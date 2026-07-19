@@ -1,0 +1,21 @@
+{
+  "name": "tw-migrate-linux-x64-gnu",
+  "version": "0.0.0",
+  "cpu": [
+    "x64"
+  ],
+  "main": "tw-migrate.linux-x64-gnu.node",
+  "files": [
+    "tw-migrate.linux-x64-gnu.node"
+  ],
+  "description": "Preview and migrate React CSS to Tailwind utilities",
+  "engines": {
+    "node": ">=20"
+  },
+  "os": [
+    "linux"
+  ],
+  "libc": [
+    "glibc"
+  ]
+}

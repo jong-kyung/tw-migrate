@@ -12,8 +12,7 @@
     "bin",
     "index.js",
     "index.d.ts",
-    "native.js",
-    "*.node"
+    "native.js"
   ],
   "engines": {
     "node": ">=20"
@@ -21,6 +20,7 @@
   "scripts": {
     "build": "napi build --platform --release --no-js --dts binding.d.ts",
     "build:debug": "napi build --platform --no-js --dts binding.d.ts",
+    "artifacts": "napi artifacts --output-dir . --npm-dir npm",
     "test": "cargo test && pnpm build:debug && node --test",
     "test:rust": "cargo test"
   },
@@ -37,5 +37,12 @@
   "devDependencies": {
     "@napi-rs/cli": "3.7.3",
     "tailwindcss": "4.3.3"
+  },
+  "optionalDependencies": {
+    "tw-migrate-darwin-arm64": "workspace:0.0.0",
+    "tw-migrate-darwin-x64": "workspace:0.0.0",
+    "tw-migrate-linux-arm64-gnu": "workspace:0.0.0",
+    "tw-migrate-linux-x64-gnu": "workspace:0.0.0",
+    "tw-migrate-win32-x64-msvc": "workspace:0.0.0"
   }
 }

@@ -14,6 +14,32 @@ importers:
       tailwindcss:
         specifier: 4.3.3
         version: 4.3.3
+    optionalDependencies:
+      tw-migrate-darwin-arm64:
+        specifier: workspace:0.0.0
+        version: link:npm/darwin-arm64
+      tw-migrate-darwin-x64:
+        specifier: workspace:0.0.0
+        version: link:npm/darwin-x64
+      tw-migrate-linux-arm64-gnu:
+        specifier: workspace:0.0.0
+        version: link:npm/linux-arm64-gnu
+      tw-migrate-linux-x64-gnu:
+        specifier: workspace:0.0.0
+        version: link:npm/linux-x64-gnu
+      tw-migrate-win32-x64-msvc:
+        specifier: workspace:0.0.0
+        version: link:npm/win32-x64-msvc
+
+  npm/darwin-arm64: {}
+
+  npm/darwin-x64: {}
+
+  npm/linux-arm64-gnu: {}
+
+  npm/linux-x64-gnu: {}
+
+  npm/win32-x64-msvc: {}
 
 packages:
 
