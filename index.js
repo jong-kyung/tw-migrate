@@ -1,7 +1,6 @@
 import { createRequire } from 'node:module';
-import { mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { planMigration } from './native.js';
@@ -119,15 +118,31 @@ async function loadTailwind(cwd, tailwindCss) {
   const defaultTheme = await readFile(join(dirname(packagePath), 'theme.css'), 'utf8');
   const themeTokens = {
     ...extractThemeTokens(defaultTheme),
-    ...extractThemeTokens(css),
+    ...(await extractThemeTokensFromGraph(css, base, loadStylesheet)),
   };
   return { compile, css, base, loadStylesheet, themeTokens };
 }
 
 function extractThemeTokens(css) {
-  return Object.fromEntries(
-    [...css.matchAll(/--([\w-]+):\s*([^;{}]+);/g)].map((match) => [match[1], match[2].trim()]),
-  );
+  const tokens = {};
+  for (const block of css.matchAll(/@theme[^\{]*\{([^}]*)\}/gs)) {
+    for (const match of block[1].matchAll(/--([\w-]+):\s*([^;{}]+);/g)) {
+      tokens[match[1]] = match[2].trim();
+    }
+  }
+  return tokens;
+}
+
+async function extractThemeTokensFromGraph(css, base, loadStylesheet, seen = new Set()) {
+  const tokens = {};
+  for (const match of css.matchAll(/@import\s+["']([^"']+)["']/g)) {
+    const key = `${base}\0${match[1]}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const loaded = await loadStylesheet(match[1], base);
+    Object.assign(tokens, await extractThemeTokensFromGraph(loaded.content, loaded.base, loadStylesheet, seen));
+  }
+  return Object.assign(tokens, extractThemeTokens(css));
 }
 
 async function validateCandidates(tailwind, candidates) {
@@ -148,7 +163,10 @@ function createStylesheetLoader(projectRequire, tailwindPackagePath) {
   return async (id, base) => {
     let path;
     if (id === 'tailwindcss') path = join(tailwindRoot, 'index.css');
-    else if (id.startsWith('tailwindcss/')) path = join(tailwindRoot, `${id.slice('tailwindcss/'.length)}.css`);
+    else if (id.startsWith('tailwindcss/')) {
+      const subpath = id.slice('tailwindcss/'.length);
+      path = join(tailwindRoot, subpath.endsWith('.css') ? subpath : `${subpath}.css`);
+    }
     else if (id.startsWith('.') || isAbsolute(id)) path = resolve(base, id);
     else path = projectRequire.resolve(id);
     return { content: await readFile(path, 'utf8'), base: dirname(path) };
@@ -168,16 +186,14 @@ function unifiedDiff(path, before, after) {
 }
 
 async function writeChanges(changes) {
-  const temporaryDirectory = await mkdtemp(join(tmpdir(), 'tw-migrate-'));
+  const staged = changes.map((change, index) => [
+    join(dirname(change.path), `.${basename(change.path)}.tw-migrate-${process.pid}-${index}`),
+    change,
+  ]);
   try {
-    const staged = [];
-    for (const [index, change] of changes.entries()) {
-      const temporaryPath = join(temporaryDirectory, String(index));
-      await writeFile(temporaryPath, change.source);
-      staged.push([temporaryPath, change.path]);
-    }
-    for (const [temporaryPath, targetPath] of staged) await rename(temporaryPath, targetPath);
+    for (const [temporaryPath, change] of staged) await writeFile(temporaryPath, change.source);
+    for (const [temporaryPath, change] of staged) await rename(temporaryPath, change.path);
   } finally {
-    await rm(temporaryDirectory, { recursive: true, force: true });
+    await Promise.all(staged.map(([temporaryPath]) => rm(temporaryPath, { force: true })));
   }
 }

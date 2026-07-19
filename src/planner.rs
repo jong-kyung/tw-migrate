@@ -78,6 +78,7 @@ enum SelectorKey {
 struct RulePlan {
     span: std::ops::Range<usize>,
     selector: String,
+    related_classes: Vec<String>,
     key: Option<SelectorKey>,
     candidates: Vec<String>,
     warning: Option<&'static str>,
@@ -100,10 +101,16 @@ pub fn plan_json(request: &str) -> Result<String, String> {
         is_module,
     )?;
 
+    let blocked_classes = rules
+        .iter()
+        .filter(|rule| rule.warning.is_some())
+        .flat_map(|rule| rule.related_classes.iter().cloned())
+        .collect::<BTreeSet<_>>();
     let mut candidate_map: HashMap<SelectorKey, Vec<String>> = HashMap::new();
     for rule in &rules {
         if let Some(key) = &rule.key
             && rule.warning.is_none()
+            && !matches!(key, SelectorKey::Class(name) if blocked_classes.contains(name))
         {
             candidate_map
                 .entry(key.clone())
@@ -334,16 +341,53 @@ fn parse_css_rules(
         }
     }
 
+    let mut qualified_rules = Vec::new();
     let mut rules = Vec::new();
     for statement in &stylesheet.statements {
-        let Statement::QualifiedRule(rule) = statement else {
-            continue;
-        };
+        match statement {
+            Statement::QualifiedRule(rule) => qualified_rules.push((rule, None)),
+            Statement::AtRule(at_rule) if at_rule.name.name == "media" => {
+                let Some(variant) = media_breakpoint_variant(at_rule, source, theme_tokens) else {
+                    rules.push(RulePlan {
+                        span: at_rule.span.start..at_rule.span.end,
+                        selector: source[at_rule.span.start
+                            ..at_rule
+                                .block
+                                .as_ref()
+                                .map_or(at_rule.span.end, |block| block.span.start)]
+                            .trim()
+                            .to_string(),
+                        related_classes: Vec::new(),
+                        key: None,
+                        candidates: Vec::new(),
+                        warning: Some("unsupported-media-query"),
+                    });
+                    continue;
+                };
+                if let Some(block) = &at_rule.block {
+                    for statement in &block.statements {
+                        if let Statement::QualifiedRule(rule) = statement {
+                            qualified_rules.push((rule, Some(variant.clone())));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 
+    for (rule, outer_variant) in qualified_rules {
         let selector = source[rule.selector.span.start..rule.selector.span.end].to_string();
         let selector_match = selector_match(rule, source, is_module);
         let key = selector_match.as_ref().map(|(key, _)| key.clone());
-        let variant = selector_match.and_then(|(_, variant)| variant);
+        let variant = match (
+            outer_variant,
+            selector_match.and_then(|(_, variant)| variant),
+        ) {
+            (Some(outer), Some(inner)) => Some(format!("{outer}:{inner}")),
+            (Some(outer), None) => Some(outer),
+            (None, inner) => inner,
+        };
         let mut candidates = Vec::new();
         let mut margin = SpacingValues::default();
         let mut padding = SpacingValues::default();
@@ -406,12 +450,51 @@ fn parse_css_rules(
         rules.push(RulePlan {
             span: rule.span.start..rule.span.end,
             selector,
+            related_classes: selector_classes(rule),
             key,
             candidates,
             warning,
         });
     }
     Ok(rules)
+}
+
+fn selector_classes(rule: &oxc_css_parser::ast::QualifiedRule<'_>) -> Vec<String> {
+    rule.selector
+        .selectors
+        .iter()
+        .flat_map(|selector| &selector.children)
+        .filter_map(|child| match child {
+            ComplexSelectorChild::CompoundSelector(compound) => Some(compound),
+            ComplexSelectorChild::Combinator(_) => None,
+        })
+        .flat_map(|compound| &compound.children)
+        .filter_map(|selector| match selector {
+            SimpleSelector::Class(class) => literal_ident(&class.name).map(str::to_string),
+            _ => None,
+        })
+        .collect()
+}
+
+fn media_breakpoint_variant(
+    at_rule: &oxc_css_parser::ast::AtRule<'_>,
+    source: &str,
+    theme_tokens: &HashMap<String, String>,
+) -> Option<String> {
+    let block_start = at_rule.block.as_ref()?.span.start;
+    let query = &source[at_rule.span.start..block_start];
+    let value_start = query.find("(min-width:")? + "(min-width:".len();
+    let value_end = query[value_start..].find(')')? + value_start;
+    let value = query[value_start..value_end].trim();
+    let mut matches = theme_tokens
+        .iter()
+        .filter(|(name, token_value)| {
+            name.starts_with("breakpoint-") && token_value.trim() == value
+        })
+        .map(|(name, _)| name["breakpoint-".len()..].to_string())
+        .collect::<Vec<_>>();
+    matches.sort();
+    matches.into_iter().next()
 }
 
 fn declaration_value<'a>(
@@ -1029,6 +1112,47 @@ mod tests {
             "export const Card = () => <div className='card p-[13px]' />;\n"
         );
         assert_eq!(response["warnings"][0]["code"], "retained-global-rule");
+    }
+
+    #[test]
+    fn keeps_a_module_reference_when_a_sibling_rule_is_unsupported() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { padding: 13px; }\n.card::before { content: 'x'; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.card} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["files"], serde_json::json!([]));
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 2);
+    }
+
+    #[test]
+    fn converts_an_exact_media_breakpoint() {
+        let request = serde_json::json!({
+            "cssPath": "/project/global.css",
+            "cssSource": "@media (min-width: 48rem) { .card { padding: 13px; } }\n",
+            "themeTokens": { "breakpoint-md": "48rem" },
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "export const Card = () => <div className=\"card\" />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["candidates"], serde_json::json!(["md:p-[13px]"]));
+        assert_eq!(
+            response["files"][0]["source"],
+            "export const Card = () => <div className=\"card md:p-[13px]\" />;\n"
+        );
     }
 
     #[test]
