@@ -1,7 +1,7 @@
 {
   "name": "tw-migrate",
   "version": "0.0.0",
-  "description": "Migrate to Tailwind from an existing CSS/SCSS file.",
+  "description": "Preview and migrate React CSS to Tailwind utilities",
   "type": "module",
   "main": "index.js",
   "types": "index.d.ts",

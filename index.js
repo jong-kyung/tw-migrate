@@ -23,8 +23,18 @@ export async function migrate(options) {
     sourcePaths.map(async (path) => ({ path, source: await readFile(path, 'utf8') })),
   );
 
-  const plan = JSON.parse(planMigration(JSON.stringify({ cssPath, cssSource, files })));
-  await validateCandidates(cwd, tailwindCss, plan.candidates);
+  const tailwind = await loadTailwind(cwd, tailwindCss);
+  const plan = JSON.parse(
+    planMigration(
+      JSON.stringify({
+        cssPath,
+        cssSource,
+        themeTokens: tailwind.themeTokens,
+        files,
+      }),
+    ),
+  );
+  await validateCandidates(tailwind, plan.candidates);
 
   const changed = plan.files
     .map((file) => ({ ...file, before: file.path === cssPath ? cssSource : files.find((item) => item.path === file.path)?.source }))
@@ -89,9 +99,7 @@ async function resolveTailwindEntry(cwd, configuredPath) {
   return entries[0];
 }
 
-async function validateCandidates(cwd, tailwindCss, candidates) {
-  if (candidates.length === 0) return;
-
+async function loadTailwind(cwd, tailwindCss) {
   const projectRequire = createRequire(join(cwd, 'package.json'));
   let packagePath;
   try {
@@ -106,10 +114,28 @@ async function validateCandidates(cwd, tailwindCss, candidates) {
   const tailwindModule = await import(pathToFileURL(modulePath));
   const { compile } = tailwindModule.default ?? tailwindModule;
   const css = await readFile(tailwindCss, 'utf8');
+  const base = dirname(tailwindCss);
   const loadStylesheet = createStylesheetLoader(projectRequire, packagePath);
+  const defaultTheme = await readFile(join(dirname(packagePath), 'theme.css'), 'utf8');
+  const themeTokens = {
+    ...extractThemeTokens(defaultTheme),
+    ...extractThemeTokens(css),
+  };
+  return { compile, css, base, loadStylesheet, themeTokens };
+}
 
+function extractThemeTokens(css) {
+  return Object.fromEntries(
+    [...css.matchAll(/--([\w-]+):\s*([^;{}]+);/g)].map((match) => [match[1], match[2].trim()]),
+  );
+}
+
+async function validateCandidates(tailwind, candidates) {
   for (const candidate of candidates) {
-    const compiler = await compile(css, { base: dirname(tailwindCss), loadStylesheet });
+    const compiler = await tailwind.compile(tailwind.css, {
+      base: tailwind.base,
+      loadStylesheet: tailwind.loadStylesheet,
+    });
     const baseline = compiler.build([]);
     if (compiler.build([candidate]) === baseline) {
       throw new Error(`Tailwind did not generate CSS for candidate: ${candidate}`);

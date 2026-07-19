@@ -8,14 +8,18 @@ import { migrate } from '../index.js';
 const initialCss = '.button { padding: 13px; }\n';
 const initialTsx = "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n";
 
-async function fixture() {
+async function fixture({
+  css = initialCss,
+  tsx = initialTsx,
+  tailwind = '@import "tailwindcss";\n',
+} = {}) {
   await mkdir('.tmp', { recursive: true });
   const cwd = await mkdtemp(join(process.cwd(), '.tmp', 'fixture-'));
   await Promise.all([
     writeFile(join(cwd, 'package.json'), '{"private":true}'),
-    writeFile(join(cwd, 'globals.css'), '@import "tailwindcss";\n'),
-    writeFile(join(cwd, 'Button.module.css'), initialCss),
-    writeFile(join(cwd, 'Button.tsx'), initialTsx),
+    writeFile(join(cwd, 'globals.css'), tailwind),
+    writeFile(join(cwd, 'Button.module.css'), css),
+    writeFile(join(cwd, 'Button.tsx'), tsx),
   ]);
   return cwd;
 }
@@ -23,6 +27,38 @@ async function fixture() {
 async function cleanup(cwd) {
   await rm(cwd, { recursive: true, force: true });
 }
+
+test('updates global classes and ids while retaining global CSS', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(join(cwd, 'legacy.css'), '.card { padding: 13px; }\n#hero { height: 100vh; }\n'),
+      writeFile(join(cwd, 'Card.tsx'), 'export const Card = () => <main id="hero" className="card" />;\n'),
+    ]);
+    const report = await migrate({ cwd, cssFile: 'legacy.css' });
+    assert.deepEqual(report.changedFiles, ['Card.tsx']);
+    assert.deepEqual(report.candidates, ['h-[100vh]', 'p-[13px]']);
+    assert.equal(report.convertedRules, 0);
+    assert.equal(report.retainedRules, 2);
+    assert.match(report.diff, /className="card p-\[13px\] h-\[100vh\]"/);
+    assert.ok(report.warnings.every((warning) => warning.code === 'retained-global-rule'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('uses an exact project theme token before arbitrary fallback', async () => {
+  const cwd = await fixture({
+    tailwind: '@import "tailwindcss";\n@theme { --spacing-card: 13px; }\n',
+  });
+  try {
+    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    assert.deepEqual(report.candidates, ['p-card']);
+    assert.match(report.diff, /className="p-card"/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
 
 test('previews without writing, applies, and is idempotent', async () => {
   const cwd = await fixture();
