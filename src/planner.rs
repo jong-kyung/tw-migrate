@@ -852,6 +852,7 @@ impl UsageCollector<'_> {
     fn global_element(&mut self, element: &JSXOpeningElement<'_>) {
         let mut id_candidates = Vec::new();
         let mut class_literal = None;
+        let mut has_class_name = false;
 
         for item in &element.attributes {
             let JSXAttributeItem::Attribute(attribute) = item else {
@@ -860,24 +861,24 @@ impl UsageCollector<'_> {
             let JSXAttributeName::Identifier(name) = &attribute.name else {
                 continue;
             };
-            let Some(JSXAttributeValue::StringLiteral(literal)) = &attribute.value else {
-                continue;
-            };
-            if name.name == "id" {
-                if let Some(candidates) = self
+            if name.name == "className" {
+                has_class_name = true;
+                if let Some(JSXAttributeValue::StringLiteral(literal)) = &attribute.value {
+                    class_literal = Some((literal.span, literal.value.to_string()));
+                }
+            } else if name.name == "id"
+                && let Some(JSXAttributeValue::StringLiteral(literal)) = &attribute.value
+                && let Some(candidates) = self
                     .candidates
                     .get(&SelectorKey::Id(literal.value.to_string()))
-                {
-                    id_candidates.extend(candidates.clone());
-                }
-            } else if name.name == "className" {
-                class_literal = Some((literal.span, literal.value.to_string()));
+            {
+                id_candidates.extend(candidates.clone());
             }
         }
 
         if let Some((span, value)) = class_literal {
             self.global_literal_edit(span, &value, &id_candidates);
-        } else if !id_candidates.is_empty() {
+        } else if !has_class_name && !id_candidates.is_empty() {
             let end = element.span.end as usize;
             let mut insertion = if self.source[..end].ends_with("/>") {
                 end - 2
@@ -1111,6 +1112,24 @@ mod tests {
             response["files"][0]["source"],
             "export const Card = () => <div className='card p-[13px]' />;\n"
         );
+        assert_eq!(response["warnings"][0]["code"], "retained-global-rule");
+    }
+
+    #[test]
+    fn does_not_duplicate_a_dynamic_global_class_name() {
+        let request = serde_json::json!({
+            "cssPath": "/project/global.css",
+            "cssSource": "#hero { height: 100vh; }\n",
+            "files": [{
+                "path": "/project/Hero.tsx",
+                "source": "export const Hero = () => <main id=\"hero\" className={getClass()} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["files"], serde_json::json!([]));
         assert_eq!(response["warnings"][0]["code"], "retained-global-rule");
     }
 
