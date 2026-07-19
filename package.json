@@ -1,0 +1,41 @@
+{
+  "name": "tw-migrate",
+  "version": "0.0.0",
+  "description": "Migrate to Tailwind from an existing CSS/SCSS file.",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "bin": {
+    "tw-migrate": "bin/tw-migrate.js"
+  },
+  "files": [
+    "bin",
+    "index.js",
+    "index.d.ts",
+    "native.js",
+    "*.node"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "napi build --platform --release --no-js --dts binding.d.ts",
+    "build:debug": "napi build --platform --no-js --dts binding.d.ts",
+    "test": "cargo test && pnpm build:debug && node --test",
+    "test:rust": "cargo test"
+  },
+  "napi": {
+    "binaryName": "tw-migrate",
+    "targets": [
+      "aarch64-apple-darwin",
+      "x86_64-apple-darwin",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-unknown-linux-gnu",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "3.7.3",
+    "tailwindcss": "4.3.3"
+  }
+}

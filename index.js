@@ -1,0 +1,157 @@
+import { createRequire } from 'node:module';
+import { mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+import { planMigration } from './native.js';
+
+const SOURCE_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx']);
+const IGNORED_DIRECTORIES = new Set(['.git', '.next', 'build', 'dist', 'node_modules']);
+
+export async function migrate(options) {
+  if (!options?.cssFile) throw new TypeError('migrate() requires cssFile');
+
+  const cwd = resolve(options.cwd ?? process.cwd());
+  const cssPath = resolve(cwd, options.cssFile);
+  const cssSource = await readFile(cssPath, 'utf8');
+  const [sourcePaths, tailwindCss] = await Promise.all([
+    collectFiles(cwd, (path) => SOURCE_EXTENSIONS.has(extension(path))),
+    resolveTailwindEntry(cwd, options.tailwindCss),
+  ]);
+  const files = await Promise.all(
+    sourcePaths.map(async (path) => ({ path, source: await readFile(path, 'utf8') })),
+  );
+
+  const plan = JSON.parse(planMigration(JSON.stringify({ cssPath, cssSource, files })));
+  await validateCandidates(cwd, tailwindCss, plan.candidates);
+
+  const changed = plan.files
+    .map((file) => ({ ...file, before: file.path === cssPath ? cssSource : files.find((item) => item.path === file.path)?.source }))
+    .filter((file) => file.before !== undefined && file.before !== file.source)
+    .sort((left, right) => left.path.localeCompare(right.path));
+  const changedFiles = changed.map((file) => relative(cwd, file.path));
+  const diff = changed.map((file) => unifiedDiff(relative(cwd, file.path), file.before, file.source)).join('');
+
+  if (options.write && changed.length > 0) await writeChanges(changed);
+
+  return {
+    changedFiles,
+    diff,
+    convertedRules: plan.convertedRules,
+    retainedRules: plan.retainedRules,
+    rules: plan.rules,
+    candidates: plan.candidates,
+    warnings: plan.warnings.map((warning) => ({ ...warning, file: relative(cwd, warning.file) })),
+  };
+}
+
+async function collectFiles(root, include) {
+  const files = [];
+  async function visit(directory) {
+    const entries = await readdir(directory, { withFileTypes: true });
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (!IGNORED_DIRECTORIES.has(entry.name)) await visit(path);
+      } else if (entry.isFile() && include(path)) {
+        files.push(path);
+      }
+    }
+  }
+  await visit(root);
+  return files;
+}
+
+function extension(path) {
+  const match = /\.[^.\/]+$/.exec(path);
+  return match?.[0] ?? '';
+}
+
+async function resolveTailwindEntry(cwd, configuredPath) {
+  if (configuredPath) {
+    const path = resolve(cwd, configuredPath);
+    await readFile(path, 'utf8');
+    return path;
+  }
+
+  const cssFiles = await collectFiles(cwd, (path) => path.endsWith('.css'));
+  const entries = [];
+  for (const path of cssFiles) {
+    const source = await readFile(path, 'utf8');
+    if (/@(import\s+["']tailwindcss(?:\/[^"']*)?["']|tailwind\s+utilities)/.test(source)) {
+      entries.push(path);
+    }
+  }
+  if (entries.length === 0) throw new Error('No Tailwind v4 CSS entry was found. Pass --tailwind-css.');
+  if (entries.length > 1) throw new Error('Multiple Tailwind CSS entries were found. Pass --tailwind-css.');
+  return entries[0];
+}
+
+async function validateCandidates(cwd, tailwindCss, candidates) {
+  if (candidates.length === 0) return;
+
+  const projectRequire = createRequire(join(cwd, 'package.json'));
+  let packagePath;
+  try {
+    packagePath = projectRequire.resolve('tailwindcss/package.json');
+  } catch {
+    throw new Error('Tailwind v4 must be installed in the target project.');
+  }
+  const packageJson = JSON.parse(await readFile(packagePath, 'utf8'));
+  if (!String(packageJson.version).startsWith('4.')) throw new Error(`Tailwind v4 is required; found ${packageJson.version}.`);
+
+  const modulePath = projectRequire.resolve('tailwindcss');
+  const tailwindModule = await import(pathToFileURL(modulePath));
+  const { compile } = tailwindModule.default ?? tailwindModule;
+  const css = await readFile(tailwindCss, 'utf8');
+  const loadStylesheet = createStylesheetLoader(projectRequire, packagePath);
+
+  for (const candidate of candidates) {
+    const compiler = await compile(css, { base: dirname(tailwindCss), loadStylesheet });
+    const baseline = compiler.build([]);
+    if (compiler.build([candidate]) === baseline) {
+      throw new Error(`Tailwind did not generate CSS for candidate: ${candidate}`);
+    }
+  }
+}
+
+function createStylesheetLoader(projectRequire, tailwindPackagePath) {
+  const tailwindRoot = dirname(tailwindPackagePath);
+  return async (id, base) => {
+    let path;
+    if (id === 'tailwindcss') path = join(tailwindRoot, 'index.css');
+    else if (id.startsWith('tailwindcss/')) path = join(tailwindRoot, `${id.slice('tailwindcss/'.length)}.css`);
+    else if (id.startsWith('.') || isAbsolute(id)) path = resolve(base, id);
+    else path = projectRequire.resolve(id);
+    return { content: await readFile(path, 'utf8'), base: dirname(path) };
+  };
+}
+
+function unifiedDiff(path, before, after) {
+  const oldLines = before.split('\n');
+  const newLines = after.split('\n');
+  return [
+    `--- a/${path}\n`,
+    `+++ b/${path}\n`,
+    `@@ -1,${oldLines.length} +1,${newLines.length} @@\n`,
+    ...oldLines.map((line, index) => `${index === oldLines.length - 1 && line === '' ? ' ' : '-'}${line}\n`),
+    ...newLines.map((line, index) => `${index === newLines.length - 1 && line === '' ? ' ' : '+'}${line}\n`),
+  ].join('');
+}
+
+async function writeChanges(changes) {
+  const temporaryDirectory = await mkdtemp(join(tmpdir(), 'tw-migrate-'));
+  try {
+    const staged = [];
+    for (const [index, change] of changes.entries()) {
+      const temporaryPath = join(temporaryDirectory, String(index));
+      await writeFile(temporaryPath, change.source);
+      staged.push([temporaryPath, change.path]);
+    }
+    for (const [temporaryPath, targetPath] of staged) await rename(temporaryPath, targetPath);
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+}
