@@ -49,6 +49,21 @@ test('updates global classes and ids while retaining global CSS', async () => {
   }
 });
 
+test('migrates a global selector whose class name recurs in a pseudo-class argument', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(join(cwd, 'legacy.css'), '.a:not(.abc) { padding: 13px; }\n'),
+      writeFile(join(cwd, 'Card.tsx'), 'export const Card = () => <div className="a" />;\n'),
+    ]);
+    const report = await migrate({ cwd, cssFile: 'legacy.css' });
+    assert.deepEqual(report.candidates, ['[&:not(.abc)]:p-[13px]']);
+    assert.match(report.diff, /className="a \[&:not\(\.abc\)\]:p-\[13px\]"/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('converts a bounded breakpoint range to stacked variants', async () => {
   const cwd = await fixture({
     css: '@media (min-width: 48rem) and (max-width: 63.999rem) { .button { padding: 13px; } }\n',

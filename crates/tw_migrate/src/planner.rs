@@ -851,15 +851,20 @@ fn arbitrary_selector_variant(
     source: &str,
     target: &oxc_css_parser::ast::CompoundSelector<'_>,
 ) -> Option<Option<String>> {
-    let key = selector_key(target.children.first()?)?;
-    let anchor = match key {
-        SelectorKey::Class(name) => format!(".{name}"),
-        SelectorKey::Id(name) => format!("#{name}"),
+    // Replace the target simple selector by its parsed span. Searching the
+    // selector text for ".name" matched the wrong occurrence when the name
+    // recurred later (e.g. inside `:not(.abc)` for `.a:not(.abc)`).
+    let target_span = match target.children.first()? {
+        SimpleSelector::Class(class) if literal_ident(&class.name).is_some() => class.span,
+        SimpleSelector::Id(id) if literal_ident(&id.name).is_some() => id.span,
+        _ => return None,
     };
-    let selector = &source[rule.selector.span.start..rule.selector.span.end];
-    let index = selector.rfind(&anchor)?;
-    let mut condition = selector.to_string();
-    condition.replace_range(index..index + anchor.len(), "&");
+    let selector_span = rule.selector.span;
+    let mut condition = source[selector_span.start..selector_span.end].to_string();
+    condition.replace_range(
+        target_span.start - selector_span.start..target_span.end - selector_span.start,
+        "&",
+    );
     Some(Some(format!("[{}]", encode_arbitrary(&condition))))
 }
 
@@ -1568,6 +1573,46 @@ mod tests {
         assert_eq!(response["convertedRules"], 1);
         assert_eq!(response["retainedRules"], 1);
         assert_eq!(response["deletedFiles"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn rewrites_the_target_selector_even_when_its_name_recurs() {
+        let request = serde_json::json!({
+            "cssPath": "/project/global.css",
+            "cssSource": ".a:not(.abc) { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "export const Card = () => <div className='a' />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(
+            response["candidates"],
+            serde_json::json!(["[&:not(.abc)]:p-[13px]"])
+        );
+    }
+
+    #[test]
+    fn rewrites_the_last_compound_of_a_descendant_selector_by_span() {
+        let request = serde_json::json!({
+            "cssPath": "/project/global.css",
+            "cssSource": ".foo .a:not(.abc) { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "export const Card = () => <div className='a' />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(
+            response["candidates"],
+            serde_json::json!(["[.foo_&:not(.abc)]:p-[13px]"])
+        );
     }
 
     #[test]
