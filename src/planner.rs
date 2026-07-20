@@ -881,11 +881,17 @@ impl UsageCollector<'_> {
         Some(member.property.name.as_str())
     }
 
-    fn static_template(&self, template: &TemplateLiteral<'_>) -> Option<(String, Vec<String>)> {
+    fn static_template(
+        &self,
+        template: &TemplateLiteral<'_>,
+    ) -> Option<(String, Vec<String>, Vec<String>)> {
         let mut value = String::new();
+        let mut original = String::new();
         let mut members = Vec::new();
         for (index, quasi) in template.quasis.iter().enumerate() {
-            value.push_str(quasi.value.cooked.as_ref()?.as_str());
+            let cooked = quasi.value.cooked.as_ref()?.as_str();
+            value.push_str(cooked);
+            original.push_str(cooked);
             let Some(expression) = template.expressions.get(index) else {
                 continue;
             };
@@ -895,12 +901,38 @@ impl UsageCollector<'_> {
             let name = self.module_member_name(member)?.to_string();
             let candidates = self.candidates.get(&SelectorKey::Class(name.clone()))?;
             value.push_str(&candidates.join(" "));
+            original.push('\0');
             members.push(name);
         }
+        let static_classes = original
+            .split_whitespace()
+            .filter(|class| !class.contains('\0'))
+            .map(str::to_string)
+            .collect();
         Some((
             value.split_whitespace().collect::<Vec<_>>().join(" "),
             members,
+            static_classes,
         ))
+    }
+
+    fn conflicting_utilities(
+        &self,
+        members: &[String],
+        static_classes: &[String],
+    ) -> Option<(String, String)> {
+        for member in members {
+            let candidates = self.candidates.get(&SelectorKey::Class(member.clone()))?;
+            for candidate in candidates {
+                if let Some(existing) = static_classes
+                    .iter()
+                    .find(|existing| tailwind_utilities_conflict(candidate, existing))
+                {
+                    return Some((candidate.clone(), existing.clone()));
+                }
+            }
+        }
+        None
     }
 
     fn global_element(&mut self, element: &JSXOpeningElement<'_>) {
@@ -990,6 +1022,114 @@ impl UsageCollector<'_> {
     }
 }
 
+fn tailwind_utilities_conflict(generated: &str, existing: &str) -> bool {
+    if generated == existing {
+        return false;
+    }
+    let (generated_variants, generated_utility) = tailwind_utility_parts(generated);
+    let (existing_variants, existing_utility) = tailwind_utility_parts(existing);
+    if generated_variants != existing_variants {
+        return false;
+    }
+
+    let generated_properties = utility_property_mask(generated_utility);
+    let existing_properties = utility_property_mask(existing_utility);
+    if generated_properties & existing_properties != 0 {
+        return true;
+    }
+    matches!(
+        (
+            arbitrary_utility_property(generated_utility),
+            arbitrary_utility_property(existing_utility)
+        ),
+        (Some(generated), Some(existing)) if generated == existing
+    )
+}
+
+fn tailwind_utility_parts(class: &str) -> (&str, &str) {
+    let mut depth = 0usize;
+    let mut separator = None;
+    for (index, character) in class.char_indices() {
+        match character {
+            '[' => depth += 1,
+            ']' => depth = depth.saturating_sub(1),
+            ':' if depth == 0 => separator = Some(index),
+            _ => {}
+        }
+    }
+    separator.map_or(("", class), |index| (&class[..index], &class[index + 1..]))
+}
+
+fn utility_property_mask(utility: &str) -> u32 {
+    let utility = utility.trim_matches('!');
+    let utility = utility.strip_prefix('-').unwrap_or(utility);
+    if let Some(mask) = spacing_utility_mask(utility, 'p', 0) {
+        return mask;
+    }
+    if let Some(mask) = spacing_utility_mask(utility, 'm', 6) {
+        return mask;
+    }
+    match utility {
+        utility if utility.starts_with("gap-x-") => 1 << 13,
+        utility if utility.starts_with("gap-y-") => 1 << 12,
+        utility if utility.starts_with("gap-") => 3 << 12,
+        utility if utility.starts_with("w-") => 1 << 14,
+        utility if utility.starts_with("h-") => 1 << 15,
+        utility if utility.starts_with("size-") => 3 << 14,
+        utility if utility == "rounded" || utility.starts_with("rounded-") => {
+            rounded_utility_mask(utility) << 16
+        }
+        "block" | "inline" | "inline-block" | "flow-root" | "flex" | "inline-flex" | "grid"
+        | "inline-grid" | "contents" | "table" | "hidden" => 1 << 20,
+        _ => 0,
+    }
+}
+
+fn spacing_utility_mask(utility: &str, prefix: char, shift: u32) -> Option<u32> {
+    let (side, _) = utility.strip_prefix(prefix)?.split_once('-')?;
+    let mask = match side {
+        "" => 0b111111,
+        "x" => 0b111010,
+        "y" => 0b000101,
+        "t" => 0b000001,
+        "r" => 0b000010,
+        "b" => 0b000100,
+        "l" => 0b001000,
+        "s" => 0b010000,
+        "e" => 0b100000,
+        _ => return None,
+    };
+    Some(mask << shift)
+}
+
+fn rounded_utility_mask(utility: &str) -> u32 {
+    let side = utility
+        .strip_prefix("rounded-")
+        .and_then(|utility| utility.split('-').next());
+    match side {
+        Some("t") => 0b0011,
+        Some("r") => 0b0110,
+        Some("b") => 0b1100,
+        Some("l") => 0b1001,
+        Some("tl" | "ss") => 0b0001,
+        Some("tr" | "se") => 0b0010,
+        Some("br" | "ee") => 0b0100,
+        Some("bl" | "es") => 0b1000,
+        Some("s") => 0b1001,
+        Some("e") => 0b0110,
+        _ => 0b1111,
+    }
+}
+
+fn arbitrary_utility_property(utility: &str) -> Option<&str> {
+    utility
+        .trim_matches('!')
+        .strip_prefix('[')?
+        .strip_suffix(']')?
+        .split_once(':')
+        .map(|(property, _)| property.trim())
+}
+
 impl<'a> Visit<'a> for UsageCollector<'_> {
     fn visit_static_member_expression(&mut self, member: &StaticMemberExpression<'a>) {
         if let Some(name) = self.module_member_name(member).map(str::to_string) {
@@ -1018,7 +1158,7 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
             let Some(JSXAttributeValue::ExpressionContainer(container)) = &attribute.value else {
                 continue;
             };
-            let (replacement_value, members) = match &container.expression {
+            let (replacement_value, members, static_classes) = match &container.expression {
                 JSXExpression::StaticMemberExpression(member) => {
                     let Some(member_name) = self.module_member_name(member).map(str::to_string)
                     else {
@@ -1028,7 +1168,7 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
                     let Some(candidates) = self.candidates.get(&key) else {
                         continue;
                     };
-                    (candidates.join(" "), vec![member_name])
+                    (candidates.join(" "), vec![member_name], Vec::new())
                 }
                 JSXExpression::TemplateLiteral(template) => {
                     let Some(result) = self.static_template(template) else {
@@ -1055,6 +1195,19 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
                     continue;
                 }
             };
+            if let Some((generated, existing)) =
+                self.conflicting_utilities(&members, &static_classes)
+            {
+                self.warnings.push(Warning {
+                    code: "existing-tailwind-conflict",
+                    file: self.file_path.to_string(),
+                    start: container.span.start as usize,
+                    end: container.span.end as usize,
+                    message: format!(
+                        "Generated utility `{generated}` may conflict with existing `{existing}`."
+                    ),
+                });
+            }
             self.edits.push(Edit {
                 start: container.span.start as usize,
                 end: container.span.end as usize,
@@ -1143,7 +1296,7 @@ fn validate_css(source: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::plan_json;
+    use super::{plan_json, tailwind_utilities_conflict};
 
     #[test]
     fn appends_a_global_class_and_retains_the_rule() {
@@ -1425,6 +1578,37 @@ mod tests {
             "export const Card = () => <div className=\"p-[13px] featured\" />;\n"
         );
         assert_eq!(response["convertedRules"], 1);
+        assert_eq!(response["warnings"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn distinguishes_overlapping_tailwind_properties() {
+        assert!(tailwind_utilities_conflict("p-[13px]", "pl-2"));
+        assert!(!tailwind_utilities_conflict("ps-2", "pe-2"));
+        assert!(!tailwind_utilities_conflict("rounded-t-lg", "rounded-b-lg"));
+        assert!(!tailwind_utilities_conflict("text-sm", "text-red-500"));
+    }
+
+    #[test]
+    fn warns_when_a_static_template_utility_conflicts() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={`${styles.card} p-2`} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(
+            response["warnings"][0]["code"],
+            "existing-tailwind-conflict"
+        );
+        assert_eq!(response["warnings"][0]["file"], "/project/Card.tsx");
     }
 
     #[test]

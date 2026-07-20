@@ -60,6 +60,19 @@ test('converts a bounded breakpoint range to stacked variants', async () => {
   }
 });
 
+test('warns when a generated utility conflicts with a static template class', async () => {
+  const cwd = await fixture({
+    tsx: "import styles from './Button.module.css';\nexport const Button = () => <button className={`${styles.button} p-2`}>Save</button>;\n",
+  });
+  try {
+    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    assert.equal(report.warnings[0].code, 'existing-tailwind-conflict');
+    assert.match(report.diff, /className="p-\[13px\] p-2"/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('uses an exact project theme token before arbitrary fallback', async () => {
   const cwd = await fixture({
     tailwind: '@import "tailwindcss";\n@theme { --spacing-card: 13px; }\n',
