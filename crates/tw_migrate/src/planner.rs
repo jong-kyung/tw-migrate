@@ -5,9 +5,10 @@ use std::{
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    ExportAllDeclaration, ExportNamedDeclaration, Expression, ImportDeclaration,
-    ImportDeclarationSpecifier, JSXAttributeItem, JSXAttributeName, JSXAttributeValue,
-    JSXExpression, JSXOpeningElement, StaticMemberExpression, TemplateLiteral,
+    Argument, CallExpression, ExportAllDeclaration, ExportNamedDeclaration, Expression,
+    ImportDeclaration, ImportDeclarationSpecifier, ImportExpression, JSXAttributeItem,
+    JSXAttributeName, JSXAttributeValue, JSXExpression, JSXOpeningElement,
+    StaticMemberExpression, TemplateLiteral,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_css_parser::{
@@ -1033,6 +1034,30 @@ impl<'a> Visit<'a> for ImportCollector<'_> {
         }
         walk::walk_export_all_declaration(self, declaration);
     }
+
+    fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+        if let Expression::Identifier(callee) = &call.callee
+            && callee.name == "require"
+            && let Some(Argument::StringLiteral(source)) = call.arguments.first()
+            && resolve_import(self.file_path, source.value.as_str())
+                == normalize_path(Path::new(self.css_path))
+        {
+            self.unsupported_shape = true;
+            self.warning_span.get_or_insert(call.span);
+        }
+        walk::walk_call_expression(self, call);
+    }
+
+    fn visit_import_expression(&mut self, import: &ImportExpression<'a>) {
+        if let Expression::StringLiteral(source) = &import.source
+            && resolve_import(self.file_path, source.value.as_str())
+                == normalize_path(Path::new(self.css_path))
+        {
+            self.unsupported_shape = true;
+            self.warning_span.get_or_insert(import.span);
+        }
+        walk::walk_import_expression(self, import);
+    }
 }
 
 struct UsageCollector<'s> {
@@ -1521,6 +1546,55 @@ mod tests {
         assert!(source.contains("className=\"p-[13px]\""));
         assert_eq!(response["convertedRules"], 1);
         assert_eq!(response["retainedRules"], 1);
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn retains_a_module_required_from_commonjs() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.card} />;\n"
+            }, {
+                "path": "/project/legacy.cjs",
+                "source": "const styles = require('./Card.module.css');\nmodule.exports = styles;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| warning["code"] == "unsupported-css-module-reference")
+        );
+    }
+
+    #[test]
+    fn retains_a_module_loaded_with_dynamic_import() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.card} />;\n"
+            }, {
+                "path": "/project/lazy.ts",
+                "source": "export const load = () => import('./Card.module.css');\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["deletedFiles"], serde_json::json!([]));
     }
 

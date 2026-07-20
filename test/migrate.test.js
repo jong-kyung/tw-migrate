@@ -275,6 +275,30 @@ test('scans mjs and mts references before deleting a CSS Module', async () => {
   }
 });
 
+test('scans cjs and cts references before deleting a CSS Module', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, 'helper.cjs'),
+        "const styles = require('./Button.module.css');\nmodule.exports = styles.button;\n",
+      ),
+      writeFile(
+        join(cwd, 'helper.cts'),
+        "import styles from './Button.module.css';\nexport const buttonClass = styles.button;\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    assert.equal(report.convertedRules, 0);
+    assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
+    assert.match(await readFile(join(cwd, 'helper.cjs'), 'utf8'), /Button\.module\.css/);
+    assert.match(await readFile(join(cwd, 'helper.cts'), 'utf8'), /Button\.module\.css/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test(
   'preserves source file permissions when writing changes',
   { skip: process.platform === 'win32' },

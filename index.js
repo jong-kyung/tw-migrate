@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 
 import { planMigration } from './native.js';
 
-const SOURCE_EXTENSIONS = new Set(['.js', '.jsx', '.mjs', '.ts', '.tsx', '.mts']);
+const SOURCE_EXTENSIONS = new Set(['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts']);
 const IGNORED_DIRECTORIES = new Set(['.git', '.next', 'build', 'dist', 'node_modules']);
 
 export async function migrate(options) {
