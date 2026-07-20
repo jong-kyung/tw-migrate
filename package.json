@@ -18,8 +18,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "napi build --platform --release --no-js --dts binding.d.ts",
-    "build:debug": "napi build --platform --no-js --dts binding.d.ts",
+    "build": "napi build --manifest-path crates/tw_migrate/Cargo.toml --package-json-path package.json --output-dir . --platform --release --no-js --dts binding.d.ts",
+    "build:debug": "napi build --manifest-path crates/tw_migrate/Cargo.toml --package-json-path package.json --output-dir . --platform --no-js --dts binding.d.ts",
     "artifacts": "napi artifacts --output-dir . --npm-dir npm",
     "test": "cargo test && pnpm build:debug && node --test",
     "test:rust": "cargo test"
