@@ -501,8 +501,25 @@ fn collect_declaration_candidates(
     keyframes: &HashMap<&str, &str>,
     is_module: bool,
 ) -> (Vec<String>, Option<&'static str>) {
+    // CSS keeps the last of duplicate same-property declarations, so a later
+    // declaration replaces the candidate emitted by an earlier one.
+    fn push_last_wins<'p>(
+        slots: &mut HashMap<&'p str, usize>,
+        candidates: &mut Vec<String>,
+        property: &'p str,
+        candidate: String,
+    ) {
+        if let Some(&slot) = slots.get(property) {
+            candidates[slot] = candidate;
+        } else {
+            slots.insert(property, candidates.len());
+            candidates.push(candidate);
+        }
+    }
+
     let mut candidates = Vec::new();
     let mut local_candidates = Vec::new();
+    let mut property_slots = HashMap::new();
     let mut margin = SpacingValues::default();
     let mut padding = SpacingValues::default();
     let mut warning = None;
@@ -552,7 +569,9 @@ fn collect_declaration_candidates(
         }
         if is_module && matches!(property, "animation" | "animation-name") {
             match animation_candidate(property, value, keyframes) {
-                Some(candidate) => local_candidates.push(candidate),
+                Some(candidate) => {
+                    push_last_wins(&mut property_slots, &mut local_candidates, property, candidate);
+                }
                 None => warning = Some("unsupported-animation"),
             }
             continue;
@@ -583,7 +602,9 @@ fn collect_declaration_candidates(
             Ok(false) => {}
         }
         match declaration_to_candidate(property, value, theme_tokens) {
-            Some(candidate) => local_candidates.push(candidate),
+            Some(candidate) => {
+                push_last_wins(&mut property_slots, &mut local_candidates, property, candidate);
+            }
             None => warning = Some("unsupported-declaration"),
         }
     }
@@ -1547,6 +1568,24 @@ mod tests {
         assert_eq!(response["convertedRules"], 1);
         assert_eq!(response["retainedRules"], 1);
         assert_eq!(response["deletedFiles"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn keeps_only_the_last_duplicate_declaration() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { color: red; color: blue; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.card} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["candidates"], serde_json::json!(["text-[blue]"]));
+        assert_eq!(response["convertedRules"], 1);
     }
 
     #[test]
