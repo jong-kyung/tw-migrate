@@ -767,6 +767,20 @@ struct SourcePlan {
     warnings: Vec<Warning>,
 }
 
+fn source_type_for_path(path: &str) -> Result<SourceType, String> {
+    let source_type = SourceType::from_path(Path::new(path)).map_err(|error| error.to_string())?;
+    Ok(
+        if Path::new(path)
+            .extension()
+            .is_some_and(|extension| extension == "js")
+        {
+            source_type.with_jsx(true)
+        } else {
+            source_type
+        },
+    )
+}
+
 fn plan_source_file(
     file: &SourceFile,
     css_path: &str,
@@ -774,7 +788,7 @@ fn plan_source_file(
     candidates: &HashMap<SelectorKey, Vec<String>>,
 ) -> Result<SourcePlan, String> {
     let allocator = Allocator::default();
-    let source_type = SourceType::from_path(Path::new(&file.path))
+    let source_type = source_type_for_path(&file.path)
         .map_err(|error| format!("Unsupported source file {}: {error}", file.path))?;
     let parsed = Parser::new(&allocator, &file.source, source_type).parse();
     if !parsed.diagnostics.is_empty() {
@@ -1327,7 +1341,7 @@ fn apply_edits(source: &str, mut edits: Vec<Edit>) -> Result<String, String> {
 
 fn validate_js(path: &str, source: &str) -> Result<(), String> {
     let allocator = Allocator::default();
-    let source_type = SourceType::from_path(Path::new(path))
+    let source_type = source_type_for_path(path)
         .map_err(|error| format!("Unsupported source file {path}: {error}"))?;
     let parsed = Parser::new(&allocator, source, source_type).parse();
     if parsed.diagnostics.is_empty() {
@@ -1750,6 +1764,27 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|warning| { warning["code"] == "unsupported-css-module-reference" })
+        );
+    }
+
+    #[test]
+    fn parses_jsx_in_javascript_files() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.js",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.card} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(
+            response["files"][0]["source"],
+            "export const Card = () => <div className=\"p-[13px]\" />;\n"
         );
     }
 
