@@ -568,6 +568,59 @@ mod tests {
     }
 
     #[test]
+    fn retains_rules_when_combined_template_members_conflict() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".a { padding: 8px; }\n.b { padding: 4px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={`${styles.a} ${styles.b}`} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        assert_eq!(response["files"], serde_json::json!([]));
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| warning["code"] == "module-utilities-conflict")
+        );
+    }
+
+    #[test]
+    fn leaves_a_template_without_module_members_untouched() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={`marketing-card`}><span className={styles.card} /></div>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let source = response["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == "/project/Card.tsx")
+            .unwrap()["source"]
+            .as_str()
+            .unwrap();
+
+        assert!(source.contains("className={`marketing-card`}"));
+        assert!(source.contains("className=\"p-[13px]\""));
+        assert_eq!(response["convertedRules"], 1);
+    }
+
+    #[test]
     fn retains_a_module_required_from_commonjs() {
         let request = serde_json::json!({
             "cssPath": "/project/Card.module.css",

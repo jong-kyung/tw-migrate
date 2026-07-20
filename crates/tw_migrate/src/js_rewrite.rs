@@ -316,6 +316,29 @@ impl UsageCollector<'_> {
         None
     }
 
+    fn conflicting_member_utilities(&self, members: &[String]) -> Option<(String, String)> {
+        // Utilities generated from different module classes are ordered by
+        // Tailwind's stylesheet, not by the source CSS cascade, so an
+        // overlapping pair must retain its rules instead of migrating.
+        for (index, left) in members.iter().enumerate() {
+            let left_candidates = self.candidates.get(&SelectorKey::Class(left.clone()))?;
+            for right in &members[index + 1..] {
+                let right_candidates = self.candidates.get(&SelectorKey::Class(right.clone()))?;
+                for left_candidate in left_candidates {
+                    if let Some(conflict) = right_candidates
+                        .iter()
+                        .find(|right_candidate| {
+                            tailwind_utilities_conflict(left_candidate, right_candidate)
+                        })
+                    {
+                        return Some((left_candidate.clone(), conflict.clone()));
+                    }
+                }
+            }
+        }
+        None
+    }
+
     fn global_element(&mut self, element: &JSXOpeningElement<'_>) {
         let mut id_candidates = Vec::new();
         let mut class_literal = None;
@@ -455,6 +478,11 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
                         });
                         continue;
                     };
+                    if result.1.is_empty() {
+                        // No module members resolved: rewriting would only
+                        // reformat an unrelated template literal.
+                        continue;
+                    }
                     result
                 }
                 _ => {
@@ -468,6 +496,18 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
                     continue;
                 }
             };
+            if let Some((left, right)) = self.conflicting_member_utilities(&members) {
+                self.warnings.push(Warning {
+                    code: "module-utilities-conflict",
+                    file: self.file_path.to_string(),
+                    start: container.span.start as usize,
+                    end: container.span.end as usize,
+                    message: format!(
+                        "Generated utilities `{left}` and `{right}` overlap; the CSS Module source order would be lost."
+                    ),
+                });
+                continue;
+            }
             if let Some((generated, existing)) =
                 self.conflicting_utilities(&members, &static_classes)
             {
