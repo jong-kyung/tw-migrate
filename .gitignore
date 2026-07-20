@@ -1,0 +1,6 @@
+.tmp/
+node_modules/
+target/
+*.node
+binding.d.ts
+.DS_Store

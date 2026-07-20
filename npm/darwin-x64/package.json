@@ -1,0 +1,18 @@
+{
+  "name": "tw-migrate-darwin-x64",
+  "version": "0.0.0",
+  "cpu": [
+    "x64"
+  ],
+  "main": "tw-migrate.darwin-x64.node",
+  "files": [
+    "tw-migrate.darwin-x64.node"
+  ],
+  "description": "Preview and migrate React CSS to Tailwind utilities",
+  "engines": {
+    "node": ">=20"
+  },
+  "os": [
+    "darwin"
+  ]
+}
