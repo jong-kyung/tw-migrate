@@ -5,8 +5,9 @@ use std::{
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    Expression, ImportDeclaration, ImportDeclarationSpecifier, JSXAttributeItem, JSXAttributeName,
-    JSXAttributeValue, JSXExpression, JSXOpeningElement, StaticMemberExpression, TemplateLiteral,
+    ExportAllDeclaration, ExportNamedDeclaration, Expression, ImportDeclaration,
+    ImportDeclarationSpecifier, JSXAttributeItem, JSXAttributeName, JSXAttributeValue,
+    JSXExpression, JSXOpeningElement, StaticMemberExpression, TemplateLiteral,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_css_parser::{
@@ -106,7 +107,6 @@ struct ParsedCss {
     rules: Vec<RulePlan>,
     keyframes: Vec<KeyframePlan>,
     global_at_rules: Vec<GlobalAtRulePlan>,
-    module_content_movable: bool,
 }
 
 #[derive(Clone)]
@@ -136,7 +136,6 @@ pub fn plan_json(request: &str) -> Result<String, String> {
         mut rules,
         keyframes,
         global_at_rules,
-        module_content_movable,
     } = parse_css_rules(
         &request.css_path,
         keyframe_scope,
@@ -185,33 +184,23 @@ pub fn plan_json(request: &str) -> Result<String, String> {
     let mut matched_module_refs: HashMap<String, usize> = HashMap::new();
     let mut module_references_safe = true;
     let mut warnings = Vec::new();
+    let mut source_plans = Vec::new();
 
     for file in &request.files {
-        let result = plan_source_file(
-            file,
-            &request.css_path,
-            is_module,
-            module_content_movable,
-            &candidate_map,
-        )?;
+        let mut result = plan_source_file(file, &request.css_path, is_module, &candidate_map)?;
 
         module_references_safe &= result.module_references_safe;
-        for candidate in result.candidates {
-            candidates.insert(candidate);
+        for candidate in &result.candidates {
+            candidates.insert(candidate.clone());
         }
-        merge_counts(&mut module_refs, result.module_refs);
-        merge_counts(&mut matched_module_refs, result.matched_module_refs);
-        warnings.extend(result.warnings);
-
-        if !result.edits.is_empty() {
-            let source = apply_edits(&file.source, result.edits)?;
-            validate_js(&file.path, &source)?;
-            planned_files.push(PlannedFile {
-                path: file.path.clone(),
-                source,
-            });
-        }
+        merge_counts(&mut module_refs, &result.module_refs);
+        merge_counts(&mut matched_module_refs, &result.matched_module_refs);
+        warnings.append(&mut result.warnings);
+        source_plans.push((file, result));
     }
+
+    let all_module_refs_migrated =
+        module_refs.values().sum::<usize>() == matched_module_refs.values().sum::<usize>();
 
     let mut css_edits = Vec::new();
     let mut converted_rules = 0;
@@ -221,6 +210,7 @@ pub fn plan_json(request: &str) -> Result<String, String> {
     for rule in rules {
         let can_remove = is_module
             && module_references_safe
+            && all_module_refs_migrated
             && rule.warning.is_none()
             && match &rule.key {
                 Some(SelectorKey::Class(name)) => {
@@ -275,7 +265,8 @@ pub fn plan_json(request: &str) -> Result<String, String> {
         }
     }
 
-    let remove_at_rules = is_module && module_references_safe && retained_rules == 0;
+    let remove_at_rules =
+        is_module && module_references_safe && all_module_refs_migrated && retained_rules == 0;
     let moved_keyframes = keyframes
         .iter()
         .filter(|keyframe| {
@@ -329,10 +320,25 @@ pub fn plan_json(request: &str) -> Result<String, String> {
         };
         validate_css(&source)?;
         if is_module && source.trim().is_empty() {
-            deleted_files.push(request.css_path);
+            deleted_files.push(request.css_path.clone());
         } else {
             planned_files.push(PlannedFile {
-                path: request.css_path,
+                path: request.css_path.clone(),
+                source,
+            });
+        }
+    }
+
+    let css_module_deleted = deleted_files.contains(&request.css_path);
+    for (file, mut result) in source_plans {
+        if css_module_deleted {
+            result.edits.append(&mut result.removable_import_edits);
+        }
+        if !result.edits.is_empty() {
+            let source = apply_edits(&file.source, result.edits)?;
+            validate_js(&file.path, &source)?;
+            planned_files.push(PlannedFile {
+                path: file.path.clone(),
                 source,
             });
         }
@@ -350,9 +356,9 @@ pub fn plan_json(request: &str) -> Result<String, String> {
     .map_err(|error| error.to_string())
 }
 
-fn merge_counts(target: &mut HashMap<String, usize>, source: HashMap<String, usize>) {
+fn merge_counts(target: &mut HashMap<String, usize>, source: &HashMap<String, usize>) {
     for (key, count) in source {
-        *target.entry(key).or_default() += count;
+        *target.entry(key.clone()).or_default() += *count;
     }
 }
 
@@ -416,7 +422,7 @@ fn parse_css_rules(
         .collect::<HashSet<_>>();
     let mut qualified_rules = Vec::new();
     let mut rules = Vec::new();
-    let module_content_movable = collect_conditional_rules(
+    collect_conditional_rules(
         &stylesheet.statements,
         &[],
         source,
@@ -460,13 +466,29 @@ fn parse_css_rules(
             warning,
         });
     }
-    let module_content_movable =
-        module_content_movable && rules.iter().all(|rule| rule.warning.is_none());
+    let mut overlapping_rules = BTreeSet::new();
+    for left in 0..rules.len() {
+        for right in left + 1..rules.len() {
+            if rules[left].key == rules[right].key
+                && rules[left].key.is_some()
+                && rules[left].candidates.iter().any(|left_candidate| {
+                    rules[right].candidates.iter().any(|right_candidate| {
+                        tailwind_utilities_conflict(left_candidate, right_candidate)
+                    })
+                })
+            {
+                overlapping_rules.extend([left, right]);
+            }
+        }
+    }
+    for index in overlapping_rules {
+        rules[index].warning = Some("unsupported-overlap");
+    }
+
     Ok(ParsedCss {
         rules,
         keyframes,
         global_at_rules,
-        module_content_movable,
     })
 }
 
@@ -828,6 +850,7 @@ fn literal_ident<'a>(ident: &'a InterpolableIdent<'a>) -> Option<&'a str> {
 
 struct SourcePlan {
     edits: Vec<Edit>,
+    removable_import_edits: Vec<Edit>,
     candidates: Vec<String>,
     module_refs: HashMap<String, usize>,
     matched_module_refs: HashMap<String, usize>,
@@ -853,7 +876,6 @@ fn plan_source_file(
     file: &SourceFile,
     css_path: &str,
     is_module: bool,
-    allow_import_removal: bool,
     candidates: &HashMap<SelectorKey, Vec<String>>,
 ) -> Result<SourcePlan, String> {
     let allocator = Allocator::default();
@@ -920,24 +942,27 @@ fn plan_source_file(
         });
     }
 
-    if is_module
-        && allow_import_removal
+    let removable_import_edits = if is_module
         && module_references_safe
         && !imports.bindings.is_empty()
         && classified_import_refs == collector.matched_module_refs.values().sum::<usize>()
-        && classified_import_refs > 0
     {
-        for binding in &imports.bindings {
-            collector.edits.push(Edit {
+        imports
+            .bindings
+            .iter()
+            .map(|binding| Edit {
                 start: binding.span.start as usize,
                 end: consume_following_newline(&file.source, binding.span.end as usize),
                 replacement: String::new(),
-            });
-        }
-    }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     Ok(SourcePlan {
         edits: collector.edits,
+        removable_import_edits,
         candidates: collector.emitted_candidates.into_iter().collect(),
         module_refs: collector.module_refs,
         matched_module_refs: collector.matched_module_refs,
@@ -986,6 +1011,27 @@ impl<'a> Visit<'a> for ImportCollector<'_> {
             }
         }
         walk::walk_import_declaration(self, declaration);
+    }
+
+    fn visit_export_named_declaration(&mut self, declaration: &ExportNamedDeclaration<'a>) {
+        if declaration.source.as_ref().is_some_and(|source| {
+            resolve_import(self.file_path, source.value.as_str())
+                == normalize_path(Path::new(self.css_path))
+        }) {
+            self.unsupported_shape = true;
+            self.warning_span.get_or_insert(declaration.span);
+        }
+        walk::walk_export_named_declaration(self, declaration);
+    }
+
+    fn visit_export_all_declaration(&mut self, declaration: &ExportAllDeclaration<'a>) {
+        if resolve_import(self.file_path, declaration.source.value.as_str())
+            == normalize_path(Path::new(self.css_path))
+        {
+            self.unsupported_shape = true;
+            self.warning_span.get_or_insert(declaration.span);
+        }
+        walk::walk_export_all_declaration(self, declaration);
     }
 }
 
@@ -1447,6 +1493,89 @@ mod tests {
         assert_eq!(response["files"], serde_json::json!([]));
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["retainedRules"], 2);
+    }
+
+    #[test]
+    fn keeps_a_module_import_when_any_rule_is_retained() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { padding: 13px; }\n.other { display: grid; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.card} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let source = response["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == "/project/Card.tsx")
+            .unwrap()["source"]
+            .as_str()
+            .unwrap();
+
+        assert!(source.contains("import styles from './Card.module.css'"));
+        assert!(source.contains("className=\"p-[13px]\""));
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(response["retainedRules"], 1);
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn warns_and_retains_reexported_css_modules() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.card} />;\n"
+            }, {
+                "path": "/project/index.ts",
+                "source": "export { default as cardStyles } from './Card.module.css';\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| warning["code"] == "unsupported-css-module-reference")
+        );
+    }
+
+    #[test]
+    fn retains_repeated_selector_rules_with_overlapping_utilities() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { padding: 8px; }\n.card { padding: 4px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.card} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 2);
+        assert_eq!(response["files"], serde_json::json!([]));
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|warning| warning["code"] == "unsupported-overlap")
+        );
     }
 
     #[test]
@@ -2088,6 +2217,40 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains(&format!("@keyframes {name}"))
+        );
+        assert_eq!(
+            response["deletedFiles"],
+            serde_json::json!(["/project/Button.module.css"])
+        );
+    }
+
+    #[test]
+    fn removes_an_import_after_moving_an_at_rule_only_module() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": "@keyframes fade { from { opacity: 0; } to { opacity: 1; } }\n",
+            "tailwindPath": "/project/globals.css",
+            "tailwindSource": "@import \"tailwindcss\";\n",
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button>Save</button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let source = response["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == "/project/Button.tsx")
+            .unwrap()["source"]
+            .as_str()
+            .unwrap();
+
+        assert_eq!(
+            source,
+            "export const Button = () => <button>Save</button>;\n"
         );
         assert_eq!(
             response["deletedFiles"],
