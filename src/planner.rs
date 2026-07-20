@@ -121,6 +121,10 @@ pub fn plan_json(request: &str) -> Result<String, String> {
         .as_ref()
         .zip(request.tailwind_source.as_ref())
         .is_some_and(|(path, _)| path != &request.css_path);
+    let relative_urls_stable = request
+        .tailwind_path
+        .as_ref()
+        .is_some_and(|path| Path::new(path).parent() == Path::new(&request.css_path).parent());
     let keyframe_scope = request
         .css_module_id
         .as_deref()
@@ -137,6 +141,7 @@ pub fn plan_json(request: &str) -> Result<String, String> {
         &request.theme_tokens,
         is_module,
         can_move_at_rules,
+        relative_urls_stable,
     )?;
 
     let blocked_classes = rules
@@ -345,6 +350,7 @@ fn parse_css_rules(
     theme_tokens: &HashMap<String, String>,
     is_module: bool,
     can_move_at_rules: bool,
+    relative_urls_stable: bool,
 ) -> Result<ParsedCss, String> {
     let allocator = oxc_css_parser::Allocator::default();
     let mut parser = CssParser::new(&allocator, source, Syntax::Css);
@@ -374,7 +380,7 @@ fn parse_css_rules(
                 let Statement::AtRule(at_rule) = statement else {
                     return None;
                 };
-                global_at_rule_plan(at_rule, source)
+                global_at_rule_plan(at_rule, source, relative_urls_stable)
             })
             .collect::<Vec<_>>()
     } else {
@@ -415,70 +421,20 @@ fn parse_css_rules(
         if let Some(variant) = selector_match.and_then(|(_, variant)| variant) {
             variants.push(variant);
         }
-        let mut candidates = Vec::new();
-        let mut margin = SpacingValues::default();
-        let mut padding = SpacingValues::default();
+        let (mut candidates, declaration_warning) = collect_declaration_candidates(
+            &rule.block.statements,
+            &variants,
+            source,
+            theme_tokens,
+            &keyframe_names,
+            is_module,
+        );
         let mut warning = key.is_none().then_some("unsupported-selector");
         if matches!(&key, Some(SelectorKey::Class(name)) if composed_classes.contains(name)) {
             warning = Some("css-module-composes");
         }
-
-        for statement in &rule.block.statements {
-            let Statement::Declaration(declaration) = statement else {
-                warning = Some("unsupported-rule-content");
-                continue;
-            };
-            if declaration.important.is_some() {
-                warning = Some("unsupported-important");
-                continue;
-            }
-            let Some(property) = literal_ident(&declaration.name) else {
-                warning = Some("unsupported-declaration");
-                continue;
-            };
-            let value = declaration_value(source, declaration);
-            if property == "composes" {
-                warning = Some("css-module-composes");
-                continue;
-            }
-            if is_module && matches!(property, "animation" | "animation-name") {
-                match animation_candidate(property, value, &keyframe_names) {
-                    Some(candidate) => candidates.push(candidate),
-                    None => warning = Some("unsupported-animation"),
-                }
-                continue;
-            }
-            let spacing_result = margin.apply(property, "margin", value).and_then(|handled| {
-                if handled {
-                    Ok(true)
-                } else {
-                    padding.apply(property, "padding", value)
-                }
-            });
-            match spacing_result {
-                Ok(true) => continue,
-                Err(()) => {
-                    warning = Some("unsupported-overlap");
-                    continue;
-                }
-                Ok(false) => {}
-            }
-            match declaration_to_candidate(property, value, theme_tokens) {
-                Some(candidate) => candidates.push(candidate),
-                None => warning = Some("unsupported-declaration"),
-            }
-        }
-
-        candidates.extend(margin.candidates("m", theme_tokens));
-        candidates.extend(padding.candidates("p", theme_tokens));
-        if candidates.is_empty() && warning.is_none() {
-            warning = Some("unsupported-declaration");
-        }
-        if !variants.is_empty() {
-            let variants = variants.join(":");
-            for candidate in &mut candidates {
-                *candidate = format!("{variants}:{candidate}");
-            }
+        if declaration_warning.is_some() {
+            warning = declaration_warning;
         }
         candidates.sort();
         candidates.dedup();
@@ -499,6 +455,106 @@ fn parse_css_rules(
         global_at_rules,
         module_content_movable,
     })
+}
+
+fn collect_declaration_candidates(
+    statements: &[Statement<'_>],
+    variants: &[String],
+    source: &str,
+    theme_tokens: &HashMap<String, String>,
+    keyframes: &HashMap<&str, &str>,
+    is_module: bool,
+) -> (Vec<String>, Option<&'static str>) {
+    let mut candidates = Vec::new();
+    let mut local_candidates = Vec::new();
+    let mut margin = SpacingValues::default();
+    let mut padding = SpacingValues::default();
+    let mut warning = None;
+
+    for statement in statements {
+        if let Statement::AtRule(at_rule) = statement {
+            let Some((variant, block)) = conditional_variant(at_rule, source, theme_tokens)
+                .zip(at_rule.block.as_ref())
+                .filter(|_| is_conditional(at_rule.name.name))
+            else {
+                warning = Some("unsupported-rule-content");
+                continue;
+            };
+            let mut nested_variants = variants.to_vec();
+            nested_variants.push(variant);
+            let (nested_candidates, nested_warning) = collect_declaration_candidates(
+                &block.statements,
+                &nested_variants,
+                source,
+                theme_tokens,
+                keyframes,
+                is_module,
+            );
+            candidates.extend(nested_candidates);
+            if nested_warning.is_some() {
+                warning = nested_warning;
+            }
+            continue;
+        }
+
+        let Statement::Declaration(declaration) = statement else {
+            warning = Some("unsupported-rule-content");
+            continue;
+        };
+        if declaration.important.is_some() {
+            warning = Some("unsupported-important");
+            continue;
+        }
+        let Some(property) = literal_ident(&declaration.name) else {
+            warning = Some("unsupported-declaration");
+            continue;
+        };
+        let value = declaration_value(source, declaration);
+        if property == "composes" {
+            warning = Some("css-module-composes");
+            continue;
+        }
+        if is_module && matches!(property, "animation" | "animation-name") {
+            match animation_candidate(property, value, keyframes) {
+                Some(candidate) => local_candidates.push(candidate),
+                None => warning = Some("unsupported-animation"),
+            }
+            continue;
+        }
+        let spacing_result = margin.apply(property, "margin", value).and_then(|handled| {
+            if handled {
+                Ok(true)
+            } else {
+                padding.apply(property, "padding", value)
+            }
+        });
+        match spacing_result {
+            Ok(true) => continue,
+            Err(()) => {
+                warning = Some("unsupported-overlap");
+                continue;
+            }
+            Ok(false) => {}
+        }
+        match declaration_to_candidate(property, value, theme_tokens) {
+            Some(candidate) => local_candidates.push(candidate),
+            None => warning = Some("unsupported-declaration"),
+        }
+    }
+
+    local_candidates.extend(margin.candidates("m", theme_tokens));
+    local_candidates.extend(padding.candidates("p", theme_tokens));
+    if !variants.is_empty() {
+        let variants = variants.join(":");
+        for candidate in &mut local_candidates {
+            *candidate = format!("{variants}:{candidate}");
+        }
+    }
+    candidates.extend(local_candidates);
+    if candidates.is_empty() && warning.is_none() {
+        warning = Some("unsupported-declaration");
+    }
+    (candidates, warning)
 }
 
 fn collect_composed_classes(
@@ -1421,7 +1477,7 @@ mod tests {
     }
 
     #[test]
-    fn retains_an_unmatched_media_breakpoint_range() {
+    fn converts_an_unmatched_media_range_to_an_arbitrary_variant() {
         let request = serde_json::json!({
             "cssPath": "/project/Card.module.css",
             "cssSource": "@media (min-width: 48rem) and (max-width: 60rem) { .card { padding: 13px; } }\n",
@@ -1438,9 +1494,11 @@ mod tests {
         let response: serde_json::Value =
             serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
 
-        assert_eq!(response["files"], serde_json::json!([]));
-        assert_eq!(response["convertedRules"], 0);
-        assert_eq!(response["warnings"][0]["code"], "unsupported-media-query");
+        assert_eq!(
+            response["candidates"],
+            serde_json::json!(["[@media_(min-width:48rem)_and_(max-width:60rem)]:p-[13px]"])
+        );
+        assert_eq!(response["convertedRules"], 1);
     }
 
     #[test]
@@ -1492,6 +1550,31 @@ mod tests {
     }
 
     #[test]
+    fn converts_conditions_nested_inside_style_rules() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": ".button { opacity: 1; @starting-style { opacity: 0; } @media (prefers-reduced-motion: reduce) { display: none; } }\n",
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(
+            response["candidates"],
+            serde_json::json!([
+                "[opacity:1]",
+                "motion-reduce:hidden",
+                "starting:[opacity:0]"
+            ])
+        );
+        assert_eq!(response["convertedRules"], 1);
+    }
+
+    #[test]
     fn moves_global_definition_at_rules_to_the_tailwind_entry() {
         let request = serde_json::json!({
             "cssPath": "/project/Button.module.css",
@@ -1530,12 +1613,12 @@ mod tests {
     #[test]
     fn retains_global_definition_at_rules_with_urls() {
         let request = serde_json::json!({
-            "cssPath": "/project/Button.module.css",
+            "cssPath": "/project/components/Button.module.css",
             "cssSource": "@font-face { font-family: Custom; src: url('./custom.woff2'); }\n.button { display: grid; }\n",
             "tailwindPath": "/project/globals.css",
             "tailwindSource": "@import \"tailwindcss\";\n",
             "files": [{
-                "path": "/project/Button.tsx",
+                "path": "/project/components/Button.tsx",
                 "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
             }]
         });
@@ -1555,10 +1638,64 @@ mod tests {
     }
 
     #[test]
-    fn retains_unsupported_nested_at_rules() {
+    fn moves_global_at_rules_with_stable_urls() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": "@font-face { font-family: Custom; src: url('./fonts/custom.woff2'); }\n@page { margin: 2cm; }\n.button { display: grid; }\n",
+            "tailwindPath": "/project/globals.css",
+            "tailwindSource": "@import \"tailwindcss\";\n",
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let tailwind = response["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == "/project/globals.css")
+            .unwrap()["source"]
+            .as_str()
+            .unwrap();
+
+        assert!(tailwind.contains("url('./fonts/custom.woff2')"));
+        assert!(tailwind.contains("@page"));
+        assert_eq!(
+            response["deletedFiles"],
+            serde_json::json!(["/project/Button.module.css"])
+        );
+    }
+
+    #[test]
+    fn converts_named_container_queries_to_arbitrary_variants() {
         let request = serde_json::json!({
             "cssPath": "/project/Button.module.css",
             "cssSource": "@media (min-width: 48rem) { .button { padding: 1rem; } @container card (min-width: 20rem) { .button { display: grid; } } }\n",
+            "themeTokens": { "breakpoint-md": "48rem" },
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(
+            response["candidates"],
+            serde_json::json!(["md:[@container_card_(min-width:20rem)]:grid", "md:p-[1rem]"])
+        );
+        assert_eq!(response["convertedRules"], 2);
+    }
+
+    #[test]
+    fn retains_unsupported_nested_at_rules() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": "@media (min-width: 48rem) { @layer components { .button { display: grid; } } }\n",
             "themeTokens": { "breakpoint-md": "48rem" },
             "files": [{
                 "path": "/project/Button.tsx",

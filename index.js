@@ -122,7 +122,8 @@ async function loadTailwind(cwd, tailwindCss) {
 
   const modulePath = projectRequire.resolve('tailwindcss');
   const tailwindModule = await import(pathToFileURL(modulePath));
-  const { compile } = tailwindModule.default ?? tailwindModule;
+  const { __unstable__loadDesignSystem: loadDesignSystem } =
+    tailwindModule.default ?? tailwindModule;
   const css = await readFile(tailwindCss, 'utf8');
   const base = dirname(tailwindCss);
   const loadModule = createModuleLoader();
@@ -132,7 +133,15 @@ async function loadTailwind(cwd, tailwindCss) {
     ...extractThemeTokens(defaultTheme),
     ...(await extractThemeTokensFromGraph(css, base, loadStylesheet)),
   };
-  return { compile, css, base, path: tailwindCss, loadModule, loadStylesheet, themeTokens };
+  return {
+    loadDesignSystem,
+    css,
+    base,
+    path: tailwindCss,
+    loadModule,
+    loadStylesheet,
+    themeTokens,
+  };
 }
 
 function extractThemeTokens(css) {
@@ -158,14 +167,13 @@ async function extractThemeTokensFromGraph(css, base, loadStylesheet, seen = new
 }
 
 async function validateCandidates(tailwind, candidates) {
+  const designSystem = await tailwind.loadDesignSystem(tailwind.css, {
+    base: tailwind.base,
+    loadModule: tailwind.loadModule,
+    loadStylesheet: tailwind.loadStylesheet,
+  });
   for (const candidate of candidates) {
-    const compiler = await tailwind.compile(tailwind.css, {
-      base: tailwind.base,
-      loadModule: tailwind.loadModule,
-      loadStylesheet: tailwind.loadStylesheet,
-    });
-    const baseline = compiler.build([]);
-    if (compiler.build([candidate]) === baseline) {
+    if (designSystem.candidatesToCss([candidate])[0] === null) {
       throw new Error(`Tailwind did not generate CSS for candidate: ${candidate}`);
     }
   }

@@ -15,7 +15,11 @@ pub(crate) struct GlobalAtRulePlan {
     pub(crate) source: String,
 }
 
-pub(crate) fn global_at_rule_plan(at_rule: &AtRule<'_>, source: &str) -> Option<GlobalAtRulePlan> {
+pub(crate) fn global_at_rule_plan(
+    at_rule: &AtRule<'_>,
+    source: &str,
+    relative_urls_stable: bool,
+) -> Option<GlobalAtRulePlan> {
     if !matches!(
         at_rule.name.name,
         "color-profile"
@@ -23,6 +27,7 @@ pub(crate) fn global_at_rule_plan(at_rule: &AtRule<'_>, source: &str) -> Option<
             | "font-face"
             | "font-feature-values"
             | "font-palette-values"
+            | "page"
             | "position-try"
             | "property"
             | "view-transition"
@@ -30,7 +35,7 @@ pub(crate) fn global_at_rule_plan(at_rule: &AtRule<'_>, source: &str) -> Option<
         return None;
     }
     let raw = &source[at_rule.span.start..at_rule.span.end];
-    if raw.to_ascii_lowercase().contains("url(") {
+    if !relative_urls_stable && has_relative_url(raw) {
         return None;
     }
     Some(GlobalAtRulePlan {
@@ -66,6 +71,29 @@ pub(crate) fn append_global_at_rules(
         output.push('\n');
     }
     Ok(output)
+}
+
+fn has_relative_url(source: &str) -> bool {
+    let lower = source.to_ascii_lowercase();
+    let mut rest = lower.as_str();
+    while let Some(start) = rest.find("url(") {
+        let after_open = &rest[start + 4..];
+        let Some(end) = after_open.find(')') else {
+            return true;
+        };
+        let value = after_open[..end].trim().trim_matches(['"', '\'']);
+        if !value.starts_with('/')
+            && !value.starts_with('#')
+            && !value.starts_with("data:")
+            && !value.starts_with("blob:")
+            && !value.starts_with("http://")
+            && !value.starts_with("https://")
+        {
+            return true;
+        }
+        rest = &after_open[end + 1..];
+    }
+    false
 }
 
 fn collect_at_rule_sources<'a>(
@@ -119,6 +147,7 @@ fn media_variant(
 ) -> Option<String> {
     media_breakpoint_variant(at_rule, source, theme_tokens)
         .or_else(|| media_feature_variant(at_rule, source))
+        .or_else(|| arbitrary_at_rule_variant(at_rule, source))
 }
 
 fn media_feature_variant(at_rule: &AtRule<'_>, source: &str) -> Option<String> {
@@ -177,6 +206,15 @@ fn container_variant(
     source: &str,
     theme_tokens: &HashMap<String, String>,
 ) -> Option<String> {
+    simple_container_variant(at_rule, source, theme_tokens)
+        .or_else(|| arbitrary_at_rule_variant(at_rule, source))
+}
+
+fn simple_container_variant(
+    at_rule: &AtRule<'_>,
+    source: &str,
+    theme_tokens: &HashMap<String, String>,
+) -> Option<String> {
     let query = at_rule_query(at_rule, source, "container")?;
     let (min_width, max_width) = width_query(query)?;
     if max_width.is_some() {
@@ -208,6 +246,26 @@ fn supports_variant(at_rule: &AtRule<'_>, source: &str) -> Option<String> {
         .replace("(_", "(")
         .replace("_)", ")");
     (!condition.is_empty()).then(|| format!("supports-[{condition}]"))
+}
+
+fn arbitrary_at_rule_variant(at_rule: &AtRule<'_>, source: &str) -> Option<String> {
+    let header = source[at_rule.span.start..at_rule.block.as_ref()?.span.start].trim();
+    if header.is_empty()
+        || header.contains(['[', ']', ';', '{', '}', '"', '\'', '\\', '_'])
+        || header.contains("/*")
+    {
+        return None;
+    }
+    let header = header
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("_")
+        .replace(":_", ":")
+        .replace("_:", ":")
+        .replace("(_", "(")
+        .replace("_)", ")")
+        .replace(",_", ",");
+    Some(format!("[{header}]"))
 }
 
 fn at_rule_query<'a>(at_rule: &AtRule<'_>, source: &'a str, name: &str) -> Option<&'a str> {

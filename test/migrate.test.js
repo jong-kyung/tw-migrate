@@ -90,6 +90,39 @@ test('converts Tailwind conditional variants and moves global definitions', asyn
   }
 });
 
+test('converts conditions nested inside style rules', async () => {
+  const cwd = await fixture({
+    css: '.button { opacity: 1; @starting-style { opacity: 0; } @media (prefers-reduced-motion: reduce) { display: none; } }\n',
+  });
+  try {
+    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    assert.deepEqual(report.candidates, [
+      '[opacity:1]',
+      'motion-reduce:hidden',
+      'starting:[opacity:0]',
+    ]);
+    assert.equal(report.convertedRules, 1);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('converts compound media and named container queries to arbitrary variants', async () => {
+  const cwd = await fixture({
+    css: '@media screen and (min-width: 40rem) and (orientation: landscape) { .button { display: grid; } }\n@container card (min-width: 20rem) and (max-width: 40rem) { .button { color: red; } }\n',
+  });
+  try {
+    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    assert.deepEqual(report.candidates, [
+      '[@container_card_(min-width:20rem)_and_(max-width:40rem)]:text-[red]',
+      '[@media_screen_and_(min-width:40rem)_and_(orientation:landscape)]:grid',
+    ]);
+    assert.equal(report.convertedRules, 2);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('warns when a generated utility conflicts with a static template class', async () => {
   const cwd = await fixture({
     tsx: "import styles from './Button.module.css';\nexport const Button = () => <button className={`${styles.button} p-2`}>Save</button>;\n",
@@ -98,6 +131,19 @@ test('warns when a generated utility conflicts with a static template class', as
     const report = await migrate({ cwd, cssFile: 'Button.module.css' });
     assert.equal(report.warnings[0].code, 'existing-tailwind-conflict');
     assert.match(report.diff, /className="p-\[13px\] p-2"/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('accepts candidates already emitted by the Tailwind entry', async () => {
+  const cwd = await fixture({
+    tailwind: '@import "tailwindcss";\n@source inline("p-[13px]");\n',
+  });
+  try {
+    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    assert.deepEqual(report.candidates, ['p-[13px]']);
+    assert.equal(report.convertedRules, 1);
   } finally {
     await cleanup(cwd);
   }
