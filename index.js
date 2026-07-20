@@ -13,6 +13,15 @@ export async function migrate(options) {
 
   const cwd = resolve(options.cwd ?? process.cwd());
   const cssPath = resolve(cwd, options.cssFile);
+  const leftovers = await collectFiles(cwd, (path) => basename(path).includes('.tw-migrate-'));
+  if (leftovers.length > 0) {
+    const listed = leftovers.map((path) => `  ${relative(cwd, path)}`).join('\n');
+    throw new Error(
+      `Found leftover tw-migrate files from an interrupted run:\n${listed}\n` +
+        'Restore each ".<name>.tw-migrate-backup-*" file by renaming it back to "<name>", ' +
+        'delete any remaining ".<name>.tw-migrate-*" staging files, then re-run.',
+    );
+  }
   const cssSource = await readFile(cssPath, 'utf8');
   const [sourcePaths, tailwindCss] = await Promise.all([
     collectFiles(cwd, (path) => SOURCE_EXTENSIONS.has(extension(path))),
@@ -244,9 +253,14 @@ async function writeChanges(changes, deletions) {
     if (succeeded) {
       await Promise.all(backups.map(([backupPath]) => rm(backupPath, { force: true })));
     } else {
-      await Promise.all(installed.map((path) => rm(path, { force: true })));
+      // Restoring a backup atomically replaces any installed content at the
+      // original path, so installed files never need a separate removal step.
+      // Best effort per file: one failed restore must not strand the rest;
+      // the startup leftover scan reports anything that could not be restored.
       for (const [backupPath, originalPath] of backedUp.reverse()) {
-        await rename(backupPath, originalPath);
+        try {
+          await rename(backupPath, originalPath);
+        } catch {}
       }
     }
     await Promise.all(staged.map(([temporaryPath]) => rm(temporaryPath, { force: true })));

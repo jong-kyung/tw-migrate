@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 
@@ -287,6 +287,51 @@ test(
       await migrate({ cwd, cssFile: 'Button.module.css', write: true });
 
       assert.equal((await stat(sourcePath)).mode & 0o777, 0o751);
+    } finally {
+      await cleanup(cwd);
+    }
+  },
+);
+
+test('fails fast when leftover files from an interrupted run exist', async () => {
+  const cwd = await fixture();
+  try {
+    await writeFile(join(cwd, '.Button.tsx.tw-migrate-backup-123-0'), 'old content');
+    await assert.rejects(migrate({ cwd, cssFile: 'Button.module.css' }), /interrupted run/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test(
+  'restores originals when a write fails partway',
+  { skip: process.platform === 'win32' },
+  async () => {
+    const cwd = await fixture();
+    try {
+      const componentTsx =
+        "import styles from '../Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n";
+      await mkdir(join(cwd, 'components'));
+      await Promise.all([
+        rm(join(cwd, 'Button.tsx')),
+        writeFile(join(cwd, 'components', 'Button.tsx'), componentTsx),
+      ]);
+
+      // Read-only root: staging in components/ and its backup rename succeed,
+      // then deleting Button.module.css (backup rename in the root) fails.
+      await chmod(cwd, 0o555);
+      try {
+        await assert.rejects(migrate({ cwd, cssFile: 'Button.module.css', write: true }));
+      } finally {
+        await chmod(cwd, 0o755);
+      }
+
+      assert.equal(await readFile(join(cwd, 'components', 'Button.tsx'), 'utf8'), componentTsx);
+      assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
+      const leftovers = (await readdir(join(cwd, 'components'))).filter((name) =>
+        name.includes('.tw-migrate-'),
+      );
+      assert.deepEqual(leftovers, []);
     } finally {
       await cleanup(cwd);
     }
