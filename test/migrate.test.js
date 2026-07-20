@@ -92,6 +92,26 @@ test('loads Tailwind config and plugin modules', async () => {
   }
 });
 
+test('moves local keyframes to Tailwind before deleting a CSS Module', async () => {
+  const cwd = await fixture({
+    css: '@keyframes fade { from { opacity: 0; } to { opacity: 1; } }\n.button { animation: fade 1s; }\n',
+  });
+  try {
+    const preview = await migrate({ cwd, cssFile: 'Button.module.css' });
+    const match = /^\[animation:(tw-migrate-[a-f0-9]+-fade)_1s\]$/.exec(preview.candidates[0]);
+    assert.ok(match);
+    assert.deepEqual(preview.changedFiles, ['Button.module.css', 'Button.tsx', 'globals.css']);
+    assert.match(preview.diff, new RegExp(`@keyframes ${match[1]}`));
+
+    await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    await assert.rejects(readFile(join(cwd, 'Button.module.css'), 'utf8'), { code: 'ENOENT' });
+    assert.match(await readFile(join(cwd, 'Button.tsx'), 'utf8'), new RegExp(match[1]));
+    assert.match(await readFile(join(cwd, 'globals.css'), 'utf8'), new RegExp(`@keyframes ${match[1]}`));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('uses an exact project theme token before arbitrary fallback', async () => {
   const cwd = await fixture({
     tailwind: '@import "tailwindcss";\n@theme { --spacing-card: 13px; }\n',
@@ -105,7 +125,7 @@ test('uses an exact project theme token before arbitrary fallback', async () => 
   }
 });
 
-test('previews without writing, applies, and is idempotent', async () => {
+test('previews and applies a complete CSS Module migration', async () => {
   const cwd = await fixture();
   try {
     const preview = await migrate({ cwd, cssFile: 'Button.module.css' });
@@ -119,15 +139,11 @@ test('previews without writing, applies, and is idempotent', async () => {
 
     const applied = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
     assert.deepEqual(applied.changedFiles, preview.changedFiles);
-    assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), '\n');
+    await assert.rejects(readFile(join(cwd, 'Button.module.css'), 'utf8'), { code: 'ENOENT' });
     assert.equal(
       await readFile(join(cwd, 'Button.tsx'), 'utf8'),
       'export const Button = () => <button className="p-[13px]">Save</button>;\n',
     );
-
-    const secondRun = await migrate({ cwd, cssFile: 'Button.module.css' });
-    assert.deepEqual(secondRun.changedFiles, []);
-    assert.equal(secondRun.diff, '');
   } finally {
     await cleanup(cwd);
   }

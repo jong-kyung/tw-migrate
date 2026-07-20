@@ -11,7 +11,10 @@ use oxc_ast::ast::{
 use oxc_ast_visit::{Visit, walk};
 use oxc_css_parser::{
     Parser as CssParser, Syntax,
-    ast::{ComplexSelectorChild, InterpolableIdent, SimpleSelector, Statement, Stylesheet},
+    ast::{
+        AtRulePrelude, ComplexSelectorChild, InterpolableIdent, KeyframesName, SimpleSelector,
+        Statement, Stylesheet,
+    },
 };
 use oxc_parser::Parser;
 use oxc_semantic::{Scoping, SemanticBuilder};
@@ -24,6 +27,12 @@ use serde::{Deserialize, Serialize};
 struct PlanRequest {
     css_path: String,
     css_source: String,
+    #[serde(default)]
+    css_module_id: Option<String>,
+    #[serde(default)]
+    tailwind_path: Option<String>,
+    #[serde(default)]
+    tailwind_source: Option<String>,
     #[serde(default)]
     theme_tokens: HashMap<String, String>,
     files: Vec<SourceFile>,
@@ -39,6 +48,7 @@ struct SourceFile {
 #[serde(rename_all = "camelCase")]
 struct PlanResponse {
     files: Vec<PlannedFile>,
+    deleted_files: Vec<String>,
     candidates: Vec<String>,
     converted_rules: usize,
     retained_rules: usize,
@@ -75,6 +85,13 @@ enum SelectorKey {
 }
 
 #[derive(Clone)]
+struct KeyframePlan {
+    span: std::ops::Range<usize>,
+    name: String,
+    migrated_name: String,
+    source: String,
+}
+
 struct RulePlan {
     span: std::ops::Range<usize>,
     selector: String,
@@ -94,11 +111,22 @@ struct Edit {
 pub fn plan_json(request: &str) -> Result<String, String> {
     let request: PlanRequest = serde_json::from_str(request).map_err(|error| error.to_string())?;
     let is_module = request.css_path.ends_with(".module.css");
-    let rules = parse_css_rules(
+    let can_move_keyframes = request
+        .tailwind_path
+        .as_ref()
+        .zip(request.tailwind_source.as_ref())
+        .is_some_and(|(path, _)| path != &request.css_path);
+    let keyframe_scope = request
+        .css_module_id
+        .as_deref()
+        .unwrap_or(&request.css_path);
+    let (rules, keyframes, module_content_movable) = parse_css_rules(
         &request.css_path,
+        keyframe_scope,
         &request.css_source,
         &request.theme_tokens,
         is_module,
+        can_move_keyframes,
     )?;
 
     let blocked_classes = rules
@@ -131,7 +159,13 @@ pub fn plan_json(request: &str) -> Result<String, String> {
     let mut warnings = Vec::new();
 
     for file in &request.files {
-        let result = plan_source_file(file, &request.css_path, is_module, &candidate_map)?;
+        let result = plan_source_file(
+            file,
+            &request.css_path,
+            is_module,
+            module_content_movable,
+            &candidate_map,
+        )?;
 
         module_references_safe &= result.module_references_safe;
         for candidate in result.candidates {
@@ -213,17 +247,56 @@ pub fn plan_json(request: &str) -> Result<String, String> {
         }
     }
 
+    let remove_keyframes = is_module && module_references_safe && retained_rules == 0;
+    let moved_keyframes = keyframes
+        .iter()
+        .filter(|keyframe| {
+            remove_keyframes
+                || candidates
+                    .iter()
+                    .any(|candidate| candidate.contains(&keyframe.migrated_name))
+        })
+        .collect::<Vec<_>>();
+    if remove_keyframes {
+        css_edits.extend(keyframes.iter().map(|keyframe| Edit {
+            start: keyframe.span.start,
+            end: keyframe.span.end,
+            replacement: String::new(),
+        }));
+    }
+    if !moved_keyframes.is_empty()
+        && let Some((tailwind_path, tailwind_source)) = request
+            .tailwind_path
+            .as_ref()
+            .zip(request.tailwind_source.as_ref())
+    {
+        let source = append_keyframes(tailwind_source, &moved_keyframes)?;
+        validate_css(&source)?;
+        if source != *tailwind_source {
+            planned_files.push(PlannedFile {
+                path: tailwind_path.clone(),
+                source,
+            });
+        }
+    }
+
+    let mut deleted_files = Vec::new();
     if !css_edits.is_empty() {
         let source = apply_edits(&request.css_source, css_edits)?;
         validate_css(&source)?;
-        planned_files.push(PlannedFile {
-            path: request.css_path,
-            source,
-        });
+        if is_module && source.trim().is_empty() {
+            deleted_files.push(request.css_path);
+        } else {
+            planned_files.push(PlannedFile {
+                path: request.css_path,
+                source,
+            });
+        }
     }
 
     serde_json::to_string(&PlanResponse {
         files: planned_files,
+        deleted_files,
         candidates: candidates.into_iter().collect(),
         converted_rules,
         retained_rules,
@@ -231,6 +304,63 @@ pub fn plan_json(request: &str) -> Result<String, String> {
         warnings,
     })
     .map_err(|error| error.to_string())
+}
+
+fn append_keyframes(source: &str, keyframes: &[&KeyframePlan]) -> Result<String, String> {
+    let allocator = oxc_css_parser::Allocator::default();
+    let mut parser = CssParser::new(&allocator, source, Syntax::Css);
+    let stylesheet = parser
+        .parse::<Stylesheet>()
+        .map_err(|error| format!("Failed to parse Tailwind CSS: {error:?}"))?;
+    let mut existing = HashMap::new();
+    collect_keyframes(&stylesheet.statements, source, &mut existing);
+
+    let mut output = source.to_string();
+    for keyframe in keyframes {
+        if let Some(current) = existing.get(&keyframe.migrated_name) {
+            if current.trim() != keyframe.source.trim() {
+                return Err(format!(
+                    "Tailwind CSS already defines a different @keyframes {}",
+                    keyframe.migrated_name
+                ));
+            }
+            continue;
+        }
+        if !output.ends_with('\n') {
+            output.push('\n');
+        }
+        if !output.ends_with("\n\n") {
+            output.push('\n');
+        }
+        output.push_str(keyframe.source.trim());
+        output.push('\n');
+    }
+    Ok(output)
+}
+
+fn collect_keyframes(
+    statements: &[Statement<'_>],
+    source: &str,
+    keyframes: &mut HashMap<String, String>,
+) {
+    for statement in statements {
+        let Statement::AtRule(at_rule) = statement else {
+            continue;
+        };
+        if at_rule.name.name == "keyframes"
+            && let Some(AtRulePrelude::Keyframes(KeyframesName::Ident(InterpolableIdent::Literal(
+                name,
+            )))) = &at_rule.prelude
+        {
+            keyframes.insert(
+                name.name.to_string(),
+                source[at_rule.span.start..at_rule.span.end].to_string(),
+            );
+        }
+        if let Some(block) = &at_rule.block {
+            collect_keyframes(&block.statements, source, keyframes);
+        }
+    }
 }
 
 fn merge_counts(target: &mut HashMap<String, usize>, source: HashMap<String, usize>) {
@@ -314,15 +444,48 @@ impl SpacingValues {
 
 fn parse_css_rules(
     path: &str,
+    keyframe_scope: &str,
     source: &str,
     theme_tokens: &HashMap<String, String>,
     is_module: bool,
-) -> Result<Vec<RulePlan>, String> {
+    can_move_keyframes: bool,
+) -> Result<(Vec<RulePlan>, Vec<KeyframePlan>, bool), String> {
     let allocator = oxc_css_parser::Allocator::default();
     let mut parser = CssParser::new(&allocator, source, Syntax::Css);
     let stylesheet = parser
         .parse::<Stylesheet>()
         .map_err(|error| format!("Failed to parse {path}: {error:?}"))?;
+
+    let keyframes = if is_module && can_move_keyframes {
+        stylesheet
+            .statements
+            .iter()
+            .filter_map(|statement| {
+                let Statement::AtRule(at_rule) = statement else {
+                    return None;
+                };
+                keyframe_plan(at_rule, keyframe_scope, source)
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let module_content_movable = !is_module
+        || stylesheet
+            .statements
+            .iter()
+            .all(|statement| match statement {
+                Statement::QualifiedRule(_) => true,
+                Statement::AtRule(at_rule) if at_rule.name.name == "media" => true,
+                Statement::AtRule(at_rule) if at_rule.name.name == "keyframes" => keyframes
+                    .iter()
+                    .any(|keyframe| keyframe.span.start == at_rule.span.start),
+                _ => false,
+            });
+    let keyframe_names = keyframes
+        .iter()
+        .map(|keyframe| (keyframe.name.as_str(), keyframe.migrated_name.as_str()))
+        .collect::<HashMap<_, _>>();
 
     let mut composed_classes = BTreeSet::new();
     if is_module {
@@ -417,6 +580,13 @@ fn parse_css_rules(
                 warning = Some("css-module-composes");
                 continue;
             }
+            if is_module && matches!(property, "animation" | "animation-name") {
+                match animation_candidate(property, value, &keyframe_names) {
+                    Some(candidate) => candidates.push(candidate),
+                    None => warning = Some("unsupported-animation"),
+                }
+                continue;
+            }
             let spacing_result = margin.apply(property, "margin", value).and_then(|handled| {
                 if handled {
                     Ok(true)
@@ -440,7 +610,7 @@ fn parse_css_rules(
 
         candidates.extend(margin.candidates("m", theme_tokens));
         candidates.extend(padding.candidates("p", theme_tokens));
-        if candidates.is_empty() {
+        if candidates.is_empty() && warning.is_none() {
             warning = Some("unsupported-declaration");
         }
         if let Some(variant) = variant {
@@ -459,7 +629,107 @@ fn parse_css_rules(
             warning,
         });
     }
-    Ok(rules)
+    let module_content_movable =
+        module_content_movable && rules.iter().all(|rule| rule.warning.is_none());
+    Ok((rules, keyframes, module_content_movable))
+}
+
+fn keyframe_plan(
+    at_rule: &oxc_css_parser::ast::AtRule<'_>,
+    path: &str,
+    source: &str,
+) -> Option<KeyframePlan> {
+    if at_rule.name.name != "keyframes" || at_rule.block.is_none() {
+        return None;
+    }
+    let Some(AtRulePrelude::Keyframes(KeyframesName::Ident(InterpolableIdent::Literal(name)))) =
+        &at_rule.prelude
+    else {
+        return None;
+    };
+    let raw = &source[at_rule.span.start..at_rule.span.end];
+    if raw.to_ascii_lowercase().contains("url(") {
+        return None;
+    }
+
+    let migrated_name = format!("tw-migrate-{:x}-{}", stable_hash(path), name.name);
+    let mut migrated_source = raw.to_string();
+    migrated_source.replace_range(
+        name.span.start - at_rule.span.start..name.span.end - at_rule.span.start,
+        &migrated_name,
+    );
+    Some(KeyframePlan {
+        span: at_rule.span.start..at_rule.span.end,
+        name: name.name.to_string(),
+        migrated_name,
+        source: migrated_source,
+    })
+}
+
+fn stable_hash(value: &str) -> u64 {
+    value.bytes().fold(0xcbf29ce484222325, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+    })
+}
+
+fn animation_candidate(
+    property: &str,
+    value: &str,
+    keyframes: &HashMap<&str, &str>,
+) -> Option<String> {
+    if value.contains(',') {
+        return None;
+    }
+    let parts = value.split_whitespace().collect::<Vec<_>>();
+    if property == "animation-name" && parts.len() != 1 {
+        return None;
+    }
+    let names = parts
+        .iter()
+        .copied()
+        .filter(|part| keyframes.contains_key(part))
+        .collect::<Vec<_>>();
+    let [name] = names.as_slice() else {
+        return None;
+    };
+    if property == "animation" && is_animation_keyword(name) {
+        return None;
+    }
+    let migrated_value = parts
+        .into_iter()
+        .map(|part| keyframes.get(part).copied().unwrap_or(part))
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(format!("[{property}:{}]", arbitrary_value(&migrated_value)))
+}
+
+fn is_animation_keyword(value: &str) -> bool {
+    matches!(
+        value,
+        "none"
+            | "linear"
+            | "ease"
+            | "ease-in"
+            | "ease-out"
+            | "ease-in-out"
+            | "step-start"
+            | "step-end"
+            | "infinite"
+            | "normal"
+            | "reverse"
+            | "alternate"
+            | "alternate-reverse"
+            | "forwards"
+            | "backwards"
+            | "both"
+            | "running"
+            | "paused"
+            | "initial"
+            | "inherit"
+            | "unset"
+            | "revert"
+            | "revert-layer"
+    )
 }
 
 fn selector_classes(rule: &oxc_css_parser::ast::QualifiedRule<'_>) -> Vec<String> {
@@ -785,6 +1055,7 @@ fn plan_source_file(
     file: &SourceFile,
     css_path: &str,
     is_module: bool,
+    allow_import_removal: bool,
     candidates: &HashMap<SelectorKey, Vec<String>>,
 ) -> Result<SourcePlan, String> {
     let allocator = Allocator::default();
@@ -852,6 +1123,7 @@ fn plan_source_file(
     }
 
     if is_module
+        && allow_import_removal
         && module_references_safe
         && !imports.bindings.is_empty()
         && classified_import_refs == collector.matched_module_refs.values().sum::<usize>()
@@ -1361,7 +1633,11 @@ fn validate_css(source: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{plan_json, tailwind_utilities_conflict};
+    use std::collections::HashMap;
+
+    use super::{
+        KeyframePlan, animation_candidate, append_keyframes, plan_json, tailwind_utilities_conflict,
+    };
 
     #[test]
     fn appends_a_global_class_and_retains_the_rule() {
@@ -1789,6 +2065,106 @@ mod tests {
     }
 
     #[test]
+    fn moves_local_keyframes_to_the_tailwind_entry() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": "@keyframes fade { from { opacity: 0; } to { opacity: 1; } }\n.button { animation: fade 1s; }\n",
+            "tailwindPath": "/project/globals.css",
+            "tailwindSource": "@import \"tailwindcss\";\n",
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let candidate = response["candidates"][0].as_str().unwrap();
+        let name = candidate
+            .strip_prefix("[animation:")
+            .and_then(|candidate| candidate.strip_suffix("_1s]"))
+            .unwrap();
+        let tailwind = response["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == "/project/globals.css")
+            .unwrap();
+
+        assert!(name.starts_with("tw-migrate-"));
+        assert!(name.ends_with("-fade"));
+        assert!(
+            tailwind["source"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("@keyframes {name}"))
+        );
+        assert_eq!(
+            response["deletedFiles"],
+            serde_json::json!(["/project/Button.module.css"])
+        );
+    }
+
+    #[test]
+    fn rejects_conflicting_tailwind_keyframes() {
+        let keyframe = KeyframePlan {
+            span: 0..0,
+            name: "fade".to_string(),
+            migrated_name: "tw-migrate-fade".to_string(),
+            source: "@keyframes tw-migrate-fade { from { opacity: 0; } }".to_string(),
+        };
+
+        assert!(
+            append_keyframes(
+                "@keyframes tw-migrate-fade { from { opacity: 1; } }",
+                &[&keyframe]
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_ambiguous_animation_names() {
+        let keyframes = HashMap::from([("linear", "tw-migrate-linear")]);
+
+        assert_eq!(
+            animation_candidate("animation", "linear 1s", &keyframes),
+            None
+        );
+        assert_eq!(
+            animation_candidate("animation-name", "linear", &keyframes),
+            Some("[animation-name:tw-migrate-linear]".to_string())
+        );
+    }
+
+    #[test]
+    fn retains_unsupported_keyframe_dependencies() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": "@keyframes fade { from { opacity: 0; } to { opacity: 1; } }\n.button { animation: fade 1s, fade 2s; }\n",
+            "tailwindPath": "/project/globals.css",
+            "tailwindSource": "@import \"tailwindcss\";\n",
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| { warning["code"] == "unsupported-animation" })
+        );
+    }
+
+    #[test]
     fn plans_a_direct_css_module_padding_migration() {
         let request = serde_json::json!({
             "cssPath": "/project/Button.module.css",
@@ -1809,6 +2185,9 @@ mod tests {
             response["files"][0]["source"],
             "export const Button = () => <button className=\"p-[13px]\">Save</button>;\n"
         );
-        assert_eq!(response["files"][1]["source"], "\n");
+        assert_eq!(
+            response["deletedFiles"],
+            serde_json::json!(["/project/Button.module.css"])
+        );
     }
 }

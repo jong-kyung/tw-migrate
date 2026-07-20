@@ -333,7 +333,7 @@ A media query migrates when its minimum-width condition exactly matches a Tailwi
 
 may become `md:p-8` when `md` is exactly `768px` in the target theme. A bounded range such as `@media (min-width: 48rem) and (max-width: 63.999rem)` becomes `md:max-lg:p-8` when the bounds match the `md` and `lg` breakpoints. Queries with additional or unmatched conditions remain unchanged.
 
-Other media queries, `@supports`, and container queries remain unchanged in the first release.
+Local CSS Module `@keyframes` referenced by a single static `animation` or `animation-name` are renamed deterministically and moved to the Tailwind entry before the module is removed. Multiple animations, ambiguous names, relative URLs, and dynamic values remain unchanged. Other media queries, `@supports`, and container queries remain unchanged in the first release.
 
 ## CSS Rule Cleanup
 
@@ -364,7 +364,7 @@ const cardClass = styles.card;
 }
 ```
 
-When an export is removed, its JSX member reference is removed as well. An import is deleted only when no imported CSS Module members remain in use.
+When an export is removed, its JSX member reference is removed as well. An import is deleted only when no imported CSS Module members remain in use. A CSS Module file is deleted after every rule and movable at-rule dependency has been migrated; otherwise the file and required imports remain.
 
 For selector lists, the entire rule is removed only when every selector is safely migrated. The first release does not split partially migrated declaration blocks.
 

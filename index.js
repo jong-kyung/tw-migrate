@@ -28,6 +28,9 @@ export async function migrate(options) {
       JSON.stringify({
         cssPath,
         cssSource,
+        cssModuleId: relative(cwd, cssPath),
+        tailwindPath: tailwind.path,
+        tailwindSource: tailwind.css,
         themeTokens: tailwind.themeTokens,
         files,
       }),
@@ -35,14 +38,22 @@ export async function migrate(options) {
   );
   await validateCandidates(tailwind, plan.candidates);
 
+  const originals = new Map([
+    ...files.map((file) => [file.path, file.source]),
+    [cssPath, cssSource],
+    [tailwind.path, tailwind.css],
+  ]);
   const changed = plan.files
-    .map((file) => ({ ...file, before: file.path === cssPath ? cssSource : files.find((item) => item.path === file.path)?.source }))
-    .filter((file) => file.before !== undefined && file.before !== file.source)
-    .sort((left, right) => left.path.localeCompare(right.path));
-  const changedFiles = changed.map((file) => relative(cwd, file.path));
-  const diff = changed.map((file) => unifiedDiff(relative(cwd, file.path), file.before, file.source)).join('');
+    .map((file) => ({ ...file, before: originals.get(file.path) }))
+    .filter((file) => file.before !== undefined && file.before !== file.source);
+  const deleted = plan.deletedFiles.map((path) => ({ path, before: originals.get(path) }));
+  const operations = [...changed, ...deleted].sort((left, right) => left.path.localeCompare(right.path));
+  const changedFiles = operations.map((file) => relative(cwd, file.path));
+  const diff = operations
+    .map((file) => unifiedDiff(relative(cwd, file.path), file.before, 'source' in file ? file.source : ''))
+    .join('');
 
-  if (options.write && changed.length > 0) await writeChanges(changed);
+  if (options.write && operations.length > 0) await writeChanges(changed, deleted);
 
   return {
     changedFiles,
@@ -121,7 +132,7 @@ async function loadTailwind(cwd, tailwindCss) {
     ...extractThemeTokens(defaultTheme),
     ...(await extractThemeTokensFromGraph(css, base, loadStylesheet)),
   };
-  return { compile, css, base, loadModule, loadStylesheet, themeTokens };
+  return { compile, css, base, path: tailwindCss, loadModule, loadStylesheet, themeTokens };
 }
 
 function extractThemeTokens(css) {
@@ -195,15 +206,39 @@ function unifiedDiff(path, before, after) {
   ].join('');
 }
 
-async function writeChanges(changes) {
+async function writeChanges(changes, deletions) {
+  const token = `${process.pid}-${Date.now()}`;
   const staged = changes.map((change, index) => [
-    join(dirname(change.path), `.${basename(change.path)}.tw-migrate-${process.pid}-${index}`),
+    join(dirname(change.path), `.${basename(change.path)}.tw-migrate-${token}-${index}`),
     change,
   ]);
+  const backups = [...changes, ...deletions].map((change, index) => [
+    join(dirname(change.path), `.${basename(change.path)}.tw-migrate-backup-${token}-${index}`),
+    change.path,
+  ]);
+  const backedUp = [];
+  const installed = [];
+  let succeeded = false;
   try {
     for (const [temporaryPath, change] of staged) await writeFile(temporaryPath, change.source);
-    for (const [temporaryPath, change] of staged) await rename(temporaryPath, change.path);
+    for (const [backupPath, originalPath] of backups) {
+      await rename(originalPath, backupPath);
+      backedUp.push([backupPath, originalPath]);
+    }
+    for (const [temporaryPath, change] of staged) {
+      await rename(temporaryPath, change.path);
+      installed.push(change.path);
+    }
+    succeeded = true;
   } finally {
+    if (succeeded) {
+      await Promise.all(backups.map(([backupPath]) => rm(backupPath, { force: true })));
+    } else {
+      await Promise.all(installed.map((path) => rm(path, { force: true })));
+      for (const [backupPath, originalPath] of backedUp.reverse()) {
+        await rename(backupPath, originalPath);
+      }
+    }
     await Promise.all(staged.map(([temporaryPath]) => rm(temporaryPath, { force: true })));
   }
 }
