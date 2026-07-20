@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 
@@ -260,6 +260,24 @@ test('scans mjs and mts references before deleting a CSS Module', async () => {
     await cleanup(cwd);
   }
 });
+
+test(
+  'preserves source file permissions when writing changes',
+  { skip: process.platform === 'win32' },
+  async () => {
+    const cwd = await fixture();
+    try {
+      const sourcePath = join(cwd, 'Button.tsx');
+      await chmod(sourcePath, 0o751);
+
+      await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+
+      assert.equal((await stat(sourcePath)).mode & 0o777, 0o751);
+    } finally {
+      await cleanup(cwd);
+    }
+  },
+);
 
 test('previews and applies a complete CSS Module migration', async () => {
   const cwd = await fixture();

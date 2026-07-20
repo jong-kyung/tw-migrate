@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import { readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -228,7 +228,11 @@ async function writeChanges(changes, deletions) {
   const installed = [];
   let succeeded = false;
   try {
-    for (const [temporaryPath, change] of staged) await writeFile(temporaryPath, change.source);
+    for (const [temporaryPath, change] of staged) {
+      const { mode } = await stat(change.path);
+      await writeFile(temporaryPath, change.source);
+      await chmod(temporaryPath, mode & 0o777);
+    }
     for (const [backupPath, originalPath] of backups) {
       await rename(originalPath, backupPath);
       backedUp.push([backupPath, originalPath]);
