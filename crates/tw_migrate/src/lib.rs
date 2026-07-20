@@ -1,6 +1,8 @@
 mod animations;
 mod arbitrary;
 mod at_rules;
+mod css_plan;
+mod js_rewrite;
 mod planner;
 mod theme;
 mod utilities;
