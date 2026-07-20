@@ -521,13 +521,23 @@ fn collect_declaration_candidates(
             }
             continue;
         }
-        let spacing_result = margin.apply(property, "margin", value).and_then(|handled| {
-            if handled {
-                Ok(true)
-            } else {
-                padding.apply(property, "padding", value)
-            }
-        });
+        let components = declaration
+            .value
+            .iter()
+            .map(|component| {
+                let span = component.span();
+                source[span.start..span.end].trim()
+            })
+            .collect::<Vec<_>>();
+        let spacing_result = margin
+            .apply(property, "margin", value, &components)
+            .and_then(|handled| {
+                if handled {
+                    Ok(true)
+                } else {
+                    padding.apply(property, "padding", value, &components)
+                }
+            });
         match spacing_result {
             Ok(true) => continue,
             Err(()) => {
@@ -1786,6 +1796,27 @@ mod tests {
             response["candidates"],
             serde_json::json!(["mb-4", "ml-8", "mr-4", "mt-4"])
         );
+    }
+
+    #[test]
+    fn preserves_functional_spacing_values() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { margin: calc(100% - 1rem); padding: var(--space, 1rem); }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.card} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(
+            response["candidates"],
+            serde_json::json!(["m-[calc(100%_-_1rem)]", "p-[var(--space,_1rem)]"])
+        );
+        assert_eq!(response["convertedRules"], 1);
     }
 
     #[test]

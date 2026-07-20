@@ -9,10 +9,15 @@ pub(crate) struct SpacingValues {
 }
 
 impl SpacingValues {
-    pub(crate) fn apply(&mut self, property: &str, family: &str, value: &str) -> Result<bool, ()> {
+    pub(crate) fn apply(
+        &mut self,
+        property: &str,
+        family: &str,
+        value: &str,
+        components: &[&str],
+    ) -> Result<bool, ()> {
         if property == family {
-            let parts = value.split_whitespace().collect::<Vec<_>>();
-            let sides = match parts.as_slice() {
+            let sides = match components {
                 [all] => [*all, *all, *all, *all],
                 [vertical, horizontal] => [*vertical, *horizontal, *vertical, *horizontal],
                 [top, horizontal, bottom] => [*top, *horizontal, *bottom, *horizontal],

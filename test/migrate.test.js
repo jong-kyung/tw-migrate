@@ -188,6 +188,22 @@ test('moves local keyframes to Tailwind before deleting a CSS Module', async () 
   }
 });
 
+test('preserves functional values in spacing shorthands', async () => {
+  const cwd = await fixture({
+    css: '.button { margin: calc(100% - 1rem); padding: var(--space, 1rem); }\n',
+  });
+  try {
+    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    assert.deepEqual(report.candidates, [
+      'm-[calc(100%_-_1rem)]',
+      'p-[var(--space,_1rem)]',
+    ]);
+    assert.equal(report.convertedRules, 1);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('uses an exact project theme token before arbitrary fallback', async () => {
   const cwd = await fixture({
     tailwind: '@import "tailwindcss";\n@theme { --spacing-card: 13px; }\n',
