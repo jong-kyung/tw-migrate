@@ -317,6 +317,41 @@ test(
   },
 );
 
+test('a second run after applying a global migration is a no-op', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(join(cwd, 'legacy.css'), '.card { padding: 13px; }\n#hero { height: 100vh; }\n'),
+      writeFile(join(cwd, 'Card.tsx'), 'export const Card = () => <main id="hero" className="card" />;\n'),
+    ]);
+    const first = await migrate({ cwd, cssFile: 'legacy.css', write: true });
+    assert.deepEqual(first.changedFiles, ['Card.tsx']);
+
+    const second = await migrate({ cwd, cssFile: 'legacy.css' });
+    assert.deepEqual(second.changedFiles, []);
+    assert.equal(second.diff, '');
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('a second run after a partial module migration is a no-op', async () => {
+  const cwd = await fixture({
+    css: '.button { padding: 13px; }\n.other { display: grid; }\n',
+  });
+  try {
+    const first = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    assert.deepEqual(first.changedFiles, ['Button.module.css', 'Button.tsx']);
+
+    const second = await migrate({ cwd, cssFile: 'Button.module.css' });
+    assert.deepEqual(second.changedFiles, []);
+    assert.equal(second.diff, '');
+    assert.match(await readFile(join(cwd, 'Button.module.css'), 'utf8'), /\.other/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('fails fast when leftover files from an interrupted run exist', async () => {
   const cwd = await fixture();
   try {
