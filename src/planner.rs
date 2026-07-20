@@ -127,11 +127,13 @@ pub fn plan_json(request: &str) -> Result<String, String> {
     let mut candidates = BTreeSet::new();
     let mut module_refs: HashMap<String, usize> = HashMap::new();
     let mut matched_module_refs: HashMap<String, usize> = HashMap::new();
+    let mut module_references_safe = true;
     let mut warnings = Vec::new();
 
     for file in &request.files {
         let result = plan_source_file(file, &request.css_path, is_module, &candidate_map)?;
 
+        module_references_safe &= result.module_references_safe;
         for candidate in result.candidates {
             candidates.insert(candidate);
         }
@@ -156,6 +158,7 @@ pub fn plan_json(request: &str) -> Result<String, String> {
 
     for rule in rules {
         let can_remove = is_module
+            && module_references_safe
             && rule.warning.is_none()
             && match &rule.key {
                 Some(SelectorKey::Class(name)) => {
@@ -760,6 +763,7 @@ struct SourcePlan {
     candidates: Vec<String>,
     module_refs: HashMap<String, usize>,
     matched_module_refs: HashMap<String, usize>,
+    module_references_safe: bool,
     warnings: Vec<Warning>,
 }
 
@@ -790,17 +794,26 @@ fn plan_source_file(
     let mut imports = ImportCollector {
         file_path: &file.path,
         css_path,
-        import_symbol: None,
-        import_span: None,
+        bindings: Vec::new(),
+        unsupported_shape: false,
+        warning_span: None,
     };
-    imports.visit_program(&parsed.program);
+    if is_module {
+        imports.visit_program(&parsed.program);
+    }
 
+    let scoping = semantic.semantic.scoping();
+    let total_import_refs = imports
+        .bindings
+        .iter()
+        .map(|binding| scoping.get_resolved_reference_ids(binding.symbol).len())
+        .sum::<usize>();
     let mut collector = UsageCollector {
         source: &file.source,
         file_path: &file.path,
         is_module,
-        scoping: semantic.semantic.scoping(),
-        import_symbol: imports.import_symbol,
+        scoping,
+        import_bindings: &imports.bindings,
         candidates,
         edits: Vec::new(),
         emitted_candidates: BTreeSet::new(),
@@ -810,18 +823,33 @@ fn plan_source_file(
     };
     collector.visit_program(&parsed.program);
 
-    if is_module
-        && imports.import_symbol.is_some()
-        && collector.module_refs.values().sum::<usize>()
-            == collector.matched_module_refs.values().sum::<usize>()
-        && !collector.module_refs.is_empty()
-        && let Some(span) = imports.import_span
-    {
-        collector.edits.push(Edit {
+    let classified_import_refs = collector.module_refs.values().sum::<usize>();
+    let module_references_safe =
+        !imports.unsupported_shape && total_import_refs == classified_import_refs;
+    if !module_references_safe && let Some(span) = imports.warning_span {
+        collector.warnings.push(Warning {
+            code: "unsupported-css-module-reference",
+            file: file.path.clone(),
             start: span.start as usize,
-            end: consume_following_newline(&file.source, span.end as usize),
-            replacement: String::new(),
+            end: span.end as usize,
+            message: "The CSS Module has an import or reference that cannot be migrated safely."
+                .to_string(),
         });
+    }
+
+    if is_module
+        && module_references_safe
+        && !imports.bindings.is_empty()
+        && classified_import_refs == collector.matched_module_refs.values().sum::<usize>()
+        && classified_import_refs > 0
+    {
+        for binding in &imports.bindings {
+            collector.edits.push(Edit {
+                start: binding.span.start as usize,
+                end: consume_following_newline(&file.source, binding.span.end as usize),
+                replacement: String::new(),
+            });
+        }
     }
 
     Ok(SourcePlan {
@@ -829,27 +857,49 @@ fn plan_source_file(
         candidates: collector.emitted_candidates.into_iter().collect(),
         module_refs: collector.module_refs,
         matched_module_refs: collector.matched_module_refs,
+        module_references_safe,
         warnings: collector.warnings,
     })
+}
+
+struct ImportBinding {
+    symbol: SymbolId,
+    span: Span,
 }
 
 struct ImportCollector<'s> {
     file_path: &'s str,
     css_path: &'s str,
-    import_symbol: Option<SymbolId>,
-    import_span: Option<Span>,
+    bindings: Vec<ImportBinding>,
+    unsupported_shape: bool,
+    warning_span: Option<Span>,
 }
 
 impl<'a> Visit<'a> for ImportCollector<'_> {
     fn visit_import_declaration(&mut self, declaration: &ImportDeclaration<'a>) {
         let resolved = resolve_import(self.file_path, declaration.source.value.as_str());
-        if resolved == normalize_path(Path::new(self.css_path))
-            && let Some(specifiers) = &declaration.specifiers
-            && let Some(ImportDeclarationSpecifier::ImportDefaultSpecifier(specifier)) =
-                specifiers.first()
-        {
-            self.import_symbol = specifier.local.symbol_id.get();
-            self.import_span = Some(declaration.span);
+        if resolved == normalize_path(Path::new(self.css_path)) {
+            self.warning_span.get_or_insert(declaration.span);
+            let Some(specifiers) = &declaration.specifiers else {
+                self.unsupported_shape = true;
+                walk::walk_import_declaration(self, declaration);
+                return;
+            };
+            if specifiers.len() != 1 {
+                self.unsupported_shape = true;
+            }
+            for specifier in specifiers {
+                if let ImportDeclarationSpecifier::ImportDefaultSpecifier(specifier) = specifier
+                    && let Some(symbol) = specifier.local.symbol_id.get()
+                {
+                    self.bindings.push(ImportBinding {
+                        symbol,
+                        span: declaration.span,
+                    });
+                } else {
+                    self.unsupported_shape = true;
+                }
+            }
         }
         walk::walk_import_declaration(self, declaration);
     }
@@ -860,7 +910,7 @@ struct UsageCollector<'s> {
     file_path: &'s str,
     is_module: bool,
     scoping: &'s Scoping,
-    import_symbol: Option<SymbolId>,
+    import_bindings: &'s [ImportBinding],
     candidates: &'s HashMap<SelectorKey, Vec<String>>,
     edits: Vec<Edit>,
     emitted_candidates: BTreeSet<String>,
@@ -875,10 +925,11 @@ impl UsageCollector<'_> {
             return None;
         };
         let reference = object.reference_id.get()?;
-        if self.scoping.get_reference(reference).symbol_id() != self.import_symbol {
-            return None;
-        }
-        Some(member.property.name.as_str())
+        let symbol = self.scoping.get_reference(reference).symbol_id()?;
+        self.import_bindings
+            .iter()
+            .any(|binding| binding.symbol == symbol)
+            .then(|| member.property.name.as_str())
     }
 
     fn static_template(
@@ -1323,6 +1374,29 @@ mod tests {
     }
 
     #[test]
+    fn ignores_side_effect_imports_for_global_css() {
+        let request = serde_json::json!({
+            "cssPath": "/project/global.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import './global.css';\nexport const Card = () => <div className='card' />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|warning| { warning["code"] == "retained-global-rule" })
+        );
+    }
+
+    #[test]
     fn does_not_duplicate_a_dynamic_global_class_name() {
         let request = serde_json::json!({
             "cssPath": "/project/global.css",
@@ -1609,6 +1683,74 @@ mod tests {
             "existing-tailwind-conflict"
         );
         assert_eq!(response["warnings"][0]["file"], "/project/Card.tsx");
+    }
+
+    #[test]
+    fn retains_a_rule_used_through_another_import_alias() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import first from './Card.module.css';\nimport second from './Card.module.css';\nconst card = first.card;\nexport const Card = () => <div className={second.card} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 1);
+        assert!(
+            response["files"][0]["source"]
+                .as_str()
+                .unwrap()
+                .contains("first.card")
+        );
+    }
+
+    #[test]
+    fn converts_references_through_every_import_alias() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import first from './Card.module.css';\nimport second from './Card.module.css';\nexport const Card = () => <><div className={first.card} /><div className={second.card} /></>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let source = response["files"][0]["source"].as_str().unwrap();
+
+        assert_eq!(response["convertedRules"], 1);
+        assert!(!source.contains("import "));
+        assert!(!source.contains(".card"));
+    }
+
+    #[test]
+    fn retains_a_module_with_an_unclassified_import_reference() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import first from './Card.module.css';\nimport second from './Card.module.css';\nconst card = first['card'];\nexport const Card = () => <div className={second.card} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 0);
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| { warning["code"] == "unsupported-css-module-reference" })
+        );
     }
 
     #[test]
