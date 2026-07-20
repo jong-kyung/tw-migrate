@@ -217,6 +217,30 @@ test('uses an exact project theme token before arbitrary fallback', async () => 
   }
 });
 
+test('scans mjs and mts references before deleting a CSS Module', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, 'helper.mjs'),
+        "import styles from './Button.module.css';\nexport const buttonClass = styles.button;\n",
+      ),
+      writeFile(
+        join(cwd, 'helper.mts'),
+        "import styles from './Button.module.css';\nexport const buttonClass = styles.button;\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    assert.equal(report.convertedRules, 0);
+    assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
+    assert.match(await readFile(join(cwd, 'helper.mjs'), 'utf8'), /Button\.module\.css/);
+    assert.match(await readFile(join(cwd, 'helper.mts'), 'utf8'), /Button\.module\.css/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('previews and applies a complete CSS Module migration', async () => {
   const cwd = await fixture();
   try {
