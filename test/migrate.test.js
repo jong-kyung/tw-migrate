@@ -62,6 +62,20 @@ test('converts a bounded breakpoint range to stacked variants', async () => {
   }
 });
 
+test('preserves the Tailwind utility prefix before variants', async () => {
+  const cwd = await fixture({
+    css: '@media (min-width: 48rem) { .button { padding: 13px; } }\n',
+    tailwind: '@import "tailwindcss" prefix(tw);\n',
+  });
+  try {
+    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    assert.deepEqual(report.candidates, ['tw:md:p-[13px]']);
+    assert.match(report.diff, /className="tw:md:p-\[13px\]"/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('converts nested media and supports rules to stacked variants', async () => {
   const cwd = await fixture({
     css: '@media (min-width: 48rem) { .button { padding: 1rem; } @supports (display: grid) { .button { display: grid; } } }\n',

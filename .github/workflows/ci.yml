@@ -30,7 +30,8 @@ jobs:
           toolchain: 1.95.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
+      - run: pnpm artifacts
       - uses: actions/upload-artifact@v4
         with:
           name: native-${{ matrix.runner }}
-          path: '*.node'
+          path: 'npm/**/*.node'

@@ -31,6 +31,7 @@ export async function migrate(options) {
         cssModuleId: relative(cwd, cssPath),
         tailwindPath: tailwind.path,
         tailwindSource: tailwind.css,
+        utilityPrefix: tailwind.designSystem.theme.prefix,
         themeTokens: tailwind.themeTokens,
         files,
       }),
@@ -133,13 +134,15 @@ async function loadTailwind(cwd, tailwindCss) {
     ...extractThemeTokens(defaultTheme),
     ...(await extractThemeTokensFromGraph(css, base, loadStylesheet)),
   };
-  return {
-    loadDesignSystem,
-    css,
+  const designSystem = await loadDesignSystem(css, {
     base,
-    path: tailwindCss,
     loadModule,
     loadStylesheet,
+  });
+  return {
+    designSystem,
+    css,
+    path: tailwindCss,
     themeTokens,
   };
 }
@@ -167,13 +170,8 @@ async function extractThemeTokensFromGraph(css, base, loadStylesheet, seen = new
 }
 
 async function validateCandidates(tailwind, candidates) {
-  const designSystem = await tailwind.loadDesignSystem(tailwind.css, {
-    base: tailwind.base,
-    loadModule: tailwind.loadModule,
-    loadStylesheet: tailwind.loadStylesheet,
-  });
   for (const candidate of candidates) {
-    if (designSystem.candidatesToCss([candidate])[0] === null) {
+    if (tailwind.designSystem.candidatesToCss([candidate])[0] === null) {
       throw new Error(`Tailwind did not generate CSS for candidate: ${candidate}`);
     }
   }

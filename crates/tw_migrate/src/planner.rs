@@ -41,6 +41,8 @@ struct PlanRequest {
     #[serde(default)]
     tailwind_source: Option<String>,
     #[serde(default)]
+    utility_prefix: Option<String>,
+    #[serde(default)]
     theme_tokens: HashMap<String, String>,
     files: Vec<SourceFile>,
 }
@@ -131,7 +133,7 @@ pub fn plan_json(request: &str) -> Result<String, String> {
         .as_deref()
         .unwrap_or(&request.css_path);
     let ParsedCss {
-        rules,
+        mut rules,
         keyframes,
         global_at_rules,
         module_content_movable,
@@ -144,6 +146,16 @@ pub fn plan_json(request: &str) -> Result<String, String> {
         can_move_at_rules,
         relative_urls_stable,
     )?;
+
+    if let Some(prefix) = request
+        .utility_prefix
+        .as_deref()
+        .filter(|prefix| !prefix.is_empty())
+    {
+        for candidate in rules.iter_mut().flat_map(|rule| &mut rule.candidates) {
+            *candidate = format!("{prefix}:{candidate}");
+        }
+    }
 
     let blocked_classes = rules
         .iter()
