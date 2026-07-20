@@ -586,6 +586,18 @@ mod tests {
     }
 
     #[test]
+    fn arbitrary_properties_conflict_with_named_utilities() {
+        assert!(tailwind_utilities_conflict("[display:block]", "hidden"));
+        assert!(tailwind_utilities_conflict("[padding:8px]", "p-2"));
+        assert!(tailwind_utilities_conflict("[margin-top:4px]", "mt-2"));
+        assert!(tailwind_utilities_conflict("[width:10rem]", "w-4"));
+        assert!(tailwind_utilities_conflict("md:[display:block]", "md:flex"));
+        assert!(!tailwind_utilities_conflict("[display:block]", "p-2"));
+        assert!(!tailwind_utilities_conflict("[opacity:1]", "hidden"));
+        assert!(!tailwind_utilities_conflict("[display:block]", "sm:hidden"));
+    }
+
+    #[test]
     fn retains_a_module_referenced_by_another_stylesheet() {
         let request = serde_json::json!({
             "cssPath": "/project/Card.module.css",

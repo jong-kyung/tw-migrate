@@ -128,8 +128,10 @@ pub(crate) fn tailwind_utilities_conflict(generated: &str, existing: &str) -> bo
         return false;
     }
 
-    let generated_properties = utility_property_mask(generated_utility);
-    let existing_properties = utility_property_mask(existing_utility);
+    let generated_properties = utility_property_mask(generated_utility)
+        | arbitrary_utility_property(generated_utility).map_or(0, arbitrary_property_mask);
+    let existing_properties = utility_property_mask(existing_utility)
+        | arbitrary_utility_property(existing_utility).map_or(0, arbitrary_property_mask);
     if generated_properties & existing_properties != 0 {
         return true;
     }
@@ -190,6 +192,41 @@ fn utility_property_mask(utility: &str) -> u32 {
         }
         "block" | "inline" | "inline-block" | "flow-root" | "flex" | "inline-flex" | "grid"
         | "inline-grid" | "contents" | "table" | "hidden" => 1 << 20,
+        _ => 0,
+    }
+}
+
+fn arbitrary_property_mask(property: &str) -> u32 {
+    // Maps an arbitrary-property candidate ([display:block]) onto the same
+    // bit masks as named utilities so mixed pairs like `[display:block]` vs
+    // `hidden` register as conflicts. Logical inline/block sides use the
+    // broader physical masks on purpose -- over-matching only retains rules.
+    match property {
+        "padding" => 0b111111,
+        "padding-top" => 0b000001,
+        "padding-right" => 0b000010,
+        "padding-bottom" => 0b000100,
+        "padding-left" => 0b001000,
+        "padding-inline" | "padding-inline-start" | "padding-inline-end" => 0b111010,
+        "padding-block" | "padding-block-start" | "padding-block-end" => 0b000101,
+        "margin" => 0b111111 << 6,
+        "margin-top" => 0b000001 << 6,
+        "margin-right" => 0b000010 << 6,
+        "margin-bottom" => 0b000100 << 6,
+        "margin-left" => 0b001000 << 6,
+        "margin-inline" | "margin-inline-start" | "margin-inline-end" => 0b111010 << 6,
+        "margin-block" | "margin-block-start" | "margin-block-end" => 0b000101 << 6,
+        "row-gap" => 1 << 12,
+        "column-gap" => 1 << 13,
+        "gap" => 3 << 12,
+        "width" => 1 << 14,
+        "height" => 1 << 15,
+        "border-radius" => 0b1111 << 16,
+        "border-top-left-radius" | "border-start-start-radius" => 0b0001 << 16,
+        "border-top-right-radius" | "border-start-end-radius" => 0b0010 << 16,
+        "border-bottom-right-radius" | "border-end-end-radius" => 0b0100 << 16,
+        "border-bottom-left-radius" | "border-end-start-radius" => 0b1000 << 16,
+        "display" => 1 << 20,
         _ => 0,
     }
 }
