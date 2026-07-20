@@ -31,6 +31,8 @@ struct PlanRequest {
     utility_prefix: Option<String>,
     #[serde(default)]
     theme_tokens: HashMap<String, String>,
+    #[serde(default)]
+    css_dependents: Vec<String>,
     files: Vec<SourceFile>,
 }
 
@@ -150,6 +152,22 @@ pub fn plan_json(request: &str) -> Result<String, String> {
     let mut module_references_safe = true;
     let mut warnings = Vec::new();
     let mut source_plans = Vec::new();
+
+    if is_module && !request.css_dependents.is_empty() {
+        // Another stylesheet depends on this module (composes/@import), so
+        // deleting it or removing imports would break that consumer.
+        module_references_safe = false;
+        for dependent in &request.css_dependents {
+            warnings.push(Warning {
+                code: "unsupported-css-module-reference",
+                file: dependent.clone(),
+                start: 0,
+                end: 0,
+                message: "Another stylesheet references the CSS Module, so it is retained."
+                    .to_string(),
+            });
+        }
+    }
 
     for file in &request.files {
         let mut result = plan_source_file(file, &request.css_path, is_module, &candidate_map)?;
@@ -565,6 +583,33 @@ mod tests {
 
         assert_eq!(response["candidates"], serde_json::json!(["text-[blue]"]));
         assert_eq!(response["convertedRules"], 1);
+    }
+
+    #[test]
+    fn retains_a_module_referenced_by_another_stylesheet() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "cssDependents": ["/project/Consumer.module.css"],
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.card} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| warning["code"] == "unsupported-css-module-reference"
+                    && warning["file"] == "/project/Consumer.module.css")
+        );
     }
 
     #[test]

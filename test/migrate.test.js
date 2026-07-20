@@ -290,6 +290,23 @@ test('scans mjs and mts references before deleting a CSS Module', async () => {
   }
 });
 
+test('retains a CSS Module composed by another stylesheet', async () => {
+  const cwd = await fixture();
+  try {
+    await writeFile(
+      join(cwd, 'Consumer.module.css'),
+      ".fancyButton {\n  composes: button from './Button.module.css';\n  border: 1px solid;\n}\n",
+    );
+
+    const report = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    assert.equal(report.convertedRules, 0);
+    assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
+    assert.ok(report.warnings.some((warning) => warning.code === 'unsupported-css-module-reference'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('scans cjs and cts references before deleting a CSS Module', async () => {
   const cwd = await fixture();
   try {

@@ -23,9 +23,10 @@ export async function migrate(options) {
     );
   }
   const cssSource = await readFile(cssPath, 'utf8');
-  const [sourcePaths, tailwindCss] = await Promise.all([
+  const [sourcePaths, tailwindCss, cssDependents] = await Promise.all([
     collectFiles(cwd, (path) => SOURCE_EXTENSIONS.has(extension(path))),
     resolveTailwindEntry(cwd, options.tailwindCss),
+    findCssDependents(cwd, cssPath),
   ]);
   const files = await Promise.all(
     sourcePaths.map(async (path) => ({ path, source: await readFile(path, 'utf8') })),
@@ -42,6 +43,7 @@ export async function migrate(options) {
         tailwindSource: tailwind.css,
         utilityPrefix: tailwind.designSystem.theme.prefix,
         themeTokens: tailwind.themeTokens,
+        cssDependents,
         files,
       }),
     ),
@@ -97,6 +99,25 @@ async function collectFiles(root, include) {
 function extension(path) {
   const match = /\.[^.\/]+$/.exec(path);
   return match?.[0] ?? '';
+}
+
+async function findCssDependents(cwd, cssPath) {
+  // Other stylesheets can depend on a CSS Module through `composes ... from`
+  // or `@import`; those references are invisible to the JS reference scan,
+  // so the planner must retain the module when any exist.
+  if (!cssPath.endsWith('.module.css')) return [];
+  const dependents = [];
+  const cssFiles = await collectFiles(cwd, (path) => path.endsWith('.css') && path !== cssPath);
+  for (const path of cssFiles) {
+    const source = await readFile(path, 'utf8');
+    const references = source.matchAll(
+      /(?:composes\s*:[^;{}]*?\bfrom\s+|@import\s+)["']([^"']+)["']/g,
+    );
+    if ([...references].some((match) => resolve(dirname(path), match[1]) === cssPath)) {
+      dependents.push(path);
+    }
+  }
+  return dependents;
 }
 
 async function resolveTailwindEntry(cwd, configuredPath) {
