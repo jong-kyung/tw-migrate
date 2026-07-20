@@ -1,4 +1,8 @@
+mod animations;
+mod at_rules;
 mod planner;
+mod theme;
+mod utilities;
 
 use napi_derive::napi;
 

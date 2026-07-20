@@ -333,7 +333,9 @@ A media query migrates when its minimum-width condition exactly matches a Tailwi
 
 may become `md:p-8` when `md` is exactly `768px` in the target theme. A bounded range such as `@media (min-width: 48rem) and (max-width: 63.999rem)` becomes `md:max-lg:p-8` when the bounds match the `md` and `lg` breakpoints. Queries with additional or unmatched conditions remain unchanged.
 
-Local CSS Module `@keyframes` referenced by a single static `animation` or `animation-name` are renamed deterministically and moved to the Tailwind entry before the module is removed. Multiple animations, ambiguous names, relative URLs, and dynamic values remain unchanged. Other media queries, `@supports`, and container queries remain unchanged in the first release.
+Supported `@media`, `@supports`, `@container`, and `@starting-style` blocks are traversed recursively and become stacked variants such as `motion-reduce:starting:@md:grid`. Media features map only to equivalent Tailwind variants, and unnamed minimum-width container queries use exact theme tokens or arbitrary container values. If a nested condition or statement cannot be represented safely, its outer conditional block and related CSS Module classes remain unchanged.
+
+Local CSS Module `@keyframes` referenced by a single static `animation` or `animation-name` are renamed deterministically and moved to the Tailwind entry before the module is removed. Global definition at-rules such as `@font-face`, `@property`, `@counter-style`, and `@view-transition` are also moved before removal when they contain no URL dependency. Multiple animations, ambiguous names, relative URLs, dynamic values, and structural at-rules remain unchanged.
 
 ## CSS Rule Cleanup
 

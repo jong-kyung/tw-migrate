@@ -60,6 +60,36 @@ test('converts a bounded breakpoint range to stacked variants', async () => {
   }
 });
 
+test('converts nested media and supports rules to stacked variants', async () => {
+  const cwd = await fixture({
+    css: '@media (min-width: 48rem) { .button { padding: 1rem; } @supports (display: grid) { .button { display: grid; } } }\n',
+  });
+  try {
+    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    assert.deepEqual(report.candidates, ['md:p-4', 'md:supports-[display:grid]:grid']);
+    assert.deepEqual(report.changedFiles, ['Button.module.css', 'Button.tsx']);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('converts Tailwind conditional variants and moves global definitions', async () => {
+  const cwd = await fixture({
+    css: '@property --progress { syntax: "<number>"; inherits: false; initial-value: 0; }\n@media (prefers-reduced-motion: reduce) { @starting-style { @container (min-width: 28rem) { .button { display: grid; } } } }\n@media (prefers-color-scheme: dark) { .button { color: white; } }\n',
+  });
+  try {
+    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    assert.deepEqual(report.candidates, [
+      'dark:text-[white]',
+      'motion-reduce:starting:@md:grid',
+    ]);
+    assert.deepEqual(report.changedFiles, ['Button.module.css', 'Button.tsx', 'globals.css']);
+    assert.match(report.diff, /@property --progress/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('warns when a generated utility conflicts with a static template class', async () => {
   const cwd = await fixture({
     tsx: "import styles from './Button.module.css';\nexport const Button = () => <button className={`${styles.button} p-2`}>Save</button>;\n",
