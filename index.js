@@ -114,13 +114,14 @@ async function loadTailwind(cwd, tailwindCss) {
   const { compile } = tailwindModule.default ?? tailwindModule;
   const css = await readFile(tailwindCss, 'utf8');
   const base = dirname(tailwindCss);
+  const loadModule = createModuleLoader();
   const loadStylesheet = createStylesheetLoader(projectRequire, packagePath);
   const defaultTheme = await readFile(join(dirname(packagePath), 'theme.css'), 'utf8');
   const themeTokens = {
     ...extractThemeTokens(defaultTheme),
     ...(await extractThemeTokensFromGraph(css, base, loadStylesheet)),
   };
-  return { compile, css, base, loadStylesheet, themeTokens };
+  return { compile, css, base, loadModule, loadStylesheet, themeTokens };
 }
 
 function extractThemeTokens(css) {
@@ -149,6 +150,7 @@ async function validateCandidates(tailwind, candidates) {
   for (const candidate of candidates) {
     const compiler = await tailwind.compile(tailwind.css, {
       base: tailwind.base,
+      loadModule: tailwind.loadModule,
       loadStylesheet: tailwind.loadStylesheet,
     });
     const baseline = compiler.build([]);
@@ -156,6 +158,14 @@ async function validateCandidates(tailwind, candidates) {
       throw new Error(`Tailwind did not generate CSS for candidate: ${candidate}`);
     }
   }
+}
+
+function createModuleLoader() {
+  return async (id, base) => {
+    const path = createRequire(join(base, 'package.json')).resolve(id);
+    const imported = await import(pathToFileURL(path));
+    return { path, base: dirname(path), module: imported.default ?? imported };
+  };
 }
 
 function createStylesheetLoader(projectRequire, tailwindPackagePath) {

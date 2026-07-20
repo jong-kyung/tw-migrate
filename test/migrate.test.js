@@ -73,6 +73,25 @@ test('warns when a generated utility conflicts with a static template class', as
   }
 });
 
+test('loads Tailwind config and plugin modules', async () => {
+  const cwd = await fixture({
+    tailwind: '@import "tailwindcss";\n@config "./tailwind.config.js";\n@plugin "./tailwind-plugin.js";\n',
+  });
+  try {
+    await Promise.all([
+      writeFile(join(cwd, 'tailwind.config.js'), 'module.exports = {};\n'),
+      writeFile(
+        join(cwd, 'tailwind-plugin.js'),
+        'module.exports = function ({ addUtilities }) { addUtilities({ ".plugin-test": { display: "block" } }); };\n',
+      ),
+    ]);
+    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    assert.deepEqual(report.candidates, ['p-[13px]']);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('uses an exact project theme token before arbitrary fallback', async () => {
   const cwd = await fixture({
     tailwind: '@import "tailwindcss";\n@theme { --spacing-card: 13px; }\n',
