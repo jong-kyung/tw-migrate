@@ -307,6 +307,35 @@ test('retains a CSS Module composed by another stylesheet', async () => {
   }
 });
 
+test('retains a CSS Module imported via url() by another stylesheet', async () => {
+  const cwd = await fixture();
+  try {
+    await writeFile(join(cwd, 'legacy.css'), '@import url(./Button.module.css);\n.page { color: red; }\n');
+
+    const report = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    assert.equal(report.convertedRules, 0);
+    assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
+    assert.ok(report.warnings.some((warning) => warning.code === 'unsupported-css-module-reference'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('ignores commented Tailwind imports when detecting the entry', async () => {
+  const cwd = await fixture();
+  try {
+    await writeFile(
+      join(cwd, 'notes.css'),
+      '/* setup example: @import "tailwindcss"; */\n.note { color: red; }\n',
+    );
+
+    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    assert.deepEqual(report.candidates, ['p-[13px]']);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('scans cjs and cts references before deleting a CSS Module', async () => {
   const cwd = await fixture();
   try {

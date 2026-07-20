@@ -101,6 +101,10 @@ function extension(path) {
   return match?.[0] ?? '';
 }
 
+function stripCssComments(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
 async function findCssDependents(cwd, cssPath) {
   // Other stylesheets can depend on a CSS Module through `composes ... from`
   // or `@import`; those references are invisible to the JS reference scan,
@@ -109,11 +113,14 @@ async function findCssDependents(cwd, cssPath) {
   const dependents = [];
   const cssFiles = await collectFiles(cwd, (path) => path.endsWith('.css') && path !== cssPath);
   for (const path of cssFiles) {
-    const source = await readFile(path, 'utf8');
-    const references = source.matchAll(
-      /(?:composes\s*:[^;{}]*?\bfrom\s+|@import\s+)["']([^"']+)["']/g,
-    );
-    if ([...references].some((match) => resolve(dirname(path), match[1]) === cssPath)) {
+    const source = stripCssComments(await readFile(path, 'utf8'));
+    const references = [
+      ...source.matchAll(
+        /(?:composes\s*:[^;{}]*?\bfrom\s+|@import\s+(?:url\(\s*)?)["']([^"']+)["']/g,
+      ),
+      ...source.matchAll(/@import\s+url\(\s*([^"'()\s]+)\s*\)/g),
+    ];
+    if (references.some((match) => resolve(dirname(path), match[1]) === cssPath)) {
       dependents.push(path);
     }
   }
@@ -130,8 +137,8 @@ async function resolveTailwindEntry(cwd, configuredPath) {
   const cssFiles = await collectFiles(cwd, (path) => path.endsWith('.css'));
   const entries = [];
   for (const path of cssFiles) {
-    const source = await readFile(path, 'utf8');
-    if (/@(import\s+["']tailwindcss(?:\/[^"']*)?["']|tailwind\s+utilities)/.test(source)) {
+    const source = stripCssComments(await readFile(path, 'utf8'));
+    if (/@import\s+["']tailwindcss(?:\/[^"']*)?["']/.test(source)) {
       entries.push(path);
     }
   }
