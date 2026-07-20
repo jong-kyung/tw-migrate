@@ -1,5 +1,7 @@
 use std::{collections::HashMap, ops::Range};
 
+use crate::arbitrary::encode as arbitrary_value;
+
 use oxc_css_parser::{
     Parser as CssParser, Syntax,
     ast::{AtRule, AtRulePrelude, InterpolableIdent, KeyframesName, Statement, Stylesheet},
@@ -168,8 +170,4 @@ fn is_animation_keyword(value: &str) -> bool {
             | "revert"
             | "revert-layer"
     )
-}
-
-fn arbitrary_value(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join("_")
 }

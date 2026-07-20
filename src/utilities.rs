@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::theme::exact_theme_token;
+use crate::{arbitrary::encode as arbitrary_value, theme::exact_theme_token};
 
 #[derive(Default)]
 pub(crate) struct SpacingValues {
@@ -153,10 +153,6 @@ fn themed_candidate(
     } else {
         format!("{prefix}-[{}]", arbitrary_value(value))
     }
-}
-
-fn arbitrary_value(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join("_")
 }
 
 fn tailwind_utility_parts(class: &str) -> (&str, &str) {

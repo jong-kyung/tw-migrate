@@ -3,6 +3,8 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import { __unstable__loadDesignSystem as loadDesignSystem } from 'tailwindcss';
+
 import { migrate } from '../index.js';
 
 const initialCss = '.button { padding: 13px; }\n';
@@ -109,12 +111,12 @@ test('converts conditions nested inside style rules', async () => {
 
 test('converts compound media and named container queries to arbitrary variants', async () => {
   const cwd = await fixture({
-    css: '@media screen and (min-width: 40rem) and (orientation: landscape) { .button { display: grid; } }\n@container card (min-width: 20rem) and (max-width: 40rem) { .button { color: red; } }\n',
+    css: '@media screen and (min-width: 40rem) and (orientation: landscape) { .button { display: grid; } }\n@container card_grid (min-width: 20rem) and (max-width: 40rem) { .button { color: red; } }\n',
   });
   try {
     const report = await migrate({ cwd, cssFile: 'Button.module.css' });
     assert.deepEqual(report.candidates, [
-      '[@container_card_(min-width:20rem)_and_(max-width:40rem)]:text-[red]',
+      '[@container_card\\_grid_(min-width:20rem)_and_(max-width:40rem)]:text-[red]',
       '[@media_screen_and_(min-width:40rem)_and_(orientation:landscape)]:grid',
     ]);
     assert.equal(report.convertedRules, 2);
@@ -183,6 +185,24 @@ test('moves local keyframes to Tailwind before deleting a CSS Module', async () 
     await assert.rejects(readFile(join(cwd, 'Button.module.css'), 'utf8'), { code: 'ENOENT' });
     assert.match(await readFile(join(cwd, 'Button.tsx'), 'utf8'), new RegExp(match[1]));
     assert.match(await readFile(join(cwd, 'globals.css'), 'utf8'), new RegExp(`@keyframes ${match[1]}`));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('escapes literal underscores in arbitrary values', async () => {
+  const cwd = await fixture({
+    css: '.button { --font-key: Open_Sans; }\n',
+  });
+  try {
+    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    assert.deepEqual(report.candidates, ['[--font-key:Open\\_Sans]']);
+    assert.ok(report.diff.includes('Open\\\\_Sans'));
+
+    const designSystem = await loadDesignSystem('@tailwind utilities;');
+    const [css] = designSystem.candidatesToCss(report.candidates);
+    assert.match(css, /Open_Sans/);
+    assert.doesNotMatch(css, /Open Sans/);
   } finally {
     await cleanup(cwd);
   }

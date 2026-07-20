@@ -1,4 +1,5 @@
 mod animations;
+mod arbitrary;
 mod at_rules;
 mod planner;
 mod theme;

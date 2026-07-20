@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     animations::{KeyframePlan, animation_candidate, append_keyframes, keyframe_plan},
+    arbitrary::encode as encode_arbitrary,
     at_rules::{
         GlobalAtRulePlan, append_global_at_rules, conditional_variant, global_at_rule_plan,
         is_conditional, unsupported_warning,
@@ -803,10 +804,7 @@ fn arbitrary_selector_variant(
     let index = selector.rfind(&anchor)?;
     let mut condition = selector.to_string();
     condition.replace_range(index..index + anchor.len(), "&");
-    Some(Some(format!(
-        "[{}]",
-        condition.split_whitespace().collect::<Vec<_>>().join("_")
-    )))
+    Some(Some(format!("[{}]", encode_arbitrary(&condition))))
 }
 
 fn literal_ident<'a>(ident: &'a InterpolableIdent<'a>) -> Option<&'a str> {
@@ -1560,6 +1558,27 @@ mod tests {
     }
 
     #[test]
+    fn escapes_literal_underscores_in_arbitrary_candidates() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": "@supports (font-tech(color_colrv1)) { .button { --font-key: Open_Sans; } }\n",
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(
+            response["candidates"],
+            serde_json::json!(["supports-[font-tech(color\\_colrv1)]:[--font-key:Open\\_Sans]"])
+        );
+        assert_eq!(response["convertedRules"], 1);
+    }
+
+    #[test]
     fn converts_conditions_nested_inside_style_rules() {
         let request = serde_json::json!({
             "cssPath": "/project/Button.module.css",
@@ -1683,7 +1702,7 @@ mod tests {
     fn converts_named_container_queries_to_arbitrary_variants() {
         let request = serde_json::json!({
             "cssPath": "/project/Button.module.css",
-            "cssSource": "@media (min-width: 48rem) { .button { padding: 1rem; } @container card (min-width: 20rem) { .button { display: grid; } } }\n",
+            "cssSource": "@media (min-width: 48rem) { .button { padding: 1rem; } @container card_grid (min-width: 20rem) { .button { display: grid; } } }\n",
             "themeTokens": { "breakpoint-md": "48rem" },
             "files": [{
                 "path": "/project/Button.tsx",
@@ -1696,7 +1715,10 @@ mod tests {
 
         assert_eq!(
             response["candidates"],
-            serde_json::json!(["md:[@container_card_(min-width:20rem)]:grid", "md:p-[1rem]"])
+            serde_json::json!([
+                "md:[@container_card\\_grid_(min-width:20rem)]:grid",
+                "md:p-[1rem]"
+            ])
         );
         assert_eq!(response["convertedRules"], 2);
     }
@@ -1732,7 +1754,7 @@ mod tests {
     fn converts_a_global_descendant_selector_to_an_arbitrary_variant() {
         let request = serde_json::json!({
             "cssPath": "/project/global.css",
-            "cssSource": ".parent .child { padding: 13px; }\n",
+            "cssSource": ".menu_open .child { padding: 13px; }\n",
             "files": [{
                 "path": "/project/Card.tsx",
                 "source": "export const Card = () => <span className=\"child\" />;\n"
@@ -1744,11 +1766,11 @@ mod tests {
 
         assert_eq!(
             response["candidates"],
-            serde_json::json!(["[.parent_&]:p-[13px]"])
+            serde_json::json!(["[.menu\\_open_&]:p-[13px]"])
         );
         assert_eq!(
             response["files"][0]["source"],
-            "export const Card = () => <span className=\"child [.parent_&]:p-[13px]\" />;\n"
+            "export const Card = () => <span className=\"child [.menu\\_open_&]:p-[13px]\" />;\n"
         );
     }
 
@@ -2090,6 +2112,12 @@ mod tests {
         assert_eq!(
             animation_candidate("animation-name", "linear", &keyframes),
             Some("[animation-name:tw-migrate-linear]".to_string())
+        );
+
+        let keyframes = HashMap::from([("fade_in", "tw-migrate-fade_in")]);
+        assert_eq!(
+            animation_candidate("animation", "fade_in 1s", &keyframes),
+            Some("[animation:tw-migrate-fade\\_in_1s]".to_string())
         );
     }
 

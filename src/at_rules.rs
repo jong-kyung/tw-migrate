@@ -8,7 +8,10 @@ use oxc_css_parser::{
     ast::{AtRule, Statement, Stylesheet},
 };
 
-use crate::theme::{exact_theme_token, parse_dimension};
+use crate::{
+    arbitrary::encode as encode_arbitrary,
+    theme::{exact_theme_token, parse_dimension},
+};
 
 pub(crate) struct GlobalAtRulePlan {
     pub(crate) span: Range<usize>,
@@ -240,18 +243,19 @@ fn supports_variant(at_rule: &AtRule<'_>, source: &str) -> Option<String> {
     let condition = condition
         .split_whitespace()
         .collect::<Vec<_>>()
-        .join("_")
-        .replace(":_", ":")
-        .replace("_:", ":")
-        .replace("(_", "(")
-        .replace("_)", ")");
+        .join(" ")
+        .replace(": ", ":")
+        .replace(" :", ":")
+        .replace("( ", "(")
+        .replace(" )", ")");
+    let condition = encode_arbitrary(&condition);
     (!condition.is_empty()).then(|| format!("supports-[{condition}]"))
 }
 
 fn arbitrary_at_rule_variant(at_rule: &AtRule<'_>, source: &str) -> Option<String> {
     let header = source[at_rule.span.start..at_rule.block.as_ref()?.span.start].trim();
     if header.is_empty()
-        || header.contains(['[', ']', ';', '{', '}', '"', '\'', '\\', '_'])
+        || header.contains(['[', ']', ';', '{', '}', '"', '\'', '\\'])
         || header.contains("/*")
     {
         return None;
@@ -259,13 +263,13 @@ fn arbitrary_at_rule_variant(at_rule: &AtRule<'_>, source: &str) -> Option<Strin
     let header = header
         .split_whitespace()
         .collect::<Vec<_>>()
-        .join("_")
-        .replace(":_", ":")
-        .replace("_:", ":")
-        .replace("(_", "(")
-        .replace("_)", ")")
-        .replace(",_", ",");
-    Some(format!("[{header}]"))
+        .join(" ")
+        .replace(": ", ":")
+        .replace(" :", ":")
+        .replace("( ", "(")
+        .replace(" )", ")")
+        .replace(", ", ",");
+    Some(format!("[{}]", encode_arbitrary(&header)))
 }
 
 fn at_rule_query<'a>(at_rule: &AtRule<'_>, source: &'a str, name: &str) -> Option<&'a str> {
