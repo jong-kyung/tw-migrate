@@ -321,7 +321,7 @@ Exact duplicate candidates are not appended, keeping migration idempotent.
 
 ### Breakpoints and At-Rules
 
-A media query migrates only when its minimum-width condition exactly matches a Tailwind theme breakpoint:
+A media query migrates when its minimum-width condition exactly matches a Tailwind theme breakpoint:
 
 ```css
 @media (min-width: 768px) {
@@ -331,7 +331,7 @@ A media query migrates only when its minimum-width condition exactly matches a T
 }
 ```
 
-may become `md:p-8` when `md` is exactly `768px` in the target theme.
+may become `md:p-8` when `md` is exactly `768px` in the target theme. A bounded range such as `@media (min-width: 48rem) and (max-width: 63.999rem)` becomes `md:max-lg:p-8` when the bounds match the `md` and `lg` breakpoints. Queries with additional or unmatched conditions remain unchanged.
 
 Other media queries, `@supports`, and container queries remain unchanged in the first release.
 

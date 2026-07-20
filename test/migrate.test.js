@@ -47,6 +47,19 @@ test('updates global classes and ids while retaining global CSS', async () => {
   }
 });
 
+test('converts a bounded breakpoint range to stacked variants', async () => {
+  const cwd = await fixture({
+    css: '@media (min-width: 48rem) and (max-width: 63.999rem) { .button { padding: 13px; } }\n',
+  });
+  try {
+    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    assert.deepEqual(report.candidates, ['md:max-lg:p-[13px]']);
+    assert.match(report.diff, /className="md:max-lg:p-\[13px\]"/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('uses an exact project theme token before arbitrary fallback', async () => {
   const cwd = await fixture({
     tailwind: '@import "tailwindcss";\n@theme { --spacing-card: 13px; }\n',
