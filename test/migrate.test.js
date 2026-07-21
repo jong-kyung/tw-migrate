@@ -784,11 +784,38 @@ test('ignores unparseable gitignored files without module references', async () 
       writeFile(join(cwd, '.gitignore'), 'coverage/\n'),
       mkdir(join(cwd, 'coverage')),
     ]);
-    await writeFile(join(cwd, 'coverage', 'report.js'), '<% generated: not JavaScript %>\n');
+    await Promise.all([
+      writeFile(join(cwd, 'coverage', 'report.js'), '<% generated: not JavaScript %>\n'),
+      // Mentions ".module.css" but never names the target module: it must
+      // pass the text filter yet still have no effect on the migration.
+      writeFile(
+        join(cwd, 'coverage', 'summary.js'),
+        '<% files: ["other.module.css"] — not JavaScript %>\n',
+      ),
+    ]);
 
     const report = await migrate({ cwd, write: true });
     assert.equal(report.convertedRules, 1);
     await assert.rejects(readFile(join(cwd, 'Button.module.css'), 'utf8'), { code: 'ENOENT' });
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('retains a module named by an unparseable gitignored file', async () => {
+  const cwd = await fixture();
+  try {
+    await run('git', ['init', '-q'], { cwd });
+    await writeFile(join(cwd, '.gitignore'), 'template.js\n');
+    await writeFile(
+      join(cwd, 'template.js'),
+      '<% import styles from "./Button.module.css" %>\n',
+    );
+
+    const report = await migrate({ cwd, write: true });
+    assert.equal(report.convertedRules, 0);
+    assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
+    assert.ok(report.warnings.some((warning) => warning.code === 'unsupported-css-module-reference'));
   } finally {
     await cleanup(cwd);
   }

@@ -1941,6 +1941,65 @@ mod tests {
     }
 
     #[test]
+    fn batch_ignores_an_unparseable_unwritable_file_without_a_reference() {
+        let request = serde_json::json!({
+            "stylesheets": [{
+                "cssPath": "/project/Card.module.css",
+                "cssSource": ".card { padding: 13px; }\n"
+            }],
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.card} />;\n"
+            }, {
+                "path": "/project/coverage.js",
+                "source": "<% generated: mentions other.module.css but is not JavaScript %>\n",
+                "writable": false
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(
+            response["deletedFiles"],
+            serde_json::json!(["/project/Card.module.css"])
+        );
+    }
+
+    #[test]
+    fn batch_retains_a_module_named_by_an_unparseable_unwritable_file() {
+        let request = serde_json::json!({
+            "stylesheets": [{
+                "cssPath": "/project/Card.module.css",
+                "cssSource": ".card { padding: 13px; }\n"
+            }],
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.card} />;\n"
+            }, {
+                "path": "/project/generated.js",
+                "source": "<% template referencing Card.module.css %>\n",
+                "writable": false
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| warning["code"] == "unsupported-css-module-reference"
+                    && warning["file"] == "/project/generated.js")
+        );
+    }
+
+    #[test]
     fn batch_updates_distinct_module_references_without_losing_edits() {
         let request = serde_json::json!({
             "stylesheets": [
