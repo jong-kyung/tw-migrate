@@ -261,7 +261,12 @@ async function planPackage(context, packageRoot) {
     return { failure: packageFailure(workspaceRoot, packageRoot, error) };
   }
 
-  await validateCandidates(tailwind, plan.candidates);
+  try {
+    await validateCandidates(tailwind, plan.candidates);
+  } catch (error) {
+    if (!options.force) throw error;
+    return { failure: packageFailure(workspaceRoot, packageRoot, error) };
+  }
   return { plan };
 }
 

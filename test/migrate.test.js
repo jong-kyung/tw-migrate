@@ -945,6 +945,73 @@ test('--force skips a package with malformed input CSS', async () => {
   }
 });
 
+// COLOR is valid CSS (properties are case-insensitive) but maps to the
+// candidate [COLOR:red], which Tailwind refuses to compile.
+const uncompilableCss = '.button { COLOR: red; }\n';
+
+test('rejects a compile-failing candidate naming the candidate', async () => {
+  const cwd = await fixture({ css: uncompilableCss });
+  try {
+    await assert.rejects(
+      migrate({ cwd, cssFile: 'Button.module.css', write: true }),
+      /Tailwind did not generate CSS for candidate: \[COLOR:red\]/,
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('writes nothing when candidate compilation fails', async () => {
+  const cwd = await fixture({ css: uncompilableCss });
+  try {
+    await assert.rejects(migrate({ cwd, cssFile: 'Button.module.css', write: true }));
+    assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), uncompilableCss);
+    assert.equal(await readFile(join(cwd, 'Button.tsx'), 'utf8'), initialTsx);
+    assert.equal(await readFile(join(cwd, 'globals.css'), 'utf8'), '@import "tailwindcss";\n');
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('--force skips a package whose candidate fails compilation and applies the rest', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      rm(join(cwd, 'globals.css')),
+      run('git', ['init', '-q'], { cwd }),
+      mkdir(join(cwd, 'good')),
+      mkdir(join(cwd, 'broken')),
+    ]);
+    await Promise.all([
+      writeFile(join(cwd, 'good', 'package.json'), '{"private":true}'),
+      writeFile(join(cwd, 'good', 'globals.css'), '@import "tailwindcss";\n'),
+      writeFile(join(cwd, 'good', 'Good.module.css'), '.good { display: grid; }\n'),
+      writeFile(
+        join(cwd, 'good', 'Good.tsx'),
+        "import styles from './Good.module.css';\nexport const Good = () => <div className={styles.good} />;\n",
+      ),
+      writeFile(join(cwd, 'broken', 'package.json'), '{"private":true}'),
+      writeFile(join(cwd, 'broken', 'globals.css'), '@import "tailwindcss";\n'),
+      writeFile(join(cwd, 'broken', 'Broken.module.css'), uncompilableCss),
+      writeFile(
+        join(cwd, 'broken', 'Broken.tsx'),
+        "import styles from './Broken.module.css';\nexport const Broken = () => <button className={styles.button} />;\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd, workspaces: true, force: true, write: true });
+    assert.deepEqual(report.failures.map((failure) => failure.package), ['broken']);
+    assert.match(report.failures[0].message, /\[COLOR:red\]/);
+    assert.ok(report.changedFiles.includes('good/Good.tsx'));
+    await assert.rejects(readFile(join(cwd, 'good', 'Good.module.css'), 'utf8'), { code: 'ENOENT' });
+    assert.equal(await readFile(join(cwd, 'broken', 'Broken.module.css'), 'utf8'), uncompilableCss);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('--force skips a broken workspace package and applies successful groups', async () => {
   const cwd = await fixture();
   try {
