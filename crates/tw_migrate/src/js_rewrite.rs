@@ -515,8 +515,38 @@ impl UsageCollector<'_> {
             };
             if name.name == "className" {
                 has_class_name = true;
-                if let Some(JSXAttributeValue::StringLiteral(literal)) = &attribute.value {
-                    class_literal = Some((literal.span, literal.value.to_string()));
+                match &attribute.value {
+                    Some(JSXAttributeValue::StringLiteral(literal)) => {
+                        class_literal = Some((literal.span, literal.value.to_string()));
+                    }
+                    Some(JSXAttributeValue::ExpressionContainer(container)) => {
+                        match &container.expression {
+                            JSXExpression::StringLiteral(literal) => {
+                                class_literal = Some((container.span, literal.value.to_string()));
+                            }
+                            JSXExpression::TemplateLiteral(template)
+                                if template.expressions.is_empty()
+                                    && template
+                                        .quasis
+                                        .first()
+                                        .is_some_and(|quasi| quasi.value.cooked.is_some()) =>
+                            {
+                                let cooked = template.quasis[0].value.cooked.as_ref().unwrap();
+                                class_literal = Some((container.span, cooked.to_string()));
+                            }
+                            _ => {
+                                self.warnings.push(Warning {
+                                    code: "dynamic-class-name",
+                                    file: self.file_path.to_string(),
+                                    start: container.span.start as usize,
+                                    end: container.span.end as usize,
+                                    message: "Only static className values are supported."
+                                        .to_string(),
+                                });
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             } else if name.name == "id"
                 && let Some(JSXAttributeValue::StringLiteral(literal)) = &attribute.value
@@ -560,12 +590,14 @@ impl UsageCollector<'_> {
                 start: insertion,
                 end: insertion,
                 replacement: format!(
-                    " className=\"{}\"",
-                    id_candidates
-                        .iter()
-                        .map(|(_, candidate)| candidate.as_str())
-                        .collect::<Vec<_>>()
-                        .join(" ")
+                    " className={}",
+                    jsx_attribute_value(
+                        &id_candidates
+                            .iter()
+                            .map(|(_, candidate)| candidate.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    )
                 ),
             });
         }
@@ -615,12 +647,28 @@ impl UsageCollector<'_> {
         if replacement_value == value {
             return;
         }
-        let quote = self.source.as_bytes()[span.start as usize] as char;
         self.edits.push(Edit {
             start: span.start as usize,
             end: span.end as usize,
-            replacement: format!("{quote}{replacement_value}{quote}"),
+            replacement: jsx_attribute_value(&replacement_value),
         });
+    }
+}
+
+/// JSX string attributes have no escape sequences (the lexer scans to the
+/// matching quote), so quote-bearing values must pick the other quote, and a
+/// value with both quotes falls back to a JS string in an expression
+/// container, where escapes do apply.
+fn jsx_attribute_value(value: &str) -> String {
+    if !value.contains('"') {
+        format!("\"{value}\"")
+    } else if !value.contains('\'') {
+        format!("'{value}'")
+    } else {
+        format!(
+            "{{{}}}",
+            serde_json::to_string(value).expect("string serialization")
+        )
     }
 }
 

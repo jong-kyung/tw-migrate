@@ -46,7 +46,11 @@ test('updates global classes and ids while retaining global CSS', async () => {
     assert.equal(report.convertedRules, 0);
     assert.equal(report.retainedRules, 2);
     assert.match(report.diff, /className="card p-\[13px\] h-\[100vh\]"/);
-    assert.ok(report.warnings.every((warning) => warning.code === 'retained-global-rule'));
+    assert.ok(
+      report.warnings.every((warning) =>
+        ['retained-global-rule', 'dynamic-class-name'].includes(warning.code),
+      ),
+    );
   } finally {
     await cleanup(cwd);
   }
@@ -403,6 +407,25 @@ test('a second run after applying a global migration is a no-op', async () => {
     ]);
     const first = await migrate({ cwd, cssFile: 'legacy.css', write: true });
     assert.deepEqual(first.changedFiles, ['Card.tsx']);
+
+    const second = await migrate({ cwd, cssFile: 'legacy.css' });
+    assert.deepEqual(second.changedFiles, []);
+    assert.equal(second.diff, '');
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('migrates a global expression className literal and stays a no-op on rerun', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(join(cwd, 'legacy.css'), '.card { padding: 13px; }\n'),
+      writeFile(join(cwd, 'Card.tsx'), "export const Card = () => <div className={'card'} />;\n"),
+    ]);
+    const first = await migrate({ cwd, cssFile: 'legacy.css', write: true });
+    assert.deepEqual(first.changedFiles, ['Card.tsx']);
+    assert.match(await readFile(join(cwd, 'Card.tsx'), 'utf8'), /className="card p-\[13px\]"/);
 
     const second = await migrate({ cwd, cssFile: 'legacy.css' });
     assert.deepEqual(second.changedFiles, []);

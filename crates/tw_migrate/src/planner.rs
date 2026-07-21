@@ -860,7 +860,7 @@ mod tests {
         assert_eq!(response["retainedRules"], 1);
         assert_eq!(
             response["files"][0]["source"],
-            "export const Card = () => <div className='card p-[13px]' />;\n"
+            "export const Card = () => <div className=\"card p-[13px]\" />;\n"
         );
         assert_eq!(response["warnings"][0]["code"], "retained-global-rule");
     }
@@ -903,7 +903,115 @@ mod tests {
             serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
 
         assert_eq!(response["files"], serde_json::json!([]));
+        let codes = response["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|warning| warning["code"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(codes, ["dynamic-class-name", "retained-global-rule"]);
+    }
+
+    #[test]
+    fn migrates_a_global_expression_string_literal_class_name() {
+        let request = serde_json::json!({
+            "cssPath": "/project/global.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "export const Card = () => <div className={'card'} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(
+            response["files"][0]["source"],
+            "export const Card = () => <div className=\"card p-[13px]\" />;\n"
+        );
         assert_eq!(response["warnings"][0]["code"], "retained-global-rule");
+    }
+
+    #[test]
+    fn migrates_a_global_static_template_class_name() {
+        let request = serde_json::json!({
+            "cssPath": "/project/global.css",
+            "cssSource": ".card { padding: 13px; }\n.featured { margin: 7px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "export const Card = () => <div className={`card featured`} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(
+            response["files"][0]["source"],
+            "export const Card = () => <div className=\"card featured p-[13px] m-[7px]\" />;\n"
+        );
+    }
+
+    #[test]
+    fn warns_on_an_unsupported_global_class_name_expression() {
+        let request = serde_json::json!({
+            "cssPath": "/project/global.css",
+            "cssSource": ".a { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "export const Card = ({ maybe }) => <div className={maybe ? 'a' : 'b'} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["files"], serde_json::json!([]));
+        let dynamic = response["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|warning| warning["code"] == "dynamic-class-name")
+            .unwrap();
+        assert_eq!(dynamic["file"], "/project/Card.tsx");
+    }
+
+    #[test]
+    fn quotes_a_global_candidate_containing_double_quotes() {
+        let request = serde_json::json!({
+            "cssPath": "/project/global.css",
+            "cssSource": "#hero { content: \"\\\"\"; }\n",
+            "files": [{
+                "path": "/project/Hero.tsx",
+                "source": "export const Hero = () => <main id=\"hero\" />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(
+            response["files"][0]["source"],
+            "export const Hero = () => <main id=\"hero\" className='[content:\"\\\"\"]' />;\n"
+        );
+    }
+
+    #[test]
+    fn a_second_run_over_a_migrated_global_expression_literal_is_a_no_op() {
+        let request = serde_json::json!({
+            "cssPath": "/project/global.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "export const Card = () => <div className=\"card p-[13px]\" />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["files"], serde_json::json!([]));
     }
 
     #[test]
