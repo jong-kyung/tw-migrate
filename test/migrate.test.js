@@ -135,9 +135,9 @@ test('converts conditions nested inside style rules', async () => {
   try {
     const report = await migrate({ cwd, cssFile: 'Button.module.css' });
     assert.deepEqual(report.candidates, [
-      '[opacity:1]',
       'motion-reduce:hidden',
-      'starting:[opacity:0]',
+      'opacity-[1]',
+      'starting:opacity-[0]',
     ]);
     assert.equal(report.convertedRules, 1);
   } finally {
@@ -331,6 +331,72 @@ test('uses an exact project theme token before arbitrary fallback', async () => 
     const report = await migrate({ cwd, cssFile: 'Button.module.css' });
     assert.deepEqual(report.candidates, ['p-card']);
     assert.match(report.diff, /className="p-card"/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('converts tier-1 utility families and stays a no-op on rerun', async () => {
+  const cwd = await fixture({
+    css: [
+      '.button {',
+      '  position: absolute;',
+      '  inset: 0;',
+      '  left: 2rem;',
+      '  overflow: hidden;',
+      '  overflow-x: auto;',
+      '  z-index: 30;',
+      '  opacity: 50%;',
+      '  font-weight: 700;',
+      '  line-height: 1.25;',
+      '  letter-spacing: 0.025em;',
+      '  text-align: center;',
+      '  flex-direction: column;',
+      '  align-items: center;',
+      '  justify-content: space-between;',
+      '  flex-wrap: wrap;',
+      '  border-width: 2px;',
+      '  border-style: dashed;',
+      '  border-color: #123456;',
+      '  min-width: 24rem;',
+      '  max-height: 2rem;',
+      '}',
+      '',
+    ].join('\n'),
+  });
+  try {
+    const first = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    assert.deepEqual(first.candidates, [
+      'absolute',
+      'border-2',
+      'border-[#123456]',
+      'border-dashed',
+      'bottom-[0]',
+      'flex-col',
+      'flex-wrap',
+      'font-bold',
+      'items-center',
+      'justify-between',
+      'leading-tight',
+      'left-8',
+      'max-h-8',
+      'min-w-sm',
+      'opacity-50',
+      'overflow-x-auto',
+      'overflow-y-hidden',
+      'right-[0]',
+      'text-center',
+      'top-[0]',
+      'tracking-wide',
+      'z-30',
+    ]);
+    assert.equal(first.convertedRules, 1);
+    assert.deepEqual(first.warnings, []);
+    await assert.rejects(readFile(join(cwd, 'Button.module.css'), 'utf8'), { code: 'ENOENT' });
+
+    const second = await migrate({ cwd });
+    assert.deepEqual(second.changedFiles, []);
+    assert.equal(second.diff, '');
   } finally {
     await cleanup(cwd);
   }

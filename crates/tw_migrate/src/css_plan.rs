@@ -14,7 +14,9 @@ use crate::{
         GlobalAtRulePlan, conditional_variant, global_at_rule_plan, is_conditional,
         unsupported_warning,
     },
-    utilities::{SpacingValues, declaration_to_candidate, tailwind_utilities_conflict},
+    utilities::{
+        OverflowValues, SpacingValues, declaration_to_candidate, tailwind_utilities_conflict,
+    },
 };
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -209,8 +211,12 @@ fn collect_declaration_candidates(
     let mut property_slots = HashMap::new();
     let mut margin = SpacingValues::default();
     let mut padding = SpacingValues::default();
+    let mut inset = SpacingValues::default();
+    let mut overflow = OverflowValues::default();
     let mut margin_properties = BTreeSet::new();
     let mut padding_properties = BTreeSet::new();
+    let mut inset_properties = BTreeSet::new();
+    let mut overflow_properties = BTreeSet::new();
     let mut warning = None;
 
     for statement in statements {
@@ -279,21 +285,60 @@ fn collect_declaration_candidates(
             })
             .collect::<Vec<_>>();
         let spacing_result = margin
-            .apply(property, "margin", value, &components)
+            .apply(
+                property,
+                "margin",
+                ["margin-top", "margin-right", "margin-bottom", "margin-left"],
+                value,
+                &components,
+            )
             .and_then(|handled| {
                 if handled {
-                    Ok(true)
-                } else {
-                    padding.apply(property, "padding", value, &components)
+                    return Ok(true);
                 }
+                padding.apply(
+                    property,
+                    "padding",
+                    [
+                        "padding-top",
+                        "padding-right",
+                        "padding-bottom",
+                        "padding-left",
+                    ],
+                    value,
+                    &components,
+                )
+            })
+            .and_then(|handled| {
+                if handled {
+                    return Ok(true);
+                }
+                inset.apply(
+                    property,
+                    "inset",
+                    ["top", "right", "bottom", "left"],
+                    value,
+                    &components,
+                )
+            })
+            .and_then(|handled| {
+                if handled {
+                    return Ok(true);
+                }
+                overflow.apply(property, value, &components)
             });
         match spacing_result {
             Ok(true) => {
-                if property == "margin" || property.starts_with("margin-") {
-                    margin_properties.insert(property.to_string());
+                let properties = if property == "margin" || property.starts_with("margin-") {
+                    &mut margin_properties
+                } else if property == "padding" || property.starts_with("padding-") {
+                    &mut padding_properties
+                } else if property == "overflow" || property.starts_with("overflow-") {
+                    &mut overflow_properties
                 } else {
-                    padding_properties.insert(property.to_string());
-                }
+                    &mut inset_properties
+                };
+                properties.insert(property.to_string());
                 continue;
             }
             Err(()) => {
@@ -313,29 +358,34 @@ fn collect_declaration_candidates(
         }
     }
 
-    match margin.candidates("m", theme_tokens) {
-        Some(margin_candidates) => {
-            for candidate in margin_candidates {
-                merge_candidate(
-                    &mut candidates,
-                    candidate,
-                    margin_properties.iter().cloned(),
-                );
+    let normalized_families = [
+        (
+            margin.candidates("m", ["mt", "mr", "mb", "ml"], theme_tokens),
+            margin_properties,
+        ),
+        (
+            padding.candidates("p", ["pt", "pr", "pb", "pl"], theme_tokens),
+            padding_properties,
+        ),
+        (
+            inset.candidates("inset", ["top", "right", "bottom", "left"], theme_tokens),
+            inset_properties,
+        ),
+        (overflow.candidates(), overflow_properties),
+    ];
+    for (family_candidates, family_properties) in normalized_families {
+        match family_candidates {
+            Some(family_candidates) => {
+                for candidate in family_candidates {
+                    merge_candidate(
+                        &mut candidates,
+                        candidate,
+                        family_properties.iter().cloned(),
+                    );
+                }
             }
+            None => warning = Some("unsupported-value"),
         }
-        None => warning = Some("unsupported-value"),
-    }
-    match padding.candidates("p", theme_tokens) {
-        Some(padding_candidates) => {
-            for candidate in padding_candidates {
-                merge_candidate(
-                    &mut candidates,
-                    candidate,
-                    padding_properties.iter().cloned(),
-                );
-            }
-        }
-        None => warning = Some("unsupported-value"),
     }
     for (candidate, property) in local_candidates {
         merge_candidate(&mut candidates, candidate, [property]);
