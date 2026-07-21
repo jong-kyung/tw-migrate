@@ -345,7 +345,10 @@ fn batch_stylesheet_request(
     }
 }
 
-fn candidate_map_for_request(request: &PlanRequest) -> Result<CandidateMaps, String> {
+/// Shared head of the single-pass and batch-pass pipelines: derive the
+/// request flags, parse the stylesheet, and apply the utility prefix, so
+/// rule-selection behavior cannot silently diverge between the two paths.
+fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss), String> {
     let is_module = request.css_path.ends_with(".module.css");
     let can_move_at_rules = request
         .tailwind_path
@@ -360,7 +363,7 @@ fn candidate_map_for_request(request: &PlanRequest) -> Result<CandidateMaps, Str
         .css_module_id
         .as_deref()
         .unwrap_or(&request.css_path);
-    let ParsedCss { mut rules, .. } = parse_css_rules(
+    let mut parsed = parse_css_rules(
         &request.css_path,
         keyframe_scope,
         &request.css_source,
@@ -374,8 +377,20 @@ fn candidate_map_for_request(request: &PlanRequest) -> Result<CandidateMaps, Str
         .as_deref()
         .filter(|prefix| !prefix.is_empty())
     {
-        prefix_rule_candidates(&mut rules, prefix);
+        prefix_rule_candidates(&mut parsed.rules, prefix);
     }
+    Ok((is_module, parsed))
+}
+
+fn dedup_candidate_map(candidate_map: &mut HashMap<SelectorKey, Vec<String>>) {
+    for candidates in candidate_map.values_mut() {
+        candidates.sort();
+        candidates.dedup();
+    }
+}
+
+fn candidate_map_for_request(request: &PlanRequest) -> Result<CandidateMaps, String> {
+    let (_, ParsedCss { rules, .. }) = parse_request_rules(request)?;
     let blocked_classes = rules
         .iter()
         .filter(|rule| rule.warning.is_some())
@@ -411,10 +426,7 @@ fn candidate_map_for_request(request: &PlanRequest) -> Result<CandidateMaps, Str
                 .extend(rule.candidates);
         }
     }
-    for candidates in candidate_map.values_mut() {
-        candidates.sort();
-        candidates.dedup();
-    }
+    dedup_candidate_map(&mut candidate_map);
     Ok(CandidateMaps {
         candidates: candidate_map,
         origins,
@@ -426,41 +438,14 @@ fn plan_request(
     blocked_rules: &RuleConflicts,
     batch_mode: bool,
 ) -> Result<PlanResponse, String> {
-    let is_module = request.css_path.ends_with(".module.css");
-    let can_move_at_rules = request
-        .tailwind_path
-        .as_ref()
-        .zip(request.tailwind_source.as_ref())
-        .is_some_and(|(path, _)| path != &request.css_path);
-    let relative_urls_stable = request
-        .tailwind_path
-        .as_ref()
-        .is_some_and(|path| Path::new(path).parent() == Path::new(&request.css_path).parent());
-    let keyframe_scope = request
-        .css_module_id
-        .as_deref()
-        .unwrap_or(&request.css_path);
-    let ParsedCss {
-        mut rules,
-        keyframes,
-        global_at_rules,
-    } = parse_css_rules(
-        &request.css_path,
-        keyframe_scope,
-        &request.css_source,
-        &request.theme_tokens,
+    let (
         is_module,
-        can_move_at_rules,
-        relative_urls_stable,
-    )?;
-
-    if let Some(prefix) = request
-        .utility_prefix
-        .as_deref()
-        .filter(|prefix| !prefix.is_empty())
-    {
-        prefix_rule_candidates(&mut rules, prefix);
-    }
+        ParsedCss {
+            mut rules,
+            keyframes,
+            global_at_rules,
+        },
+    ) = parse_request_rules(&request)?;
     for rule in &mut rules {
         let rule_id = RuleId {
             start: rule.span.start,
@@ -496,10 +481,7 @@ fn plan_request(
                 .extend(rule.candidates.clone());
         }
     }
-    for candidates in candidate_map.values_mut() {
-        candidates.sort();
-        candidates.dedup();
-    }
+    dedup_candidate_map(&mut candidate_map);
 
     let mut planned_files = Vec::new();
     let mut candidates = BTreeSet::new();
