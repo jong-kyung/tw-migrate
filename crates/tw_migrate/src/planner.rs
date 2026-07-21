@@ -61,6 +61,10 @@ struct BatchStylesheet {
     css_module_id: Option<String>,
     #[serde(default)]
     css_dependents: Vec<String>,
+    /// Rules whose candidates failed Tailwind compilation in a previous
+    /// planning pass; they are retained without converting anything.
+    #[serde(default)]
+    blocked_rules: Vec<RuleId>,
 }
 
 fn default_writable() -> bool {
@@ -94,10 +98,13 @@ struct PlannedFile {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct RuleReport {
     selector: String,
     status: &'static str,
     candidates: Vec<String>,
+    file: String,
+    rule_id: RuleId,
 }
 
 #[derive(Serialize)]
@@ -118,11 +125,11 @@ pub(crate) struct Edit {
 
 pub fn plan_json(request: &str) -> Result<String, String> {
     let request: PlanRequest = serde_json::from_str(request).map_err(|error| error.to_string())?;
-    serde_json::to_string(&plan_request(request, &HashMap::new(), false)?)
+    serde_json::to_string(&plan_request(request, &HashMap::new(), &HashSet::new(), false)?)
         .map_err(|error| error.to_string())
 }
 
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Deserialize, Eq, Hash, PartialEq, Serialize)]
 struct RuleId {
     start: usize,
     end: usize,
@@ -281,7 +288,17 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
             .tailwind_path
             .as_ref()
             .and_then(|path| current.get(path).cloned());
-        let response = plan_request(stylesheet_request, &blocked_rules[index], true)?;
+        let externally_blocked = stylesheet
+            .blocked_rules
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>();
+        let response = plan_request(
+            stylesheet_request,
+            &blocked_rules[index],
+            &externally_blocked,
+            true,
+        )?;
 
         for file in response.files {
             deleted.remove(&file.path);
@@ -433,9 +450,19 @@ fn candidate_map_for_request(request: &PlanRequest) -> Result<CandidateMaps, Str
     })
 }
 
+/// Warnings that retain a single rule during batch planning without blocking
+/// the rest of its class's rules from converting.
+fn is_batch_retained(warning: Option<&str>) -> bool {
+    matches!(
+        warning,
+        Some("batch-stylesheet-conflict" | "candidate-compilation-failure")
+    )
+}
+
 fn plan_request(
     request: PlanRequest,
     blocked_rules: &RuleConflicts,
+    externally_blocked: &HashSet<RuleId>,
     batch_mode: bool,
 ) -> Result<PlanResponse, String> {
     let (
@@ -453,20 +480,19 @@ fn plan_request(
         };
         if blocked_rules.contains_key(&rule_id) {
             rule.warning = Some("batch-stylesheet-conflict");
+        } else if rule.warning.is_none() && externally_blocked.contains(&rule_id) {
+            rule.warning = Some("candidate-compilation-failure");
         }
     }
 
     let preserved_module_classes = rules
         .iter()
-        .filter(|rule| batch_mode && is_module && rule.warning == Some("batch-stylesheet-conflict"))
+        .filter(|rule| batch_mode && is_module && is_batch_retained(rule.warning))
         .flat_map(|rule| rule.related_classes.iter().cloned())
         .collect::<BTreeSet<_>>();
     let blocked_classes = rules
         .iter()
-        .filter(|rule| {
-            rule.warning.is_some()
-                && !(batch_mode && rule.warning == Some("batch-stylesheet-conflict"))
-        })
+        .filter(|rule| rule.warning.is_some() && !(batch_mode && is_batch_retained(rule.warning)))
         .flat_map(|rule| rule.related_classes.iter().cloned())
         .collect::<BTreeSet<_>>();
     let mut candidate_map: HashMap<SelectorKey, Vec<String>> = HashMap::new();
@@ -570,6 +596,10 @@ fn plan_request(
                 _ => false,
             };
 
+        let rule_id = RuleId {
+            start: rule.span.start,
+            end: rule.span.end,
+        };
         if can_remove {
             converted_rules += 1;
             css_edits.push(Edit {
@@ -581,13 +611,22 @@ fn plan_request(
                 selector: rule.selector,
                 status: "converted",
                 candidates: rule.candidates,
+                file: request.css_path.clone(),
+                rule_id,
+            });
+        } else if rule.warning == Some("candidate-compilation-failure") {
+            // The caller blocked this rule after a Tailwind compilation
+            // failure and attributes the warning itself.
+            retained_rules += 1;
+            rule_reports.push(RuleReport {
+                selector: rule.selector,
+                status: "retained",
+                candidates: rule.candidates,
+                file: request.css_path.clone(),
+                rule_id,
             });
         } else {
             retained_rules += 1;
-            let rule_id = RuleId {
-                start: rule.span.start,
-                end: rule.span.end,
-            };
             let (code, message) = if rule.warning == Some("batch-stylesheet-conflict") {
                 let conflicts = blocked_rules
                     .get(&rule_id)
@@ -629,6 +668,8 @@ fn plan_request(
                 selector: rule.selector,
                 status: "retained",
                 candidates: rule.candidates,
+                file: request.css_path.clone(),
+                rule_id,
             });
         }
     }
@@ -2079,6 +2120,49 @@ mod tests {
             response["deletedFiles"],
             serde_json::json!(["/project/A.module.css", "/project/B.module.css"])
         );
+    }
+
+    #[test]
+    fn batch_blocked_rules_are_retained_silently_and_reports_carry_rule_ids() {
+        let request = serde_json::json!({
+            "stylesheets": [{
+                "cssPath": "/project/Button.module.css",
+                "cssSource": ".bad { color: red; }\n.good { padding: 13px; }\n",
+                "blockedRules": [{ "start": 0, "end": 20 }]
+            }],
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.bad}><i className={styles.good} /></button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(response["retainedRules"], 1);
+        assert_eq!(response["candidates"], serde_json::json!(["p-[13px]"]));
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        // The blocked rule is retained without a Rust-side warning: the
+        // caller attributes candidate-compilation-failure itself.
+        assert_eq!(response["warnings"], serde_json::json!([]));
+        let rules = response["rules"].as_array().unwrap();
+        let blocked = rules.iter().find(|rule| rule["selector"] == ".bad").unwrap();
+        assert_eq!(blocked["status"], "retained");
+        assert_eq!(blocked["file"], "/project/Button.module.css");
+        assert_eq!(blocked["ruleId"], serde_json::json!({ "start": 0, "end": 20 }));
+        let converted = rules.iter().find(|rule| rule["selector"] == ".good").unwrap();
+        assert_eq!(converted["status"], "converted");
+        let source = response["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == "/project/Button.tsx")
+            .unwrap()["source"]
+            .as_str()
+            .unwrap();
+        assert!(source.contains("styles.bad"));
+        assert!(source.contains("\"p-[13px]\""));
     }
 
     #[test]

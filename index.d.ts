@@ -19,6 +19,8 @@ export interface RuleReport {
   selector: string;
   status: 'converted' | 'retained';
   candidates: string[];
+  file: string;
+  ruleId: { start: number; end: number };
 }
 
 export interface MigrationFailure {

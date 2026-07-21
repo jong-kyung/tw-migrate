@@ -949,31 +949,132 @@ test('--force skips a package with malformed input CSS', async () => {
 // candidate [COLOR:red], which Tailwind refuses to compile.
 const uncompilableCss = '.button { COLOR: red; }\n';
 
-test('rejects a compile-failing candidate naming the candidate', async () => {
-  const cwd = await fixture({ css: uncompilableCss });
+test('retains the owning rule when its candidate fails compilation', async () => {
+  const cwd = await fixture({
+    css: '.button { COLOR: red; }\n.good { padding: 13px; }\n',
+    tsx: "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}><i className={styles.good} /></button>;\n",
+  });
   try {
-    await assert.rejects(
-      migrate({ cwd, cssFile: 'Button.module.css', write: true }),
-      /Tailwind did not generate CSS for candidate: \[COLOR:red\]/,
-    );
+    const report = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    assert.equal(report.convertedRules, 1);
+    assert.equal(report.retainedRules, 1);
+    assert.deepEqual(report.candidates, ['p-[13px]']);
+    const warning = report.warnings.find((entry) => entry.code === 'candidate-compilation-failure');
+    assert.equal(warning.file, 'Button.module.css');
+    assert.match(warning.message, /\[COLOR:red\]/);
+    const css = await readFile(join(cwd, 'Button.module.css'), 'utf8');
+    assert.match(css, /\.button \{ COLOR: red; \}/);
+    assert.doesNotMatch(css, /\.good/);
+    const tsx = await readFile(join(cwd, 'Button.tsx'), 'utf8');
+    assert.match(tsx, /styles\.button/);
+    assert.match(tsx, /"p-\[13px\]"/);
+
+    const second = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    assert.deepEqual(second.changedFiles, []);
+    assert.equal(second.diff, '');
+    assert.deepEqual(second.warnings, report.warnings);
   } finally {
     await cleanup(cwd);
   }
 });
 
-test('writes nothing when candidate compilation fails', async () => {
-  const cwd = await fixture({ css: uncompilableCss });
+test('completes with every rule retained when all candidates fail compilation', async () => {
+  const allFailingCss = '.button { COLOR: red; }\n.other { BACKGROUND: blue; }\n';
+  const bothTsx = "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}><i className={styles.other} /></button>;\n";
+  const cwd = await fixture({ css: allFailingCss, tsx: bothTsx });
   try {
-    await assert.rejects(migrate({ cwd, cssFile: 'Button.module.css', write: true }));
-    assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), uncompilableCss);
-    assert.equal(await readFile(join(cwd, 'Button.tsx'), 'utf8'), initialTsx);
+    const report = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    assert.deepEqual(report.changedFiles, []);
+    assert.equal(report.convertedRules, 0);
+    assert.equal(report.retainedRules, 2);
+    assert.deepEqual(report.candidates, []);
+    assert.deepEqual(
+      report.warnings.map((warning) => warning.code),
+      ['candidate-compilation-failure', 'candidate-compilation-failure'],
+    );
+    assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), allFailingCss);
+    assert.equal(await readFile(join(cwd, 'Button.tsx'), 'utf8'), bothTsx);
     assert.equal(await readFile(join(cwd, 'globals.css'), 'utf8'), '@import "tailwindcss";\n');
   } finally {
     await cleanup(cwd);
   }
 });
 
-test('--force skips a package whose candidate fails compilation and applies the rest', async () => {
+test('attributes a shared failing candidate to each owning rule', async () => {
+  const cwd = await fixture({
+    css: '.button { COLOR: red; }\n.other { COLOR: red; }\n',
+    tsx: "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}><i className={styles.other} /></button>;\n",
+  });
+  try {
+    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    const warnings = report.warnings.filter((warning) => warning.code === 'candidate-compilation-failure');
+    assert.equal(warnings.length, 2);
+    assert.notEqual(warnings[0].start, warnings[1].start);
+    assert.equal(report.retainedRules, 2);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('keeps keyframes and the Tailwind entry when a failing rule retains the module', async () => {
+  const cwd = await fixture({
+    css: '@keyframes spin_it { to { transform: rotate(360deg); } }\n.button { COLOR: red; animation: spin_it 1s; }\n',
+  });
+  try {
+    const report = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    assert.deepEqual(report.changedFiles, []);
+    assert.equal(report.retainedRules, 1);
+    assert.equal(
+      report.warnings.filter((warning) => warning.code === 'candidate-compilation-failure').length,
+      1,
+    );
+    assert.equal(await readFile(join(cwd, 'globals.css'), 'utf8'), '@import "tailwindcss";\n');
+    assert.match(await readFile(join(cwd, 'Button.module.css'), 'utf8'), /@keyframes spin_it/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('converts healthy stylesheets when one fails compilation in a batch', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'a.module.css'), '.a { padding: 13px; }\n'),
+      writeFile(
+        join(cwd, 'A.tsx'),
+        "import styles from './a.module.css';\nexport const A = () => <div className={styles.a} />;\n",
+      ),
+      writeFile(join(cwd, 'b.module.css'), uncompilableCss),
+      writeFile(
+        join(cwd, 'B.tsx'),
+        "import styles from './b.module.css';\nexport const B = () => <div className={styles.button} />;\n",
+      ),
+      writeFile(join(cwd, 'c.module.css'), '.c { display: grid; }\n'),
+      writeFile(
+        join(cwd, 'C.tsx'),
+        "import styles from './c.module.css';\nexport const C = () => <div className={styles.c} />;\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd, write: true });
+    assert.equal(report.convertedRules, 2);
+    assert.equal(report.retainedRules, 1);
+    await assert.rejects(readFile(join(cwd, 'a.module.css'), 'utf8'), { code: 'ENOENT' });
+    await assert.rejects(readFile(join(cwd, 'c.module.css'), 'utf8'), { code: 'ENOENT' });
+    assert.equal(await readFile(join(cwd, 'b.module.css'), 'utf8'), uncompilableCss);
+    const warning = report.warnings.find((entry) => entry.code === 'candidate-compilation-failure');
+    assert.equal(warning.file, 'b.module.css');
+    assert.match(await readFile(join(cwd, 'A.tsx'), 'utf8'), /"p-\[13px\]"/);
+    assert.match(await readFile(join(cwd, 'C.tsx'), 'utf8'), /"grid"/);
+    assert.match(await readFile(join(cwd, 'B.tsx'), 'utf8'), /styles\.button/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('completes both workspace packages retaining the compile-failing rule', async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -1002,11 +1103,13 @@ test('--force skips a package whose candidate fails compilation and applies the 
     ]);
 
     const report = await migrate({ cwd, workspaces: true, force: true, write: true });
-    assert.deepEqual(report.failures.map((failure) => failure.package), ['broken']);
-    assert.match(report.failures[0].message, /\[COLOR:red\]/);
+    assert.deepEqual(report.failures, []);
     assert.ok(report.changedFiles.includes('good/Good.tsx'));
     await assert.rejects(readFile(join(cwd, 'good', 'Good.module.css'), 'utf8'), { code: 'ENOENT' });
     assert.equal(await readFile(join(cwd, 'broken', 'Broken.module.css'), 'utf8'), uncompilableCss);
+    const warning = report.warnings.find((entry) => entry.code === 'candidate-compilation-failure');
+    assert.equal(warning.file, 'broken/Broken.module.css');
+    assert.match(warning.message, /\[COLOR:red\]/);
   } finally {
     await cleanup(cwd);
   }
