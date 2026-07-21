@@ -56,6 +56,39 @@ fn source_type_for_path(path: &str) -> Result<SourceType, String> {
     )
 }
 
+/// A scan-only file that cannot be parsed is data, not an error: when its
+/// text names this stylesheet it becomes an unverifiable reference that
+/// conservatively retains the module; otherwise it has no effect. Writable
+/// files still fail loudly -- migration targets must be analyzable.
+fn opaque_reference_plan(file: &SourceFile, css_path: &str, is_module: bool) -> SourcePlan {
+    let referenced = is_module
+        && Path::new(css_path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| file.source.contains(name));
+    SourcePlan {
+        edits: Vec::new(),
+        removable_import_edits: Vec::new(),
+        candidates: Vec::new(),
+        matches: Vec::new(),
+        module_refs: HashMap::new(),
+        matched_module_refs: HashMap::new(),
+        module_references_safe: !referenced,
+        warnings: if referenced {
+            vec![Warning {
+                code: "unsupported-css-module-reference",
+                file: file.path.clone(),
+                start: 0,
+                end: 0,
+                message: "The file could not be parsed, so its possible reference retains the CSS Module."
+                    .to_string(),
+            }]
+        } else {
+            Vec::new()
+        },
+    }
+}
+
 pub(crate) fn plan_source_file(
     file: &SourceFile,
     css_path: &str,
@@ -102,6 +135,9 @@ fn plan_source_file_with_mode(
         .map_err(|error| format!("Unsupported source file {}: {error}", file.path))?;
     let parsed = Parser::new(&allocator, &file.source, source_type).parse();
     if !parsed.diagnostics.is_empty() {
+        if !file.writable {
+            return Ok(opaque_reference_plan(file, css_path, is_module));
+        }
         return Err(format!(
             "Failed to parse {}: {:?}",
             file.path, parsed.diagnostics
@@ -109,6 +145,9 @@ fn plan_source_file_with_mode(
     }
     let semantic = SemanticBuilder::new_compiler().build(&parsed.program);
     if !semantic.diagnostics.is_empty() {
+        if !file.writable {
+            return Ok(opaque_reference_plan(file, css_path, is_module));
+        }
         return Err(format!(
             "Failed to analyze {}: {:?}",
             file.path, semantic.diagnostics

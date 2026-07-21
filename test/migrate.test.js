@@ -659,6 +659,212 @@ test('excludes every detected Tailwind entry when an override selects one', asyn
   }
 });
 
+test('combines classes from two stylesheets on one element end-to-end', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'title.module.css'), '.title { padding: 13px; }\n'),
+      writeFile(join(cwd, 'accent.module.css'), '.accent { color: red; }\n'),
+      writeFile(
+        join(cwd, 'Card.tsx'),
+        "import title from './title.module.css';\nimport accent from './accent.module.css';\nexport const Card = () => <div className={`${title.title} ${accent.accent}`} />;\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd, write: true });
+    assert.equal(report.convertedRules, 2);
+    await assert.rejects(readFile(join(cwd, 'title.module.css'), 'utf8'), { code: 'ENOENT' });
+    await assert.rejects(readFile(join(cwd, 'accent.module.css'), 'utf8'), { code: 'ENOENT' });
+    assert.equal(
+      await readFile(join(cwd, 'Card.tsx'), 'utf8'),
+      'export const Card = () => <div className="p-[13px] text-[red]" />;\n',
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('retains conflicting rules combined from two stylesheets on one element', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'title.module.css'), '.title { padding: 13px; }\n'),
+      writeFile(join(cwd, 'accent.module.css'), '.accent { padding: 4px; }\n'),
+      writeFile(
+        join(cwd, 'Card.tsx'),
+        "import title from './title.module.css';\nimport accent from './accent.module.css';\nexport const Card = () => <div className={`${title.title} ${accent.accent}`} />;\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd, write: true });
+    assert.equal(report.convertedRules, 0);
+    assert.equal(await readFile(join(cwd, 'title.module.css'), 'utf8'), '.title { padding: 13px; }\n');
+    assert.equal(await readFile(join(cwd, 'accent.module.css'), 'utf8'), '.accent { padding: 4px; }\n');
+    assert.match(await readFile(join(cwd, 'Card.tsx'), 'utf8'), /title\.module\.css/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('detects source changes between planning reads', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      rm(join(cwd, 'globals.css')),
+      run('git', ['init', '-q'], { cwd }),
+      mkdir(join(cwd, 'aaa')),
+      mkdir(join(cwd, 'bbb')),
+    ]);
+    const laterEntry = join(cwd, 'bbb', 'globals.css');
+    await Promise.all([
+      writeFile(join(cwd, 'aaa', 'package.json'), '{"private":true}'),
+      writeFile(join(cwd, 'aaa', 'globals.css'), '@import "tailwindcss";\n@plugin "./mutate.cjs";\n'),
+      writeFile(join(cwd, 'aaa', 'A.module.css'), '.a { padding: 13px; }\n'),
+      writeFile(
+        join(cwd, 'aaa', 'App.tsx'),
+        "import styles from './A.module.css';\nexport const App = () => <div className={styles.a} />;\n",
+      ),
+      // Package aaa plans first; its plugin mutates bbb's already-snapshotted
+      // entry, so bbb's later planning read must fire the planning-time guard.
+      writeFile(
+        join(cwd, 'aaa', 'mutate.cjs'),
+        `const fs = require('node:fs');\nfs.appendFileSync(${JSON.stringify(laterEntry)}, '/* mutated */\\n');\nmodule.exports = () => {};\n`,
+      ),
+      writeFile(join(cwd, 'bbb', 'package.json'), '{"private":true}'),
+      writeFile(laterEntry, '@import "tailwindcss";\n'),
+      writeFile(join(cwd, 'bbb', 'B.module.css'), '.b { padding: 4px; }\n'),
+      writeFile(
+        join(cwd, 'bbb', 'B.tsx'),
+        "import styles from './B.module.css';\nexport const B = () => <div className={styles.b} />;\n",
+      ),
+    ]);
+
+    await assert.rejects(
+      migrate({ cwd, workspaces: true }),
+      /Source changed during planning: .*bbb[/\\]globals\.css/,
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('detects leftover files stranded outside the selected package', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      run('git', ['init', '-q'], { cwd }),
+      mkdir(join(cwd, 'packages')),
+    ]);
+    await Promise.all([mkdir(join(cwd, 'packages', 'a')), mkdir(join(cwd, 'packages', 'b'))]);
+    await Promise.all([
+      writeFile(join(cwd, 'packages', 'a', 'package.json'), '{"private":true}'),
+      writeFile(join(cwd, 'packages', 'b', 'package.json'), '{"private":true}'),
+      writeFile(join(cwd, 'packages', 'b', '.B.tsx.tw-migrate-backup-1-0'), 'stranded original'),
+    ]);
+
+    // Running from packages/a must still surface the stranded backup a
+    // crashed --workspaces run left in packages/b.
+    await assert.rejects(migrate({ cwd: join(cwd, 'packages', 'a') }), /interrupted run/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('ignores unparseable gitignored files without module references', async () => {
+  const cwd = await fixture();
+  try {
+    await run('git', ['init', '-q'], { cwd });
+    await Promise.all([
+      writeFile(join(cwd, '.gitignore'), 'coverage/\n'),
+      mkdir(join(cwd, 'coverage')),
+    ]);
+    await Promise.all([
+      writeFile(join(cwd, 'coverage', 'report.js'), '<% generated: not JavaScript %>\n'),
+      // Mentions ".module.css" but never names the target module: it must
+      // pass the text filter yet still have no effect on the migration.
+      writeFile(
+        join(cwd, 'coverage', 'summary.js'),
+        '<% files: ["other.module.css"] — not JavaScript %>\n',
+      ),
+    ]);
+
+    const report = await migrate({ cwd, write: true });
+    assert.equal(report.convertedRules, 1);
+    await assert.rejects(readFile(join(cwd, 'Button.module.css'), 'utf8'), { code: 'ENOENT' });
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('retains a module named by an unparseable gitignored file', async () => {
+  const cwd = await fixture();
+  try {
+    await run('git', ['init', '-q'], { cwd });
+    await writeFile(join(cwd, '.gitignore'), 'template.js\n');
+    await writeFile(
+      join(cwd, 'template.js'),
+      '<% import styles from "./Button.module.css" %>\n',
+    );
+
+    const report = await migrate({ cwd, write: true });
+    assert.equal(report.convertedRules, 0);
+    assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
+    assert.ok(report.warnings.some((warning) => warning.code === 'unsupported-css-module-reference'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('retains a module referenced only from a gitignored consumer', async () => {
+  const cwd = await fixture();
+  try {
+    await run('git', ['init', '-q'], { cwd });
+    await Promise.all([
+      writeFile(join(cwd, '.gitignore'), 'generated.js\n'),
+      writeFile(
+        join(cwd, 'generated.js'),
+        "import styles from './Button.module.css';\nexport const buttonClass = styles.button;\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd, write: true });
+    assert.equal(report.convertedRules, 0);
+    assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
+    assert.match(await readFile(join(cwd, 'generated.js'), 'utf8'), /Button\.module\.css/);
+    assert.ok(!report.changedFiles.includes('generated.js'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('retains a module composed by a gitignored stylesheet', async () => {
+  const cwd = await fixture();
+  try {
+    await run('git', ['init', '-q'], { cwd });
+    await Promise.all([
+      writeFile(join(cwd, '.gitignore'), 'Consumer.module.css\n'),
+      writeFile(
+        join(cwd, 'Consumer.module.css'),
+        ".fancy {\n  composes: button from './Button.module.css';\n}\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd, write: true });
+    assert.equal(report.convertedRules, 0);
+    assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
+    assert.ok(report.warnings.some((warning) => warning.code === 'unsupported-css-module-reference'));
+    assert.ok(!report.changedFiles.includes('Consumer.module.css'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('verifies reference-only source snapshots before writing', async () => {
   const cwd = await fixture({
     tailwind: '@import "tailwindcss";\n@plugin "./mutate.cjs";\n',

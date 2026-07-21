@@ -20,59 +20,14 @@ export async function migrate(options = {}) {
     throw new TypeError('tailwindCss cannot be combined with workspaces');
   }
 
-  const cwd = resolve(options.cwd ?? process.cwd());
-  const currentPackage = await findPackageRoot(cwd);
-  const gitRoot = await findGitRoot(currentPackage);
-  const workspaceRoot = gitRoot && !(await isIgnoredByGit(gitRoot, currentPackage))
-    ? gitRoot
-    : currentPackage;
-  const allPaths = await discoverFiles(workspaceRoot, workspaceRoot === gitRoot);
-  const explicitCss = options.cssFile ? resolve(cwd, options.cssFile) : undefined;
-  const configuredEntry = options.tailwindCss ? resolve(cwd, options.tailwindCss) : undefined;
-  if (explicitCss && extension(explicitCss) !== '.css') {
-    throw new TypeError('Only .css files can be migrated');
-  }
-  if (configuredEntry && extension(configuredEntry) !== '.css') {
-    throw new TypeError('The Tailwind CSS entry must be a .css file');
-  }
-  if (configuredEntry && !(await stat(configuredEntry)).isFile()) {
-    throw new TypeError('The Tailwind CSS entry must be a file');
-  }
-  if (explicitCss && !isWithin(currentPackage, explicitCss)) {
-    throw new TypeError('The selected CSS file must belong to the current package');
-  }
-  for (const path of [explicitCss, configuredEntry]) {
-    if (path && !allPaths.includes(path)) allPaths.push(path);
-  }
-  allPaths.sort();
+  const scope = await resolveScope(options);
+  const { cwd, workspaceRoot, selectedPackages, explicitCss, configuredEntry } = scope;
 
-  const allPackageRoots = await discoverPackageRoots(workspaceRoot, allPaths);
-  if (!allPackageRoots.includes(currentPackage)) allPackageRoots.push(currentPackage);
-  for (const path of [explicitCss, configuredEntry]) {
-    if (!path) continue;
-    const owner = await findPackageRoot(dirname(path));
-    if (!allPackageRoots.includes(owner)) allPackageRoots.push(owner);
-  }
-  allPackageRoots.sort();
-  const pathOwners = new Map(allPaths.map((path) => [path, owningPackage(path, allPackageRoots)]));
-  if (explicitCss && pathOwners.get(explicitCss) !== currentPackage) {
-    throw new TypeError('The selected CSS file must belong to the current package');
-  }
-  if (configuredEntry && pathOwners.get(configuredEntry) !== currentPackage) {
-    throw new TypeError('The Tailwind CSS entry must belong to the current package');
-  }
-  const selectedPackages = options.workspaces ? allPackageRoots : [currentPackage];
-  const writablePackages = new Set(selectedPackages);
-  const snapshots = new Map();
-
-  const leftovers = new Set();
-  for (const packageRoot of selectedPackages) {
-    for (const path of await collectFiles(packageRoot, (path) => basename(path).includes('.tw-migrate-'))) {
-      leftovers.add(path);
-    }
-  }
-  if (leftovers.size > 0) {
-    const listed = [...leftovers].sort().map((path) => `  ${normalizedRelativePath(cwd, path)}`).join('\n');
+  // A prior interrupted run's scope is unknowable from the current flags
+  // (it may have covered other packages), so scan the whole workspace root.
+  const leftovers = await collectFiles(workspaceRoot, (path) => basename(path).includes('.tw-migrate-'));
+  if (leftovers.length > 0) {
+    const listed = leftovers.sort().map((path) => `  ${normalizedRelativePath(cwd, path)}`).join('\n');
     throw new Error(
       `Found leftover tw-migrate files from an interrupted run:\n${listed}\n` +
         'Restore each ".<name>.tw-migrate-backup-*" file by renaming it back to "<name>", ' +
@@ -80,129 +35,52 @@ export async function migrate(options = {}) {
     );
   }
 
-  const cssPaths = allPaths.filter((path) => path.endsWith('.css'));
-  const sourcePaths = allPaths.filter((path) => SOURCE_EXTENSIONS.has(extension(path)));
-  const [cssSources, sourceFiles] = await Promise.all([
+  const snapshots = new Map();
+  const cssPaths = scope.scannedPaths.filter((path) => path.endsWith('.css'));
+  const sourcePaths = scope.scannedPaths.filter((path) => SOURCE_EXTENSIONS.has(extension(path)));
+  const [cssSources, sourceCandidates] = await Promise.all([
     readSources(cssPaths, snapshots),
-    Promise.all(sourcePaths.map(async (path) => ({ path, source: await snapshotFile(snapshots, path) }))),
+    Promise.all(sourcePaths.map(async (path) => {
+      const source = await readFile(path, 'utf8');
+      // Scan-only sources matter solely as potential CSS Module references,
+      // and every supported reference names the module literally. Unrelated
+      // gitignored files (coverage output, generated bundles) must reach
+      // neither the parser nor the snapshot ledger.
+      if (!scope.targetable.has(path) && !source.includes('.module.css')) return undefined;
+      return { path, source: recordSnapshot(snapshots, path, source) };
+    })),
     ...selectedPackages.map((packageRoot) => snapshotFile(snapshots, join(packageRoot, 'package.json'))),
   ]);
+  const sourceFiles = sourceCandidates.filter(Boolean);
   if (explicitCss && !cssSources.has(explicitCss)) {
     cssSources.set(explicitCss, await snapshotFile(snapshots, explicitCss));
   }
   if (configuredEntry && !cssSources.has(configuredEntry)) {
     cssSources.set(configuredEntry, await snapshotFile(snapshots, configuredEntry));
   }
-  const cssDependents = indexCssDependents(cssSources);
 
+  const context = {
+    ...scope,
+    options,
+    snapshots,
+    cssSources,
+    sourceFiles,
+    cssDependents: indexCssDependents(cssSources),
+  };
   const failures = [];
   const plans = [];
   for (const packageRoot of selectedPackages) {
-    const ownedCss = [...cssSources.keys()].filter((path) => pathOwners.get(path) === packageRoot);
-    if (ownedCss.length === 0) continue;
-
-    let tailwindPath;
-    let tailwindEntries;
-    try {
-      ({ path: tailwindPath, entries: tailwindEntries } = resolveTailwindEntry(
-        ownedCss,
-        cssSources,
-        configuredEntry,
-      ));
-    } catch (error) {
-      if (!options.force) throw error;
-      failures.push(packageFailure(workspaceRoot, packageRoot, error));
-      continue;
-    }
-
-    const excludedEntries = new Set([...tailwindEntries, tailwindPath]);
-    const targets = explicitCss
-      ? [explicitCss]
-      : ownedCss.filter((path) => !excludedEntries.has(path));
-    if (targets.length === 0) continue;
-    if (targets.some((path) => excludedEntries.has(path))) {
-      throw new Error('The Tailwind CSS entry cannot be migrated.');
-    }
-
-    let tailwind;
-    try {
-      tailwind = await loadTailwind(packageRoot, tailwindPath, snapshots, workspaceRoot);
-    } catch (error) {
-      if (!options.force) throw error;
-      failures.push(packageFailure(workspaceRoot, packageRoot, error));
-      continue;
-    }
-
-    const files = sourceFiles.map((file) => {
-      const owner = pathOwners.get(file.path);
-      return {
-        ...file,
-        writable: options.workspaces ? writablePackages.has(owner) : owner === packageRoot,
-      };
-    });
-    const stylesheets = targets.sort().map((cssPath) => ({
-      cssPath,
-      cssSource: cssSources.get(cssPath),
-      cssModuleId: normalizedRelativePath(packageRoot, cssPath),
-      cssDependents: cssDependents.get(cssPath) ?? [],
-    }));
-    let plan;
-    try {
-      plan = JSON.parse(
-        planBatchMigration(
-          JSON.stringify({
-            stylesheets,
-            tailwindPath: tailwind.path,
-            tailwindSource: tailwind.css,
-            utilityPrefix: tailwind.designSystem.theme.prefix,
-            themeTokens: tailwind.themeTokens,
-            files,
-          }),
-        ),
-      );
-    } catch (error) {
-      if (!options.force || !isRecoverablePlanningError(error)) throw error;
-      failures.push(packageFailure(workspaceRoot, packageRoot, error));
-      continue;
-    }
-
-    await validateCandidates(tailwind, plan.candidates);
-    plans.push(plan);
+    const result = await planPackage(context, packageRoot);
+    if (result.failure) failures.push(result.failure);
+    else if (result.plan) plans.push(result.plan);
   }
 
   const originals = new Map([
     ...cssSources,
     ...sourceFiles.map((file) => [file.path, file.source]),
   ]);
-  const filesByPath = new Map();
-  const deletedPaths = new Set();
-  const candidates = new Set();
-  const rules = [];
-  const warnings = [];
-  let convertedRules = 0;
-  let retainedRules = 0;
-
-  for (const plan of plans) {
-    for (const file of plan.files) {
-      if (!originals.has(file.path)) throw new Error(`Planned file is outside the source snapshot: ${file.path}`);
-      if (filesByPath.has(file.path) || deletedPaths.has(file.path)) {
-        throw new Error(`Multiple package groups planned changes for ${file.path}`);
-      }
-      filesByPath.set(file.path, file);
-    }
-    for (const path of plan.deletedFiles) {
-      if (!originals.has(path)) throw new Error(`Planned deletion is outside the source snapshot: ${path}`);
-      if (filesByPath.has(path) || deletedPaths.has(path)) {
-        throw new Error(`Multiple package groups planned changes for ${path}`);
-      }
-      deletedPaths.add(path);
-    }
-    for (const candidate of plan.candidates) candidates.add(candidate);
-    convertedRules += plan.convertedRules;
-    retainedRules += plan.retainedRules;
-    rules.push(...plan.rules);
-    warnings.push(...plan.warnings);
-  }
+  const { filesByPath, deletedPaths, candidates, rules, warnings, convertedRules, retainedRules } =
+    mergePlans(plans, originals);
 
   const changed = [...filesByPath.values()]
     .map((file) => ({ ...file, before: originals.get(file.path) }))
@@ -235,6 +113,189 @@ export async function migrate(options = {}) {
     warnings: warnings.map((warning) => ({ ...warning, file: normalizedRelativePath(cwd, warning.file) })),
     failures,
   };
+}
+
+async function resolveScope(options) {
+  const cwd = resolve(options.cwd ?? process.cwd());
+  const currentPackage = await findPackageRoot(cwd);
+  const gitRoot = await findGitRoot(currentPackage);
+  const workspaceRoot = gitRoot && !(await isIgnoredByGit(gitRoot, currentPackage))
+    ? gitRoot
+    : currentPackage;
+  const allPaths = await discoverFiles(workspaceRoot, workspaceRoot === gitRoot);
+  // Ignore filtering scopes what gets migrated, never what gets scanned:
+  // gitignored consumers and stylesheets must still block unsafe deletion.
+  const scannedPaths = workspaceRoot === gitRoot
+    ? [...new Set([...allPaths, ...(await collectFiles(workspaceRoot, isRelevantDiscoveredFile))])]
+    : [...allPaths];
+  const explicitCss = options.cssFile ? resolve(cwd, options.cssFile) : undefined;
+  const configuredEntry = options.tailwindCss ? resolve(cwd, options.tailwindCss) : undefined;
+  if (explicitCss && extension(explicitCss) !== '.css') {
+    throw new TypeError('Only .css files can be migrated');
+  }
+  if (configuredEntry && extension(configuredEntry) !== '.css') {
+    throw new TypeError('The Tailwind CSS entry must be a .css file');
+  }
+  if (configuredEntry && !(await stat(configuredEntry)).isFile()) {
+    throw new TypeError('The Tailwind CSS entry must be a file');
+  }
+  if (explicitCss && !isWithin(currentPackage, explicitCss)) {
+    throw new TypeError('The selected CSS file must belong to the current package');
+  }
+  for (const path of [explicitCss, configuredEntry]) {
+    if (path && !allPaths.includes(path)) allPaths.push(path);
+    if (path && !scannedPaths.includes(path)) scannedPaths.push(path);
+  }
+  allPaths.sort();
+  scannedPaths.sort();
+  const targetable = new Set(allPaths);
+
+  const allPackageRoots = await discoverPackageRoots(workspaceRoot, allPaths);
+  if (!allPackageRoots.includes(currentPackage)) allPackageRoots.push(currentPackage);
+  for (const path of [explicitCss, configuredEntry]) {
+    if (!path) continue;
+    const owner = await findPackageRoot(dirname(path));
+    if (!allPackageRoots.includes(owner)) allPackageRoots.push(owner);
+  }
+  allPackageRoots.sort();
+  const pathOwners = new Map(scannedPaths.map((path) => [path, owningPackage(path, allPackageRoots)]));
+  if (explicitCss && pathOwners.get(explicitCss) !== currentPackage) {
+    throw new TypeError('The selected CSS file must belong to the current package');
+  }
+  if (configuredEntry && pathOwners.get(configuredEntry) !== currentPackage) {
+    throw new TypeError('The Tailwind CSS entry must belong to the current package');
+  }
+  const selectedPackages = options.workspaces ? allPackageRoots : [currentPackage];
+  return {
+    cwd,
+    workspaceRoot,
+    scannedPaths,
+    targetable,
+    explicitCss,
+    configuredEntry,
+    pathOwners,
+    selectedPackages,
+    writablePackages: new Set(selectedPackages),
+  };
+}
+
+async function planPackage(context, packageRoot) {
+  const {
+    options,
+    snapshots,
+    workspaceRoot,
+    explicitCss,
+    configuredEntry,
+    cssSources,
+    sourceFiles,
+    cssDependents,
+    pathOwners,
+    targetable,
+    writablePackages,
+  } = context;
+  const ownedCss = [...cssSources.keys()].filter(
+    (path) => targetable.has(path) && pathOwners.get(path) === packageRoot,
+  );
+  if (ownedCss.length === 0) return {};
+
+  let tailwindPath;
+  let tailwindEntries;
+  try {
+    ({ path: tailwindPath, entries: tailwindEntries } = resolveTailwindEntry(
+      ownedCss,
+      cssSources,
+      configuredEntry,
+    ));
+  } catch (error) {
+    if (!options.force) throw error;
+    return { failure: packageFailure(workspaceRoot, packageRoot, error) };
+  }
+
+  const excludedEntries = new Set([...tailwindEntries, tailwindPath]);
+  const targets = explicitCss
+    ? [explicitCss]
+    : ownedCss.filter((path) => !excludedEntries.has(path));
+  if (targets.length === 0) return {};
+  if (targets.some((path) => excludedEntries.has(path))) {
+    throw new Error('The Tailwind CSS entry cannot be migrated.');
+  }
+
+  let tailwind;
+  try {
+    tailwind = await loadTailwind(packageRoot, tailwindPath, snapshots, workspaceRoot);
+  } catch (error) {
+    if (!options.force) throw error;
+    return { failure: packageFailure(workspaceRoot, packageRoot, error) };
+  }
+
+  const files = sourceFiles.map((file) => {
+    const owner = pathOwners.get(file.path);
+    return {
+      ...file,
+      writable: targetable.has(file.path)
+        && (options.workspaces ? writablePackages.has(owner) : owner === packageRoot),
+    };
+  });
+  const stylesheets = targets.sort().map((cssPath) => ({
+    cssPath,
+    cssSource: cssSources.get(cssPath),
+    cssModuleId: normalizedRelativePath(packageRoot, cssPath),
+    cssDependents: cssDependents.get(cssPath) ?? [],
+  }));
+  let plan;
+  try {
+    plan = JSON.parse(
+      planBatchMigration(
+        JSON.stringify({
+          stylesheets,
+          tailwindPath: tailwind.path,
+          tailwindSource: tailwind.css,
+          utilityPrefix: tailwind.designSystem.theme.prefix,
+          themeTokens: tailwind.themeTokens,
+          files,
+        }),
+      ),
+    );
+  } catch (error) {
+    if (!options.force || !isRecoverablePlanningError(error)) throw error;
+    return { failure: packageFailure(workspaceRoot, packageRoot, error) };
+  }
+
+  await validateCandidates(tailwind, plan.candidates);
+  return { plan };
+}
+
+function mergePlans(plans, originals) {
+  const filesByPath = new Map();
+  const deletedPaths = new Set();
+  const candidates = new Set();
+  const rules = [];
+  const warnings = [];
+  let convertedRules = 0;
+  let retainedRules = 0;
+
+  for (const plan of plans) {
+    for (const file of plan.files) {
+      if (!originals.has(file.path)) throw new Error(`Planned file is outside the source snapshot: ${file.path}`);
+      if (filesByPath.has(file.path) || deletedPaths.has(file.path)) {
+        throw new Error(`Multiple package groups planned changes for ${file.path}`);
+      }
+      filesByPath.set(file.path, file);
+    }
+    for (const path of plan.deletedFiles) {
+      if (!originals.has(path)) throw new Error(`Planned deletion is outside the source snapshot: ${path}`);
+      if (filesByPath.has(path) || deletedPaths.has(path)) {
+        throw new Error(`Multiple package groups planned changes for ${path}`);
+      }
+      deletedPaths.add(path);
+    }
+    for (const candidate of plan.candidates) candidates.add(candidate);
+    convertedRules += plan.convertedRules;
+    retainedRules += plan.retainedRules;
+    rules.push(...plan.rules);
+    warnings.push(...plan.warnings);
+  }
+  return { filesByPath, deletedPaths, candidates, rules, warnings, convertedRules, retainedRules };
 }
 
 async function findPackageRoot(start) {
@@ -333,7 +394,10 @@ function isProjectInput(workspaceRoot, path) {
 }
 
 async function snapshotFile(snapshots, path) {
-  const source = await readFile(path, 'utf8');
+  return recordSnapshot(snapshots, path, await readFile(path, 'utf8'));
+}
+
+function recordSnapshot(snapshots, path, source) {
   if (snapshots.has(path) && snapshots.get(path) !== source) {
     throw new Error(`Source changed during planning: ${path}`);
   }
