@@ -1,8 +1,10 @@
 export interface MigrateOptions {
-  cssFile: string;
+  cssFile?: string;
   cwd?: string;
   write?: boolean;
   tailwindCss?: string;
+  workspaces?: boolean;
+  force?: boolean;
 }
 
 export interface MigrationWarning {
@@ -19,6 +21,11 @@ export interface RuleReport {
   candidates: string[];
 }
 
+export interface MigrationFailure {
+  package: string;
+  message: string;
+}
+
 export interface MigrationReport {
   changedFiles: string[];
   diff: string;
@@ -27,6 +34,7 @@ export interface MigrationReport {
   rules: RuleReport[];
   candidates: string[];
   warnings: MigrationWarning[];
+  failures: MigrationFailure[];
 }
 
-export function migrate(options: MigrateOptions): Promise<MigrationReport>;
+export function migrate(options?: MigrateOptions): Promise<MigrationReport>;

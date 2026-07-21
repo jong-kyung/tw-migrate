@@ -30,3 +30,4 @@ if (!binding) {
 }
 
 export const planMigration = binding.planMigration;
+export const planBatchMigration = binding.planBatchMigration;
