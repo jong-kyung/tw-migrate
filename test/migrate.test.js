@@ -659,6 +659,28 @@ test('excludes every detected Tailwind entry when an override selects one', asyn
   }
 });
 
+test('detects leftover files stranded outside the selected package', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      run('git', ['init', '-q'], { cwd }),
+      mkdir(join(cwd, 'packages')),
+    ]);
+    await Promise.all([mkdir(join(cwd, 'packages', 'a')), mkdir(join(cwd, 'packages', 'b'))]);
+    await Promise.all([
+      writeFile(join(cwd, 'packages', 'a', 'package.json'), '{"private":true}'),
+      writeFile(join(cwd, 'packages', 'b', 'package.json'), '{"private":true}'),
+      writeFile(join(cwd, 'packages', 'b', '.B.tsx.tw-migrate-backup-1-0'), 'stranded original'),
+    ]);
+
+    // Running from packages/a must still surface the stranded backup a
+    // crashed --workspaces run left in packages/b.
+    await assert.rejects(migrate({ cwd: join(cwd, 'packages', 'a') }), /interrupted run/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('retains a module referenced only from a gitignored consumer', async () => {
   const cwd = await fixture();
   try {

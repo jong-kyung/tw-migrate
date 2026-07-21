@@ -73,14 +73,11 @@ export async function migrate(options = {}) {
   const writablePackages = new Set(selectedPackages);
   const snapshots = new Map();
 
-  const leftovers = new Set();
-  for (const packageRoot of selectedPackages) {
-    for (const path of await collectFiles(packageRoot, (path) => basename(path).includes('.tw-migrate-'))) {
-      leftovers.add(path);
-    }
-  }
-  if (leftovers.size > 0) {
-    const listed = [...leftovers].sort().map((path) => `  ${normalizedRelativePath(cwd, path)}`).join('\n');
+  // A prior interrupted run's scope is unknowable from the current flags
+  // (it may have covered other packages), so scan the whole workspace root.
+  const leftovers = await collectFiles(workspaceRoot, (path) => basename(path).includes('.tw-migrate-'));
+  if (leftovers.length > 0) {
+    const listed = leftovers.sort().map((path) => `  ${normalizedRelativePath(cwd, path)}`).join('\n');
     throw new Error(
       `Found leftover tw-migrate files from an interrupted run:\n${listed}\n` +
         'Restore each ".<name>.tw-migrate-backup-*" file by renaming it back to "<name>", ' +
