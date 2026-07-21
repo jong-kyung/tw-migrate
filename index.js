@@ -10,6 +10,7 @@ import { planBatchMigration } from './native.js';
 const run = promisify(execFile);
 const SOURCE_EXTENSIONS = new Set(['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts']);
 const IGNORED_DIRECTORIES = new Set(['.git', '.next', 'build', 'dist', 'node_modules']);
+const RECOVERABLE_INPUT_ERROR = 'TW_MIGRATE_RECOVERABLE_INPUT:';
 
 export async function migrate(options = {}) {
   if (options.cssFile && options.workspaces) {
@@ -53,10 +54,11 @@ export async function migrate(options = {}) {
     if (!allPackageRoots.includes(owner)) allPackageRoots.push(owner);
   }
   allPackageRoots.sort();
-  if (explicitCss && owningPackage(explicitCss, allPackageRoots) !== currentPackage) {
+  const pathOwners = new Map(allPaths.map((path) => [path, owningPackage(path, allPackageRoots)]));
+  if (explicitCss && pathOwners.get(explicitCss) !== currentPackage) {
     throw new TypeError('The selected CSS file must belong to the current package');
   }
-  if (configuredEntry && owningPackage(configuredEntry, allPackageRoots) !== currentPackage) {
+  if (configuredEntry && pathOwners.get(configuredEntry) !== currentPackage) {
     throw new TypeError('The Tailwind CSS entry must belong to the current package');
   }
   const selectedPackages = options.workspaces ? allPackageRoots : [currentPackage];
@@ -91,14 +93,12 @@ export async function migrate(options = {}) {
   if (configuredEntry && !cssSources.has(configuredEntry)) {
     cssSources.set(configuredEntry, await snapshotFile(snapshots, configuredEntry));
   }
+  const cssDependents = indexCssDependents(cssSources);
 
   const failures = [];
   const plans = [];
-  const sortedPackages = [...selectedPackages].sort();
-  for (const packageRoot of sortedPackages) {
-    const ownedCss = [...cssSources.keys()].filter(
-      (path) => owningPackage(path, allPackageRoots) === packageRoot,
-    );
+  for (const packageRoot of selectedPackages) {
+    const ownedCss = [...cssSources.keys()].filter((path) => pathOwners.get(path) === packageRoot);
     if (ownedCss.length === 0) continue;
 
     let tailwindPath;
@@ -134,7 +134,7 @@ export async function migrate(options = {}) {
     }
 
     const files = sourceFiles.map((file) => {
-      const owner = owningPackage(file.path, allPackageRoots);
+      const owner = pathOwners.get(file.path);
       return {
         ...file,
         writable: options.workspaces ? writablePackages.has(owner) : owner === packageRoot,
@@ -144,7 +144,7 @@ export async function migrate(options = {}) {
       cssPath,
       cssSource: cssSources.get(cssPath),
       cssModuleId: relative(packageRoot, cssPath),
-      cssDependents: findCssDependents(cssSources, cssPath),
+      cssDependents: cssDependents.get(cssPath) ?? [],
     }));
     let plan;
     try {
@@ -167,7 +167,7 @@ export async function migrate(options = {}) {
     }
 
     await validateCandidates(tailwind, plan.candidates);
-    plans.push({ packageRoot, plan, tailwind });
+    plans.push(plan);
   }
 
   const originals = new Map([
@@ -182,7 +182,7 @@ export async function migrate(options = {}) {
   let convertedRules = 0;
   let retainedRules = 0;
 
-  for (const { plan } of plans) {
+  for (const plan of plans) {
     for (const file of plan.files) {
       if (!originals.has(file.path)) throw new Error(`Planned file is outside the source snapshot: ${file.path}`);
       if (filesByPath.has(file.path) || deletedPaths.has(file.path)) {
@@ -272,7 +272,7 @@ async function isIgnoredByGit(gitRoot, path) {
 }
 
 async function discoverFiles(root, useGit) {
-  if (!useGit) return collectFiles(root, () => true);
+  if (!useGit) return collectFiles(root, isRelevantDiscoveredFile);
 
   const { stdout } = await run(
     'git',
@@ -283,7 +283,7 @@ async function discoverFiles(root, useGit) {
     .split('\0')
     .filter(Boolean)
     .map((path) => resolve(root, path))
-    .filter((path) => !hasIgnoredDirectory(root, path));
+    .filter((path) => !hasIgnoredDirectory(root, path) && isRelevantDiscoveredFile(path));
   const existing = await Promise.all(paths.map(async (path) => {
     try {
       return (await stat(path)).isFile() ? path : undefined;
@@ -321,6 +321,12 @@ function hasIgnoredDirectory(root, path) {
   return relative(root, path).split(/[\\/]/).some((part) => IGNORED_DIRECTORIES.has(part));
 }
 
+function isRelevantDiscoveredFile(path) {
+  return basename(path) === 'package.json'
+    || path.endsWith('.css')
+    || SOURCE_EXTENSIONS.has(extension(path));
+}
+
 function isProjectInput(workspaceRoot, path) {
   return isWithin(workspaceRoot, path)
     && !relative(workspaceRoot, path).split(/[\\/]/).includes('node_modules');
@@ -336,18 +342,18 @@ async function snapshotFile(snapshots, path) {
 }
 
 function packageFailure(workspaceRoot, packageRoot, error) {
+  const message = error instanceof Error ? error.message : String(error);
   return {
     package: relative(workspaceRoot, packageRoot) || '.',
-    message: error instanceof Error ? error.message : String(error),
+    message: message.startsWith(RECOVERABLE_INPUT_ERROR)
+      ? message.slice(RECOVERABLE_INPUT_ERROR.length)
+      : message,
   };
 }
 
 function isRecoverablePlanningError(error) {
   const message = error instanceof Error ? error.message : String(error);
-  if (message.startsWith('Failed to parse edited CSS')) return false;
-  return message.startsWith('Failed to parse ')
-    || message.startsWith('Failed to analyze ')
-    || message.startsWith('Unsupported source file ');
+  return message.startsWith(RECOVERABLE_INPUT_ERROR);
 }
 
 async function readSources(paths, snapshots) {
@@ -381,11 +387,9 @@ function stripCssComments(source) {
   return source.replace(/\/\*[\s\S]*?\*\//g, '');
 }
 
-function findCssDependents(cssSources, cssPath) {
-  if (!cssPath.endsWith('.module.css')) return [];
-  const dependents = [];
+function indexCssDependents(cssSources) {
+  const dependents = new Map();
   for (const [path, rawSource] of cssSources) {
-    if (path === cssPath) continue;
     const source = stripCssComments(rawSource);
     const references = [
       ...source.matchAll(
@@ -393,9 +397,15 @@ function findCssDependents(cssSources, cssPath) {
       ),
       ...source.matchAll(/@import\s+url\(\s*([^"'()\s]+)\s*\)/g),
     ];
-    if (references.some((match) => resolve(dirname(path), match[1]) === cssPath)) dependents.push(path);
+    for (const target of new Set(references.map((match) => resolve(dirname(path), match[1])))) {
+      if (target === path || !target.endsWith('.module.css') || !cssSources.has(target)) continue;
+      const paths = dependents.get(target) ?? [];
+      paths.push(path);
+      dependents.set(target, paths);
+    }
   }
-  return dependents.sort();
+  for (const paths of dependents.values()) paths.sort();
+  return dependents;
 }
 
 function resolveTailwindEntry(cssPaths, cssSources, configuredPath) {

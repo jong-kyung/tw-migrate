@@ -723,6 +723,22 @@ test('--force never swallows cross-group plan collisions', async () => {
   }
 });
 
+test('--force skips a package with malformed input CSS', async () => {
+  const cwd = await fixture({ css: '}\n' });
+  try {
+    const report = await migrate({ cwd, force: true, write: true });
+
+    assert.deepEqual(report.changedFiles, []);
+    assert.equal(report.failures.length, 1);
+    assert.equal(report.failures[0].package, '.');
+    assert.match(report.failures[0].message, /Failed to parse .*Button\.module\.css/);
+    assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), '}\n');
+    assert.equal(await readFile(join(cwd, 'Button.tsx'), 'utf8'), initialTsx);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('--force skips a broken workspace package and applies successful groups', async () => {
   const cwd = await fixture();
   try {

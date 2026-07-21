@@ -156,12 +156,15 @@ fn prefix_rule_candidates(rules: &mut [RulePlan], prefix: &str) {
 
 struct BatchMatch {
     stylesheet: usize,
-    file: String,
-    start: usize,
-    end: usize,
     candidate: String,
     rule: RuleId,
     properties: BTreeSet<String>,
+}
+
+pub(crate) fn is_recoverable_input_error(error: &str) -> bool {
+    (!error.starts_with("Failed to parse edited CSS") && error.starts_with("Failed to parse "))
+        || error.starts_with("Failed to analyze ")
+        || error.starts_with("Unsupported source file ")
 }
 
 pub fn plan_batch_json(request: &str) -> Result<String, String> {
@@ -171,9 +174,9 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
         return Err("Batch migration requires at least one stylesheet".to_string());
     }
 
-    let mut all_matches = Vec::new();
+    let mut match_groups: HashMap<(String, usize, usize), Vec<BatchMatch>> = HashMap::new();
     for (index, stylesheet) in request.stylesheets.iter().enumerate() {
-        let plan_request = batch_stylesheet_request(&request, stylesheet, request.files.clone());
+        let plan_request = batch_stylesheet_request(&request, stylesheet, Vec::new());
         let candidate_maps = candidate_map_for_request(&plan_request)?;
         for file in request.files.iter().filter(|file| file.writable) {
             let result = crate::js_rewrite::plan_batch_source_file(
@@ -188,48 +191,47 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
                     .origins
                     .get(&(matched.key, matched.candidate.clone()))
                 {
-                    all_matches.extend(origins.iter().map(|origin| BatchMatch {
-                        stylesheet: index,
-                        file: file.path.clone(),
-                        start: matched.start,
-                        end: matched.end,
-                        candidate: matched.candidate.clone(),
-                        rule: origin.rule,
-                        properties: origin.properties.clone(),
-                    }));
+                    match_groups
+                        .entry((file.path.clone(), matched.start, matched.end))
+                        .or_default()
+                        .extend(origins.iter().map(|origin| BatchMatch {
+                            stylesheet: index,
+                            candidate: matched.candidate.clone(),
+                            rule: origin.rule,
+                            properties: origin.properties.clone(),
+                        }));
                 }
             }
         }
     }
 
-    let mut blocked_rules = vec![HashMap::new(); request.stylesheets.len()];
-    for (left_index, left) in all_matches.iter().enumerate() {
-        for right in &all_matches[left_index + 1..] {
-            if left.stylesheet != right.stylesheet
-                && left.file == right.file
-                && left.start == right.start
-                && left.end == right.end
-                && (tailwind_utilities_conflict(&left.candidate, &right.candidate)
-                    || (tailwind_variants_match(&left.candidate, &right.candidate)
-                        && left.properties.iter().any(|left_property| {
-                            right.properties.iter().any(|right_property| {
-                                css_properties_conflict(left_property, right_property)
-                            })
-                        })))
-            {
-                let pair = if left.candidate <= right.candidate {
-                    (left.candidate.clone(), right.candidate.clone())
-                } else {
-                    (right.candidate.clone(), left.candidate.clone())
-                };
-                blocked_rules[left.stylesheet]
-                    .entry(left.rule)
-                    .or_insert_with(BTreeSet::new)
-                    .insert(pair.clone());
-                blocked_rules[right.stylesheet]
-                    .entry(right.rule)
-                    .or_insert_with(BTreeSet::new)
-                    .insert(pair);
+    let mut blocked_rules: Vec<RuleConflicts> = vec![HashMap::new(); request.stylesheets.len()];
+    for matches in match_groups.values() {
+        for (left_index, left) in matches.iter().enumerate() {
+            for right in &matches[left_index + 1..] {
+                if left.stylesheet != right.stylesheet
+                    && (tailwind_utilities_conflict(&left.candidate, &right.candidate)
+                        || (tailwind_variants_match(&left.candidate, &right.candidate)
+                            && left.properties.iter().any(|left_property| {
+                                right.properties.iter().any(|right_property| {
+                                    css_properties_conflict(left_property, right_property)
+                                })
+                            })))
+                {
+                    let pair = if left.candidate <= right.candidate {
+                        (left.candidate.clone(), right.candidate.clone())
+                    } else {
+                        (right.candidate.clone(), left.candidate.clone())
+                    };
+                    blocked_rules[left.stylesheet]
+                        .entry(left.rule)
+                        .or_default()
+                        .insert(pair.clone());
+                    blocked_rules[right.stylesheet]
+                        .entry(right.rule)
+                        .or_default()
+                        .insert(pair);
+                }
             }
         }
     }
@@ -380,7 +382,7 @@ fn candidate_map_for_request(request: &PlanRequest) -> Result<CandidateMaps, Str
         .flat_map(|rule| rule.related_classes.iter().cloned())
         .collect::<BTreeSet<_>>();
     let mut candidate_map: HashMap<SelectorKey, Vec<String>> = HashMap::new();
-    let mut origins = HashMap::new();
+    let mut origins: HashMap<(SelectorKey, String), Vec<RuleOrigin>> = HashMap::new();
     for rule in rules {
         if let Some(key) = rule.key
             && rule.warning.is_none()
@@ -393,7 +395,7 @@ fn candidate_map_for_request(request: &PlanRequest) -> Result<CandidateMaps, Str
             for candidate in &rule.candidates {
                 origins
                     .entry((key.clone(), candidate.clone()))
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(RuleOrigin {
                         rule: rule_id,
                         properties: rule

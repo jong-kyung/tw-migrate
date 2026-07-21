@@ -290,7 +290,6 @@ struct StaticTemplate {
     preserved_candidates: Vec<String>,
     preserved_expression: Option<String>,
     append_at: Option<usize>,
-    blocked: bool,
 }
 
 struct UsageCollector<'s> {
@@ -358,7 +357,6 @@ impl UsageCollector<'_> {
                                 preserved_candidates: Vec::new(),
                                 preserved_expression: None,
                                 append_at: None,
-                                blocked: true,
                             });
                         }
                         return None;
@@ -399,7 +397,6 @@ impl UsageCollector<'_> {
             preserved_candidates,
             preserved_expression: None,
             append_at: partial.then_some(template.span.end as usize - 1),
-            blocked: false,
         })
     }
 
@@ -619,7 +616,6 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
                                 .to_string()
                         }),
                         append_at: None,
-                        blocked: false,
                     }
                 }
                 JSXExpression::TemplateLiteral(template) => {
@@ -660,11 +656,7 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
                 preserved_candidates,
                 preserved_expression,
                 append_at,
-                blocked,
             } = template;
-            if blocked {
-                continue;
-            }
             for member in &members {
                 let key = SelectorKey::Class(member.clone());
                 for candidate in &self.candidates[&key] {
