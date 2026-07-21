@@ -776,6 +776,24 @@ test('detects leftover files stranded outside the selected package', async () =>
   }
 });
 
+test('ignores unparseable gitignored files without module references', async () => {
+  const cwd = await fixture();
+  try {
+    await run('git', ['init', '-q'], { cwd });
+    await Promise.all([
+      writeFile(join(cwd, '.gitignore'), 'coverage/\n'),
+      mkdir(join(cwd, 'coverage')),
+    ]);
+    await writeFile(join(cwd, 'coverage', 'report.js'), '<% generated: not JavaScript %>\n');
+
+    const report = await migrate({ cwd, write: true });
+    assert.equal(report.convertedRules, 1);
+    await assert.rejects(readFile(join(cwd, 'Button.module.css'), 'utf8'), { code: 'ENOENT' });
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('retains a module referenced only from a gitignored consumer', async () => {
   const cwd = await fixture();
   try {

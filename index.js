@@ -38,11 +38,20 @@ export async function migrate(options = {}) {
   const snapshots = new Map();
   const cssPaths = scope.scannedPaths.filter((path) => path.endsWith('.css'));
   const sourcePaths = scope.scannedPaths.filter((path) => SOURCE_EXTENSIONS.has(extension(path)));
-  const [cssSources, sourceFiles] = await Promise.all([
+  const [cssSources, sourceCandidates] = await Promise.all([
     readSources(cssPaths, snapshots),
-    Promise.all(sourcePaths.map(async (path) => ({ path, source: await snapshotFile(snapshots, path) }))),
+    Promise.all(sourcePaths.map(async (path) => {
+      const source = await readFile(path, 'utf8');
+      // Scan-only sources matter solely as potential CSS Module references,
+      // and every supported reference names the module literally. Unrelated
+      // gitignored files (coverage output, generated bundles) must reach
+      // neither the parser nor the snapshot ledger.
+      if (!scope.targetable.has(path) && !source.includes('.module.css')) return undefined;
+      return { path, source: recordSnapshot(snapshots, path, source) };
+    })),
     ...selectedPackages.map((packageRoot) => snapshotFile(snapshots, join(packageRoot, 'package.json'))),
   ]);
+  const sourceFiles = sourceCandidates.filter(Boolean);
   if (explicitCss && !cssSources.has(explicitCss)) {
     cssSources.set(explicitCss, await snapshotFile(snapshots, explicitCss));
   }
@@ -385,7 +394,10 @@ function isProjectInput(workspaceRoot, path) {
 }
 
 async function snapshotFile(snapshots, path) {
-  const source = await readFile(path, 'utf8');
+  return recordSnapshot(snapshots, path, await readFile(path, 'utf8'));
+}
+
+function recordSnapshot(snapshots, path, source) {
   if (snapshots.has(path) && snapshots.get(path) !== source) {
     throw new Error(`Source changed during planning: ${path}`);
   }
