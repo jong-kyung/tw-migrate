@@ -27,6 +27,11 @@ export async function migrate(options = {}) {
     ? gitRoot
     : currentPackage;
   const allPaths = await discoverFiles(workspaceRoot, workspaceRoot === gitRoot);
+  // Ignore filtering scopes what gets migrated, never what gets scanned:
+  // gitignored consumers and stylesheets must still block unsafe deletion.
+  const scannedPaths = workspaceRoot === gitRoot
+    ? [...new Set([...allPaths, ...(await collectFiles(workspaceRoot, isRelevantDiscoveredFile))])]
+    : [...allPaths];
   const explicitCss = options.cssFile ? resolve(cwd, options.cssFile) : undefined;
   const configuredEntry = options.tailwindCss ? resolve(cwd, options.tailwindCss) : undefined;
   if (explicitCss && extension(explicitCss) !== '.css') {
@@ -43,8 +48,11 @@ export async function migrate(options = {}) {
   }
   for (const path of [explicitCss, configuredEntry]) {
     if (path && !allPaths.includes(path)) allPaths.push(path);
+    if (path && !scannedPaths.includes(path)) scannedPaths.push(path);
   }
   allPaths.sort();
+  scannedPaths.sort();
+  const targetable = new Set(allPaths);
 
   const allPackageRoots = await discoverPackageRoots(workspaceRoot, allPaths);
   if (!allPackageRoots.includes(currentPackage)) allPackageRoots.push(currentPackage);
@@ -54,7 +62,7 @@ export async function migrate(options = {}) {
     if (!allPackageRoots.includes(owner)) allPackageRoots.push(owner);
   }
   allPackageRoots.sort();
-  const pathOwners = new Map(allPaths.map((path) => [path, owningPackage(path, allPackageRoots)]));
+  const pathOwners = new Map(scannedPaths.map((path) => [path, owningPackage(path, allPackageRoots)]));
   if (explicitCss && pathOwners.get(explicitCss) !== currentPackage) {
     throw new TypeError('The selected CSS file must belong to the current package');
   }
@@ -80,8 +88,8 @@ export async function migrate(options = {}) {
     );
   }
 
-  const cssPaths = allPaths.filter((path) => path.endsWith('.css'));
-  const sourcePaths = allPaths.filter((path) => SOURCE_EXTENSIONS.has(extension(path)));
+  const cssPaths = scannedPaths.filter((path) => path.endsWith('.css'));
+  const sourcePaths = scannedPaths.filter((path) => SOURCE_EXTENSIONS.has(extension(path)));
   const [cssSources, sourceFiles] = await Promise.all([
     readSources(cssPaths, snapshots),
     Promise.all(sourcePaths.map(async (path) => ({ path, source: await snapshotFile(snapshots, path) }))),
@@ -98,7 +106,9 @@ export async function migrate(options = {}) {
   const failures = [];
   const plans = [];
   for (const packageRoot of selectedPackages) {
-    const ownedCss = [...cssSources.keys()].filter((path) => pathOwners.get(path) === packageRoot);
+    const ownedCss = [...cssSources.keys()].filter(
+      (path) => targetable.has(path) && pathOwners.get(path) === packageRoot,
+    );
     if (ownedCss.length === 0) continue;
 
     let tailwindPath;
@@ -137,7 +147,8 @@ export async function migrate(options = {}) {
       const owner = pathOwners.get(file.path);
       return {
         ...file,
-        writable: options.workspaces ? writablePackages.has(owner) : owner === packageRoot,
+        writable: targetable.has(file.path)
+          && (options.workspaces ? writablePackages.has(owner) : owner === packageRoot),
       };
     });
     const stylesheets = targets.sort().map((cssPath) => ({

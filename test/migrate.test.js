@@ -659,6 +659,50 @@ test('excludes every detected Tailwind entry when an override selects one', asyn
   }
 });
 
+test('retains a module referenced only from a gitignored consumer', async () => {
+  const cwd = await fixture();
+  try {
+    await run('git', ['init', '-q'], { cwd });
+    await Promise.all([
+      writeFile(join(cwd, '.gitignore'), 'generated.js\n'),
+      writeFile(
+        join(cwd, 'generated.js'),
+        "import styles from './Button.module.css';\nexport const buttonClass = styles.button;\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd, write: true });
+    assert.equal(report.convertedRules, 0);
+    assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
+    assert.match(await readFile(join(cwd, 'generated.js'), 'utf8'), /Button\.module\.css/);
+    assert.ok(!report.changedFiles.includes('generated.js'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('retains a module composed by a gitignored stylesheet', async () => {
+  const cwd = await fixture();
+  try {
+    await run('git', ['init', '-q'], { cwd });
+    await Promise.all([
+      writeFile(join(cwd, '.gitignore'), 'Consumer.module.css\n'),
+      writeFile(
+        join(cwd, 'Consumer.module.css'),
+        ".fancy {\n  composes: button from './Button.module.css';\n}\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd, write: true });
+    assert.equal(report.convertedRules, 0);
+    assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
+    assert.ok(report.warnings.some((warning) => warning.code === 'unsupported-css-module-reference'));
+    assert.ok(!report.changedFiles.includes('Consumer.module.css'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('verifies reference-only source snapshots before writing', async () => {
   const cwd = await fixture({
     tailwind: '@import "tailwindcss";\n@plugin "./mutate.cjs";\n',
