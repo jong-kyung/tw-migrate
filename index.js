@@ -72,7 +72,7 @@ export async function migrate(options = {}) {
     }
   }
   if (leftovers.size > 0) {
-    const listed = [...leftovers].sort().map((path) => `  ${relative(cwd, path)}`).join('\n');
+    const listed = [...leftovers].sort().map((path) => `  ${normalizedRelativePath(cwd, path)}`).join('\n');
     throw new Error(
       `Found leftover tw-migrate files from an interrupted run:\n${listed}\n` +
         'Restore each ".<name>.tw-migrate-backup-*" file by renaming it back to "<name>", ' +
@@ -143,7 +143,7 @@ export async function migrate(options = {}) {
     const stylesheets = targets.sort().map((cssPath) => ({
       cssPath,
       cssSource: cssSources.get(cssPath),
-      cssModuleId: relative(packageRoot, cssPath),
+      cssModuleId: normalizedRelativePath(packageRoot, cssPath),
       cssDependents: cssDependents.get(cssPath) ?? [],
     }));
     let plan;
@@ -212,9 +212,9 @@ export async function migrate(options = {}) {
     .map((path) => ({ path, before: originals.get(path) }))
     .sort((left, right) => left.path.localeCompare(right.path));
   const operations = [...changed, ...deleted].sort((left, right) => left.path.localeCompare(right.path));
-  const changedFiles = operations.map((file) => relative(cwd, file.path));
+  const changedFiles = operations.map((file) => normalizedRelativePath(cwd, file.path));
   const diff = operations
-    .map((file) => unifiedDiff(relative(cwd, file.path), file.before, 'source' in file ? file.source : ''))
+    .map((file) => unifiedDiff(normalizedRelativePath(cwd, file.path), file.before, 'source' in file ? file.source : ''))
     .join('');
 
   if (options.write && operations.length > 0) {
@@ -232,7 +232,7 @@ export async function migrate(options = {}) {
     retainedRules,
     rules,
     candidates: [...candidates].sort(),
-    warnings: warnings.map((warning) => ({ ...warning, file: relative(cwd, warning.file) })),
+    warnings: warnings.map((warning) => ({ ...warning, file: normalizedRelativePath(cwd, warning.file) })),
     failures,
   };
 }
@@ -344,7 +344,7 @@ async function snapshotFile(snapshots, path) {
 function packageFailure(workspaceRoot, packageRoot, error) {
   const message = error instanceof Error ? error.message : String(error);
   return {
-    package: relative(workspaceRoot, packageRoot) || '.',
+    package: normalizedRelativePath(workspaceRoot, packageRoot) || '.',
     message: message.startsWith(RECOVERABLE_INPUT_ERROR)
       ? message.slice(RECOVERABLE_INPUT_ERROR.length)
       : message,
@@ -381,6 +381,10 @@ async function collectFiles(root, include) {
 function extension(path) {
   const match = /\.[^.\/]+$/.exec(path);
   return match?.[0] ?? '';
+}
+
+function normalizedRelativePath(root, path) {
+  return relative(root, path).split(sep).join('/');
 }
 
 function stripCssComments(source) {
