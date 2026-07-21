@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{arbitrary::encode as arbitrary_value, theme::exact_theme_token};
+use crate::{arbitrary::encode_value, theme::exact_theme_token};
 
 #[derive(Default)]
 pub(crate) struct SpacingValues {
@@ -43,25 +43,23 @@ impl SpacingValues {
         Ok(true)
     }
 
+    /// Returns `None` when a stored value cannot be represented as a
+    /// Tailwind arbitrary value.
     pub(crate) fn candidates(
         &self,
         family_prefix: &str,
         theme_tokens: &HashMap<String, String>,
-    ) -> Vec<String> {
+    ) -> Option<Vec<String>> {
         if !self.used {
-            return Vec::new();
+            return Some(Vec::new());
         }
         if let [Some(top), Some(right), Some(bottom), Some(left)] = &self.values
             && top == right
             && top == bottom
             && top == left
         {
-            return vec![themed_candidate(
-                family_prefix,
-                "spacing",
-                top,
-                theme_tokens,
-            )];
+            return themed_candidate(family_prefix, "spacing", top, theme_tokens)
+                .map(|candidate| vec![candidate]);
         }
         ["t", "r", "b", "l"]
             .into_iter()
@@ -84,9 +82,9 @@ pub(crate) fn declaration_to_candidate(
     property: &str,
     value: &str,
     theme_tokens: &HashMap<String, String>,
-) -> Option<String> {
-    if value.is_empty() || value.contains(['[', ']', ';']) {
-        return None;
+) -> Result<String, &'static str> {
+    if value.is_empty() {
+        return Err("unsupported-declaration");
     }
     let static_candidate = match (property, value) {
         ("display", "flex") => Some("flex"),
@@ -95,27 +93,26 @@ pub(crate) fn declaration_to_candidate(
         _ => None,
     };
     if let Some(candidate) = static_candidate {
-        return Some(candidate.to_string());
+        return Ok(candidate.to_string());
     }
 
     let (prefix, token_namespace) = match property {
-        "padding" => ("p", Some("spacing")),
-        "margin" => ("m", Some("spacing")),
-        "gap" => ("gap", Some("spacing")),
-        "width" => ("w", Some("spacing")),
-        "height" => ("h", Some("spacing")),
-        "color" => ("text", Some("color")),
-        "background-color" => ("bg", Some("color")),
-        "border-radius" => ("rounded", Some("radius")),
-        "font-size" => ("text", Some("text")),
-        _ => return Some(format!("[{property}:{}]", arbitrary_value(value))),
+        "padding" => ("p", "spacing"),
+        "margin" => ("m", "spacing"),
+        "gap" => ("gap", "spacing"),
+        "width" => ("w", "spacing"),
+        "height" => ("h", "spacing"),
+        "color" => ("text", "color"),
+        "background-color" => ("bg", "color"),
+        "border-radius" => ("rounded", "radius"),
+        "font-size" => ("text", "text"),
+        _ => {
+            return encode_value(value)
+                .map(|value| format!("[{property}:{value}]"))
+                .ok_or("unsupported-value");
+        }
     };
-    Some(themed_candidate(
-        prefix,
-        token_namespace.expect("mapped utility namespace"),
-        value,
-        theme_tokens,
-    ))
+    themed_candidate(prefix, token_namespace, value, theme_tokens).ok_or("unsupported-value")
 }
 
 pub(crate) fn tailwind_utilities_conflict(generated: &str, existing: &str) -> bool {
@@ -360,11 +357,11 @@ fn themed_candidate(
     namespace: &str,
     value: &str,
     theme_tokens: &HashMap<String, String>,
-) -> String {
+) -> Option<String> {
     if let Some(name) = exact_theme_token(namespace, value, theme_tokens) {
-        format!("{prefix}-{name}")
+        Some(format!("{prefix}-{name}"))
     } else {
-        format!("{prefix}-[{}]", arbitrary_value(value))
+        encode_value(value).map(|value| format!("{prefix}-[{value}]"))
     }
 }
 

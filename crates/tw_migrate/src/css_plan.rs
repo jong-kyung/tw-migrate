@@ -303,29 +303,39 @@ fn collect_declaration_candidates(
             Ok(false) => {}
         }
         match declaration_to_candidate(property, value, theme_tokens) {
-            Some(candidate) => push_last_wins(
+            Ok(candidate) => push_last_wins(
                 &mut property_slots,
                 &mut local_candidates,
                 property,
                 candidate,
             ),
-            None => warning = Some("unsupported-declaration"),
+            Err(code) => warning = Some(code),
         }
     }
 
-    for candidate in margin.candidates("m", theme_tokens) {
-        merge_candidate(
-            &mut candidates,
-            candidate,
-            margin_properties.iter().cloned(),
-        );
+    match margin.candidates("m", theme_tokens) {
+        Some(margin_candidates) => {
+            for candidate in margin_candidates {
+                merge_candidate(
+                    &mut candidates,
+                    candidate,
+                    margin_properties.iter().cloned(),
+                );
+            }
+        }
+        None => warning = Some("unsupported-value"),
     }
-    for candidate in padding.candidates("p", theme_tokens) {
-        merge_candidate(
-            &mut candidates,
-            candidate,
-            padding_properties.iter().cloned(),
-        );
+    match padding.candidates("p", theme_tokens) {
+        Some(padding_candidates) => {
+            for candidate in padding_candidates {
+                merge_candidate(
+                    &mut candidates,
+                    candidate,
+                    padding_properties.iter().cloned(),
+                );
+            }
+        }
+        None => warning = Some("unsupported-value"),
     }
     for (candidate, property) in local_candidates {
         merge_candidate(&mut candidates, candidate, [property]);

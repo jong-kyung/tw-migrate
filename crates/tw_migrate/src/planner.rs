@@ -1459,6 +1459,80 @@ mod tests {
     }
 
     #[test]
+    fn encodes_quoted_values_and_urls_into_arbitrary_candidates() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": ".button { background-image: url(\"a_b.png\"); font-family: \"My Font\", sans-serif; content: \"a_b\"; width: calc(min(100%, 50vw)); }\n",
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(
+            response["candidates"],
+            serde_json::json!([
+                "[background-image:url(\"a_b.png\")]",
+                "[content:\"a\\_b\"]",
+                "[font-family:\"My_Font\",_sans-serif]",
+                "w-[calc(min(100%,_50vw))]"
+            ])
+        );
+        assert_eq!(response["convertedRules"], 1);
+    }
+
+    #[test]
+    fn encodes_grid_line_names_into_arbitrary_candidates() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": ".button { grid-template-columns: [full-start] 1fr; }\n",
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(
+            response["candidates"],
+            serde_json::json!(["[grid-template-columns:[full-start]_1fr]"])
+        );
+        assert_eq!(response["convertedRules"], 1);
+    }
+
+    #[test]
+    fn retains_unrepresentable_values_with_an_unsupported_value_warning() {
+        // Tailwind preserves url() bodies verbatim (underscores are not
+        // decoded back to spaces there), so a space inside url() cannot be
+        // represented in a class attribute.
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": ".button { background-image: url(\"a b.png\"); }\n",
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 0);
+        let warnings = response["warnings"].as_array().unwrap();
+        assert!(!warnings.is_empty());
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning["code"] == "unsupported-value")
+        );
+    }
+
+    #[test]
     fn converts_conditions_nested_inside_style_rules() {
         let request = serde_json::json!({
             "cssPath": "/project/Button.module.css",

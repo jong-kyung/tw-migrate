@@ -233,12 +233,75 @@ test('escapes literal underscores in arbitrary values', async () => {
   try {
     const report = await migrate({ cwd, cssFile: 'Button.module.css' });
     assert.deepEqual(report.candidates, ['[--font-key:Open\\_Sans]']);
-    assert.ok(report.diff.includes('Open\\\\_Sans'));
+    // JSX string attributes have no escape sequences, so the attribute must
+    // carry the candidate verbatim (a single backslash before the underscore).
+    assert.ok(report.diff.includes('className="[--font-key:Open\\_Sans]"'));
 
     const designSystem = await loadDesignSystem('@tailwind utilities;');
     const [css] = designSystem.candidatesToCss(report.candidates);
     assert.match(css, /Open_Sans/);
     assert.doesNotMatch(css, /Open Sans/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('round-trips quoted values and urls through arbitrary candidates', async () => {
+  const cwd = await fixture({
+    css: '.button { background-image: url("a_b.png"); font-family: "My Font", sans-serif; content: "a_b"; width: calc(min(100%, 50vw)); }\n',
+  });
+  try {
+    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    assert.deepEqual(report.candidates, [
+      '[background-image:url("a_b.png")]',
+      '[content:"a\\_b"]',
+      '[font-family:"My_Font",_sans-serif]',
+      'w-[calc(min(100%,_50vw))]',
+    ]);
+    assert.equal(report.convertedRules, 1);
+
+    const designSystem = await loadDesignSystem('@tailwind utilities;');
+    const css = designSystem.candidatesToCss(report.candidates).join('');
+    assert.match(css, /url\("a_b\.png"\)/);
+    assert.match(css, /"My Font", sans-serif/);
+    assert.match(css, /content: "a_b"/);
+    assert.match(css, /calc\(min\(100%, 50vw\)\)/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('retains a url value with a space under an unsupported-value warning', async () => {
+  const cwd = await fixture({
+    css: '.button { background-image: url("a b.png"); }\n',
+  });
+  try {
+    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    assert.equal(report.convertedRules, 0);
+    assert.equal(report.retainedRules, 1);
+    assert.ok(report.warnings.some((warning) => warning.code === 'unsupported-value'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('a second run over a converted quoted-value rule is a no-op', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(join(cwd, 'legacy.css'), '.card { font-family: "My Font", sans-serif; }\n'),
+      writeFile(join(cwd, 'Card.tsx'), 'export const Card = () => <div className="card" />;\n'),
+    ]);
+    const first = await migrate({ cwd, cssFile: 'legacy.css', write: true });
+    assert.deepEqual(first.changedFiles, ['Card.tsx']);
+    assert.match(
+      await readFile(join(cwd, 'Card.tsx'), 'utf8'),
+      /className='card \[font-family:"My_Font",_sans-serif\]'/,
+    );
+
+    const second = await migrate({ cwd, cssFile: 'legacy.css' });
+    assert.deepEqual(second.changedFiles, []);
+    assert.equal(second.diff, '');
   } finally {
     await cleanup(cwd);
   }

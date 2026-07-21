@@ -893,8 +893,7 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
                 self.edits.push(Edit {
                     start: container.span.start as usize,
                     end: container.span.end as usize,
-                    replacement: serde_json::to_string(&replacement_value)
-                        .expect("string serialization"),
+                    replacement: jsx_attribute_value(&replacement_value),
                 });
             } else {
                 self.edits.extend(partial_edits);
