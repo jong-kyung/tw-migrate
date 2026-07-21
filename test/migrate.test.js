@@ -363,6 +363,19 @@ test('scans cjs and cts references before deleting a CSS Module', async () => {
   }
 });
 
+test('warns at an aliased CSS Module reference site', async () => {
+  const cwd = await fixture({
+    tsx: "import styles from './Button.module.css';\nconst buttonClass = styles.button;\nexport const Button = () => <button className={buttonClass}>Save</button>;\n",
+  });
+  try {
+    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    assert.equal(report.convertedRules, 0);
+    assert.ok(report.warnings.some((warning) => warning.code === 'aliased-css-module-reference'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test(
   'preserves source file permissions when writing changes',
   { skip: process.platform === 'win32' },

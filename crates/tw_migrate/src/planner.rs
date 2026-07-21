@@ -1789,8 +1789,104 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|warning| { warning["code"] == "unsupported-css-module-reference" })
+                .any(|warning| { warning["code"] == "computed-css-module-reference" })
         );
+    }
+
+    #[test]
+    fn warns_at_the_computed_css_module_reference_site() {
+        let source = "import styles from './Card.module.css';\nexport const name = styles['card'];\n";
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": source
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        let start = source.find("styles['card']").unwrap();
+        let warning = response["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|warning| warning["code"] == "computed-css-module-reference")
+            .expect("computed reference warning");
+        assert_eq!(warning["file"], "/project/Card.tsx");
+        assert_eq!(warning["start"], start);
+        assert_eq!(warning["end"], start + "styles['card']".len());
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|warning| warning["code"] != "unsupported-css-module-reference")
+        );
+    }
+
+    #[test]
+    fn warns_at_an_aliased_css_module_reference_site() {
+        let source = "import styles from './Card.module.css';\nconst card = styles.card;\nexport const Card = () => <div className={styles.button} />;\n";
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { padding: 13px; }\n.button { color: red; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": source
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 2);
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        let start = source.find("card = styles.card").unwrap();
+        let aliased = response["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|warning| warning["code"] == "aliased-css-module-reference")
+            .collect::<Vec<_>>();
+        assert_eq!(aliased.len(), 1);
+        assert_eq!(aliased[0]["file"], "/project/Card.tsx");
+        assert_eq!(aliased[0]["start"], start);
+        assert_eq!(aliased[0]["end"], start + "card = styles.card".len());
+    }
+
+    #[test]
+    fn warns_at_a_non_classname_css_module_reference_site() {
+        let source = "import styles from './Card.module.css';\nexport const find = () => document.querySelector(`.${styles.card}`);\n";
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": source
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        let start = source.find("styles.card").unwrap();
+        let warning = response["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|warning| warning["code"] == "non-classname-css-module-reference")
+            .expect("non-className reference warning");
+        assert_eq!(warning["file"], "/project/Card.tsx");
+        assert_eq!(warning["start"], start);
+        assert_eq!(warning["end"], start + "styles.card".len());
     }
 
     #[test]

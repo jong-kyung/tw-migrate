@@ -7,10 +7,10 @@ use std::{
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    Argument, CallExpression, ExportAllDeclaration, ExportNamedDeclaration, Expression,
-    ImportDeclaration, ImportDeclarationSpecifier, ImportExpression, JSXAttributeItem,
-    JSXAttributeName, JSXAttributeValue, JSXExpression, JSXOpeningElement, StaticMemberExpression,
-    TemplateLiteral,
+    Argument, CallExpression, ComputedMemberExpression, ExportAllDeclaration,
+    ExportNamedDeclaration, Expression, ImportDeclaration, ImportDeclarationSpecifier,
+    ImportExpression, JSXAttribute, JSXAttributeItem, JSXAttributeName, JSXAttributeValue,
+    JSXExpression, JSXOpeningElement, StaticMemberExpression, TemplateLiteral, VariableDeclarator,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::Parser;
@@ -185,14 +185,25 @@ fn plan_source_file_with_mode(
         matches: Vec::new(),
         module_refs: HashMap::new(),
         matched_module_refs: HashMap::new(),
+        class_name_depth: 0,
+        alias_spans: HashMap::new(),
+        computed_refs: 0,
+        unsafe_reference: false,
         warnings: Vec::new(),
     };
     collector.visit_program(&parsed.program);
 
-    let classified_import_refs = collector.module_refs.values().sum::<usize>();
+    let classified_import_refs =
+        collector.module_refs.values().sum::<usize>() + collector.computed_refs;
+    let counts_match = total_import_refs == classified_import_refs;
     let module_references_safe =
-        !imports.unsupported_shape && total_import_refs == classified_import_refs;
-    if !module_references_safe && let Some(span) = imports.warning_span {
+        !imports.unsupported_shape && counts_match && !collector.unsafe_reference;
+    // Computed, aliased, and non-className sites already carry their own
+    // per-site warnings; the import-site warning covers the remaining
+    // import-shape and unclassified-identifier cases.
+    if (imports.unsupported_shape || !counts_match)
+        && let Some(span) = imports.warning_span
+    {
         collector.warnings.push(Warning {
             code: "unsupported-css-module-reference",
             file: file.path.clone(),
@@ -345,19 +356,31 @@ struct UsageCollector<'s> {
     matches: Vec<CandidateMatch>,
     module_refs: HashMap<String, usize>,
     matched_module_refs: HashMap<String, usize>,
+    class_name_depth: u32,
+    alias_spans: HashMap<u32, Span>,
+    computed_refs: usize,
+    unsafe_reference: bool,
     warnings: Vec<Warning>,
 }
 
 impl UsageCollector<'_> {
-    fn module_member_name<'a>(&self, member: &'a StaticMemberExpression<'a>) -> Option<&'a str> {
-        let Expression::Identifier(object) = &member.object else {
-            return None;
+    fn is_module_object(&self, object: &Expression<'_>) -> bool {
+        let Expression::Identifier(object) = object else {
+            return false;
         };
-        let reference = object.reference_id.get()?;
-        let symbol = self.scoping.get_reference(reference).symbol_id()?;
+        let Some(reference) = object.reference_id.get() else {
+            return false;
+        };
+        let Some(symbol) = self.scoping.get_reference(reference).symbol_id() else {
+            return false;
+        };
         self.import_bindings
             .iter()
             .any(|binding| binding.symbol == symbol)
+    }
+
+    fn module_member_name<'a>(&self, member: &'a StaticMemberExpression<'a>) -> Option<&'a str> {
+        self.is_module_object(&member.object)
             .then(|| member.property.name.as_str())
     }
 
@@ -605,8 +628,71 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
     fn visit_static_member_expression(&mut self, member: &StaticMemberExpression<'a>) {
         if let Some(name) = self.module_member_name(member).map(str::to_string) {
             *self.module_refs.entry(name).or_default() += 1;
+            if self.class_name_depth == 0 {
+                self.unsafe_reference = true;
+                if let Some(declarator) = self.alias_spans.get(&member.span.start) {
+                    self.warnings.push(Warning {
+                        code: "aliased-css-module-reference",
+                        file: self.file_path.to_string(),
+                        start: declarator.start as usize,
+                        end: declarator.end as usize,
+                        message:
+                            "A CSS Module class is aliased to a binding, so the module is retained."
+                                .to_string(),
+                    });
+                } else {
+                    self.warnings.push(Warning {
+                        code: "non-classname-css-module-reference",
+                        file: self.file_path.to_string(),
+                        start: member.span.start as usize,
+                        end: member.span.end as usize,
+                        message: "A CSS Module class is used outside a supported className, so the module is retained."
+                            .to_string(),
+                    });
+                }
+            }
         }
         walk::walk_static_member_expression(self, member);
+    }
+
+    fn visit_computed_member_expression(&mut self, member: &ComputedMemberExpression<'a>) {
+        if self.is_module_object(&member.object) {
+            self.computed_refs += 1;
+            self.unsafe_reference = true;
+            self.warnings.push(Warning {
+                code: "computed-css-module-reference",
+                file: self.file_path.to_string(),
+                start: member.span.start as usize,
+                end: member.span.end as usize,
+                message:
+                    "A computed CSS Module access cannot be verified, so the module is retained."
+                        .to_string(),
+            });
+        }
+        walk::walk_computed_member_expression(self, member);
+    }
+
+    fn visit_variable_declarator(&mut self, declarator: &VariableDeclarator<'a>) {
+        if let Some(Expression::StaticMemberExpression(member)) = &declarator.init
+            && self.module_member_name(member).is_some()
+        {
+            self.alias_spans.insert(member.span.start, declarator.span);
+        }
+        walk::walk_variable_declarator(self, declarator);
+    }
+
+    fn visit_jsx_attribute(&mut self, attribute: &JSXAttribute<'a>) {
+        let class_name = matches!(
+            &attribute.name,
+            JSXAttributeName::Identifier(name) if name.name == "className"
+        );
+        if class_name {
+            self.class_name_depth += 1;
+        }
+        walk::walk_jsx_attribute(self, attribute);
+        if class_name {
+            self.class_name_depth -= 1;
+        }
     }
 
     fn visit_jsx_opening_element(&mut self, element: &JSXOpeningElement<'a>) {
