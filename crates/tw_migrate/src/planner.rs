@@ -540,7 +540,9 @@ fn plan_request(
 
         module_references_safe &= result.module_references_safe;
         if !file.writable {
-            if is_module && !result.module_refs.is_empty() {
+            if is_module
+                && (!result.module_refs.is_empty() || !result.removable_import_edits.is_empty())
+            {
                 module_references_safe = false;
                 warnings.push(Warning {
                     code: "reference-only-css-module-consumer",
@@ -2297,6 +2299,33 @@ mod tests {
     }
 
     #[test]
+    fn batch_retains_mask_shorthand_conflicts() {
+        let request = serde_json::json!({
+            "stylesheets": [
+                {
+                    "cssPath": "/project/A.module.css",
+                    "cssSource": ".a { mask: url(a.svg); }\n"
+                },
+                {
+                    "cssPath": "/project/B.module.css",
+                    "cssSource": ".b { mask-image: url(b.svg); }\n"
+                }
+            ],
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = () => <div className={`${a.a} ${b.b}`} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["files"], serde_json::json!([]));
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 2);
+    }
+
+    #[test]
     fn batch_retains_all_reset_conflicts() {
         let request = serde_json::json!({
             "stylesheets": [
@@ -2760,6 +2789,41 @@ mod tests {
             serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
 
         assert_eq!(response["files"], serde_json::json!([]));
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 1);
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| warning["code"] == "reference-only-css-module-consumer")
+        );
+    }
+
+    #[test]
+    fn batch_unused_reference_only_import_prevents_module_deletion() {
+        let request = serde_json::json!({
+            "stylesheets": [{
+                "cssPath": "/project/shared/Button.module.css",
+                "cssSource": ".button { padding: 13px; }\n"
+            }],
+            "files": [
+                {
+                    "path": "/project/shared/Button.tsx",
+                    "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button} />;\n"
+                },
+                {
+                    "path": "/project/app/Unused.tsx",
+                    "source": "import styles from '../shared/Button.module.css';\nexport const unused = true;\n",
+                    "writable": false
+                }
+            ]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
         assert_eq!(response["deletedFiles"], serde_json::json!([]));
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["retainedRules"], 1);
