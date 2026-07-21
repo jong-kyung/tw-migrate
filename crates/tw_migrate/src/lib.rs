@@ -13,3 +13,8 @@ use napi_derive::napi;
 pub fn plan_migration(request: String) -> napi::Result<String> {
     planner::plan_json(&request).map_err(|error| napi::Error::from_reason(error.to_string()))
 }
+
+#[napi]
+pub fn plan_batch_migration(request: String) -> napi::Result<String> {
+    planner::plan_batch_json(&request).map_err(|error| napi::Error::from_reason(error.to_string()))
+}

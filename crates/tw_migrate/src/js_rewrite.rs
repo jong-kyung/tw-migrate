@@ -9,8 +9,8 @@ use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     Argument, CallExpression, ExportAllDeclaration, ExportNamedDeclaration, Expression,
     ImportDeclaration, ImportDeclarationSpecifier, ImportExpression, JSXAttributeItem,
-    JSXAttributeName, JSXAttributeValue, JSXExpression, JSXOpeningElement,
-    StaticMemberExpression, TemplateLiteral,
+    JSXAttributeName, JSXAttributeValue, JSXExpression, JSXOpeningElement, StaticMemberExpression,
+    TemplateLiteral,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::Parser;
@@ -24,10 +24,18 @@ use crate::{
     utilities::tailwind_utilities_conflict,
 };
 
+pub(crate) struct CandidateMatch {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) key: SelectorKey,
+    pub(crate) candidate: String,
+}
+
 pub(crate) struct SourcePlan {
     pub(crate) edits: Vec<Edit>,
     pub(crate) removable_import_edits: Vec<Edit>,
     pub(crate) candidates: Vec<String>,
+    pub(crate) matches: Vec<CandidateMatch>,
     pub(crate) module_refs: HashMap<String, usize>,
     pub(crate) matched_module_refs: HashMap<String, usize>,
     pub(crate) module_references_safe: bool,
@@ -53,6 +61,41 @@ pub(crate) fn plan_source_file(
     css_path: &str,
     is_module: bool,
     candidates: &HashMap<SelectorKey, Vec<String>>,
+) -> Result<SourcePlan, String> {
+    plan_source_file_with_mode(
+        file,
+        css_path,
+        is_module,
+        candidates,
+        &BTreeSet::new(),
+        false,
+    )
+}
+
+pub(crate) fn plan_batch_source_file(
+    file: &SourceFile,
+    css_path: &str,
+    is_module: bool,
+    candidates: &HashMap<SelectorKey, Vec<String>>,
+    preserved_module_classes: &BTreeSet<String>,
+) -> Result<SourcePlan, String> {
+    plan_source_file_with_mode(
+        file,
+        css_path,
+        is_module,
+        candidates,
+        preserved_module_classes,
+        true,
+    )
+}
+
+fn plan_source_file_with_mode(
+    file: &SourceFile,
+    css_path: &str,
+    is_module: bool,
+    candidates: &HashMap<SelectorKey, Vec<String>>,
+    preserved_module_classes: &BTreeSet<String>,
+    batch_mode: bool,
 ) -> Result<SourcePlan, String> {
     let allocator = Allocator::default();
     let source_type = source_type_for_path(&file.path)
@@ -96,8 +139,11 @@ pub(crate) fn plan_source_file(
         scoping,
         import_bindings: &imports.bindings,
         candidates,
+        preserved_module_classes,
+        batch_mode,
         edits: Vec::new(),
         emitted_candidates: BTreeSet::new(),
+        matches: Vec::new(),
         module_refs: HashMap::new(),
         matched_module_refs: HashMap::new(),
         warnings: Vec::new(),
@@ -140,6 +186,7 @@ pub(crate) fn plan_source_file(
         edits: collector.edits,
         removable_import_edits,
         candidates: collector.emitted_candidates.into_iter().collect(),
+        matches: collector.matches,
         module_refs: collector.module_refs,
         matched_module_refs: collector.matched_module_refs,
         module_references_safe,
@@ -235,6 +282,17 @@ impl<'a> Visit<'a> for ImportCollector<'_> {
     }
 }
 
+struct StaticTemplate {
+    value: String,
+    members: Vec<String>,
+    static_classes: Vec<String>,
+    partial_edits: Vec<Edit>,
+    preserved_candidates: Vec<String>,
+    preserved_expression: Option<String>,
+    append_at: Option<usize>,
+    blocked: bool,
+}
+
 struct UsageCollector<'s> {
     source: &'s str,
     file_path: &'s str,
@@ -242,8 +300,11 @@ struct UsageCollector<'s> {
     scoping: &'s Scoping,
     import_bindings: &'s [ImportBinding],
     candidates: &'s HashMap<SelectorKey, Vec<String>>,
+    preserved_module_classes: &'s BTreeSet<String>,
+    batch_mode: bool,
     edits: Vec<Edit>,
     emitted_candidates: BTreeSet<String>,
+    matches: Vec<CandidateMatch>,
     module_refs: HashMap<String, usize>,
     matched_module_refs: HashMap<String, usize>,
     warnings: Vec<Warning>,
@@ -262,13 +323,13 @@ impl UsageCollector<'_> {
             .then(|| member.property.name.as_str())
     }
 
-    fn static_template(
-        &self,
-        template: &TemplateLiteral<'_>,
-    ) -> Option<(String, Vec<String>, Vec<String>)> {
+    fn static_template(&self, template: &TemplateLiteral<'_>) -> Option<StaticTemplate> {
         let mut value = String::new();
         let mut original = String::new();
         let mut members = Vec::new();
+        let mut member_edits = Vec::new();
+        let mut preserved_candidates = Vec::new();
+        let mut partial = false;
         for (index, quasi) in template.quasis.iter().enumerate() {
             let cooked = quasi.value.cooked.as_ref()?.as_str();
             value.push_str(cooked);
@@ -276,25 +337,70 @@ impl UsageCollector<'_> {
             let Some(expression) = template.expressions.get(index) else {
                 continue;
             };
-            let Expression::StaticMemberExpression(member) = expression else {
-                return None;
-            };
-            let name = self.module_member_name(member)?.to_string();
-            let candidates = self.candidates.get(&SelectorKey::Class(name.clone()))?;
-            value.push_str(&candidates.join(" "));
-            original.push('\0');
-            members.push(name);
+            match expression {
+                Expression::StaticMemberExpression(member) => {
+                    let Some(name) = self.module_member_name(member).map(str::to_string) else {
+                        if self.batch_mode {
+                            partial = true;
+                            original.push('\0');
+                            continue;
+                        }
+                        return None;
+                    };
+                    let Some(candidates) = self.candidates.get(&SelectorKey::Class(name.clone()))
+                    else {
+                        if self.batch_mode {
+                            return Some(StaticTemplate {
+                                value: String::new(),
+                                members: Vec::new(),
+                                static_classes: Vec::new(),
+                                partial_edits: Vec::new(),
+                                preserved_candidates: Vec::new(),
+                                preserved_expression: None,
+                                append_at: None,
+                                blocked: true,
+                            });
+                        }
+                        return None;
+                    };
+                    original.push('\0');
+                    members.push(name.clone());
+                    if self.preserved_module_classes.contains(&name) {
+                        partial = true;
+                        preserved_candidates.extend(candidates.iter().cloned());
+                    } else {
+                        let replacement = candidates.join(" ");
+                        value.push_str(&replacement);
+                        member_edits.push(Edit {
+                            start: member.span.start as usize,
+                            end: member.span.end as usize,
+                            replacement: serde_json::to_string(&replacement)
+                                .expect("string serialization"),
+                        });
+                    }
+                }
+                Expression::StringLiteral(literal) if self.batch_mode => {
+                    value.push_str(literal.value.as_str());
+                    original.push_str(literal.value.as_str());
+                }
+                _ => return None,
+            }
         }
         let static_classes = original
             .split_whitespace()
             .filter(|class| !class.contains('\0'))
             .map(str::to_string)
             .collect();
-        Some((
-            value.split_whitespace().collect::<Vec<_>>().join(" "),
+        Some(StaticTemplate {
+            value: value.split_whitespace().collect::<Vec<_>>().join(" "),
             members,
             static_classes,
-        ))
+            partial_edits: if partial { member_edits } else { Vec::new() },
+            preserved_candidates,
+            preserved_expression: None,
+            append_at: partial.then_some(template.span.end as usize - 1),
+            blocked: false,
+        })
     }
 
     fn conflicting_utilities(
@@ -325,12 +431,9 @@ impl UsageCollector<'_> {
             for right in &members[index + 1..] {
                 let right_candidates = self.candidates.get(&SelectorKey::Class(right.clone()))?;
                 for left_candidate in left_candidates {
-                    if let Some(conflict) = right_candidates
-                        .iter()
-                        .find(|right_candidate| {
-                            tailwind_utilities_conflict(left_candidate, right_candidate)
-                        })
-                    {
+                    if let Some(conflict) = right_candidates.iter().find(|right_candidate| {
+                        tailwind_utilities_conflict(left_candidate, right_candidate)
+                    }) {
                         return Some((left_candidate.clone(), conflict.clone()));
                     }
                 }
@@ -358,11 +461,16 @@ impl UsageCollector<'_> {
                 }
             } else if name.name == "id"
                 && let Some(JSXAttributeValue::StringLiteral(literal)) = &attribute.value
-                && let Some(candidates) = self
-                    .candidates
-                    .get(&SelectorKey::Id(literal.value.to_string()))
             {
-                id_candidates.extend(candidates.clone());
+                let key = SelectorKey::Id(literal.value.to_string());
+                if let Some(candidates) = self.candidates.get(&key) {
+                    id_candidates.extend(
+                        candidates
+                            .iter()
+                            .cloned()
+                            .map(|candidate| (key.clone(), candidate)),
+                    );
+                }
             }
         }
 
@@ -380,35 +488,66 @@ impl UsageCollector<'_> {
             {
                 insertion -= 1;
             }
-            for candidate in &id_candidates {
+            for (key, candidate) in &id_candidates {
                 self.emitted_candidates.insert(candidate.clone());
+                self.matches.push(CandidateMatch {
+                    start: insertion,
+                    end: insertion,
+                    key: key.clone(),
+                    candidate: candidate.clone(),
+                });
             }
             self.edits.push(Edit {
                 start: insertion,
                 end: insertion,
-                replacement: format!(" className=\"{}\"", id_candidates.join(" ")),
+                replacement: format!(
+                    " className=\"{}\"",
+                    id_candidates
+                        .iter()
+                        .map(|(_, candidate)| candidate.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ),
             });
         }
     }
 
-    fn global_literal_edit(&mut self, span: Span, value: &str, extra_candidates: &[String]) {
+    fn global_literal_edit(
+        &mut self,
+        span: Span,
+        value: &str,
+        extra_candidates: &[(SelectorKey, String)],
+    ) {
         let mut classes = value
             .split_whitespace()
             .map(str::to_string)
             .collect::<Vec<_>>();
         let original_classes = classes.clone();
         for class in original_classes {
-            if let Some(candidates) = self.candidates.get(&SelectorKey::Class(class)) {
+            let key = SelectorKey::Class(class);
+            if let Some(candidates) = self.candidates.get(&key) {
                 for candidate in candidates {
                     self.emitted_candidates.insert(candidate.clone());
+                    self.matches.push(CandidateMatch {
+                        start: span.start as usize,
+                        end: span.end as usize,
+                        key: key.clone(),
+                        candidate: candidate.clone(),
+                    });
                     if !classes.contains(candidate) {
                         classes.push(candidate.clone());
                     }
                 }
             }
         }
-        for candidate in extra_candidates {
+        for (key, candidate) in extra_candidates {
             self.emitted_candidates.insert(candidate.clone());
+            self.matches.push(CandidateMatch {
+                start: span.start as usize,
+                end: span.end as usize,
+                key: key.clone(),
+                candidate: candidate.clone(),
+            });
             if !classes.contains(candidate) {
                 classes.push(candidate.clone());
             }
@@ -454,7 +593,7 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
             let Some(JSXAttributeValue::ExpressionContainer(container)) = &attribute.value else {
                 continue;
             };
-            let (replacement_value, members, static_classes) = match &container.expression {
+            let template = match &container.expression {
                 JSXExpression::StaticMemberExpression(member) => {
                     let Some(member_name) = self.module_member_name(member).map(str::to_string)
                     else {
@@ -464,7 +603,24 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
                     let Some(candidates) = self.candidates.get(&key) else {
                         continue;
                     };
-                    (candidates.join(" "), vec![member_name], Vec::new())
+                    let preserved = self.preserved_module_classes.contains(&member_name);
+                    StaticTemplate {
+                        value: candidates.join(" "),
+                        members: vec![member_name],
+                        static_classes: Vec::new(),
+                        partial_edits: Vec::new(),
+                        preserved_candidates: if preserved {
+                            candidates.clone()
+                        } else {
+                            Vec::new()
+                        },
+                        preserved_expression: preserved.then(|| {
+                            self.source[member.span.start as usize..member.span.end as usize]
+                                .to_string()
+                        }),
+                        append_at: None,
+                        blocked: false,
+                    }
                 }
                 JSXExpression::TemplateLiteral(template) => {
                     let Some(result) = self.static_template(template) else {
@@ -478,7 +634,7 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
                         });
                         continue;
                     };
-                    if result.1.is_empty() {
+                    if result.members.is_empty() {
                         // No module members resolved: rewriting would only
                         // reformat an unrelated template literal.
                         continue;
@@ -496,6 +652,30 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
                     continue;
                 }
             };
+            let StaticTemplate {
+                value: replacement_value,
+                members,
+                static_classes,
+                mut partial_edits,
+                preserved_candidates,
+                preserved_expression,
+                append_at,
+                blocked,
+            } = template;
+            if blocked {
+                continue;
+            }
+            for member in &members {
+                let key = SelectorKey::Class(member.clone());
+                for candidate in &self.candidates[&key] {
+                    self.matches.push(CandidateMatch {
+                        start: container.span.start as usize,
+                        end: container.span.end as usize,
+                        key: key.clone(),
+                        candidate: candidate.clone(),
+                    });
+                }
+            }
             if let Some((left, right)) = self.conflicting_member_utilities(&members) {
                 self.warnings.push(Warning {
                     code: "module-utilities-conflict",
@@ -521,12 +701,39 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
                     ),
                 });
             }
-            self.edits.push(Edit {
-                start: container.span.start as usize,
-                end: container.span.end as usize,
-                replacement: serde_json::to_string(&replacement_value)
-                    .expect("string serialization"),
-            });
+            if let Some(expression) = preserved_expression {
+                let appended = format!(" {}", preserved_candidates.join(" "));
+                self.edits.push(Edit {
+                    start: container.span.start as usize,
+                    end: container.span.end as usize,
+                    replacement: format!(
+                        "{{`${{{expression}}}${{{}}}`}}",
+                        serde_json::to_string(&appended).expect("string serialization")
+                    ),
+                });
+            } else if let Some(append_at) = append_at
+                && !preserved_candidates.is_empty()
+            {
+                let appended = format!(" {}", preserved_candidates.join(" "));
+                partial_edits.push(Edit {
+                    start: append_at,
+                    end: append_at,
+                    replacement: format!(
+                        "${{{}}}",
+                        serde_json::to_string(&appended).expect("string serialization")
+                    ),
+                });
+                self.edits.extend(partial_edits);
+            } else if partial_edits.is_empty() {
+                self.edits.push(Edit {
+                    start: container.span.start as usize,
+                    end: container.span.end as usize,
+                    replacement: serde_json::to_string(&replacement_value)
+                        .expect("string serialization"),
+                });
+            } else {
+                self.edits.extend(partial_edits);
+            }
             for member in members {
                 let key = SelectorKey::Class(member.clone());
                 for candidate in &self.candidates[&key] {

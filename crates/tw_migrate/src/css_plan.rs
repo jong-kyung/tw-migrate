@@ -29,6 +29,7 @@ pub(crate) struct RulePlan {
     pub(crate) related_classes: Vec<String>,
     pub(crate) key: Option<SelectorKey>,
     pub(crate) candidates: Vec<String>,
+    pub(crate) candidate_properties: HashMap<String, BTreeSet<String>>,
     pub(crate) warning: Option<&'static str>,
 }
 
@@ -116,7 +117,7 @@ pub(crate) fn parse_css_rules(
         if let Some(variant) = selector_match.and_then(|(_, variant)| variant) {
             variants.push(variant);
         }
-        let (mut candidates, declaration_warning) = collect_declaration_candidates(
+        let (candidate_properties, declaration_warning) = collect_declaration_candidates(
             &rule.block.statements,
             &variants,
             source,
@@ -124,6 +125,7 @@ pub(crate) fn parse_css_rules(
             &keyframe_names,
             is_module,
         );
+        let mut candidates = candidate_properties.keys().cloned().collect::<Vec<_>>();
         let mut warning = key.is_none().then_some("unsupported-selector");
         if matches!(&key, Some(SelectorKey::Class(name)) if composed_classes.contains(name)) {
             warning = Some("css-module-composes");
@@ -139,6 +141,7 @@ pub(crate) fn parse_css_rules(
             related_classes: selector_classes(rule),
             key,
             candidates,
+            candidate_properties,
             warning,
         });
     }
@@ -175,28 +178,39 @@ fn collect_declaration_candidates(
     theme_tokens: &HashMap<String, String>,
     keyframes: &HashMap<&str, &str>,
     is_module: bool,
-) -> (Vec<String>, Option<&'static str>) {
+) -> (HashMap<String, BTreeSet<String>>, Option<&'static str>) {
     // CSS keeps the last of duplicate same-property declarations, so a later
     // declaration replaces the candidate emitted by an earlier one.
     fn push_last_wins<'p>(
         slots: &mut HashMap<&'p str, usize>,
-        candidates: &mut Vec<String>,
+        candidates: &mut Vec<(String, String)>,
         property: &'p str,
         candidate: String,
     ) {
+        let entry = (candidate, property.to_string());
         if let Some(&slot) = slots.get(property) {
-            candidates[slot] = candidate;
+            candidates[slot] = entry;
         } else {
             slots.insert(property, candidates.len());
-            candidates.push(candidate);
+            candidates.push(entry);
         }
     }
 
-    let mut candidates = Vec::new();
+    fn merge_candidate(
+        candidates: &mut HashMap<String, BTreeSet<String>>,
+        candidate: String,
+        properties: impl IntoIterator<Item = String>,
+    ) {
+        candidates.entry(candidate).or_default().extend(properties);
+    }
+
+    let mut candidates = HashMap::new();
     let mut local_candidates = Vec::new();
     let mut property_slots = HashMap::new();
     let mut margin = SpacingValues::default();
     let mut padding = SpacingValues::default();
+    let mut margin_properties = BTreeSet::new();
+    let mut padding_properties = BTreeSet::new();
     let mut warning = None;
 
     for statement in statements {
@@ -218,7 +232,9 @@ fn collect_declaration_candidates(
                 keyframes,
                 is_module,
             );
-            candidates.extend(nested_candidates);
+            for (candidate, properties) in nested_candidates {
+                merge_candidate(&mut candidates, candidate, properties);
+            }
             if nested_warning.is_some() {
                 warning = nested_warning;
             }
@@ -244,9 +260,12 @@ fn collect_declaration_candidates(
         }
         if is_module && matches!(property, "animation" | "animation-name") {
             match animation_candidate(property, value, keyframes) {
-                Some(candidate) => {
-                    push_last_wins(&mut property_slots, &mut local_candidates, property, candidate);
-                }
+                Some(candidate) => push_last_wins(
+                    &mut property_slots,
+                    &mut local_candidates,
+                    property,
+                    candidate,
+                ),
                 None => warning = Some("unsupported-animation"),
             }
             continue;
@@ -269,7 +288,14 @@ fn collect_declaration_candidates(
                 }
             });
         match spacing_result {
-            Ok(true) => continue,
+            Ok(true) => {
+                if property == "margin" || property.starts_with("margin-") {
+                    margin_properties.insert(property.to_string());
+                } else {
+                    padding_properties.insert(property.to_string());
+                }
+                continue;
+            }
             Err(()) => {
                 warning = Some("unsupported-overlap");
                 continue;
@@ -277,22 +303,40 @@ fn collect_declaration_candidates(
             Ok(false) => {}
         }
         match declaration_to_candidate(property, value, theme_tokens) {
-            Some(candidate) => {
-                push_last_wins(&mut property_slots, &mut local_candidates, property, candidate);
-            }
+            Some(candidate) => push_last_wins(
+                &mut property_slots,
+                &mut local_candidates,
+                property,
+                candidate,
+            ),
             None => warning = Some("unsupported-declaration"),
         }
     }
 
-    local_candidates.extend(margin.candidates("m", theme_tokens));
-    local_candidates.extend(padding.candidates("p", theme_tokens));
+    for candidate in margin.candidates("m", theme_tokens) {
+        merge_candidate(
+            &mut candidates,
+            candidate,
+            margin_properties.iter().cloned(),
+        );
+    }
+    for candidate in padding.candidates("p", theme_tokens) {
+        merge_candidate(
+            &mut candidates,
+            candidate,
+            padding_properties.iter().cloned(),
+        );
+    }
+    for (candidate, property) in local_candidates {
+        merge_candidate(&mut candidates, candidate, [property]);
+    }
     if !variants.is_empty() {
         let variants = variants.join(":");
-        for candidate in &mut local_candidates {
-            *candidate = format!("{variants}:{candidate}");
-        }
+        candidates = candidates
+            .into_iter()
+            .map(|(candidate, properties)| (format!("{variants}:{candidate}"), properties))
+            .collect();
     }
-    candidates.extend(local_candidates);
     if candidates.is_empty() && warning.is_none() {
         warning = Some("unsupported-declaration");
     }
@@ -414,6 +458,7 @@ fn retained_at_rule(
         related_classes: related_classes.into_iter().collect(),
         key: None,
         candidates: Vec::new(),
+        candidate_properties: HashMap::new(),
         warning: Some(warning),
     }
 }

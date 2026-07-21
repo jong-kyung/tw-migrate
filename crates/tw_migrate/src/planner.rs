@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     path::Path,
 };
 
@@ -12,8 +12,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     animations::append_keyframes,
     at_rules::{append_global_at_rules, is_conditional},
-    css_plan::{ParsedCss, SelectorKey, parse_css_rules},
+    css_plan::{ParsedCss, RulePlan, SelectorKey, parse_css_rules},
     js_rewrite::{plan_source_file, validate_js},
+    utilities::{css_properties_conflict, tailwind_utilities_conflict, tailwind_variants_match},
 };
 
 #[derive(Deserialize)]
@@ -37,9 +38,41 @@ struct PlanRequest {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchPlanRequest {
+    stylesheets: Vec<BatchStylesheet>,
+    #[serde(default)]
+    tailwind_path: Option<String>,
+    #[serde(default)]
+    tailwind_source: Option<String>,
+    #[serde(default)]
+    utility_prefix: Option<String>,
+    #[serde(default)]
+    theme_tokens: HashMap<String, String>,
+    files: Vec<SourceFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchStylesheet {
+    css_path: String,
+    css_source: String,
+    #[serde(default)]
+    css_module_id: Option<String>,
+    #[serde(default)]
+    css_dependents: Vec<String>,
+}
+
+fn default_writable() -> bool {
+    true
+}
+
+#[derive(Clone, Deserialize)]
 pub(crate) struct SourceFile {
     pub(crate) path: String,
     pub(crate) source: String,
+    #[serde(default = "default_writable")]
+    pub(crate) writable: bool,
 }
 
 #[derive(Serialize)]
@@ -85,6 +118,312 @@ pub(crate) struct Edit {
 
 pub fn plan_json(request: &str) -> Result<String, String> {
     let request: PlanRequest = serde_json::from_str(request).map_err(|error| error.to_string())?;
+    serde_json::to_string(&plan_request(request, &HashMap::new(), false)?)
+        .map_err(|error| error.to_string())
+}
+
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+struct RuleId {
+    start: usize,
+    end: usize,
+}
+
+type RuleConflicts = HashMap<RuleId, BTreeSet<(String, String)>>;
+
+struct RuleOrigin {
+    rule: RuleId,
+    properties: BTreeSet<String>,
+}
+
+struct CandidateMaps {
+    candidates: HashMap<SelectorKey, Vec<String>>,
+    origins: HashMap<(SelectorKey, String), Vec<RuleOrigin>>,
+}
+
+fn prefix_rule_candidates(rules: &mut [RulePlan], prefix: &str) {
+    for rule in rules {
+        rule.candidates = rule
+            .candidates
+            .drain(..)
+            .map(|candidate| format!("{prefix}:{candidate}"))
+            .collect();
+        rule.candidate_properties = std::mem::take(&mut rule.candidate_properties)
+            .into_iter()
+            .map(|(candidate, properties)| (format!("{prefix}:{candidate}"), properties))
+            .collect();
+    }
+}
+
+struct BatchMatch {
+    stylesheet: usize,
+    file: String,
+    start: usize,
+    end: usize,
+    candidate: String,
+    rule: RuleId,
+    properties: BTreeSet<String>,
+}
+
+pub fn plan_batch_json(request: &str) -> Result<String, String> {
+    let request: BatchPlanRequest =
+        serde_json::from_str(request).map_err(|error| error.to_string())?;
+    if request.stylesheets.is_empty() {
+        return Err("Batch migration requires at least one stylesheet".to_string());
+    }
+
+    let mut all_matches = Vec::new();
+    for (index, stylesheet) in request.stylesheets.iter().enumerate() {
+        let plan_request = batch_stylesheet_request(&request, stylesheet, request.files.clone());
+        let candidate_maps = candidate_map_for_request(&plan_request)?;
+        for file in request.files.iter().filter(|file| file.writable) {
+            let result = crate::js_rewrite::plan_batch_source_file(
+                file,
+                &stylesheet.css_path,
+                stylesheet.css_path.ends_with(".module.css"),
+                &candidate_maps.candidates,
+                &BTreeSet::new(),
+            )?;
+            for matched in result.matches {
+                if let Some(origins) = candidate_maps
+                    .origins
+                    .get(&(matched.key, matched.candidate.clone()))
+                {
+                    all_matches.extend(origins.iter().map(|origin| BatchMatch {
+                        stylesheet: index,
+                        file: file.path.clone(),
+                        start: matched.start,
+                        end: matched.end,
+                        candidate: matched.candidate.clone(),
+                        rule: origin.rule,
+                        properties: origin.properties.clone(),
+                    }));
+                }
+            }
+        }
+    }
+
+    let mut blocked_rules = vec![HashMap::new(); request.stylesheets.len()];
+    for (left_index, left) in all_matches.iter().enumerate() {
+        for right in &all_matches[left_index + 1..] {
+            if left.stylesheet != right.stylesheet
+                && left.file == right.file
+                && left.start == right.start
+                && left.end == right.end
+                && (tailwind_utilities_conflict(&left.candidate, &right.candidate)
+                    || (tailwind_variants_match(&left.candidate, &right.candidate)
+                        && left.properties.iter().any(|left_property| {
+                            right.properties.iter().any(|right_property| {
+                                css_properties_conflict(left_property, right_property)
+                            })
+                        })))
+            {
+                let pair = if left.candidate <= right.candidate {
+                    (left.candidate.clone(), right.candidate.clone())
+                } else {
+                    (right.candidate.clone(), left.candidate.clone())
+                };
+                blocked_rules[left.stylesheet]
+                    .entry(left.rule)
+                    .or_insert_with(BTreeSet::new)
+                    .insert(pair.clone());
+                blocked_rules[right.stylesheet]
+                    .entry(right.rule)
+                    .or_insert_with(BTreeSet::new)
+                    .insert(pair);
+            }
+        }
+    }
+
+    let mut originals = HashMap::new();
+    for file in &request.files {
+        originals.insert(file.path.clone(), file.source.clone());
+    }
+    for stylesheet in &request.stylesheets {
+        originals.insert(stylesheet.css_path.clone(), stylesheet.css_source.clone());
+    }
+    if let Some((path, source)) = request
+        .tailwind_path
+        .as_ref()
+        .zip(request.tailwind_source.as_ref())
+    {
+        originals.insert(path.clone(), source.clone());
+    }
+    let mut current = originals.clone();
+    let mut deleted = HashSet::new();
+    let mut candidates = BTreeSet::new();
+    let mut converted_rules = 0;
+    let mut retained_rules = 0;
+    let mut rules = Vec::new();
+    let mut warnings = Vec::new();
+    let mut order = (0..request.stylesheets.len()).collect::<Vec<_>>();
+    order.sort_by(|left, right| {
+        request.stylesheets[*left]
+            .css_path
+            .cmp(&request.stylesheets[*right].css_path)
+    });
+
+    for index in order {
+        let stylesheet = &request.stylesheets[index];
+        let mut files = request.files.clone();
+        for file in &mut files {
+            if let Some(source) = current.get(&file.path) {
+                file.source.clone_from(source);
+            }
+        }
+        let mut stylesheet_request = batch_stylesheet_request(&request, stylesheet, files);
+        stylesheet_request.css_source = current
+            .get(&stylesheet.css_path)
+            .cloned()
+            .unwrap_or_else(|| stylesheet.css_source.clone());
+        stylesheet_request.tailwind_source = request
+            .tailwind_path
+            .as_ref()
+            .and_then(|path| current.get(path).cloned());
+        let response = plan_request(stylesheet_request, &blocked_rules[index], true)?;
+
+        for file in response.files {
+            deleted.remove(&file.path);
+            current.insert(file.path, file.source);
+        }
+        for path in response.deleted_files {
+            current.remove(&path);
+            deleted.insert(path);
+        }
+        candidates.extend(response.candidates);
+        converted_rules += response.converted_rules;
+        retained_rules += response.retained_rules;
+        rules.extend(response.rules);
+        warnings.extend(response.warnings);
+    }
+
+    let mut files = current
+        .into_iter()
+        .filter(|(path, source)| originals.get(path).is_some_and(|before| before != source))
+        .map(|(path, source)| PlannedFile { path, source })
+        .collect::<Vec<_>>();
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    let mut deleted_files = deleted.into_iter().collect::<Vec<_>>();
+    deleted_files.sort();
+    warnings.sort_by(|left, right| {
+        (&left.file, left.start, left.end, left.code).cmp(&(
+            &right.file,
+            right.start,
+            right.end,
+            right.code,
+        ))
+    });
+
+    serde_json::to_string(&PlanResponse {
+        files,
+        deleted_files,
+        candidates: candidates.into_iter().collect(),
+        converted_rules,
+        retained_rules,
+        rules,
+        warnings,
+    })
+    .map_err(|error| error.to_string())
+}
+
+fn batch_stylesheet_request(
+    batch: &BatchPlanRequest,
+    stylesheet: &BatchStylesheet,
+    files: Vec<SourceFile>,
+) -> PlanRequest {
+    PlanRequest {
+        css_path: stylesheet.css_path.clone(),
+        css_source: stylesheet.css_source.clone(),
+        css_module_id: stylesheet.css_module_id.clone(),
+        tailwind_path: batch.tailwind_path.clone(),
+        tailwind_source: batch.tailwind_source.clone(),
+        utility_prefix: batch.utility_prefix.clone(),
+        theme_tokens: batch.theme_tokens.clone(),
+        css_dependents: stylesheet.css_dependents.clone(),
+        files,
+    }
+}
+
+fn candidate_map_for_request(request: &PlanRequest) -> Result<CandidateMaps, String> {
+    let is_module = request.css_path.ends_with(".module.css");
+    let can_move_at_rules = request
+        .tailwind_path
+        .as_ref()
+        .zip(request.tailwind_source.as_ref())
+        .is_some_and(|(path, _)| path != &request.css_path);
+    let relative_urls_stable = request
+        .tailwind_path
+        .as_ref()
+        .is_some_and(|path| Path::new(path).parent() == Path::new(&request.css_path).parent());
+    let keyframe_scope = request
+        .css_module_id
+        .as_deref()
+        .unwrap_or(&request.css_path);
+    let ParsedCss { mut rules, .. } = parse_css_rules(
+        &request.css_path,
+        keyframe_scope,
+        &request.css_source,
+        &request.theme_tokens,
+        is_module,
+        can_move_at_rules,
+        relative_urls_stable,
+    )?;
+    if let Some(prefix) = request
+        .utility_prefix
+        .as_deref()
+        .filter(|prefix| !prefix.is_empty())
+    {
+        prefix_rule_candidates(&mut rules, prefix);
+    }
+    let blocked_classes = rules
+        .iter()
+        .filter(|rule| rule.warning.is_some())
+        .flat_map(|rule| rule.related_classes.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let mut candidate_map: HashMap<SelectorKey, Vec<String>> = HashMap::new();
+    let mut origins = HashMap::new();
+    for rule in rules {
+        if let Some(key) = rule.key
+            && rule.warning.is_none()
+            && !matches!(&key, SelectorKey::Class(name) if blocked_classes.contains(name))
+        {
+            let rule_id = RuleId {
+                start: rule.span.start,
+                end: rule.span.end,
+            };
+            for candidate in &rule.candidates {
+                origins
+                    .entry((key.clone(), candidate.clone()))
+                    .or_insert_with(Vec::new)
+                    .push(RuleOrigin {
+                        rule: rule_id,
+                        properties: rule
+                            .candidate_properties
+                            .get(candidate)
+                            .cloned()
+                            .unwrap_or_default(),
+                    });
+            }
+            candidate_map
+                .entry(key)
+                .or_default()
+                .extend(rule.candidates);
+        }
+    }
+    for candidates in candidate_map.values_mut() {
+        candidates.sort();
+        candidates.dedup();
+    }
+    Ok(CandidateMaps {
+        candidates: candidate_map,
+        origins,
+    })
+}
+
+fn plan_request(
+    request: PlanRequest,
+    blocked_rules: &RuleConflicts,
+    batch_mode: bool,
+) -> Result<PlanResponse, String> {
     let is_module = request.css_path.ends_with(".module.css");
     let can_move_at_rules = request
         .tailwind_path
@@ -118,14 +457,29 @@ pub fn plan_json(request: &str) -> Result<String, String> {
         .as_deref()
         .filter(|prefix| !prefix.is_empty())
     {
-        for candidate in rules.iter_mut().flat_map(|rule| &mut rule.candidates) {
-            *candidate = format!("{prefix}:{candidate}");
+        prefix_rule_candidates(&mut rules, prefix);
+    }
+    for rule in &mut rules {
+        let rule_id = RuleId {
+            start: rule.span.start,
+            end: rule.span.end,
+        };
+        if blocked_rules.contains_key(&rule_id) {
+            rule.warning = Some("batch-stylesheet-conflict");
         }
     }
 
+    let preserved_module_classes = rules
+        .iter()
+        .filter(|rule| batch_mode && is_module && rule.warning == Some("batch-stylesheet-conflict"))
+        .flat_map(|rule| rule.related_classes.iter().cloned())
+        .collect::<BTreeSet<_>>();
     let blocked_classes = rules
         .iter()
-        .filter(|rule| rule.warning.is_some())
+        .filter(|rule| {
+            rule.warning.is_some()
+                && !(batch_mode && rule.warning == Some("batch-stylesheet-conflict"))
+        })
         .flat_map(|rule| rule.related_classes.iter().cloned())
         .collect::<BTreeSet<_>>();
     let mut candidate_map: HashMap<SelectorKey, Vec<String>> = HashMap::new();
@@ -170,9 +524,36 @@ pub fn plan_json(request: &str) -> Result<String, String> {
     }
 
     for file in &request.files {
-        let mut result = plan_source_file(file, &request.css_path, is_module, &candidate_map)?;
+        let mut result = if batch_mode {
+            crate::js_rewrite::plan_batch_source_file(
+                file,
+                &request.css_path,
+                is_module,
+                &candidate_map,
+                &preserved_module_classes,
+            )?
+        } else {
+            plan_source_file(file, &request.css_path, is_module, &candidate_map)?
+        };
 
         module_references_safe &= result.module_references_safe;
+        if !file.writable {
+            if is_module && !result.module_refs.is_empty() {
+                module_references_safe = false;
+                warnings.push(Warning {
+                    code: "reference-only-css-module-consumer",
+                    file: file.path.clone(),
+                    start: 0,
+                    end: 0,
+                    message: "A reference-only source uses this CSS Module, so it is retained."
+                        .to_string(),
+                });
+            }
+            result.edits.clear();
+            result.removable_import_edits.clear();
+            result.candidates.clear();
+            result.matched_module_refs.clear();
+        }
         for candidate in &result.candidates {
             candidates.insert(candidate.clone());
         }
@@ -193,7 +574,7 @@ pub fn plan_json(request: &str) -> Result<String, String> {
     for rule in rules {
         let can_remove = is_module
             && module_references_safe
-            && all_module_refs_migrated
+            && (batch_mode || all_module_refs_migrated)
             && rule.warning.is_none()
             && match &rule.key {
                 Some(SelectorKey::Class(name)) => {
@@ -217,7 +598,25 @@ pub fn plan_json(request: &str) -> Result<String, String> {
             });
         } else {
             retained_rules += 1;
-            let (code, message) = if let Some(code) = rule.warning {
+            let rule_id = RuleId {
+                start: rule.span.start,
+                end: rule.span.end,
+            };
+            let (code, message) = if rule.warning == Some("batch-stylesheet-conflict") {
+                let conflicts = blocked_rules
+                    .get(&rule_id)
+                    .expect("conflicting rule must retain its candidates")
+                    .iter()
+                    .map(|(left, right)| format!("`{left}` and `{right}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                (
+                    "batch-stylesheet-conflict",
+                    format!(
+                        "Generated utilities {conflicts} conflict on the same JSX element, so the contributing rule is retained."
+                    ),
+                )
+            } else if let Some(code) = rule.warning {
                 (
                     code,
                     "The rule is outside the supported declaration or selector subset.".to_string(),
@@ -327,7 +726,7 @@ pub fn plan_json(request: &str) -> Result<String, String> {
         }
     }
 
-    serde_json::to_string(&PlanResponse {
+    Ok(PlanResponse {
         files: planned_files,
         deleted_files,
         candidates: candidates.into_iter().collect(),
@@ -336,7 +735,6 @@ pub fn plan_json(request: &str) -> Result<String, String> {
         rules: rule_reports,
         warnings,
     })
-    .map_err(|error| error.to_string())
 }
 
 fn merge_counts(target: &mut HashMap<String, usize>, source: &HashMap<String, usize>) {
@@ -408,11 +806,13 @@ fn validate_css(source: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{BTreeSet, HashMap};
 
-    use super::plan_json;
+    use super::{SourceFile, apply_edits, plan_batch_json, plan_json};
     use crate::animations::{KeyframePlan, animation_candidate, append_keyframes};
-    use crate::utilities::tailwind_utilities_conflict;
+    use crate::css_plan::SelectorKey;
+    use crate::js_rewrite::plan_batch_source_file;
+    use crate::utilities::{css_properties_conflict, tailwind_utilities_conflict};
 
     #[test]
     fn appends_a_global_class_and_retains_the_rule() {
@@ -619,8 +1019,10 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|warning| warning["code"] == "unsupported-css-module-reference"
-                    && warning["file"] == "/project/Consumer.module.css")
+                .any(
+                    |warning| warning["code"] == "unsupported-css-module-reference"
+                        && warning["file"] == "/project/Consumer.module.css"
+                )
         );
     }
 
@@ -1549,6 +1951,822 @@ mod tests {
         assert_eq!(
             response["deletedFiles"],
             serde_json::json!(["/project/Button.module.css"])
+        );
+    }
+
+    #[test]
+    fn batch_updates_distinct_module_references_without_losing_edits() {
+        let request = serde_json::json!({
+            "stylesheets": [
+                {
+                    "cssPath": "/project/A.module.css",
+                    "cssSource": ".a { padding: 13px; }\n"
+                },
+                {
+                    "cssPath": "/project/B.module.css",
+                    "cssSource": ".b { color: red; }\n"
+                }
+            ],
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = () => <><div className={a.a} /><div className={b.b} /></>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let source = response["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == "/project/App.tsx")
+            .unwrap()["source"]
+            .as_str()
+            .unwrap();
+
+        assert_eq!(
+            source,
+            "export const App = () => <><div className=\"p-[13px]\" /><div className=\"text-[red]\" /></>;\n"
+        );
+        assert_eq!(response["convertedRules"], 2);
+        assert_eq!(
+            response["deletedFiles"],
+            serde_json::json!(["/project/A.module.css", "/project/B.module.css"])
+        );
+    }
+
+    #[test]
+    fn batch_migrates_members_from_multiple_modules_in_one_template() {
+        let request = serde_json::json!({
+            "stylesheets": [
+                {
+                    "cssPath": "/project/A.module.css",
+                    "cssSource": ".a { padding: 13px; }\n"
+                },
+                {
+                    "cssPath": "/project/B.module.css",
+                    "cssSource": ".b { color: red; }\n"
+                }
+            ],
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = () => <div className={`${a.a} ${b.b}`} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let source = response["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == "/project/App.tsx")
+            .unwrap()["source"]
+            .as_str()
+            .unwrap();
+
+        assert_eq!(
+            source,
+            "export const App = () => <div className=\"p-[13px] text-[red]\" />;\n"
+        );
+        assert_eq!(response["convertedRules"], 2);
+        assert_eq!(
+            response["deletedFiles"],
+            serde_json::json!(["/project/A.module.css", "/project/B.module.css"])
+        );
+    }
+
+    #[test]
+    fn batch_retains_conflicting_members_from_multiple_modules_in_one_template() {
+        let request = serde_json::json!({
+            "stylesheets": [
+                {
+                    "cssPath": "/project/A.module.css",
+                    "cssSource": ".a { padding: 8px; }\n"
+                },
+                {
+                    "cssPath": "/project/B.module.css",
+                    "cssSource": ".b { padding: 16px; }\n"
+                }
+            ],
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = () => <div className={`${a.a} ${b.b}`} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["files"], serde_json::json!([]));
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 2);
+        assert_eq!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|warning| warning["code"] == "batch-stylesheet-conflict")
+                .count(),
+            2
+        );
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|warning| warning["code"] != "dynamic-class-name")
+        );
+    }
+
+    #[test]
+    fn batch_retains_same_css_property_even_when_tailwind_prefix_is_ambiguous() {
+        let request = serde_json::json!({
+            "stylesheets": [
+                {
+                    "cssPath": "/project/A.module.css",
+                    "cssSource": ".a { color: red; }\n"
+                },
+                {
+                    "cssPath": "/project/B.module.css",
+                    "cssSource": ".b { color: blue; }\n"
+                }
+            ],
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = () => <div className={`${a.a} ${b.b}`} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["files"], serde_json::json!([]));
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 2);
+        assert_eq!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|warning| warning["code"] == "batch-stylesheet-conflict")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn batch_does_not_conflict_color_with_font_size() {
+        let request = serde_json::json!({
+            "stylesheets": [
+                {
+                    "cssPath": "/project/A.module.css",
+                    "cssSource": ".a { color: red; }\n"
+                },
+                {
+                    "cssPath": "/project/B.module.css",
+                    "cssSource": ".b { font-size: 13px; }\n"
+                }
+            ],
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = () => <div className={`${a.a} ${b.b}`} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let source = response["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == "/project/App.tsx")
+            .unwrap()["source"]
+            .as_str()
+            .unwrap();
+
+        assert_eq!(
+            source,
+            "export const App = () => <div className=\"text-[red] text-[13px]\" />;\n"
+        );
+        assert_eq!(response["convertedRules"], 2);
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|warning| warning["code"] != "batch-stylesheet-conflict")
+        );
+    }
+
+    #[test]
+    fn batch_keeps_dynamic_template_warnings() {
+        let request = serde_json::json!({
+            "stylesheets": [{
+                "cssPath": "/project/A.module.css",
+                "cssSource": ".a { padding: 8px; }\n"
+            }],
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "import a from './A.module.css';\nexport const App = ({ active }) => <div className={`${a.a} ${active ? 'on' : 'off'}`} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| warning["code"] == "dynamic-class-name")
+        );
+    }
+
+    #[test]
+    fn batch_blocks_only_the_conflicting_rule_for_a_shared_selector_key() {
+        let request = serde_json::json!({
+            "stylesheets": [
+                {
+                    "cssPath": "/project/a.css",
+                    "cssSource": ".a { padding: 8px; }\n.a:hover { color: red; }\n"
+                },
+                {
+                    "cssPath": "/project/b.css",
+                    "cssSource": ".b { padding: 16px; }\n"
+                }
+            ],
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "export const App = () => <div className=\"a b\" />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let source = response["files"][0]["source"].as_str().unwrap();
+
+        assert_eq!(
+            source,
+            "export const App = () => <div className=\"a b hover:text-[red]\" />;\n"
+        );
+        assert_eq!(
+            response["candidates"],
+            serde_json::json!(["hover:text-[red]"])
+        );
+        assert_eq!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|warning| warning["code"] == "batch-stylesheet-conflict")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn batch_preserves_a_direct_module_member_when_appending_independent_candidates() {
+        let file = SourceFile {
+            path: "/project/App.tsx".to_string(),
+            source: "import styles from './A.module.css';\nexport const App = () => <div className={styles.a} />;\n".to_string(),
+            writable: true,
+        };
+        let candidates = HashMap::from([(
+            SelectorKey::Class("a".to_string()),
+            vec!["hover:text-[red]".to_string()],
+        )]);
+        let preserved = BTreeSet::from(["a".to_string()]);
+
+        let plan = plan_batch_source_file(
+            &file,
+            "/project/A.module.css",
+            true,
+            &candidates,
+            &preserved,
+        )
+        .unwrap();
+        let source = apply_edits(&file.source, plan.edits).unwrap();
+
+        assert_eq!(
+            source,
+            "import styles from './A.module.css';\nexport const App = () => <div className={`${styles.a}${\" hover:text-[red]\"}`} />;\n"
+        );
+        assert_eq!(plan.matched_module_refs.get("a"), Some(&1));
+    }
+
+    #[test]
+    fn batch_retains_arbitrary_border_shorthand_conflicts() {
+        let request = serde_json::json!({
+            "stylesheets": [
+                {
+                    "cssPath": "/project/A.module.css",
+                    "cssSource": ".a { border: 1px solid red; }\n"
+                },
+                {
+                    "cssPath": "/project/B.module.css",
+                    "cssSource": ".b { border-color: blue; }\n"
+                }
+            ],
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = () => <div className={`${a.a} ${b.b}`} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["files"], serde_json::json!([]));
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 2);
+        assert_eq!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|warning| warning["code"] == "batch-stylesheet-conflict")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn batch_retains_all_reset_conflicts() {
+        let request = serde_json::json!({
+            "stylesheets": [
+                {
+                    "cssPath": "/project/A.module.css",
+                    "cssSource": ".a { all: unset; }\n"
+                },
+                {
+                    "cssPath": "/project/B.module.css",
+                    "cssSource": ".b { color: blue; }\n"
+                }
+            ],
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = () => <div className={`${a.a} ${b.b}`} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["files"], serde_json::json!([]));
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 2);
+        assert_eq!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|warning| warning["code"] == "batch-stylesheet-conflict")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn all_reset_excludes_css_wide_exceptions() {
+        assert!(!css_properties_conflict("all", "--theme-color"));
+        assert!(!css_properties_conflict("all", "direction"));
+        assert!(!css_properties_conflict("all", "unicode-bidi"));
+        assert!(css_properties_conflict("all", "color"));
+    }
+
+    #[test]
+    fn batch_retains_grid_shorthand_conflicts() {
+        let request = serde_json::json!({
+            "stylesheets": [
+                {
+                    "cssPath": "/project/A.module.css",
+                    "cssSource": ".a { grid: auto / 1fr; }\n"
+                },
+                {
+                    "cssPath": "/project/B.module.css",
+                    "cssSource": ".b { grid-template-columns: 2fr; }\n"
+                }
+            ],
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = () => <div className={`${a.a} ${b.b}`} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["files"], serde_json::json!([]));
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 2);
+        assert_eq!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|warning| warning["code"] == "batch-stylesheet-conflict")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn batch_does_not_conflict_unrelated_border_radius_and_color() {
+        let request = serde_json::json!({
+            "stylesheets": [
+                {
+                    "cssPath": "/project/A.module.css",
+                    "cssSource": ".a { border-radius: 13px; }\n"
+                },
+                {
+                    "cssPath": "/project/B.module.css",
+                    "cssSource": ".b { border-color: blue; }\n"
+                }
+            ],
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = () => <div className={`${a.a} ${b.b}`} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let app = response["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == "/project/App.tsx")
+            .unwrap()["source"]
+            .as_str()
+            .unwrap();
+
+        assert_eq!(
+            app,
+            "export const App = () => <div className=\"rounded-[13px] [border-color:blue]\" />;\n"
+        );
+        assert_eq!(response["convertedRules"], 2);
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|warning| warning["code"] != "batch-stylesheet-conflict")
+        );
+    }
+
+    #[test]
+    fn batch_converts_independent_module_rules_while_preserving_conflicting_members() {
+        let request = serde_json::json!({
+            "stylesheets": [
+                {
+                    "cssPath": "/project/A.module.css",
+                    "cssSource": ".a { padding: 8px; }\n.a:hover { color: red; }\n"
+                },
+                {
+                    "cssPath": "/project/B.module.css",
+                    "cssSource": ".b { padding: 16px; }\n"
+                }
+            ],
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = () => <div className={`${a.a} ${b.b}`} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let app = response["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == "/project/App.tsx")
+            .unwrap()["source"]
+            .as_str()
+            .unwrap();
+        let css = response["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == "/project/A.module.css")
+            .unwrap()["source"]
+            .as_str()
+            .unwrap();
+
+        assert_eq!(
+            app,
+            "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = () => <div className={`${a.a} ${b.b}${\" hover:text-[red]\"}`} />;\n"
+        );
+        assert_eq!(css, ".a { padding: 8px; }\n\n");
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(response["retainedRules"], 2);
+        assert_eq!(
+            response["candidates"],
+            serde_json::json!(["hover:text-[red]"])
+        );
+    }
+
+    #[test]
+    fn batch_converts_a_different_module_class_when_one_class_conflicts() {
+        let request = serde_json::json!({
+            "stylesheets": [
+                {
+                    "cssPath": "/project/A.module.css",
+                    "cssSource": ".a { padding: 8px; }\n.c { color: red; }\n"
+                },
+                {
+                    "cssPath": "/project/B.module.css",
+                    "cssSource": ".b { padding: 16px; }\n"
+                }
+            ],
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = () => <><div className={`${a.a} ${b.b}`} /><div className={a.c} /></>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let app = response["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == "/project/App.tsx")
+            .unwrap()["source"]
+            .as_str()
+            .unwrap();
+        let css = response["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == "/project/A.module.css")
+            .unwrap()["source"]
+            .as_str()
+            .unwrap();
+
+        assert_eq!(
+            app,
+            "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = () => <><div className={`${a.a} ${b.b}`} /><div className=\"text-[red]\" /></>;\n"
+        );
+        assert_eq!(css, ".a { padding: 8px; }\n\n");
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(response["retainedRules"], 2);
+        assert_eq!(response["candidates"], serde_json::json!(["text-[red]"]));
+    }
+
+    #[test]
+    fn batch_retains_cross_stylesheet_conflicts() {
+        let request = serde_json::json!({
+            "stylesheets": [
+                {
+                    "cssPath": "/project/a.css",
+                    "cssSource": ".a { padding: 8px; }\n"
+                },
+                {
+                    "cssPath": "/project/b.css",
+                    "cssSource": ".b { padding: 16px; }\n"
+                }
+            ],
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "export const App = () => <div className=\"a b\" />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["files"], serde_json::json!([]));
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 2);
+        let conflict_files = response["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|warning| warning["code"] == "batch-stylesheet-conflict")
+            .map(|warning| warning["file"].as_str().unwrap())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            conflict_files,
+            BTreeSet::from(["/project/a.css", "/project/b.css"])
+        );
+        for warning in response["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|warning| warning["code"] == "batch-stylesheet-conflict")
+        {
+            let message = warning["message"].as_str().unwrap();
+            assert!(message.contains("p-[8px]"));
+            assert!(message.contains("p-[16px]"));
+            assert!(message.contains("conflict"));
+        }
+    }
+
+    #[test]
+    fn batch_uses_candidate_specific_properties_for_font_size_conflicts() {
+        let request = serde_json::json!({
+            "stylesheets": [
+                {
+                    "cssPath": "/project/A.module.css",
+                    "cssSource": "@supports (display: grid) { .a { color: red; font-size: 12px; } }\n"
+                },
+                {
+                    "cssPath": "/project/B.module.css",
+                    "cssSource": "@supports (display: grid) { .b { font-size: 13px; } }\n"
+                }
+            ],
+            "utilityPrefix": "tw",
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = () => <div className={`${a.a} ${b.b}`} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let messages = response["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|warning| warning["code"] == "batch-stylesheet-conflict")
+            .map(|warning| warning["message"].as_str().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(messages.len(), 2);
+        assert!(
+            messages
+                .iter()
+                .all(|message| message.contains("tw:supports-[display:grid]:text-[12px]"))
+        );
+        assert!(
+            messages
+                .iter()
+                .all(|message| message.contains("tw:supports-[display:grid]:text-[13px]"))
+        );
+        assert!(
+            messages
+                .iter()
+                .all(|message| !message.contains("text-[red]"))
+        );
+    }
+
+    #[test]
+    fn batch_uses_candidate_specific_properties_for_color_conflicts() {
+        let request = serde_json::json!({
+            "stylesheets": [
+                {
+                    "cssPath": "/project/A.module.css",
+                    "cssSource": ".a { color: red; font-size: 12px; }\n"
+                },
+                {
+                    "cssPath": "/project/B.module.css",
+                    "cssSource": ".b { color: blue; }\n"
+                }
+            ],
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = () => <div className={`${a.a} ${b.b}`} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let messages = response["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|warning| warning["code"] == "batch-stylesheet-conflict")
+            .map(|warning| warning["message"].as_str().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(messages.len(), 2);
+        assert!(
+            messages
+                .iter()
+                .all(|message| message.contains("text-[red]"))
+        );
+        assert!(
+            messages
+                .iter()
+                .all(|message| message.contains("text-[blue]"))
+        );
+        assert!(
+            messages
+                .iter()
+                .all(|message| !message.contains("text-[12px]"))
+        );
+    }
+
+    #[test]
+    fn batch_merges_properties_when_candidates_deduplicate() {
+        let request = serde_json::json!({
+            "stylesheets": [
+                {
+                    "cssPath": "/project/A.module.css",
+                    "cssSource": ".a { color: var(--value); font-size: var(--value); }\n"
+                },
+                {
+                    "cssPath": "/project/B.module.css",
+                    "cssSource": ".b { color: blue; }\n"
+                },
+                {
+                    "cssPath": "/project/C.module.css",
+                    "cssSource": ".c { font-size: 13px; }\n"
+                }
+            ],
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "import a from './A.module.css';\nimport b from './B.module.css';\nimport c from './C.module.css';\nexport const App = () => <div className={`${a.a} ${b.b} ${c.c}`} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let message = response["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|warning| {
+                warning["code"] == "batch-stylesheet-conflict"
+                    && warning["file"] == "/project/A.module.css"
+            })
+            .unwrap()["message"]
+            .as_str()
+            .unwrap();
+
+        assert!(message.contains("text-[var(--value)]"));
+        assert!(message.contains("text-[blue]"));
+        assert!(message.contains("text-[13px]"));
+    }
+
+    #[test]
+    fn batch_combines_tailwind_entry_additions() {
+        let request = serde_json::json!({
+            "stylesheets": [
+                {
+                    "cssPath": "/project/A.module.css",
+                    "cssSource": "@keyframes fade { from { opacity: 0; } to { opacity: 1; } }\n.a { animation: fade 1s; }\n"
+                },
+                {
+                    "cssPath": "/project/B.module.css",
+                    "cssSource": "@keyframes spin { from { rotate: 0deg; } to { rotate: 360deg; } }\n.b { animation: spin 1s; }\n"
+                }
+            ],
+            "tailwindPath": "/project/globals.css",
+            "tailwindSource": "@import \"tailwindcss\";\n",
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = () => <><div className={a.a} /><div className={b.b} /></>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let tailwind = response["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == "/project/globals.css")
+            .unwrap()["source"]
+            .as_str()
+            .unwrap();
+
+        assert_eq!(tailwind.matches("@keyframes tw-migrate-").count(), 2);
+    }
+
+    #[test]
+    fn batch_reference_only_consumer_prevents_module_deletion() {
+        let request = serde_json::json!({
+            "stylesheets": [{
+                "cssPath": "/project/shared/Button.module.css",
+                "cssSource": ".button { padding: 13px; }\n"
+            }],
+            "files": [{
+                "path": "/project/app/Button.tsx",
+                "source": "import styles from '../shared/Button.module.css';\nexport const Button = () => <button className={styles.button} />;\n",
+                "writable": false
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["files"], serde_json::json!([]));
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 1);
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| warning["code"] == "reference-only-css-module-consumer")
         );
     }
 }
