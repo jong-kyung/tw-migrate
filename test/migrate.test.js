@@ -659,6 +659,101 @@ test('excludes every detected Tailwind entry when an override selects one', asyn
   }
 });
 
+test('combines classes from two stylesheets on one element end-to-end', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'title.module.css'), '.title { padding: 13px; }\n'),
+      writeFile(join(cwd, 'accent.module.css'), '.accent { color: red; }\n'),
+      writeFile(
+        join(cwd, 'Card.tsx'),
+        "import title from './title.module.css';\nimport accent from './accent.module.css';\nexport const Card = () => <div className={`${title.title} ${accent.accent}`} />;\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd, write: true });
+    assert.equal(report.convertedRules, 2);
+    await assert.rejects(readFile(join(cwd, 'title.module.css'), 'utf8'), { code: 'ENOENT' });
+    await assert.rejects(readFile(join(cwd, 'accent.module.css'), 'utf8'), { code: 'ENOENT' });
+    assert.equal(
+      await readFile(join(cwd, 'Card.tsx'), 'utf8'),
+      'export const Card = () => <div className="p-[13px] text-[red]" />;\n',
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('retains conflicting rules combined from two stylesheets on one element', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'title.module.css'), '.title { padding: 13px; }\n'),
+      writeFile(join(cwd, 'accent.module.css'), '.accent { padding: 4px; }\n'),
+      writeFile(
+        join(cwd, 'Card.tsx'),
+        "import title from './title.module.css';\nimport accent from './accent.module.css';\nexport const Card = () => <div className={`${title.title} ${accent.accent}`} />;\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd, write: true });
+    assert.equal(report.convertedRules, 0);
+    assert.equal(await readFile(join(cwd, 'title.module.css'), 'utf8'), '.title { padding: 13px; }\n');
+    assert.equal(await readFile(join(cwd, 'accent.module.css'), 'utf8'), '.accent { padding: 4px; }\n');
+    assert.match(await readFile(join(cwd, 'Card.tsx'), 'utf8'), /title\.module\.css/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('detects source changes between planning reads', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      rm(join(cwd, 'globals.css')),
+      run('git', ['init', '-q'], { cwd }),
+      mkdir(join(cwd, 'aaa')),
+      mkdir(join(cwd, 'bbb')),
+    ]);
+    const laterEntry = join(cwd, 'bbb', 'globals.css');
+    await Promise.all([
+      writeFile(join(cwd, 'aaa', 'package.json'), '{"private":true}'),
+      writeFile(join(cwd, 'aaa', 'globals.css'), '@import "tailwindcss";\n@plugin "./mutate.cjs";\n'),
+      writeFile(join(cwd, 'aaa', 'A.module.css'), '.a { padding: 13px; }\n'),
+      writeFile(
+        join(cwd, 'aaa', 'App.tsx'),
+        "import styles from './A.module.css';\nexport const App = () => <div className={styles.a} />;\n",
+      ),
+      // Package aaa plans first; its plugin mutates bbb's already-snapshotted
+      // entry, so bbb's later planning read must fire the planning-time guard.
+      writeFile(
+        join(cwd, 'aaa', 'mutate.cjs'),
+        `const fs = require('node:fs');\nfs.appendFileSync(${JSON.stringify(laterEntry)}, '/* mutated */\\n');\nmodule.exports = () => {};\n`,
+      ),
+      writeFile(join(cwd, 'bbb', 'package.json'), '{"private":true}'),
+      writeFile(laterEntry, '@import "tailwindcss";\n'),
+      writeFile(join(cwd, 'bbb', 'B.module.css'), '.b { padding: 4px; }\n'),
+      writeFile(
+        join(cwd, 'bbb', 'B.tsx'),
+        "import styles from './B.module.css';\nexport const B = () => <div className={styles.b} />;\n",
+      ),
+    ]);
+
+    await assert.rejects(
+      migrate({ cwd, workspaces: true }),
+      /Source changed during planning: .*bbb[/\\]globals\.css/,
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('detects leftover files stranded outside the selected package', async () => {
   const cwd = await fixture();
   try {
