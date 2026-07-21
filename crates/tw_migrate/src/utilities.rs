@@ -144,6 +144,217 @@ pub(crate) fn tailwind_utilities_conflict(generated: &str, existing: &str) -> bo
     )
 }
 
+pub(crate) fn tailwind_variants_match(left: &str, right: &str) -> bool {
+    tailwind_utility_parts(left).0 == tailwind_utility_parts(right).0
+}
+
+pub(crate) fn css_properties_conflict(left: &str, right: &str) -> bool {
+    if left == right {
+        return true;
+    }
+    if left == "all" {
+        return reset_by_all(right);
+    }
+    if right == "all" {
+        return reset_by_all(left);
+    }
+    let left_mask = arbitrary_property_mask(left);
+    let right_mask = arbitrary_property_mask(right);
+    if left_mask != 0 && left_mask & right_mask != 0 {
+        return true;
+    }
+    let left_border = border_property_mask(left);
+    let right_border = border_property_mask(right);
+    if left_border != 0 && left_border & right_border != 0 {
+        return true;
+    }
+    shorthand_contains(left, right) || shorthand_contains(right, left)
+}
+
+fn reset_by_all(property: &str) -> bool {
+    !property.starts_with("--") && !matches!(property, "direction" | "unicode-bidi")
+}
+
+fn shorthand_contains(shorthand: &str, longhand: &str) -> bool {
+    let longhands: &[&str] = match shorthand {
+        "animation" => &[
+            "animation-delay",
+            "animation-direction",
+            "animation-duration",
+            "animation-fill-mode",
+            "animation-iteration-count",
+            "animation-name",
+            "animation-play-state",
+            "animation-timing-function",
+        ],
+        "background" => &[
+            "background-attachment",
+            "background-clip",
+            "background-color",
+            "background-image",
+            "background-origin",
+            "background-position",
+            "background-repeat",
+            "background-size",
+        ],
+        "column-rule" => &[
+            "column-rule-color",
+            "column-rule-style",
+            "column-rule-width",
+        ],
+        "columns" => &["column-count", "column-width"],
+        "flex" => &["flex-basis", "flex-grow", "flex-shrink"],
+        "flex-flow" => &["flex-direction", "flex-wrap"],
+        "font" => &[
+            "font-family",
+            "font-size",
+            "font-stretch",
+            "font-style",
+            "font-variant",
+            "font-weight",
+            "line-height",
+        ],
+        "grid" => &[
+            "grid-template-rows",
+            "grid-template-columns",
+            "grid-template-areas",
+            "grid-auto-rows",
+            "grid-auto-columns",
+            "grid-auto-flow",
+            "row-gap",
+            "column-gap",
+        ],
+        "grid-area" => &[
+            "grid-row-start",
+            "grid-column-start",
+            "grid-row-end",
+            "grid-column-end",
+        ],
+        "grid-column" => &["grid-column-start", "grid-column-end"],
+        "grid-row" => &["grid-row-start", "grid-row-end"],
+        "grid-template" => &[
+            "grid-template-rows",
+            "grid-template-columns",
+            "grid-template-areas",
+        ],
+        "inset" => &["top", "right", "bottom", "left"],
+        "inset-block" => &["inset-block-start", "inset-block-end"],
+        "inset-inline" => &["inset-inline-start", "inset-inline-end"],
+        "list-style" => &["list-style-image", "list-style-position", "list-style-type"],
+        "mask" => &[
+            "mask-border",
+            "mask-border-mode",
+            "mask-border-outset",
+            "mask-border-repeat",
+            "mask-border-slice",
+            "mask-border-source",
+            "mask-border-width",
+            "mask-clip",
+            "mask-composite",
+            "mask-image",
+            "mask-mode",
+            "mask-origin",
+            "mask-position",
+            "mask-repeat",
+            "mask-size",
+        ],
+        "mask-border" => &[
+            "mask-border-mode",
+            "mask-border-outset",
+            "mask-border-repeat",
+            "mask-border-slice",
+            "mask-border-source",
+            "mask-border-width",
+        ],
+        "outline" => &["outline-color", "outline-style", "outline-width"],
+        "overflow" => &["overflow-x", "overflow-y"],
+        "place-content" => &["align-content", "justify-content"],
+        "place-items" => &["align-items", "justify-items"],
+        "place-self" => &["align-self", "justify-self"],
+        "text-decoration" => &[
+            "text-decoration-color",
+            "text-decoration-line",
+            "text-decoration-style",
+            "text-decoration-thickness",
+        ],
+        "transition" => &[
+            "transition-behavior",
+            "transition-delay",
+            "transition-duration",
+            "transition-property",
+            "transition-timing-function",
+        ],
+        _ => &[],
+    };
+    longhands.contains(&longhand)
+}
+
+fn border_property_mask(property: &str) -> u16 {
+    const WIDTH: u16 = 0b0000_0000_1111;
+    const STYLE: u16 = 0b0000_1111_0000;
+    const COLOR: u16 = 0b1111_0000_0000;
+    const IMAGE: u16 = 1 << 12;
+    const TOP: u16 = 0b0001_0001_0001;
+    const RIGHT: u16 = 0b0010_0010_0010;
+    const BOTTOM: u16 = 0b0100_0100_0100;
+    const LEFT: u16 = 0b1000_1000_1000;
+    const BLOCK: u16 = TOP | BOTTOM;
+    const INLINE: u16 = RIGHT | LEFT;
+    const ALL: u16 = WIDTH | STYLE | COLOR | IMAGE;
+
+    match property {
+        "border" => ALL,
+        "border-width" => WIDTH,
+        "border-style" => STYLE,
+        "border-color" => COLOR,
+        "border-top" => TOP,
+        "border-right" => RIGHT,
+        "border-bottom" => BOTTOM,
+        "border-left" => LEFT,
+        "border-block" => BLOCK,
+        "border-inline" => INLINE,
+        "border-block-start" | "border-block-end" => BLOCK,
+        "border-inline-start" | "border-inline-end" => INLINE,
+        "border-top-width" => TOP & WIDTH,
+        "border-right-width" => RIGHT & WIDTH,
+        "border-bottom-width" => BOTTOM & WIDTH,
+        "border-left-width" => LEFT & WIDTH,
+        "border-block-width" | "border-block-start-width" | "border-block-end-width" => {
+            BLOCK & WIDTH
+        }
+        "border-inline-width" | "border-inline-start-width" | "border-inline-end-width" => {
+            INLINE & WIDTH
+        }
+        "border-top-style" => TOP & STYLE,
+        "border-right-style" => RIGHT & STYLE,
+        "border-bottom-style" => BOTTOM & STYLE,
+        "border-left-style" => LEFT & STYLE,
+        "border-block-style" | "border-block-start-style" | "border-block-end-style" => {
+            BLOCK & STYLE
+        }
+        "border-inline-style" | "border-inline-start-style" | "border-inline-end-style" => {
+            INLINE & STYLE
+        }
+        "border-top-color" => TOP & COLOR,
+        "border-right-color" => RIGHT & COLOR,
+        "border-bottom-color" => BOTTOM & COLOR,
+        "border-left-color" => LEFT & COLOR,
+        "border-block-color" | "border-block-start-color" | "border-block-end-color" => {
+            BLOCK & COLOR
+        }
+        "border-inline-color" | "border-inline-start-color" | "border-inline-end-color" => {
+            INLINE & COLOR
+        }
+        "border-image"
+        | "border-image-source"
+        | "border-image-slice"
+        | "border-image-width"
+        | "border-image-outset"
+        | "border-image-repeat" => IMAGE,
+        _ => 0,
+    }
+}
+
 fn themed_candidate(
     prefix: &str,
     namespace: &str,

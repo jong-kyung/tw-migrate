@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { chmod, mkdtemp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
+import { promisify } from 'node:util';
 
 import { __unstable__loadDesignSystem as loadDesignSystem } from 'tailwindcss';
 
 import { migrate } from '../index.js';
 
+const run = promisify(execFile);
 const initialCss = '.button { padding: 13px; }\n';
 const initialTsx = "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n";
 
@@ -476,6 +479,298 @@ test('previews and applies a complete CSS Module migration', async () => {
     assert.equal(
       await readFile(join(cwd, 'Button.tsx'), 'utf8'),
       'export const Button = () => <button className="p-[13px]">Save</button>;\n',
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('auto-discovers every CSS target in the current package', async () => {
+  const cwd = await fixture();
+  try {
+    const report = await migrate({ cwd });
+    assert.deepEqual(report.changedFiles, ['Button.module.css', 'Button.tsx']);
+    assert.deepEqual(report.failures, []);
+    assert.deepEqual(report.candidates, ['p-[13px]']);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('batch migration updates one source from multiple CSS Modules without lost edits', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'A.module.css'), '.a { padding: 13px; }\n'),
+      writeFile(join(cwd, 'B.module.css'), '.b { color: red; }\n'),
+      writeFile(
+        join(cwd, 'App.tsx'),
+        "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = () => <><div className={a.a} /><div className={b.b} /></>;\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd, write: true });
+    assert.deepEqual(report.changedFiles, ['A.module.css', 'App.tsx', 'B.module.css']);
+    assert.equal(
+      await readFile(join(cwd, 'App.tsx'), 'utf8'),
+      'export const App = () => <><div className="p-[13px]" /><div className="text-[red]" /></>;\n',
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('explicit CSS paths bypass Git ignore filtering', async () => {
+  const cwd = await fixture();
+  try {
+    await run('git', ['init', '-q'], { cwd });
+    await Promise.all([
+      writeFile(join(cwd, '.gitignore'), 'Ignored.module.css\n'),
+      writeFile(join(cwd, 'Ignored.module.css'), '.ignored { display: grid; }\n'),
+      writeFile(
+        join(cwd, 'Ignored.tsx'),
+        "import styles from './Ignored.module.css';\nexport const Ignored = () => <div className={styles.ignored} />;\n",
+      ),
+    ]);
+
+    const automatic = await migrate({ cwd });
+    assert.ok(!automatic.changedFiles.includes('Ignored.module.css'));
+    const explicit = await migrate({ cwd, cssFile: 'Ignored.module.css' });
+    assert.deepEqual(explicit.candidates, ['grid']);
+    assert.ok(explicit.changedFiles.includes('Ignored.module.css'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('reference-only workspace consumers prevent CSS Module deletion', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      run('git', ['init', '-q'], { cwd }),
+      mkdir(join(cwd, 'shared')),
+      mkdir(join(cwd, 'app')),
+    ]);
+    await Promise.all([
+      writeFile(join(cwd, 'shared', 'package.json'), '{"private":true}'),
+      writeFile(join(cwd, 'shared', 'globals.css'), '@import "tailwindcss";\n'),
+      writeFile(join(cwd, 'shared', 'Button.module.css'), '.button { padding: 13px; }\n'),
+      writeFile(join(cwd, 'app', 'package.json'), '{"private":true}'),
+      writeFile(
+        join(cwd, 'app', 'Button.tsx'),
+        "import styles from '../shared/Button.module.css';\nexport const Button = () => <button className={styles.button} />;\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd: join(cwd, 'shared'), write: true });
+    assert.deepEqual(report.changedFiles, []);
+    assert.equal(await readFile(join(cwd, 'shared', 'Button.module.css'), 'utf8'), '.button { padding: 13px; }\n');
+    assert.ok(report.warnings.some((warning) => warning.code === 'reference-only-css-module-consumer'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('workspace mode updates a selected cross-package consumer', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      rm(join(cwd, 'globals.css')),
+      run('git', ['init', '-q'], { cwd }),
+      mkdir(join(cwd, 'shared')),
+      mkdir(join(cwd, 'app')),
+    ]);
+    await Promise.all([
+      writeFile(join(cwd, 'shared', 'package.json'), '{"private":true}'),
+      writeFile(join(cwd, 'shared', 'globals.css'), '@import "tailwindcss";\n'),
+      writeFile(join(cwd, 'shared', 'Button.module.css'), '.button { padding: 13px; }\n'),
+      writeFile(join(cwd, 'app', 'package.json'), '{"private":true}'),
+      writeFile(
+        join(cwd, 'app', 'Button.tsx'),
+        "import styles from '../shared/Button.module.css';\nexport const Button = () => <button className={styles.button} />;\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd, workspaces: true, write: true });
+    assert.ok(report.changedFiles.includes('app/Button.tsx'));
+    await assert.rejects(readFile(join(cwd, 'shared', 'Button.module.css'), 'utf8'), { code: 'ENOENT' });
+    assert.equal(
+      await readFile(join(cwd, 'app', 'Button.tsx'), 'utf8'),
+      'export const Button = () => <button className="p-[13px]" />;\n',
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('rejects positional CSS owned by a nested package', async () => {
+  const cwd = await fixture();
+  try {
+    await mkdir(join(cwd, 'nested'));
+    await Promise.all([
+      writeFile(join(cwd, 'nested', 'package.json'), '{"private":true}'),
+      writeFile(join(cwd, 'nested', 'Nested.module.css'), '.nested { display: grid; }\n'),
+    ]);
+
+    await assert.rejects(
+      migrate({ cwd, cssFile: 'nested/Nested.module.css' }),
+      /must belong to the current package/,
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('rejects a Tailwind override owned by another package', async () => {
+  const cwd = await fixture();
+  try {
+    await mkdir(join(cwd, 'nested'));
+    await Promise.all([
+      writeFile(join(cwd, 'nested', 'package.json'), '{"private":true}'),
+      writeFile(join(cwd, 'nested', 'globals.css'), '@import "tailwindcss";\n'),
+    ]);
+
+    await assert.rejects(
+      migrate({ cwd, tailwindCss: 'nested/globals.css' }),
+      /Tailwind CSS entry must belong to the current package/,
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('excludes every detected Tailwind entry when an override selects one', async () => {
+  const cwd = await fixture();
+  try {
+    await writeFile(join(cwd, 'admin.css'), '@import "tailwindcss";\n');
+
+    const report = await migrate({ cwd, tailwindCss: 'globals.css' });
+    assert.equal(report.rules.length, 1);
+    assert.ok(report.warnings.every((warning) => warning.file !== 'admin.css'));
+    assert.ok(!report.changedFiles.includes('admin.css'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('verifies reference-only source snapshots before writing', async () => {
+  const cwd = await fixture({
+    tailwind: '@import "tailwindcss";\n@plugin "./mutate.cjs";\n',
+  });
+  try {
+    await Promise.all([
+      run('git', ['init', '-q'], { cwd }),
+      mkdir(join(cwd, 'external')),
+    ]);
+    const externalPath = join(cwd, 'external', 'Note.tsx');
+    await Promise.all([
+      writeFile(join(cwd, 'external', 'package.json'), '{"private":true}'),
+      writeFile(externalPath, 'export const Note = () => <div />;\n'),
+      writeFile(
+        join(cwd, 'mutate.cjs'),
+        `const fs = require('node:fs');\nfs.appendFileSync(${JSON.stringify(externalPath)}, '// changed during planning\\n');\nmodule.exports = () => {};\n`,
+      ),
+    ]);
+
+    await assert.rejects(
+      migrate({ cwd, write: true }),
+      /Source changed after planning: .*external[/\\]Note\.tsx/,
+    );
+    assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('--force never swallows cross-group plan collisions', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      rm(join(cwd, 'globals.css')),
+      run('git', ['init', '-q'], { cwd }),
+      mkdir(join(cwd, 'a')),
+      mkdir(join(cwd, 'b')),
+      mkdir(join(cwd, 'app')),
+    ]);
+    await Promise.all([
+      writeFile(join(cwd, 'a', 'package.json'), '{"private":true}'),
+      writeFile(join(cwd, 'a', 'globals.css'), '@import "tailwindcss";\n'),
+      writeFile(join(cwd, 'a', 'A.module.css'), '.a { padding: 13px; }\n'),
+      writeFile(join(cwd, 'b', 'package.json'), '{"private":true}'),
+      writeFile(join(cwd, 'b', 'globals.css'), '@import "tailwindcss";\n'),
+      writeFile(join(cwd, 'b', 'B.module.css'), '.b { color: red; }\n'),
+      writeFile(join(cwd, 'app', 'package.json'), '{"private":true}'),
+      writeFile(
+        join(cwd, 'app', 'App.tsx'),
+        "import a from '../a/A.module.css';\nimport b from '../b/B.module.css';\nexport const App = () => <><div className={a.a} /><div className={b.b} /></>;\n",
+      ),
+    ]);
+
+    await assert.rejects(
+      migrate({ cwd, workspaces: true, force: true, write: true }),
+      /Multiple package groups planned changes for/,
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('--force skips a package with malformed input CSS', async () => {
+  const cwd = await fixture({ css: '}\n' });
+  try {
+    const report = await migrate({ cwd, force: true, write: true });
+
+    assert.deepEqual(report.changedFiles, []);
+    assert.equal(report.failures.length, 1);
+    assert.equal(report.failures[0].package, '.');
+    assert.match(report.failures[0].message, /Failed to parse .*Button\.module\.css/);
+    assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), '}\n');
+    assert.equal(await readFile(join(cwd, 'Button.tsx'), 'utf8'), initialTsx);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('--force skips a broken workspace package and applies successful groups', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      rm(join(cwd, 'globals.css')),
+      run('git', ['init', '-q'], { cwd }),
+      mkdir(join(cwd, 'good')),
+      mkdir(join(cwd, 'broken')),
+    ]);
+    await Promise.all([
+      writeFile(join(cwd, 'good', 'package.json'), '{"private":true}'),
+      writeFile(join(cwd, 'good', 'globals.css'), '@import "tailwindcss";\n'),
+      writeFile(join(cwd, 'good', 'Good.module.css'), '.good { display: grid; }\n'),
+      writeFile(
+        join(cwd, 'good', 'Good.tsx'),
+        "import styles from './Good.module.css';\nexport const Good = () => <div className={styles.good} />;\n",
+      ),
+      writeFile(join(cwd, 'broken', 'package.json'), '{"private":true}'),
+      writeFile(join(cwd, 'broken', 'globals.css'), '@import "tailwindcss";\n'),
+      writeFile(join(cwd, 'broken', 'Broken.module.css'), '}\n'),
+    ]);
+
+    await assert.rejects(migrate({ cwd, workspaces: true, write: true }));
+    const report = await migrate({ cwd, workspaces: true, force: true, write: true });
+    assert.deepEqual(report.failures.map((failure) => failure.package), ['broken']);
+    assert.ok(report.changedFiles.includes('good/Good.module.css'));
+    await assert.rejects(readFile(join(cwd, 'good', 'Good.module.css'), 'utf8'), { code: 'ENOENT' });
+    assert.equal(
+      await readFile(join(cwd, 'good', 'Good.tsx'), 'utf8'),
+      'export const Good = () => <div className="grid" />;\n',
     );
   } finally {
     await cleanup(cwd);
