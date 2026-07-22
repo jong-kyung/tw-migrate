@@ -2,9 +2,10 @@ import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { chmod, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
+import { parseHtmlSource } from './html.js';
 import { planBatchMigration } from './native.js';
 import {
   compileLessEntry,
@@ -16,7 +17,7 @@ import {
 } from './style-compiler.js';
 
 const run = promisify(execFile);
-const SOURCE_EXTENSIONS = new Set(['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts']);
+const SOURCE_EXTENSIONS = new Set(['.html', '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts']);
 const STYLESHEET_SYNTAX = new Map([
   ['.css', 'css'],
   ['.scss', 'scss'],
@@ -63,7 +64,8 @@ export async function migrate(options = {}) {
       // and every supported reference names the module literally. Unrelated
       // gitignored files (coverage output, generated bundles) must reach
       // neither the parser nor the snapshot ledger.
-      if (!scope.targetable.has(path) && !mentionsStylesheetModule(source)) return undefined;
+      if (!scope.targetable.has(path)
+        && (extension(path) === '.html' || !mentionsStylesheetModule(source))) return undefined;
       return { path, source: recordSnapshot(snapshots, path, source) };
     })),
     ...selectedPackages.map((packageRoot) => snapshotFile(snapshots, join(packageRoot, 'package.json'))),
@@ -210,8 +212,26 @@ async function planPackage(context, packageRoot) {
     targetable,
     writablePackages,
   } = context;
+  let preparedHtml;
+  try {
+    preparedHtml = await preparePackageHtml({
+      packageRoot,
+      sourceFiles,
+      styleSources,
+      snapshots,
+      pathOwners,
+    });
+  } catch (error) {
+    if (!options.force) throw error;
+    return { failure: packageFailure(workspaceRoot, packageRoot, error) };
+  }
+  const packageSources = [
+    ...sourceFiles.filter((file) => extension(file.path) !== '.html'),
+    ...preparedHtml.files,
+  ];
   const ownedStyles = [...styleSources.keys()].filter(
-    (path) => targetable.has(path) && pathOwners.get(path) === packageRoot,
+    (path) => pathOwners.get(path) === packageRoot
+      && (targetable.has(path) || preparedHtml.stylePaths.has(path)),
   );
   if (ownedStyles.length === 0) return {};
 
@@ -233,7 +253,10 @@ async function planPackage(context, packageRoot) {
     ? [explicitStyle]
     : ownedStyles.filter((path) =>
       !excludedEntries.has(path)
-      && (!isPreprocessorPath(path) || sourceFiles.some((file) => sourceReferencesStyle(file, path))),
+      && !preparedHtml.generatedPaths.has(path)
+      && (!isPreprocessorPath(path)
+        || preparedHtml.stylePaths.has(path)
+        || packageSources.some((file) => sourceReferencesStyle(file, path))),
     );
   if (targets.length === 0) return {};
   if (targets.some((path) => excludedEntries.has(path))) {
@@ -248,7 +271,7 @@ async function planPackage(context, packageRoot) {
     return { failure: packageFailure(workspaceRoot, packageRoot, error) };
   }
 
-  const files = sourceFiles.map((file) => {
+  const files = packageSources.map((file) => {
     const owner = pathOwners.get(file.path);
     return {
       ...file,
@@ -315,7 +338,11 @@ async function planPackage(context, packageRoot) {
     return { failure: packageFailure(workspaceRoot, packageRoot, error) };
   }
 
+  plan.warnings.push(...preparedHtml.warnings);
   await validateCandidates(tailwind, plan.candidates);
+  for (const file of plan.files.filter((file) => extension(file.path) === '.html')) {
+    parseHtmlSource(file.path, file.source);
+  }
   for (const stylesheet of stylesheets.filter((stylesheet) => isPreprocessorPath(stylesheet.cssPath))) {
     const changed = plan.files.find((file) => file.path === stylesheet.cssPath);
     if (!changed && !plan.deletedFiles.includes(stylesheet.cssPath)) continue;
@@ -474,6 +501,228 @@ function sourceReferencesStyle(file, stylePath) {
   if (!importPath.startsWith('.')) importPath = `./${importPath}`;
   return [`'${importPath}'`, `"${importPath}"`, `\`${importPath}\``]
     .some((literal) => file.source.includes(literal));
+}
+
+async function preparePackageHtml({
+  packageRoot,
+  sourceFiles,
+  styleSources,
+  snapshots,
+  pathOwners,
+}) {
+  const files = [];
+  const stylePaths = new Set();
+  const generatedPaths = new Set();
+  const warnings = [];
+
+  for (const file of sourceFiles.filter(
+    (file) => extension(file.path) === '.html' && pathOwners.get(file.path) === packageRoot,
+  )) {
+    const parsed = parseHtmlSource(file.path, file.source);
+    const contexts = [];
+    for (const link of parsed.links) {
+      const variants = mediaVariants(link.media);
+      if (variants === undefined) {
+        warnings.push(htmlWarning(
+          'unsupported-link-media',
+          file.path,
+          link.start,
+          link.end,
+          `The stylesheet link media condition ${JSON.stringify(link.media)} cannot be represented safely.`,
+        ));
+        continue;
+      }
+      const linkedPath = localHtmlReference(packageRoot, dirname(file.path), link.href);
+      if (!linkedPath || !isWithin(packageRoot, linkedPath)) {
+        warnings.push(htmlWarning(
+          'unsupported-html-stylesheet-link',
+          file.path,
+          link.start,
+          link.end,
+          'Only local package stylesheet links are analyzed.',
+        ));
+        continue;
+      }
+      await collectHtmlStyleContexts({
+        path: linkedPath,
+        variants,
+        packageRoot,
+        styleSources,
+        snapshots,
+        pathOwners,
+        stylePaths,
+        generatedPaths,
+        contexts,
+        warnings,
+        visited: new Set(),
+      });
+    }
+
+    if (contexts.length > 0) {
+      for (const attribute of parsed.dynamicAttributes) {
+        warnings.push(htmlWarning(
+          'dynamic-html-attribute',
+          file.path,
+          attribute.start,
+          attribute.end,
+          'This HTML attribute is not a safely writable quoted literal.',
+        ));
+      }
+    }
+    files.push({
+      ...file,
+      htmlElements: parsed.elements,
+      htmlStylesheets: deduplicateHtmlContexts(contexts),
+    });
+  }
+
+  return { files, stylePaths, generatedPaths, warnings };
+}
+
+async function collectHtmlStyleContexts(state) {
+  const key = `${state.path}\0${state.variants.join(':')}`;
+  if (state.visited.has(key)) return;
+  state.visited.add(key);
+  if (!isStylesheetPath(state.path)) return;
+
+  let source;
+  try {
+    source = state.styleSources.get(state.path)
+      ?? await snapshotFile(state.snapshots, state.path);
+  } catch (error) {
+    if (error.code === 'ENOENT') return;
+    throw error;
+  }
+  if (!state.styleSources.has(state.path)) state.styleSources.set(state.path, source);
+  state.pathOwners.set(state.path, state.packageRoot);
+
+  if (extension(state.path) === '.css') {
+    const mapped = await mappedPreprocessorSource(state.path, source, state);
+    if (mapped) {
+      state.generatedPaths.add(state.path);
+      state.stylePaths.add(mapped);
+      state.contexts.push({ cssPath: mapped, variants: state.variants });
+      return;
+    }
+  }
+
+  state.stylePaths.add(state.path);
+  state.contexts.push({ cssPath: state.path, variants: state.variants });
+  if (extension(state.path) !== '.css') return;
+
+  for (const imported of cssImports(source)) {
+    const variants = mediaVariants(imported.media);
+    if (variants === undefined) {
+      state.warnings.push(htmlWarning(
+        'unsupported-link-media',
+        state.path,
+        imported.start,
+        imported.end,
+        `The stylesheet import media condition ${JSON.stringify(imported.media)} cannot be represented safely.`,
+      ));
+      continue;
+    }
+    const importedPath = localHtmlReference(state.packageRoot, dirname(state.path), imported.href);
+    if (!importedPath || !isWithin(state.packageRoot, importedPath)) continue;
+    await collectHtmlStyleContexts({
+      ...state,
+      path: importedPath,
+      variants: [...state.variants, ...variants],
+    });
+  }
+}
+
+async function mappedPreprocessorSource(cssPath, cssSource, state) {
+  const matches = [...cssSource.matchAll(/\/\*[#@]\s*sourceMappingURL=([^\s*]+)\s*\*\//g)];
+  const reference = matches.at(-1)?.[1];
+  const mapPath = reference && localHtmlReference(state.packageRoot, dirname(cssPath), reference);
+  if (!mapPath || !isWithin(state.packageRoot, mapPath)) return undefined;
+
+  let rawMap;
+  try {
+    rawMap = await snapshotFile(state.snapshots, mapPath);
+  } catch (error) {
+    if (error.code === 'ENOENT') return undefined;
+    throw error;
+  }
+  let sourceMap;
+  try {
+    sourceMap = JSON.parse(rawMap);
+  } catch {
+    return undefined;
+  }
+  const sources = (sourceMap.sources ?? [])
+    .map((source) => sourceMapSource(mapPath, sourceMap.sourceRoot, source))
+    .filter((path) => path && isPreprocessorPath(path) && isWithin(state.packageRoot, path));
+  const uniqueSources = [...new Set(sources)];
+  const entries = uniqueSources.filter((path) => !basename(path).startsWith('_'));
+  if (entries.length !== 1) return undefined;
+
+  const entryPath = entries[0];
+  const entrySource = state.styleSources.get(entryPath)
+    ?? await snapshotFile(state.snapshots, entryPath);
+  if (!state.styleSources.has(entryPath)) state.styleSources.set(entryPath, entrySource);
+  state.pathOwners.set(entryPath, state.packageRoot);
+  return entryPath;
+}
+
+function sourceMapSource(mapPath, sourceRoot, source) {
+  try {
+    const url = new URL(source);
+    return url.protocol === 'file:' ? fileURLToPath(url) : undefined;
+  } catch {
+    return resolve(dirname(mapPath), sourceRoot ?? '', source);
+  }
+}
+
+function cssImports(source) {
+  const imports = [];
+  const withoutComments = stripCssComments(source);
+  const pattern = /@import\s+(?:url\(\s*)?(?:["']([^"']+)["']|([^"'()\s;]+))\s*\)?\s*([^;]*);/g;
+  for (const match of withoutComments.matchAll(pattern)) {
+    imports.push({
+      href: match[1] ?? match[2],
+      media: match[3].trim(),
+      start: match.index,
+      end: match.index + match[0].length,
+    });
+  }
+  return imports;
+}
+
+function localHtmlReference(packageRoot, base, reference) {
+  const path = reference.split(/[?#]/, 1)[0];
+  if (!path || path.startsWith('//') || /^[a-z][a-z\d+.-]*:/i.test(path)) return undefined;
+  let decoded;
+  try {
+    decoded = decodeURIComponent(path);
+  } catch {
+    return undefined;
+  }
+  return decoded.startsWith('/')
+    ? resolve(packageRoot, `.${decoded}`)
+    : resolve(base, decoded);
+}
+
+function mediaVariants(media) {
+  const normalized = media.trim().toLowerCase();
+  if (!normalized || normalized === 'all') return [];
+  if (normalized === 'print') return ['print'];
+  return undefined;
+}
+
+function deduplicateHtmlContexts(contexts) {
+  const seen = new Set();
+  return contexts.filter((context) => {
+    const key = `${context.cssPath}\0${context.variants.join(':')}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function htmlWarning(code, file, start, end, message) {
+  return { code, file, start, end, message };
 }
 
 function isProjectInput(workspaceRoot, path) {

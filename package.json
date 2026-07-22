@@ -10,6 +10,7 @@
   },
   "files": [
     "bin",
+    "html.js",
     "index.js",
     "index.d.ts",
     "native.js",
@@ -49,6 +50,7 @@
     "tw-migrate-win32-x64-msvc": "workspace:0.0.0"
   },
   "dependencies": {
-    "@jridgewell/trace-mapping": "0.3.31"
+    "@jridgewell/trace-mapping": "0.3.31",
+    "parse5": "8.0.1"
   }
 }

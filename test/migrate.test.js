@@ -504,6 +504,205 @@ test('post-edit Less rendering remains fatal under force', async () => {
   }
 });
 
+test('updates linked static HTML literals while preserving bytes and scope', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'legacy.css'), '.card { padding: 13px; }\n#hero { height: 100vh; }\n'),
+      writeFile(
+        join(cwd, 'index.html'),
+        '<!doctype html>\n<link rel="stylesheet" href="./legacy.css">\n<main id=\'hero\' class=\'card featured\'>Hi</main>\n',
+      ),
+      writeFile(join(cwd, 'unlinked.html'), '<div class="card"></div>\n'),
+    ]);
+
+    const preview = await migrate({ cwd, styleFile: 'legacy.css' });
+    assert.deepEqual(preview.changedFiles, ['index.html']);
+    assert.deepEqual(preview.candidates, ['h-[100vh]', 'p-[13px]']);
+    assert.match(preview.diff, /class='card featured p-\[13px\] h-\[100vh\]'/);
+    await migrate({ cwd, styleFile: 'legacy.css', write: true });
+    assert.equal(
+      await readFile(join(cwd, 'index.html'), 'utf8'),
+      '<!doctype html>\n<link rel="stylesheet" href="./legacy.css">\n<main id=\'hero\' class=\'card featured p-[13px] h-[100vh]\'>Hi</main>\n',
+    );
+    assert.equal(await readFile(join(cwd, 'unlinked.html'), 'utf8'), '<div class="card"></div>\n');
+    const second = await migrate({ cwd, styleFile: 'legacy.css' });
+    assert.equal(second.diff, '');
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('adds a class attribute for an id-only HTML match', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'legacy.css'), '#hero { height: 100vh; }\n'),
+      writeFile(
+        join(cwd, 'index.html'),
+        '<link rel="stylesheet" href="./legacy.css"><main id="hero">Hi</main>\n',
+      ),
+    ]);
+
+    const report = await migrate({ cwd, styleFile: 'legacy.css', write: true });
+    assert.deepEqual(report.changedFiles, ['index.html']);
+    assert.equal(
+      await readFile(join(cwd, 'index.html'), 'utf8'),
+      '<link rel="stylesheet" href="./legacy.css"><main id="hero" class="h-[100vh]">Hi</main>\n',
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('follows transitive CSS imports and applies exact print link media', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'base.css'), '@import "./print.css";\n'),
+      writeFile(join(cwd, 'print.css'), '.card { padding: 13px; }\n'),
+      writeFile(
+        join(cwd, 'index.html'),
+        '<link rel="stylesheet" href="./base.css" media="print"><div class="card"></div>\n',
+      ),
+    ]);
+
+    const report = await migrate({ cwd });
+    assert.ok(report.candidates.includes('print:p-[13px]'));
+    assert.match(report.diff, /class="card print:p-\[13px\]"/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('retains unsupported media and template-looking HTML attributes', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'legacy.css'), '.card { padding: 13px; }\n'),
+      writeFile(
+        join(cwd, 'index.html'),
+        '<link rel="stylesheet" href="./legacy.css" media="speech"><div class="card"></div>\n',
+      ),
+      writeFile(
+        join(cwd, 'dynamic.html'),
+        '<link rel="stylesheet" href="./legacy.css"><div class="card {{ state }}"></div><style>.card{}</style><script>"card"</script>\n',
+      ),
+      writeFile(
+        join(cwd, 'remote.html'),
+        '<link rel="stylesheet" href="https://example.com/legacy.css"><div class="card"></div>\n',
+      ),
+    ]);
+
+    const report = await migrate({ cwd, styleFile: 'legacy.css' });
+    assert.deepEqual(report.changedFiles, []);
+    assert.ok(report.warnings.some((warning) => warning.code === 'unsupported-link-media'));
+    assert.ok(report.warnings.some((warning) => warning.code === 'dynamic-html-attribute'));
+    assert.ok(report.warnings.some((warning) => warning.code === 'unsupported-html-stylesheet-link'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('combines independent linked stylesheets on multiple HTML elements', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'a.css'), '.card { padding: 13px; }\n'),
+      writeFile(join(cwd, 'b.css'), '.note { color: red; }\n'),
+      writeFile(
+        join(cwd, 'index.html'),
+        '<link rel="stylesheet" href="./a.css"><link rel="stylesheet" href="./b.css"><div class="card"></div><p class="note"></p>\n',
+      ),
+    ]);
+
+    const report = await migrate({ cwd });
+    assert.match(report.diff, /class="card p-\[13px\]"/);
+    assert.match(report.diff, /class="note text-\[red\]"/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('retains conflicting rules linked to the same HTML element', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'a.css'), '.card { padding: 13px; }\n'),
+      writeFile(join(cwd, 'b.css'), '.card { padding: 17px; }\n'),
+      writeFile(
+        join(cwd, 'index.html'),
+        '<link rel="stylesheet" href="./a.css"><link rel="stylesheet" href="./b.css"><div class="card"></div>\n',
+      ),
+    ]);
+
+    const report = await migrate({ cwd });
+    assert.deepEqual(report.changedFiles, []);
+    assert.ok(report.warnings.filter((warning) => warning.code === 'batch-stylesheet-conflict').length >= 2);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('treats invalid writable HTML as a recoverable package input failure', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'legacy.css'), '.card { padding: 13px; }\n'),
+      writeFile(join(cwd, 'index.html'), '<link rel="stylesheet" href="./legacy.css"><div class="card></div>'),
+    ]);
+
+    await assert.rejects(migrate({ cwd }), /Failed to parse .*index\.html/);
+    const report = await migrate({ cwd, force: true });
+    assert.equal(report.failures.length, 1);
+    assert.deepEqual(report.changedFiles, []);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('uses a generated CSS source map to reach an authored Sass entry without editing artifacts', async () => {
+  const cwd = await fixture();
+  try {
+    const generated = '.card { padding: 13px; }\n/*# sourceMappingURL=generated.css.map */\n';
+    const source = '$space: 13px;\n.card { padding: $space; }\n';
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'generated.css'), generated),
+      writeFile(join(cwd, 'generated.css.map'), JSON.stringify({ version: 3, sources: ['source.scss'], names: [], mappings: '' })),
+      writeFile(join(cwd, 'source.scss'), source),
+      writeFile(
+        join(cwd, 'index.html'),
+        '<link rel="stylesheet" href="./generated.css"><div class="card"></div>\n',
+      ),
+    ]);
+
+    const report = await migrate({ cwd, write: true });
+    assert.ok(report.candidates.includes('p-[13px]'));
+    assert.equal(await readFile(join(cwd, 'generated.css'), 'utf8'), generated);
+    assert.equal(await readFile(join(cwd, 'source.scss'), 'utf8'), source);
+    assert.match(await readFile(join(cwd, 'index.html'), 'utf8'), /class="card p-\[13px\]"/);
+    assert.ok(!report.warnings.some((warning) => warning.code === 'rebuild-required'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('updates global classes and ids while retaining global CSS', async () => {
   const cwd = await fixture();
   try {

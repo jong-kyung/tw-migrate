@@ -13,7 +13,8 @@ use crate::{
     animations::append_keyframes,
     at_rules::{append_global_at_rules, is_conditional},
     css_plan::{ParsedCss, RulePlan, SelectorKey, parse_css_rules},
-    js_rewrite::{plan_source_file, validate_js},
+    html_rewrite::plan_html_file,
+    js_rewrite::{SourcePlan, plan_batch_source_file, plan_source_file, validate_js},
     utilities::{css_properties_conflict, tailwind_utilities_conflict, tailwind_variants_match},
 };
 
@@ -120,6 +121,30 @@ struct SourceMapping {
     original_column: usize,
 }
 
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HtmlAttribute {
+    pub(crate) value: String,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    #[serde(default)]
+    pub(crate) synthetic: bool,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HtmlElement {
+    pub(crate) class_attribute: Option<HtmlAttribute>,
+    pub(crate) id_attribute: Option<HtmlAttribute>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HtmlStylesheet {
+    pub(crate) css_path: String,
+    pub(crate) variants: Vec<String>,
+}
+
 fn default_writable() -> bool {
     true
 }
@@ -130,6 +155,10 @@ pub(crate) struct SourceFile {
     pub(crate) source: String,
     #[serde(default = "default_writable")]
     pub(crate) writable: bool,
+    #[serde(default, rename = "htmlElements")]
+    pub(crate) html_elements: Vec<HtmlElement>,
+    #[serde(default, rename = "htmlStylesheets")]
+    pub(crate) html_stylesheets: Vec<HtmlStylesheet>,
 }
 
 #[derive(Serialize)]
@@ -218,6 +247,34 @@ struct BatchMatch {
     properties: BTreeSet<String>,
 }
 
+fn plan_consumer_file(
+    file: &SourceFile,
+    css_path: &str,
+    is_module: bool,
+    candidates: &HashMap<SelectorKey, Vec<String>>,
+    preserved_module_classes: &BTreeSet<String>,
+    utility_prefix: Option<&str>,
+    batch_mode: bool,
+) -> Result<SourcePlan, String> {
+    if Path::new(&file.path)
+        .extension()
+        .is_some_and(|extension| extension == "html")
+    {
+        return Ok(plan_html_file(file, css_path, candidates, utility_prefix));
+    }
+    if batch_mode {
+        plan_batch_source_file(
+            file,
+            css_path,
+            is_module,
+            candidates,
+            preserved_module_classes,
+        )
+    } else {
+        plan_source_file(file, css_path, is_module, candidates)
+    }
+}
+
 pub(crate) fn is_recoverable_input_error(error: &str) -> bool {
     (!error.starts_with("Failed to parse edited CSS") && error.starts_with("Failed to parse "))
         || error.starts_with("Failed to analyze ")
@@ -236,7 +293,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
         let plan_request = batch_stylesheet_request(&request, stylesheet, Vec::new());
         let candidate_maps = candidate_map_for_request(&plan_request)?;
         for file in request.files.iter().filter(|file| file.writable) {
-            let result = crate::js_rewrite::plan_batch_source_file(
+            let result = plan_consumer_file(
                 file,
                 &stylesheet.css_path,
                 stylesheet
@@ -244,11 +301,13 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
                     .unwrap_or_else(|| is_stylesheet_module(&stylesheet.css_path)),
                 &candidate_maps.candidates,
                 &BTreeSet::new(),
+                request.utility_prefix.as_deref(),
+                true,
             )?;
             for matched in result.matches {
                 if let Some(origins) = candidate_maps
                     .origins
-                    .get(&(matched.key, matched.candidate.clone()))
+                    .get(&(matched.key, matched.origin_candidate.clone()))
                 {
                     match_groups
                         .entry((file.path.clone(), matched.start, matched.end))
@@ -754,17 +813,15 @@ fn plan_request(
     }
 
     for file in &request.files {
-        let mut result = if batch_mode {
-            crate::js_rewrite::plan_batch_source_file(
-                file,
-                &request.css_path,
-                is_module,
-                &candidate_map,
-                &preserved_module_classes,
-            )?
-        } else {
-            plan_source_file(file, &request.css_path, is_module, &candidate_map)?
-        };
+        let mut result = plan_consumer_file(
+            file,
+            &request.css_path,
+            is_module,
+            &candidate_map,
+            &preserved_module_classes,
+            request.utility_prefix.as_deref(),
+            batch_mode,
+        )?;
 
         module_references_safe &= result.module_references_safe;
         if !file.writable {
@@ -849,7 +906,7 @@ fn plan_request(
                 (
                     "batch-stylesheet-conflict",
                     format!(
-                        "Generated utilities {conflicts} conflict on the same JSX element, so the contributing rule is retained."
+                        "Generated utilities {conflicts} conflict on the same source element, so the contributing rule is retained."
                     ),
                 )
             } else if rule.warning == Some("unproven-source-map") {
@@ -976,7 +1033,12 @@ fn plan_request(
         }
         if !result.edits.is_empty() {
             let source = apply_edits(&file.source, result.edits)?;
-            validate_js(&file.path, &source)?;
+            if Path::new(&file.path)
+                .extension()
+                .is_none_or(|extension| extension != "html")
+            {
+                validate_js(&file.path, &source)?;
+            }
             planned_files.push(PlannedFile {
                 path: file.path.clone(),
                 source,
@@ -2624,6 +2686,8 @@ mod tests {
             path: "/project/App.tsx".to_string(),
             source: "import styles from './A.module.css';\nexport const App = () => <div className={styles.a} />;\n".to_string(),
             writable: true,
+            html_elements: Vec::new(),
+            html_stylesheets: Vec::new(),
         };
         let candidates = HashMap::from([(
             SelectorKey::Class("a".to_string()),
