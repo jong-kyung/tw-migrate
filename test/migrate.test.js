@@ -892,6 +892,76 @@ test('normalizes separators when resolving source map roots', () => {
   );
 });
 
+test('infers one preprocessor source by filename without generated CSS', async () => {
+  const cwd = await fixture();
+  try {
+    await mkdir(join(cwd, 'src'));
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'src', 'app.scss'), '.card { padding: 13px; }\n'),
+      writeFile(
+        join(cwd, 'index.html'),
+        '<link rel="stylesheet" href="./dist/app.css"><div class="card"></div>\n',
+      ),
+    ]);
+
+    const report = await migrate({ cwd });
+    assert.deepEqual(report.candidates, ['p-[13px]']);
+    assert.match(report.diff, /class="card p-\[13px\]"/);
+    assert.ok(report.warnings.some((warning) => warning.code === 'inferred-preprocessor-source'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('does not infer an ambiguous preprocessor filename', async () => {
+  const cwd = await fixture();
+  try {
+    await mkdir(join(cwd, 'src'));
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'app.less'), '.card { padding: 17px; }\n'),
+      writeFile(join(cwd, 'src', 'app.scss'), '.card { padding: 13px; }\n'),
+      writeFile(
+        join(cwd, 'index.html'),
+        '<link rel="stylesheet" href="./dist/app.css"><div class="card"></div>\n',
+      ),
+    ]);
+
+    const report = await migrate({ cwd });
+    assert.deepEqual(report.candidates, []);
+    assert.equal(report.diff, '');
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('does not infer a comma-imported dotted-stem preprocessor dependency', async () => {
+  const cwd = await fixture();
+  try {
+    await mkdir(join(cwd, 'src'));
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'src', 'main.scss'), '$space: 13px;\n@import "other",\n  "app.module";\n'),
+      writeFile(join(cwd, 'src', 'other.scss'), '.other { color: red; }\n'),
+      writeFile(join(cwd, 'src', 'app.module.scss'), '.card { padding: $space; }\n'),
+      writeFile(
+        join(cwd, 'index.html'),
+        '<link rel="stylesheet" href="./dist/app.module.css"><div class="card"></div>\n',
+      ),
+    ]);
+
+    const report = await migrate({ cwd });
+    assert.deepEqual(report.candidates, []);
+    assert.equal(report.diff, '');
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('uses only genuinely mapped preprocessor sources for generated CSS links', async () => {
   const cwd = await fixture();
   try {
@@ -901,6 +971,7 @@ test('uses only genuinely mapped preprocessor sources for generated CSS links', 
       rm(join(cwd, 'Button.module.css')),
       rm(join(cwd, 'Button.tsx')),
       writeFile(join(cwd, 'generated.css'), generated),
+      writeFile(join(cwd, 'generated.scss'), '.generated { color: blue; }\n'),
       writeFile(join(cwd, 'generated.css.map'), JSON.stringify({
         version: 3,
         sourceRoot: pathToFileURL(`${cwd}/`).href,

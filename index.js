@@ -224,6 +224,7 @@ async function planPackage(context, packageRoot) {
       styleSources,
       snapshots,
       pathOwners,
+      styleDependents,
     });
   } catch (error) {
     if (!options.force || isIntegrityError(error)) throw error;
@@ -527,6 +528,7 @@ async function preparePackageHtml({
   styleSources,
   snapshots,
   pathOwners,
+  styleDependents,
 }) {
   const files = [];
   const stylePaths = new Set();
@@ -588,6 +590,7 @@ async function preparePackageHtml({
         styleSources,
         snapshots,
         pathOwners,
+        styleDependents,
         stylePaths,
         generatedPaths,
         contexts,
@@ -639,7 +642,10 @@ async function collectHtmlStyleContexts(state) {
     source = state.styleSources.get(state.path)
       ?? await snapshotFile(state.snapshots, state.path);
   } catch (error) {
-    if (error.code === 'ENOENT') return;
+    if (error.code === 'ENOENT') {
+      if (extension(state.path) === '.css') addInferredPreprocessorContext(state);
+      return;
+    }
     throw error;
   }
   if (!state.styleSources.has(state.path)) state.styleSources.set(state.path, source);
@@ -653,6 +659,7 @@ async function collectHtmlStyleContexts(state) {
       state.contexts.push({ cssPath: mapped, variants: state.variants });
       return;
     }
+    if (addInferredPreprocessorContext(state)) return;
   }
 
   state.stylePaths.add(state.path);
@@ -679,6 +686,30 @@ async function collectHtmlStyleContexts(state) {
       variants: [...state.variants, ...variants],
     });
   }
+}
+
+function addInferredPreprocessorContext(state) {
+  const stem = basename(state.path, '.css');
+  const matches = [...state.styleSources.keys()].filter((path) =>
+    isPreprocessorPath(path)
+      && state.pathOwners.get(path) === state.packageRoot
+      && !basename(path).startsWith('_')
+      && !state.styleDependents.has(path)
+      && basename(path, extension(path)) === stem,
+  );
+  if (matches.length !== 1) return false;
+  const [path] = matches;
+  state.generatedPaths.add(state.path);
+  state.stylePaths.add(path);
+  state.contexts.push({ cssPath: path, variants: state.variants });
+  state.warnings.push(htmlWarning(
+    'inferred-preprocessor-source',
+    state.path,
+    0,
+    0,
+    `The missing source map was replaced by the unique matching preprocessor filename ${basename(path)}.`,
+  ));
+  return true;
 }
 
 async function mappedPreprocessorSource(cssPath, cssSource, state) {
@@ -927,20 +958,40 @@ function indexStylesheetDependents(styleSources) {
   for (const [path, rawSource] of styleSources) {
     const source = stripCssComments(rawSource);
     const references = [
-      ...source.matchAll(
-        /(?:composes\s*:[^;{}]*?\bfrom\s+|@import\s+(?:url\(\s*)?)["']([^"']+)["']/g,
-      ),
-      ...source.matchAll(/@import\s+url\(\s*([^"'()\s]+)\s*\)/g),
+      ...[...source.matchAll(/composes\s*:[^;{}]*?\bfrom\s+["']([^"']+)["']/g)]
+        .map((match) => match[1]),
+      ...[...source.matchAll(/@(?:use|forward)\s+["']([^"']+)["']/g)]
+        .map((match) => match[1]),
+      ...[...source.matchAll(/@import\s+(?:\([^)]*\)\s*)?(?:([^;{}]+);|([^;{}\r\n]+))/g)]
+        .flatMap((statement) => [...(statement[1] ?? statement[2]).matchAll(/["']([^"']+)["']/g)]
+          .map((match) => match[1])),
+      ...[...source.matchAll(/@import\s+url\(\s*([^"'()\s]+)\s*\)/g)]
+        .map((match) => match[1]),
     ];
-    for (const target of new Set(references.map((match) => resolve(dirname(path), match[1])))) {
-      if (target === path || !isStylesheetModule(target) || !styleSources.has(target)) continue;
-      const paths = dependents.get(target) ?? [];
-      paths.push(path);
-      dependents.set(target, paths);
+    for (const reference of new Set(references)) {
+      for (const target of stylesheetReferenceTargets(path, reference, styleSources)) {
+        if (target === path || (!isStylesheetModule(target) && !isPreprocessorPath(target))) continue;
+        const paths = dependents.get(target) ?? [];
+        paths.push(path);
+        dependents.set(target, paths);
+      }
     }
   }
-  for (const paths of dependents.values()) paths.sort();
+  for (const [target, paths] of dependents) dependents.set(target, [...new Set(paths)].sort());
   return dependents;
+}
+
+function stylesheetReferenceTargets(importer, reference, styleSources) {
+  const target = resolve(dirname(importer), reference);
+  const candidates = STYLESHEET_SYNTAX.has(extension(target))
+    ? [target]
+    : [...STYLESHEET_SYNTAX.keys()].flatMap((syntax) => [
+      `${target}${syntax}`,
+      join(dirname(target), `_${basename(target)}${syntax}`),
+      join(target, `_index${syntax}`),
+      join(target, `index${syntax}`),
+    ]);
+  return candidates.filter((path) => styleSources.has(path));
 }
 
 function resolveTailwindEntry(stylePaths, styleSources, configuredPath) {
