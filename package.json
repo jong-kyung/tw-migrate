@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "description": "Preview and migrate React CSS to Tailwind utilities",
   "type": "module",
+  "packageManager": "pnpm@11.15.1",
   "main": "index.js",
   "types": "index.d.ts",
   "bin": {

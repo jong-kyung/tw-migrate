@@ -1,2 +1,4 @@
 packages:
   - npm/*
+allowBuilds:
+  '@parcel/watcher': false
