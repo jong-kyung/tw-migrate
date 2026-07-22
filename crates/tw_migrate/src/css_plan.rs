@@ -44,12 +44,13 @@ pub(crate) fn parse_css_rules(
     keyframe_scope: &str,
     source: &str,
     theme_tokens: &HashMap<String, String>,
+    syntax: Syntax,
     is_module: bool,
     can_move_at_rules: bool,
     relative_urls_stable: bool,
 ) -> Result<ParsedCss, String> {
     let allocator = oxc_css_parser::Allocator::default();
-    let mut parser = CssParser::new(&allocator, source, Syntax::Css);
+    let mut parser = CssParser::new(&allocator, source, syntax);
     let stylesheet = parser
         .parse::<Stylesheet>()
         .map_err(|error| format!("Failed to parse {path}: {error:?}"))?;
@@ -123,6 +124,7 @@ pub(crate) fn parse_css_rules(
             source,
             theme_tokens,
             &keyframe_names,
+            syntax,
             is_module,
         );
         let mut candidates = candidate_properties.keys().cloned().collect::<Vec<_>>();
@@ -171,12 +173,28 @@ pub(crate) fn parse_css_rules(
     })
 }
 
+fn declaration_is_plain_css(
+    declaration: &oxc_css_parser::ast::Declaration<'_>,
+    source: &str,
+) -> bool {
+    let raw = &source[declaration.span.start..declaration.span.end];
+    if raw.contains(['$', '@', '`', '(']) || raw.contains("#{") {
+        return false;
+    }
+    let wrapped = format!("a{{{raw}}}");
+    let allocator = oxc_css_parser::Allocator::default();
+    CssParser::new(&allocator, &wrapped, Syntax::Css)
+        .parse::<Stylesheet>()
+        .is_ok()
+}
+
 fn collect_declaration_candidates(
     statements: &[Statement<'_>],
     variants: &[String],
     source: &str,
     theme_tokens: &HashMap<String, String>,
     keyframes: &HashMap<&str, &str>,
+    syntax: Syntax,
     is_module: bool,
 ) -> (HashMap<String, BTreeSet<String>>, Option<&'static str>) {
     // CSS keeps the last of duplicate same-property declarations, so a later
@@ -230,6 +248,7 @@ fn collect_declaration_candidates(
                 source,
                 theme_tokens,
                 keyframes,
+                syntax,
                 is_module,
             );
             for (candidate, properties) in nested_candidates {
@@ -247,6 +266,10 @@ fn collect_declaration_candidates(
         };
         if declaration.important.is_some() {
             warning = Some("unsupported-important");
+            continue;
+        }
+        if syntax != Syntax::Css && !declaration_is_plain_css(declaration, source) {
+            warning = Some("unsupported-declaration");
             continue;
         }
         let Some(property) = literal_ident(&declaration.name) else {

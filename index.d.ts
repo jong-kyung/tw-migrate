@@ -1,5 +1,5 @@
 export interface MigrateOptions {
-  cssFile?: string;
+  styleFile?: string;
   cwd?: string;
   write?: boolean;
   tailwindCss?: string;

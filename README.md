@@ -1,13 +1,13 @@
 # tw-migrate
 
-Preview and migrate static React/Next.js CSS references to Tailwind v4 utilities.
+Preview and migrate static React/Next.js stylesheet references to Tailwind v4 utilities.
 
 ```bash
 pnpm install
 pnpm build:debug
 node bin/tw-migrate.js                         # Preview the current package
 node bin/tw-migrate.js --write                 # Migrate the current package
-node bin/tw-migrate.js path/to/Button.module.css
+node bin/tw-migrate.js path/to/Button.module.scss
 node bin/tw-migrate.js --workspaces --write    # Migrate every package
 ```
 
@@ -15,6 +15,8 @@ The CLI previews changes by default. Pass `--tailwind-css path/to/globals.css` w
 
 ## Current support
 
+- `.css`, `.scss`, `.sass`, and `.less` stylesheets
+- CSS-compatible declarations in preprocessors; variables, functions, and other evaluated values are retained
 - `.js`, `.jsx`, `.ts`, and `.tsx` source files
 - direct CSS Module members and static template literals
 - global `className` and `id` literals

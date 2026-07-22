@@ -17,11 +17,42 @@ use crate::{
     utilities::{css_properties_conflict, tailwind_utilities_conflict, tailwind_variants_match},
 };
 
+#[derive(Clone, Copy, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum StylesheetSyntax {
+    #[default]
+    Css,
+    Scss,
+    Sass,
+    Less,
+}
+
+impl StylesheetSyntax {
+    fn parser_syntax(self) -> Syntax {
+        match self {
+            Self::Css => Syntax::Css,
+            Self::Scss => Syntax::Scss,
+            Self::Sass => Syntax::Sass,
+            Self::Less => Syntax::Less,
+        }
+    }
+}
+
+fn is_stylesheet_module(path: &str) -> bool {
+    ["css", "scss", "sass", "less"]
+        .iter()
+        .any(|extension| path.ends_with(&format!(".module.{extension}")))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PlanRequest {
     css_path: String,
     css_source: String,
+    #[serde(default)]
+    syntax: StylesheetSyntax,
+    #[serde(default)]
+    is_module: Option<bool>,
     #[serde(default)]
     css_module_id: Option<String>,
     #[serde(default)]
@@ -57,6 +88,10 @@ struct BatchPlanRequest {
 struct BatchStylesheet {
     css_path: String,
     css_source: String,
+    #[serde(default)]
+    syntax: StylesheetSyntax,
+    #[serde(default)]
+    is_module: Option<bool>,
     #[serde(default)]
     css_module_id: Option<String>,
     #[serde(default)]
@@ -182,7 +217,9 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
             let result = crate::js_rewrite::plan_batch_source_file(
                 file,
                 &stylesheet.css_path,
-                stylesheet.css_path.ends_with(".module.css"),
+                stylesheet
+                    .is_module
+                    .unwrap_or_else(|| is_stylesheet_module(&stylesheet.css_path)),
                 &candidate_maps.candidates,
                 &BTreeSet::new(),
             )?;
@@ -335,6 +372,8 @@ fn batch_stylesheet_request(
     PlanRequest {
         css_path: stylesheet.css_path.clone(),
         css_source: stylesheet.css_source.clone(),
+        syntax: stylesheet.syntax,
+        is_module: stylesheet.is_module,
         css_module_id: stylesheet.css_module_id.clone(),
         tailwind_path: batch.tailwind_path.clone(),
         tailwind_source: batch.tailwind_source.clone(),
@@ -349,12 +388,15 @@ fn batch_stylesheet_request(
 /// request flags, parse the stylesheet, and apply the utility prefix, so
 /// rule-selection behavior cannot silently diverge between the two paths.
 fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss), String> {
-    let is_module = request.css_path.ends_with(".module.css");
-    let can_move_at_rules = request
-        .tailwind_path
-        .as_ref()
-        .zip(request.tailwind_source.as_ref())
-        .is_some_and(|(path, _)| path != &request.css_path);
+    let is_module = request
+        .is_module
+        .unwrap_or_else(|| is_stylesheet_module(&request.css_path));
+    let can_move_at_rules = request.syntax == StylesheetSyntax::Css
+        && request
+            .tailwind_path
+            .as_ref()
+            .zip(request.tailwind_source.as_ref())
+            .is_some_and(|(path, _)| path != &request.css_path);
     let relative_urls_stable = request
         .tailwind_path
         .as_ref()
@@ -368,6 +410,7 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss), Strin
         keyframe_scope,
         &request.css_source,
         &request.theme_tokens,
+        request.syntax.parser_syntax(),
         is_module,
         can_move_at_rules,
         relative_urls_stable,
@@ -682,11 +725,11 @@ fn plan_request(
     if !css_edits.is_empty() {
         let source = apply_edits(&request.css_source, css_edits)?;
         let source = if is_module {
-            remove_empty_conditionals(source)?
+            remove_empty_conditionals(source, request.syntax.parser_syntax())?
         } else {
             source
         };
-        validate_css(&source)?;
+        validate_stylesheet(&source, request.syntax.parser_syntax())?;
         if is_module && source.trim().is_empty() {
             deleted_files.push(request.css_path.clone());
         } else {
@@ -746,10 +789,10 @@ fn apply_edits(source: &str, mut edits: Vec<Edit>) -> Result<String, String> {
     Ok(output)
 }
 
-fn remove_empty_conditionals(mut source: String) -> Result<String, String> {
+fn remove_empty_conditionals(mut source: String, syntax: Syntax) -> Result<String, String> {
     loop {
         let allocator = oxc_css_parser::Allocator::default();
-        let mut parser = CssParser::new(&allocator, &source, Syntax::Css);
+        let mut parser = CssParser::new(&allocator, &source, syntax);
         let stylesheet = parser
             .parse::<Stylesheet>()
             .map_err(|error| format!("Failed to parse edited CSS: {error:?}"))?;
@@ -783,11 +826,15 @@ fn collect_empty_conditionals(statements: &[Statement<'_>], edits: &mut Vec<Edit
 }
 
 fn validate_css(source: &str) -> Result<(), String> {
+    validate_stylesheet(source, Syntax::Css)
+}
+
+fn validate_stylesheet(source: &str, syntax: Syntax) -> Result<(), String> {
     let allocator = oxc_css_parser::Allocator::default();
-    CssParser::new(&allocator, source, Syntax::Css)
+    CssParser::new(&allocator, source, syntax)
         .parse::<Stylesheet>()
         .map(|_| ())
-        .map_err(|error| format!("Edited CSS no longer parses: {error:?}"))
+        .map_err(|error| format!("Edited stylesheet no longer parses: {error:?}"))
 }
 
 #[cfg(test)]
@@ -799,6 +846,58 @@ mod tests {
     use crate::css_plan::SelectorKey;
     use crate::js_rewrite::plan_batch_source_file;
     use crate::utilities::{css_properties_conflict, tailwind_utilities_conflict};
+
+    #[test]
+    fn parses_indented_sass_with_explicit_module_metadata() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.sass",
+            "cssSource": ".button\n  padding: 13px\n",
+            "syntax": "sass",
+            "isModule": true,
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.sass';\nexport const Button = () => <button className={styles.button} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["candidates"], serde_json::json!(["p-[13px]"]));
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(
+            response["deletedFiles"],
+            serde_json::json!(["/project/Button.module.sass"])
+        );
+    }
+
+    #[test]
+    fn retains_scss_values_that_require_semantic_evaluation() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.scss",
+            "cssSource": "$space: 13px;\n.button { padding: $space; }\n",
+            "syntax": "scss",
+            "isModule": true,
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.scss';\nexport const Button = () => <button className={styles.button} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["candidates"], serde_json::json!([]));
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 1);
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| { warning["code"] == "unsupported-declaration" })
+        );
+    }
 
     #[test]
     fn appends_a_global_class_and_retains_the_rule() {
@@ -1994,8 +2093,10 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|warning| warning["code"] == "unsupported-css-module-reference"
-                    && warning["file"] == "/project/generated.js")
+                .any(
+                    |warning| warning["code"] == "unsupported-css-module-reference"
+                        && warning["file"] == "/project/generated.js"
+                )
         );
     }
 

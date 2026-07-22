@@ -33,6 +33,91 @@ async function cleanup(cwd) {
   await rm(cwd, { recursive: true, force: true });
 }
 
+test('uses styleFile as the explicit stylesheet option', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(join(cwd, 'legacy.css'), '.card { color: red; }\n'),
+      writeFile(join(cwd, 'Card.tsx'), 'export const Card = () => <div className="card" />;\n'),
+    ]);
+
+    const report = await migrate({ cwd, styleFile: 'legacy.css' });
+    assert.deepEqual(report.changedFiles, ['Card.tsx']);
+    assert.deepEqual(report.candidates, ['text-[red]']);
+    await assert.rejects(
+      migrate({ cwd, cssFile: 'legacy.css' }),
+      /cssFile has been replaced by styleFile/,
+    );
+    await assert.rejects(
+      migrate({ cwd, styleFile: 'legacy.css', workspaces: true }),
+      /styleFile cannot be combined with workspaces/,
+    );
+    await assert.rejects(
+      migrate({ cwd, styleFile: 'legacy.pcss' }),
+      /Only \.css, \.scss, \.sass, and \.less files can be migrated/,
+    );
+    await assert.rejects(
+      migrate({ cwd, tailwindCss: 'globals.scss' }),
+      /Tailwind CSS entry must be a \.css file/,
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+for (const [extension, source] of [
+  ['scss', '.button { padding: 13px; }\n'],
+  ['sass', '.button\n  padding: 13px\n'],
+  ['less', '.button { padding: 13px; }\n'],
+]) {
+  test(`migrates direct CSS Module declarations in .${extension}`, async () => {
+    const cwd = await fixture();
+    const stylePath = `Button.module.${extension}`;
+    try {
+      await Promise.all([
+        rm(join(cwd, 'Button.module.css')),
+        writeFile(join(cwd, stylePath), source),
+        writeFile(
+          join(cwd, 'Button.tsx'),
+          `import styles from './${stylePath}';\nexport const Button = () => <button className={styles.button}>Save</button>;\n`,
+        ),
+      ]);
+
+      const report = await migrate({ cwd, styleFile: stylePath, write: true });
+      assert.deepEqual(report.candidates, ['p-[13px]']);
+      assert.equal(report.convertedRules, 1);
+      await assert.rejects(readFile(join(cwd, stylePath), 'utf8'), { code: 'ENOENT' });
+      assert.equal(
+        await readFile(join(cwd, 'Button.tsx'), 'utf8'),
+        'export const Button = () => <button className="p-[13px]">Save</button>;\n',
+      );
+    } finally {
+      await cleanup(cwd);
+    }
+  });
+}
+
+test('retains preprocessor declarations that require semantic evaluation', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      writeFile(join(cwd, 'Button.module.scss'), '$space: 13px;\n.button { padding: $space; }\n'),
+      writeFile(
+        join(cwd, 'Button.tsx'),
+        "import styles from './Button.module.scss';\nexport const Button = () => <button className={styles.button}>Save</button>;\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd, styleFile: 'Button.module.scss' });
+    assert.deepEqual(report.changedFiles, []);
+    assert.deepEqual(report.candidates, []);
+    assert.ok(report.warnings.some((warning) => warning.code === 'unsupported-declaration'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('updates global classes and ids while retaining global CSS', async () => {
   const cwd = await fixture();
   try {
@@ -40,7 +125,7 @@ test('updates global classes and ids while retaining global CSS', async () => {
       writeFile(join(cwd, 'legacy.css'), '.card { padding: 13px; }\n#hero { height: 100vh; }\n'),
       writeFile(join(cwd, 'Card.tsx'), 'export const Card = () => <main id="hero" className="card" />;\n'),
     ]);
-    const report = await migrate({ cwd, cssFile: 'legacy.css' });
+    const report = await migrate({ cwd, styleFile: 'legacy.css' });
     assert.deepEqual(report.changedFiles, ['Card.tsx']);
     assert.deepEqual(report.candidates, ['h-[100vh]', 'p-[13px]']);
     assert.equal(report.convertedRules, 0);
@@ -59,7 +144,7 @@ test('migrates a global selector whose class name recurs in a pseudo-class argum
       writeFile(join(cwd, 'legacy.css'), '.a:not(.abc) { padding: 13px; }\n'),
       writeFile(join(cwd, 'Card.tsx'), 'export const Card = () => <div className="a" />;\n'),
     ]);
-    const report = await migrate({ cwd, cssFile: 'legacy.css' });
+    const report = await migrate({ cwd, styleFile: 'legacy.css' });
     assert.deepEqual(report.candidates, ['[&:not(.abc)]:p-[13px]']);
     assert.match(report.diff, /className="a \[&:not\(\.abc\)\]:p-\[13px\]"/);
   } finally {
@@ -72,7 +157,7 @@ test('converts a bounded breakpoint range to stacked variants', async () => {
     css: '@media (min-width: 48rem) and (max-width: 63.999rem) { .button { padding: 13px; } }\n',
   });
   try {
-    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    const report = await migrate({ cwd, styleFile: 'Button.module.css' });
     assert.deepEqual(report.candidates, ['md:max-lg:p-[13px]']);
     assert.match(report.diff, /className="md:max-lg:p-\[13px\]"/);
   } finally {
@@ -86,7 +171,7 @@ test('preserves the Tailwind utility prefix before variants', async () => {
     tailwind: '@import "tailwindcss" prefix(tw);\n',
   });
   try {
-    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    const report = await migrate({ cwd, styleFile: 'Button.module.css' });
     assert.deepEqual(report.candidates, ['tw:md:p-[13px]']);
     assert.match(report.diff, /className="tw:md:p-\[13px\]"/);
   } finally {
@@ -99,7 +184,7 @@ test('converts nested media and supports rules to stacked variants', async () =>
     css: '@media (min-width: 48rem) { .button { padding: 1rem; } @supports (display: grid) { .button { display: grid; } } }\n',
   });
   try {
-    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    const report = await migrate({ cwd, styleFile: 'Button.module.css' });
     assert.deepEqual(report.candidates, ['md:p-4', 'md:supports-[display:grid]:grid']);
     assert.deepEqual(report.changedFiles, ['Button.module.css', 'Button.tsx']);
   } finally {
@@ -112,7 +197,7 @@ test('converts Tailwind conditional variants and moves global definitions', asyn
     css: '@property --progress { syntax: "<number>"; inherits: false; initial-value: 0; }\n@media (prefers-reduced-motion: reduce) { @starting-style { @container (min-width: 28rem) { .button { display: grid; } } } }\n@media (prefers-color-scheme: dark) { .button { color: white; } }\n',
   });
   try {
-    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    const report = await migrate({ cwd, styleFile: 'Button.module.css' });
     assert.deepEqual(report.candidates, [
       'dark:text-[white]',
       'motion-reduce:starting:@md:grid',
@@ -129,7 +214,7 @@ test('converts conditions nested inside style rules', async () => {
     css: '.button { opacity: 1; @starting-style { opacity: 0; } @media (prefers-reduced-motion: reduce) { display: none; } }\n',
   });
   try {
-    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    const report = await migrate({ cwd, styleFile: 'Button.module.css' });
     assert.deepEqual(report.candidates, [
       '[opacity:1]',
       'motion-reduce:hidden',
@@ -146,7 +231,7 @@ test('converts compound media and named container queries to arbitrary variants'
     css: '@media screen and (min-width: 40rem) and (orientation: landscape) { .button { display: grid; } }\n@container card_grid (min-width: 20rem) and (max-width: 40rem) { .button { color: red; } }\n',
   });
   try {
-    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    const report = await migrate({ cwd, styleFile: 'Button.module.css' });
     assert.deepEqual(report.candidates, [
       '[@container_card\\_grid_(min-width:20rem)_and_(max-width:40rem)]:text-[red]',
       '[@media_screen_and_(min-width:40rem)_and_(orientation:landscape)]:grid',
@@ -162,7 +247,7 @@ test('warns when a generated utility conflicts with a static template class', as
     tsx: "import styles from './Button.module.css';\nexport const Button = () => <button className={`${styles.button} p-2`}>Save</button>;\n",
   });
   try {
-    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    const report = await migrate({ cwd, styleFile: 'Button.module.css' });
     assert.equal(report.warnings[0].code, 'existing-tailwind-conflict');
     assert.match(report.diff, /className="p-\[13px\] p-2"/);
   } finally {
@@ -175,7 +260,7 @@ test('accepts candidates already emitted by the Tailwind entry', async () => {
     tailwind: '@import "tailwindcss";\n@source inline("p-[13px]");\n',
   });
   try {
-    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    const report = await migrate({ cwd, styleFile: 'Button.module.css' });
     assert.deepEqual(report.candidates, ['p-[13px]']);
     assert.equal(report.convertedRules, 1);
   } finally {
@@ -195,7 +280,7 @@ test('loads Tailwind config and plugin modules', async () => {
         'module.exports = function ({ addUtilities }) { addUtilities({ ".plugin-test": { display: "block" } }); };\n',
       ),
     ]);
-    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    const report = await migrate({ cwd, styleFile: 'Button.module.css' });
     assert.deepEqual(report.candidates, ['p-[13px]']);
   } finally {
     await cleanup(cwd);
@@ -207,13 +292,13 @@ test('moves local keyframes to Tailwind before deleting a CSS Module', async () 
     css: '@keyframes fade { from { opacity: 0; } to { opacity: 1; } }\n.button { animation: fade 1s; }\n',
   });
   try {
-    const preview = await migrate({ cwd, cssFile: 'Button.module.css' });
+    const preview = await migrate({ cwd, styleFile: 'Button.module.css' });
     const match = /^\[animation:(tw-migrate-[a-f0-9]+-fade)_1s\]$/.exec(preview.candidates[0]);
     assert.ok(match);
     assert.deepEqual(preview.changedFiles, ['Button.module.css', 'Button.tsx', 'globals.css']);
     assert.match(preview.diff, new RegExp(`@keyframes ${match[1]}`));
 
-    await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    await migrate({ cwd, styleFile: 'Button.module.css', write: true });
     await assert.rejects(readFile(join(cwd, 'Button.module.css'), 'utf8'), { code: 'ENOENT' });
     assert.match(await readFile(join(cwd, 'Button.tsx'), 'utf8'), new RegExp(match[1]));
     assert.match(await readFile(join(cwd, 'globals.css'), 'utf8'), new RegExp(`@keyframes ${match[1]}`));
@@ -227,7 +312,7 @@ test('escapes literal underscores in arbitrary values', async () => {
     css: '.button { --font-key: Open_Sans; }\n',
   });
   try {
-    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    const report = await migrate({ cwd, styleFile: 'Button.module.css' });
     assert.deepEqual(report.candidates, ['[--font-key:Open\\_Sans]']);
     assert.ok(report.diff.includes('Open\\\\_Sans'));
 
@@ -245,7 +330,7 @@ test('preserves functional values in spacing shorthands', async () => {
     css: '.button { margin: calc(100% - 1rem); padding: var(--space, 1rem); }\n',
   });
   try {
-    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    const report = await migrate({ cwd, styleFile: 'Button.module.css' });
     assert.deepEqual(report.candidates, [
       'm-[calc(100%_-_1rem)]',
       'p-[var(--space,_1rem)]',
@@ -261,7 +346,7 @@ test('uses an exact project theme token before arbitrary fallback', async () => 
     tailwind: '@import "tailwindcss";\n@theme { --spacing-card: 13px; }\n',
   });
   try {
-    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    const report = await migrate({ cwd, styleFile: 'Button.module.css' });
     assert.deepEqual(report.candidates, ['p-card']);
     assert.match(report.diff, /className="p-card"/);
   } finally {
@@ -283,7 +368,7 @@ test('scans mjs and mts references before deleting a CSS Module', async () => {
       ),
     ]);
 
-    const report = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    const report = await migrate({ cwd, styleFile: 'Button.module.css', write: true });
     assert.equal(report.convertedRules, 0);
     assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
     assert.match(await readFile(join(cwd, 'helper.mjs'), 'utf8'), /Button\.module\.css/);
@@ -301,7 +386,7 @@ test('retains a CSS Module composed by another stylesheet', async () => {
       ".fancyButton {\n  composes: button from './Button.module.css';\n  border: 1px solid;\n}\n",
     );
 
-    const report = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    const report = await migrate({ cwd, styleFile: 'Button.module.css', write: true });
     assert.equal(report.convertedRules, 0);
     assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
     assert.ok(report.warnings.some((warning) => warning.code === 'unsupported-css-module-reference'));
@@ -315,7 +400,7 @@ test('retains a CSS Module imported via url() by another stylesheet', async () =
   try {
     await writeFile(join(cwd, 'legacy.css'), '@import url(./Button.module.css);\n.page { color: red; }\n');
 
-    const report = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    const report = await migrate({ cwd, styleFile: 'Button.module.css', write: true });
     assert.equal(report.convertedRules, 0);
     assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
     assert.ok(report.warnings.some((warning) => warning.code === 'unsupported-css-module-reference'));
@@ -332,7 +417,7 @@ test('ignores commented Tailwind imports when detecting the entry', async () => 
       '/* setup example: @import "tailwindcss"; */\n.note { color: red; }\n',
     );
 
-    const report = await migrate({ cwd, cssFile: 'Button.module.css' });
+    const report = await migrate({ cwd, styleFile: 'Button.module.css' });
     assert.deepEqual(report.candidates, ['p-[13px]']);
   } finally {
     await cleanup(cwd);
@@ -353,7 +438,7 @@ test('scans cjs and cts references before deleting a CSS Module', async () => {
       ),
     ]);
 
-    const report = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    const report = await migrate({ cwd, styleFile: 'Button.module.css', write: true });
     assert.equal(report.convertedRules, 0);
     assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
     assert.match(await readFile(join(cwd, 'helper.cjs'), 'utf8'), /Button\.module\.css/);
@@ -372,7 +457,7 @@ test(
       const sourcePath = join(cwd, 'Button.tsx');
       await chmod(sourcePath, 0o751);
 
-      await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+      await migrate({ cwd, styleFile: 'Button.module.css', write: true });
 
       assert.equal((await stat(sourcePath)).mode & 0o777, 0o751);
     } finally {
@@ -388,10 +473,10 @@ test('a second run after applying a global migration is a no-op', async () => {
       writeFile(join(cwd, 'legacy.css'), '.card { padding: 13px; }\n#hero { height: 100vh; }\n'),
       writeFile(join(cwd, 'Card.tsx'), 'export const Card = () => <main id="hero" className="card" />;\n'),
     ]);
-    const first = await migrate({ cwd, cssFile: 'legacy.css', write: true });
+    const first = await migrate({ cwd, styleFile: 'legacy.css', write: true });
     assert.deepEqual(first.changedFiles, ['Card.tsx']);
 
-    const second = await migrate({ cwd, cssFile: 'legacy.css' });
+    const second = await migrate({ cwd, styleFile: 'legacy.css' });
     assert.deepEqual(second.changedFiles, []);
     assert.equal(second.diff, '');
   } finally {
@@ -404,10 +489,10 @@ test('a second run after a partial module migration is a no-op', async () => {
     css: '.button { padding: 13px; }\n.other { display: grid; }\n',
   });
   try {
-    const first = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    const first = await migrate({ cwd, styleFile: 'Button.module.css', write: true });
     assert.deepEqual(first.changedFiles, ['Button.module.css', 'Button.tsx']);
 
-    const second = await migrate({ cwd, cssFile: 'Button.module.css' });
+    const second = await migrate({ cwd, styleFile: 'Button.module.css' });
     assert.deepEqual(second.changedFiles, []);
     assert.equal(second.diff, '');
     assert.match(await readFile(join(cwd, 'Button.module.css'), 'utf8'), /\.other/);
@@ -420,7 +505,7 @@ test('fails fast when leftover files from an interrupted run exist', async () =>
   const cwd = await fixture();
   try {
     await writeFile(join(cwd, '.Button.tsx.tw-migrate-backup-123-0'), 'old content');
-    await assert.rejects(migrate({ cwd, cssFile: 'Button.module.css' }), /interrupted run/);
+    await assert.rejects(migrate({ cwd, styleFile: 'Button.module.css' }), /interrupted run/);
   } finally {
     await cleanup(cwd);
   }
@@ -444,7 +529,7 @@ test(
       // then deleting Button.module.css (backup rename in the root) fails.
       await chmod(cwd, 0o555);
       try {
-        await assert.rejects(migrate({ cwd, cssFile: 'Button.module.css', write: true }));
+        await assert.rejects(migrate({ cwd, styleFile: 'Button.module.css', write: true }));
       } finally {
         await chmod(cwd, 0o755);
       }
@@ -464,7 +549,7 @@ test(
 test('previews and applies a complete CSS Module migration', async () => {
   const cwd = await fixture();
   try {
-    const preview = await migrate({ cwd, cssFile: 'Button.module.css' });
+    const preview = await migrate({ cwd, styleFile: 'Button.module.css' });
     assert.deepEqual(preview.changedFiles, ['Button.module.css', 'Button.tsx']);
     assert.deepEqual(preview.candidates, ['p-[13px]']);
     assert.equal(preview.convertedRules, 1);
@@ -473,7 +558,7 @@ test('previews and applies a complete CSS Module migration', async () => {
     assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
     assert.equal(await readFile(join(cwd, 'Button.tsx'), 'utf8'), initialTsx);
 
-    const applied = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    const applied = await migrate({ cwd, styleFile: 'Button.module.css', write: true });
     assert.deepEqual(applied.changedFiles, preview.changedFiles);
     await assert.rejects(readFile(join(cwd, 'Button.module.css'), 'utf8'), { code: 'ENOENT' });
     assert.equal(
@@ -485,11 +570,17 @@ test('previews and applies a complete CSS Module migration', async () => {
   }
 });
 
-test('auto-discovers every CSS target in the current package', async () => {
+test('auto-discovers supported stylesheet targets in the current package', async () => {
   const cwd = await fixture();
   try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      writeFile(join(cwd, 'Button.module.scss'), initialCss),
+      writeFile(join(cwd, 'Button.tsx'), initialTsx.replace('.module.css', '.module.scss')),
+    ]);
+
     const report = await migrate({ cwd });
-    assert.deepEqual(report.changedFiles, ['Button.module.css', 'Button.tsx']);
+    assert.deepEqual(report.changedFiles, ['Button.module.scss', 'Button.tsx']);
     assert.deepEqual(report.failures, []);
     assert.deepEqual(report.candidates, ['p-[13px]']);
   } finally {
@@ -537,7 +628,7 @@ test('explicit CSS paths bypass Git ignore filtering', async () => {
 
     const automatic = await migrate({ cwd });
     assert.ok(!automatic.changedFiles.includes('Ignored.module.css'));
-    const explicit = await migrate({ cwd, cssFile: 'Ignored.module.css' });
+    const explicit = await migrate({ cwd, styleFile: 'Ignored.module.css' });
     assert.deepEqual(explicit.candidates, ['grid']);
     assert.ok(explicit.changedFiles.includes('Ignored.module.css'));
   } finally {
@@ -619,7 +710,7 @@ test('rejects positional CSS owned by a nested package', async () => {
     ]);
 
     await assert.rejects(
-      migrate({ cwd, cssFile: 'nested/Nested.module.css' }),
+      migrate({ cwd, styleFile: 'nested/Nested.module.css' }),
       /must belong to the current package/,
     );
   } finally {
