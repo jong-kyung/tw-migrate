@@ -2,11 +2,11 @@
 
 import { migrate } from '../index.js';
 
-const usage = 'Usage: tw-migrate [css-file] [--tailwind-css <entry.css>] [--workspaces] [--force] [--write]';
+const usage = 'Usage: tw-migrate [style-file] [--tailwind-css <entry.css>] [--workspaces] [--force] [--write]';
 
 async function main() {
   const args = process.argv.slice(2);
-  let cssFile;
+  let styleFile;
   let tailwindCss;
   let write = false;
   let force = false;
@@ -25,11 +25,11 @@ async function main() {
       return;
     } else if (argument.startsWith('-')) {
       throw new Error(`Unknown option: ${argument}`);
-    } else if (!cssFile) cssFile = argument;
+    } else if (!styleFile) styleFile = argument;
     else throw new Error(`Unexpected argument: ${argument}`);
   }
 
-  const report = await migrate({ cssFile, tailwindCss, write, force, workspaces });
+  const report = await migrate({ styleFile, tailwindCss, write, force, workspaces });
   if (report.diff) process.stdout.write(report.diff);
   for (const warning of report.warnings) {
     console.warn(`warning[${warning.code}] ${warning.file}:${warning.start}-${warning.end} ${warning.message}`);

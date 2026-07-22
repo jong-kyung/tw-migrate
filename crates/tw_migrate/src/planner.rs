@@ -12,16 +12,54 @@ use serde::{Deserialize, Serialize};
 use crate::{
     animations::append_keyframes,
     at_rules::{append_global_at_rules, is_conditional},
-    css_plan::{ParsedCss, RulePlan, SelectorKey, parse_css_rules},
-    js_rewrite::{plan_source_file, validate_js},
+    css_plan::{ParseOptions, ParsedCss, RulePlan, SelectorKey, parse_css_rules},
+    html_rewrite::plan_html_file,
+    js_rewrite::{SourcePlan, plan_batch_source_file, plan_source_file, validate_js},
     utilities::{css_properties_conflict, tailwind_utilities_conflict, tailwind_variants_match},
 };
+
+#[derive(Clone, Copy, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum StylesheetSyntax {
+    #[default]
+    Css,
+    Scss,
+    Sass,
+    Less,
+}
+
+impl StylesheetSyntax {
+    fn parser_syntax(self) -> Syntax {
+        match self {
+            Self::Css => Syntax::Css,
+            Self::Scss => Syntax::Scss,
+            Self::Sass => Syntax::Sass,
+            Self::Less => Syntax::Less,
+        }
+    }
+}
+
+fn is_stylesheet_module(path: &str) -> bool {
+    ["css", "scss", "sass", "less"]
+        .iter()
+        .any(|extension| path.ends_with(&format!(".module.{extension}")))
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PlanRequest {
     css_path: String,
     css_source: String,
+    #[serde(default)]
+    analysis_source: Option<String>,
+    #[serde(default)]
+    source_mappings: Vec<SourceMapping>,
+    #[serde(default)]
+    syntax: StylesheetSyntax,
+    #[serde(default)]
+    is_module: Option<bool>,
+    #[serde(default)]
+    is_partial: bool,
     #[serde(default)]
     css_module_id: Option<String>,
     #[serde(default)]
@@ -58,9 +96,59 @@ struct BatchStylesheet {
     css_path: String,
     css_source: String,
     #[serde(default)]
+    analysis_source: Option<String>,
+    #[serde(default)]
+    source_mappings: Vec<SourceMapping>,
+    #[serde(default)]
+    syntax: StylesheetSyntax,
+    #[serde(default)]
+    is_module: Option<bool>,
+    #[serde(default)]
+    is_partial: bool,
+    #[serde(default)]
     css_module_id: Option<String>,
     #[serde(default)]
     css_dependents: Vec<String>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SourceMapping {
+    generated_line: usize,
+    generated_column: usize,
+    source_path: String,
+    original_line: usize,
+    original_column: usize,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HtmlAttribute {
+    pub(crate) value: String,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    #[serde(default)]
+    pub(crate) synthetic: bool,
+    #[serde(default = "default_writable")]
+    pub(crate) writable: bool,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HtmlElement {
+    pub(crate) class_attribute: Option<HtmlAttribute>,
+    pub(crate) id_attribute: Option<HtmlAttribute>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HtmlStylesheet {
+    pub(crate) css_path: String,
+    pub(crate) variants: Vec<String>,
+    #[serde(default)]
+    pub(crate) direct: bool,
+    #[serde(default = "default_writable")]
+    pub(crate) analyzable: bool,
 }
 
 fn default_writable() -> bool {
@@ -73,6 +161,14 @@ pub(crate) struct SourceFile {
     pub(crate) source: String,
     #[serde(default = "default_writable")]
     pub(crate) writable: bool,
+    #[serde(default, rename = "htmlElements")]
+    pub(crate) html_elements: Vec<HtmlElement>,
+    #[serde(default, rename = "htmlStylesheets")]
+    pub(crate) html_stylesheets: Vec<HtmlStylesheet>,
+    #[serde(default = "default_writable", rename = "htmlReferencesSafe")]
+    pub(crate) html_references_safe: bool,
+    #[serde(default, rename = "htmlScriptText")]
+    pub(crate) html_script_text: String,
 }
 
 #[derive(Serialize)]
@@ -80,6 +176,7 @@ pub(crate) struct SourceFile {
 struct PlanResponse {
     files: Vec<PlannedFile>,
     deleted_files: Vec<String>,
+    unlinked_files: Vec<String>,
     candidates: Vec<String>,
     converted_rules: usize,
     retained_rules: usize,
@@ -161,6 +258,34 @@ struct BatchMatch {
     properties: BTreeSet<String>,
 }
 
+fn plan_consumer_file(
+    file: &SourceFile,
+    css_path: &str,
+    is_module: bool,
+    candidates: &HashMap<SelectorKey, Vec<String>>,
+    preserved_module_classes: &BTreeSet<String>,
+    utility_prefix: Option<&str>,
+    batch_mode: bool,
+) -> Result<SourcePlan, String> {
+    if Path::new(&file.path)
+        .extension()
+        .is_some_and(|extension| extension == "html")
+    {
+        return Ok(plan_html_file(file, css_path, candidates, utility_prefix));
+    }
+    if batch_mode {
+        plan_batch_source_file(
+            file,
+            css_path,
+            is_module,
+            candidates,
+            preserved_module_classes,
+        )
+    } else {
+        plan_source_file(file, css_path, is_module, candidates)
+    }
+}
+
 pub(crate) fn is_recoverable_input_error(error: &str) -> bool {
     (!error.starts_with("Failed to parse edited CSS") && error.starts_with("Failed to parse "))
         || error.starts_with("Failed to analyze ")
@@ -179,17 +304,21 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
         let plan_request = batch_stylesheet_request(&request, stylesheet, Vec::new());
         let candidate_maps = candidate_map_for_request(&plan_request)?;
         for file in request.files.iter().filter(|file| file.writable) {
-            let result = crate::js_rewrite::plan_batch_source_file(
+            let result = plan_consumer_file(
                 file,
                 &stylesheet.css_path,
-                stylesheet.css_path.ends_with(".module.css"),
+                stylesheet
+                    .is_module
+                    .unwrap_or_else(|| is_stylesheet_module(&stylesheet.css_path)),
                 &candidate_maps.candidates,
                 &BTreeSet::new(),
+                request.utility_prefix.as_deref(),
+                true,
             )?;
             for matched in result.matches {
                 if let Some(origins) = candidate_maps
                     .origins
-                    .get(&(matched.key, matched.candidate.clone()))
+                    .get(&(matched.key, matched.origin_candidate.clone()))
                 {
                     match_groups
                         .entry((file.path.clone(), matched.start, matched.end))
@@ -252,6 +381,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
     }
     let mut current = originals.clone();
     let mut deleted = HashSet::new();
+    let mut unlinked = HashSet::new();
     let mut candidates = BTreeSet::new();
     let mut converted_rules = 0;
     let mut retained_rules = 0;
@@ -291,6 +421,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
             current.remove(&path);
             deleted.insert(path);
         }
+        unlinked.extend(response.unlinked_files);
         candidates.extend(response.candidates);
         converted_rules += response.converted_rules;
         retained_rules += response.retained_rules;
@@ -306,6 +437,8 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
     files.sort_by(|left, right| left.path.cmp(&right.path));
     let mut deleted_files = deleted.into_iter().collect::<Vec<_>>();
     deleted_files.sort();
+    let mut unlinked_files = unlinked.into_iter().collect::<Vec<_>>();
+    unlinked_files.sort();
     warnings.sort_by(|left, right| {
         (&left.file, left.start, left.end, left.code).cmp(&(
             &right.file,
@@ -318,6 +451,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
     serde_json::to_string(&PlanResponse {
         files,
         deleted_files,
+        unlinked_files,
         candidates: candidates.into_iter().collect(),
         converted_rules,
         retained_rules,
@@ -335,6 +469,11 @@ fn batch_stylesheet_request(
     PlanRequest {
         css_path: stylesheet.css_path.clone(),
         css_source: stylesheet.css_source.clone(),
+        analysis_source: stylesheet.analysis_source.clone(),
+        source_mappings: stylesheet.source_mappings.clone(),
+        syntax: stylesheet.syntax,
+        is_module: stylesheet.is_module,
+        is_partial: stylesheet.is_partial,
         css_module_id: stylesheet.css_module_id.clone(),
         tailwind_path: batch.tailwind_path.clone(),
         tailwind_source: batch.tailwind_source.clone(),
@@ -349,12 +488,15 @@ fn batch_stylesheet_request(
 /// request flags, parse the stylesheet, and apply the utility prefix, so
 /// rule-selection behavior cannot silently diverge between the two paths.
 fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss), String> {
-    let is_module = request.css_path.ends_with(".module.css");
-    let can_move_at_rules = request
-        .tailwind_path
-        .as_ref()
-        .zip(request.tailwind_source.as_ref())
-        .is_some_and(|(path, _)| path != &request.css_path);
+    let is_module = request
+        .is_module
+        .unwrap_or_else(|| is_stylesheet_module(&request.css_path));
+    let can_move_at_rules = request.syntax == StylesheetSyntax::Css
+        && request
+            .tailwind_path
+            .as_ref()
+            .zip(request.tailwind_source.as_ref())
+            .is_some_and(|(path, _)| path != &request.css_path);
     let relative_urls_stable = request
         .tailwind_path
         .as_ref()
@@ -363,15 +505,46 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss), Strin
         .css_module_id
         .as_deref()
         .unwrap_or(&request.css_path);
+    let analysis_source = request
+        .analysis_source
+        .as_deref()
+        .unwrap_or(&request.css_source);
+    let analysis_syntax = if request.analysis_source.is_some() {
+        Syntax::Css
+    } else {
+        request.syntax.parser_syntax()
+    };
     let mut parsed = parse_css_rules(
         &request.css_path,
         keyframe_scope,
-        &request.css_source,
+        analysis_source,
         &request.theme_tokens,
-        is_module,
-        can_move_at_rules,
-        relative_urls_stable,
+        ParseOptions {
+            syntax: analysis_syntax,
+            is_module,
+            can_move_at_rules,
+            relative_urls_stable,
+        },
     )?;
+    if request.analysis_source.is_some() {
+        map_authored_rule_spans(request, analysis_source, &mut parsed.rules)?;
+        if is_module {
+            for rule in &mut parsed.rules {
+                if rule.warning.is_none() && rule.authored_span.is_none() {
+                    rule.warning = Some("unproven-source-map");
+                }
+            }
+        }
+    } else {
+        for rule in &mut parsed.rules {
+            rule.authored_span = Some(rule.span.clone());
+        }
+    }
+    if request.is_partial {
+        for rule in &mut parsed.rules {
+            rule.warning = Some("shared-preprocessor-source");
+        }
+    }
     if let Some(prefix) = request
         .utility_prefix
         .as_deref()
@@ -380,6 +553,194 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss), Strin
         prefix_rule_candidates(&mut parsed.rules, prefix);
     }
     Ok((is_module, parsed))
+}
+
+fn map_authored_rule_spans(
+    request: &PlanRequest,
+    analysis_source: &str,
+    rules: &mut [RulePlan],
+) -> Result<(), String> {
+    let allocator = oxc_css_parser::Allocator::default();
+    let mut parser = CssParser::new(
+        &allocator,
+        &request.css_source,
+        request.syntax.parser_syntax(),
+    );
+    let stylesheet = parser
+        .parse::<Stylesheet>()
+        .map_err(|error| format!("Failed to parse {}: {error:?}", request.css_path))?;
+    let mut authored_rules = Vec::new();
+    collect_qualified_rule_spans(&stylesheet.statements, &mut authored_rules);
+    let mappings = request
+        .source_mappings
+        .iter()
+        .map(|mapping| ((mapping.generated_line, mapping.generated_column), mapping))
+        .collect::<HashMap<_, _>>();
+
+    for rule in rules.iter_mut() {
+        let mut original_offsets = Vec::new();
+        for generated_offset in &rule.provenance_offsets {
+            let Some(position) = offset_to_line_column(analysis_source, *generated_offset) else {
+                original_offsets.clear();
+                break;
+            };
+            let Some(mapping) = mappings.get(&position) else {
+                original_offsets.clear();
+                break;
+            };
+            if mapping.source_path != request.css_path {
+                original_offsets.clear();
+                break;
+            }
+            let Some(offset) = line_column_to_offset(
+                &request.css_source,
+                mapping.original_line,
+                mapping.original_column,
+            ) else {
+                original_offsets.clear();
+                break;
+            };
+            original_offsets.push(offset);
+        }
+        if original_offsets.is_empty() {
+            continue;
+        }
+        rule.authored_span = authored_rules
+            .iter()
+            .filter(|(span, _)| {
+                original_offsets
+                    .iter()
+                    .all(|offset| span.start <= *offset && *offset < span.end)
+            })
+            .min_by_key(|(span, _)| span.end - span.start)
+            .map(|(span, _)| span.clone());
+    }
+
+    let mut shared_spans: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
+    for (index, rule) in rules.iter().enumerate() {
+        if let Some(span) = &rule.authored_span {
+            shared_spans
+                .entry((span.start, span.end))
+                .or_default()
+                .push(index);
+        }
+    }
+    let mut ambiguous = BTreeSet::new();
+    for indices in shared_spans.values().filter(|indices| indices.len() > 1) {
+        ambiguous.extend(indices.iter().copied());
+    }
+    for left in 0..rules.len() {
+        let Some(left_span) = &rules[left].authored_span else {
+            continue;
+        };
+        for (right, right_rule) in rules.iter().enumerate().skip(left + 1) {
+            let Some(right_span) = &right_rule.authored_span else {
+                continue;
+            };
+            if left_span.start < right_span.end && right_span.start < left_span.end {
+                ambiguous.extend([left, right]);
+            }
+        }
+    }
+    for index in ambiguous {
+        rules[index].authored_span = None;
+    }
+    let interpolation = match request.syntax {
+        StylesheetSyntax::Scss | StylesheetSyntax::Sass => Some("#{"),
+        StylesheetSyntax::Less => Some("@{"),
+        StylesheetSyntax::Css => None,
+    };
+    if let Some(interpolation) = interpolation {
+        for rule in rules {
+            let interpolated = rule.authored_span.as_ref().is_some_and(|authored_span| {
+                authored_rules.iter().any(|(span, selector_span)| {
+                    span == authored_span
+                        && request.css_source[selector_span.clone()].contains(interpolation)
+                })
+            });
+            if interpolated {
+                rule.authored_span = None;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn collect_qualified_rule_spans(
+    statements: &[Statement<'_>],
+    spans: &mut Vec<(std::ops::Range<usize>, std::ops::Range<usize>)>,
+) {
+    for statement in statements {
+        match statement {
+            Statement::QualifiedRule(rule) => {
+                spans.push((
+                    rule.span.start..rule.span.end,
+                    rule.selector.span.start..rule.selector.span.end,
+                ));
+                collect_qualified_rule_spans(&rule.block.statements, spans);
+            }
+            Statement::AtRule(at_rule) => {
+                if let Some(block) = &at_rule.block {
+                    collect_qualified_rule_spans(&block.statements, spans);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn offset_to_line_column(source: &str, offset: usize) -> Option<(usize, usize)> {
+    if offset > source.len() || !source.is_char_boundary(offset) {
+        return None;
+    }
+    let mut line = 0;
+    let mut column = 0;
+    for character in source[..offset].chars() {
+        if character == '\n' {
+            line += 1;
+            column = 0;
+        } else {
+            column += character.len_utf16();
+        }
+    }
+    Some((line, column))
+}
+
+fn line_column_to_offset(source: &str, target_line: usize, target_column: usize) -> Option<usize> {
+    let mut line = 0;
+    let mut column = 0;
+    for (offset, character) in source.char_indices() {
+        if line == target_line && column == target_column {
+            return Some(offset);
+        }
+        if character == '\n' {
+            line += 1;
+            column = 0;
+        } else {
+            column += character.len_utf16();
+            if line == target_line && column > target_column {
+                return None;
+            }
+        }
+    }
+    (line == target_line && column == target_column).then_some(source.len())
+}
+
+fn mentions_word(text: &str, word: &str) -> bool {
+    if word.is_empty() {
+        return false;
+    }
+    let bytes = text.as_bytes();
+    text.match_indices(word).any(|(start, _)| {
+        let end = start + word.len();
+        let before_ok = start == 0 || !is_ident_byte(bytes[start - 1]);
+        let after_ok = end >= bytes.len() || !is_ident_byte(bytes[end]);
+        before_ok && after_ok
+    })
+}
+
+fn is_ident_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-'
 }
 
 fn dedup_candidate_map(candidate_map: &mut HashMap<SelectorKey, Vec<String>>) {
@@ -508,22 +869,57 @@ fn plan_request(
     }
 
     for file in &request.files {
-        let mut result = if batch_mode {
-            crate::js_rewrite::plan_batch_source_file(
-                file,
-                &request.css_path,
-                is_module,
-                &candidate_map,
-                &preserved_module_classes,
-            )?
-        } else {
-            plan_source_file(file, &request.css_path, is_module, &candidate_map)?
-        };
+        let mut result = plan_consumer_file(
+            file,
+            &request.css_path,
+            is_module,
+            &candidate_map,
+            &preserved_module_classes,
+            request.utility_prefix.as_deref(),
+            batch_mode,
+        )?;
 
         module_references_safe &= result.module_references_safe;
+        let direct_html_link = file
+            .html_stylesheets
+            .iter()
+            .any(|context| context.direct && context.css_path == request.css_path);
+        let unsafe_html_link = file.html_stylesheets.iter().any(|context| {
+            context.direct && !context.analyzable && context.css_path == request.css_path
+        });
+        if is_module && (unsafe_html_link || (direct_html_link && !file.html_references_safe)) {
+            module_references_safe = false;
+        }
+        // Inline scripts are never analyzed, so a script that names one of the
+        // module's classes may create consumers at runtime; retain the module.
+        let any_html_context = file
+            .html_stylesheets
+            .iter()
+            .any(|context| context.css_path == request.css_path);
+        if is_module
+            && any_html_context
+            && !file.html_script_text.is_empty()
+            && rules.iter().any(|rule| {
+                rule.related_classes
+                    .iter()
+                    .any(|class| mentions_word(&file.html_script_text, class))
+            })
+        {
+            module_references_safe = false;
+            warnings.push(Warning {
+                code: "unproven-script-reference",
+                file: file.path.clone(),
+                start: 0,
+                end: 0,
+                message: "An inline script names a CSS Module class, so the module is retained."
+                    .to_string(),
+            });
+        }
         if !file.writable {
             if is_module
-                && (!result.module_refs.is_empty() || !result.removable_import_edits.is_empty())
+                && (direct_html_link
+                    || !result.module_refs.is_empty()
+                    || !result.removable_import_edits.is_empty())
             {
                 module_references_safe = false;
                 warnings.push(Warning {
@@ -572,9 +968,13 @@ fn plan_request(
 
         if can_remove {
             converted_rules += 1;
+            let authored_span = rule
+                .authored_span
+                .clone()
+                .expect("removable rules must have proven authored spans");
             css_edits.push(Edit {
-                start: rule.span.start,
-                end: rule.span.end,
+                start: authored_span.start,
+                end: authored_span.end,
                 replacement: String::new(),
             });
             rule_reports.push(RuleReport {
@@ -599,8 +999,20 @@ fn plan_request(
                 (
                     "batch-stylesheet-conflict",
                     format!(
-                        "Generated utilities {conflicts} conflict on the same JSX element, so the contributing rule is retained."
+                        "Generated utilities {conflicts} conflict on the same source element, so the contributing rule is retained."
                     ),
+                )
+            } else if rule.warning == Some("unproven-source-map") {
+                (
+                    "unproven-source-map",
+                    "The generated rule does not map uniquely to one authored source rule, so it is retained."
+                        .to_string(),
+                )
+            } else if rule.warning == Some("shared-preprocessor-source") {
+                (
+                    "shared-preprocessor-source",
+                    "A Sass partial must be analyzed through every consuming entry, so it is retained."
+                        .to_string(),
                 )
             } else if let Some(code) = rule.warning {
                 (
@@ -618,11 +1030,18 @@ fn plan_request(
                     "No exclusively supported className references were found.".to_string(),
                 )
             };
+            let warning_span = rule.authored_span.as_ref().unwrap_or(&rule.span);
+            let (start, end) = if request.analysis_source.is_some() && rule.authored_span.is_none()
+            {
+                (0, 0)
+            } else {
+                (warning_span.start, warning_span.end)
+            };
             warnings.push(Warning {
                 code,
                 file: request.css_path.clone(),
-                start: rule.span.start,
-                end: rule.span.end,
+                start,
+                end,
                 message,
             });
             rule_reports.push(RuleReport {
@@ -678,15 +1097,16 @@ fn plan_request(
         }
     }
 
+    let stylesheet_changed = !css_edits.is_empty();
     let mut deleted_files = Vec::new();
-    if !css_edits.is_empty() {
+    if stylesheet_changed {
         let source = apply_edits(&request.css_source, css_edits)?;
         let source = if is_module {
-            remove_empty_conditionals(source)?
+            remove_empty_conditionals(source, request.syntax.parser_syntax())?
         } else {
             source
         };
-        validate_css(&source)?;
+        validate_stylesheet(&source, request.syntax.parser_syntax())?;
         if is_module && source.trim().is_empty() {
             deleted_files.push(request.css_path.clone());
         } else {
@@ -698,13 +1118,20 @@ fn plan_request(
     }
 
     let css_module_deleted = deleted_files.contains(&request.css_path);
+    let module_import_is_unused =
+        is_module && module_references_safe && all_module_refs_migrated && retained_rules == 0;
     for (file, mut result) in source_plans {
-        if css_module_deleted {
+        if css_module_deleted || module_import_is_unused {
             result.edits.append(&mut result.removable_import_edits);
         }
         if !result.edits.is_empty() {
             let source = apply_edits(&file.source, result.edits)?;
-            validate_js(&file.path, &source)?;
+            if Path::new(&file.path)
+                .extension()
+                .is_none_or(|extension| extension != "html")
+            {
+                validate_js(&file.path, &source)?;
+            }
             planned_files.push(PlannedFile {
                 path: file.path.clone(),
                 source,
@@ -712,9 +1139,29 @@ fn plan_request(
         }
     }
 
+    if stylesheet_changed
+        && matches!(
+            request.syntax,
+            StylesheetSyntax::Scss | StylesheetSyntax::Sass | StylesheetSyntax::Less
+        )
+    {
+        warnings.push(Warning {
+            code: "rebuild-required",
+            file: request.css_path.clone(),
+            start: 0,
+            end: 0,
+            message: "Rebuild this preprocessor entry to refresh its generated CSS.".to_string(),
+        });
+    }
+
     Ok(PlanResponse {
         files: planned_files,
         deleted_files,
+        unlinked_files: if module_import_is_unused {
+            vec![request.css_path]
+        } else {
+            Vec::new()
+        },
         candidates: candidates.into_iter().collect(),
         converted_rules,
         retained_rules,
@@ -746,10 +1193,10 @@ fn apply_edits(source: &str, mut edits: Vec<Edit>) -> Result<String, String> {
     Ok(output)
 }
 
-fn remove_empty_conditionals(mut source: String) -> Result<String, String> {
+fn remove_empty_conditionals(mut source: String, syntax: Syntax) -> Result<String, String> {
     loop {
         let allocator = oxc_css_parser::Allocator::default();
-        let mut parser = CssParser::new(&allocator, &source, Syntax::Css);
+        let mut parser = CssParser::new(&allocator, &source, syntax);
         let stylesheet = parser
             .parse::<Stylesheet>()
             .map_err(|error| format!("Failed to parse edited CSS: {error:?}"))?;
@@ -782,12 +1229,16 @@ fn collect_empty_conditionals(statements: &[Statement<'_>], edits: &mut Vec<Edit
     }
 }
 
-fn validate_css(source: &str) -> Result<(), String> {
+pub(crate) fn validate_css(source: &str) -> Result<(), String> {
+    validate_stylesheet(source, Syntax::Css)
+}
+
+fn validate_stylesheet(source: &str, syntax: Syntax) -> Result<(), String> {
     let allocator = oxc_css_parser::Allocator::default();
-    CssParser::new(&allocator, source, Syntax::Css)
+    CssParser::new(&allocator, source, syntax)
         .parse::<Stylesheet>()
         .map(|_| ())
-        .map_err(|error| format!("Edited CSS no longer parses: {error:?}"))
+        .map_err(|error| format!("Edited stylesheet no longer parses: {error:?}"))
 }
 
 #[cfg(test)]
@@ -799,6 +1250,58 @@ mod tests {
     use crate::css_plan::SelectorKey;
     use crate::js_rewrite::plan_batch_source_file;
     use crate::utilities::{css_properties_conflict, tailwind_utilities_conflict};
+
+    #[test]
+    fn parses_indented_sass_with_explicit_module_metadata() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.sass",
+            "cssSource": ".button\n  padding: 13px\n",
+            "syntax": "sass",
+            "isModule": true,
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.sass';\nexport const Button = () => <button className={styles.button} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["candidates"], serde_json::json!(["p-[13px]"]));
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(
+            response["deletedFiles"],
+            serde_json::json!(["/project/Button.module.sass"])
+        );
+    }
+
+    #[test]
+    fn retains_scss_values_that_require_semantic_evaluation() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.scss",
+            "cssSource": "$space: 13px;\n.button { padding: $space; }\n",
+            "syntax": "scss",
+            "isModule": true,
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.scss';\nexport const Button = () => <button className={styles.button} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["candidates"], serde_json::json!([]));
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 1);
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| { warning["code"] == "unsupported-declaration" })
+        );
+    }
 
     #[test]
     fn appends_a_global_class_and_retains_the_rule() {
@@ -1994,8 +2497,10 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|warning| warning["code"] == "unsupported-css-module-reference"
-                    && warning["file"] == "/project/generated.js")
+                .any(
+                    |warning| warning["code"] == "unsupported-css-module-reference"
+                        && warning["file"] == "/project/generated.js"
+                )
         );
     }
 
@@ -2279,6 +2784,10 @@ mod tests {
             path: "/project/App.tsx".to_string(),
             source: "import styles from './A.module.css';\nexport const App = () => <div className={styles.a} />;\n".to_string(),
             writable: true,
+            html_elements: Vec::new(),
+            html_stylesheets: Vec::new(),
+            html_references_safe: true,
+            html_script_text: String::new(),
         };
         let candidates = HashMap::from([(
             SelectorKey::Class("a".to_string()),
