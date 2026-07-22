@@ -6,7 +6,14 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 import { planBatchMigration } from './native.js';
-import { compileSassEntry, isSassPath, loadProjectSass } from './style-compiler.js';
+import {
+  compileLessEntry,
+  compileSassEntry,
+  isPreprocessorPath,
+  isSassPath,
+  loadProjectLess,
+  loadProjectSass,
+} from './style-compiler.js';
 
 const run = promisify(execFile);
 const SOURCE_EXTENSIONS = new Set(['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts']);
@@ -226,7 +233,7 @@ async function planPackage(context, packageRoot) {
     ? [explicitStyle]
     : ownedStyles.filter((path) =>
       !excludedEntries.has(path)
-      && (!isSassPath(path) || sourceFiles.some((file) => sourceReferencesStyle(file, path))),
+      && (!isPreprocessorPath(path) || sourceFiles.some((file) => sourceReferencesStyle(file, path))),
     );
   if (targets.length === 0) return {};
   if (targets.some((path) => excludedEntries.has(path))) {
@@ -251,6 +258,7 @@ async function planPackage(context, packageRoot) {
   });
   let stylesheets;
   let sass;
+  let less;
   try {
     stylesheets = [];
     for (const stylePath of targets.sort()) {
@@ -264,9 +272,15 @@ async function planPackage(context, packageRoot) {
         isModule: isStylesheetModule(stylePath),
         isPartial,
       };
+      let compiled;
       if (isSassPath(stylePath) && !isPartial) {
         sass ??= await loadProjectSass(packageRoot);
-        const compiled = await compileSassEntry(sass, stylePath);
+        compiled = await compileSassEntry(sass, stylePath);
+      } else if (extension(stylePath) === '.less') {
+        less ??= await loadProjectLess(packageRoot);
+        compiled = await compileLessEntry(less, stylePath, stylesheet.cssSource);
+      }
+      if (compiled) {
         for (const loadedPath of compiled.loadedPaths) {
           if (!isProjectInput(workspaceRoot, loadedPath)) continue;
           const source = await snapshotFile(snapshots, loadedPath);
@@ -302,10 +316,15 @@ async function planPackage(context, packageRoot) {
   }
 
   await validateCandidates(tailwind, plan.candidates);
-  for (const stylesheet of stylesheets.filter((stylesheet) => isSassPath(stylesheet.cssPath))) {
+  for (const stylesheet of stylesheets.filter((stylesheet) => isPreprocessorPath(stylesheet.cssPath))) {
     const changed = plan.files.find((file) => file.path === stylesheet.cssPath);
     if (!changed && !plan.deletedFiles.includes(stylesheet.cssPath)) continue;
-    await compileSassEntry(sass, stylesheet.cssPath, changed?.source ?? '');
+    const source = changed?.source ?? '';
+    if (isSassPath(stylesheet.cssPath)) {
+      await compileSassEntry(sass, stylesheet.cssPath, source);
+    } else {
+      await compileLessEntry(less, stylesheet.cssPath, source);
+    }
   }
   return { plan };
 }

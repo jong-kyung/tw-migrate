@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import { extname, join } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { decodedMappings, originalPositionFor, TraceMap } from '@jridgewell/trace-mapping';
@@ -10,16 +10,28 @@ export function isSassPath(path) {
   return SASS_EXTENSIONS.has(extname(path));
 }
 
-export async function loadProjectSass(packageRoot) {
+export function isPreprocessorPath(path) {
+  return isSassPath(path) || extname(path) === '.less';
+}
+
+async function loadProjectModule(packageRoot, name, errorMessage) {
   const projectRequire = createRequire(join(packageRoot, 'package.json'));
   let modulePath;
   try {
-    modulePath = projectRequire.resolve('sass');
+    modulePath = projectRequire.resolve(name);
   } catch {
-    throw new Error('Sass must be installed in the target project.');
+    throw new Error(errorMessage);
   }
   const imported = await import(pathToFileURL(modulePath));
   return imported.default ?? imported;
+}
+
+export function loadProjectSass(packageRoot) {
+  return loadProjectModule(packageRoot, 'sass', 'Sass must be installed in the target project.');
+}
+
+export function loadProjectLess(packageRoot) {
+  return loadProjectModule(packageRoot, 'less', 'Less must be installed in the target project.');
 }
 
 export async function compileSassEntry(sass, entryPath, source) {
@@ -45,7 +57,23 @@ export async function compileSassEntry(sass, entryPath, source) {
   };
 }
 
-function sourceMappings(sourceMap) {
+export async function compileLessEntry(less, entryPath, source) {
+  const result = await less.render(source, {
+    filename: entryPath,
+    sourceMap: {
+      outputSourceFiles: true,
+      sourceMapBasepath: dirname(entryPath),
+      sourceMapOutputFilename: `${basename(entryPath, '.less')}.css`,
+    },
+  });
+  return {
+    css: result.css,
+    loadedPaths: result.imports.map((path) => isAbsolute(path) ? path : resolve(dirname(entryPath), path)),
+    sourceMappings: result.map ? sourceMappings(JSON.parse(result.map), dirname(entryPath)) : [],
+  };
+}
+
+function sourceMappings(sourceMap, sourceBase) {
   const traceMap = new TraceMap(sourceMap);
   const mappings = [];
   for (const [generatedLine, segments] of decodedMappings(traceMap).entries()) {
@@ -57,14 +85,8 @@ function sourceMappings(sourceMap) {
         column: generatedColumn,
       });
       if (original.source === null || original.line === null || original.column === null) continue;
-      let sourcePath;
-      try {
-        const url = new URL(original.source);
-        if (url.protocol !== 'file:') continue;
-        sourcePath = fileURLToPath(url);
-      } catch {
-        continue;
-      }
+      const sourcePath = sourcePathFromMap(original.source, sourceBase);
+      if (!sourcePath) continue;
       mappings.push({
         generatedLine,
         generatedColumn,
@@ -75,4 +97,14 @@ function sourceMappings(sourceMap) {
     }
   }
   return mappings;
+}
+
+function sourcePathFromMap(source, sourceBase) {
+  if (isAbsolute(source)) return resolve(source);
+  try {
+    const url = new URL(source);
+    return url.protocol === 'file:' ? fileURLToPath(url) : undefined;
+  } catch {
+    return sourceBase ? resolve(sourceBase, source) : undefined;
+  }
 }

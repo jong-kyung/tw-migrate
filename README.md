@@ -16,7 +16,7 @@ The CLI previews changes by default. Pass `--tailwind-css path/to/globals.css` w
 ## Current support
 
 - `.css`, `.scss`, `.sass`, and `.less` stylesheets
-- SCSS/Sass values evaluated with the target project's installed `sass`; ambiguous mixin and partial origins are retained
+- SCSS/Sass/Less values evaluated with the target project's installed compiler; ambiguous mixin and partial origins are retained
 - `.js`, `.jsx`, `.ts`, and `.tsx` source files
 - direct CSS Module members and static template literals
 - global `className` and `id` literals

@@ -37,6 +37,7 @@
   },
   "devDependencies": {
     "@napi-rs/cli": "3.7.3",
+    "less": "4.7.0",
     "sass": "1.101.3",
     "tailwindcss": "4.3.3"
   },

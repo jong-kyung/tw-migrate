@@ -987,7 +987,7 @@ fn plan_request(
     if stylesheet_changed
         && matches!(
             request.syntax,
-            StylesheetSyntax::Scss | StylesheetSyntax::Sass
+            StylesheetSyntax::Scss | StylesheetSyntax::Sass | StylesheetSyntax::Less
         )
     {
         warnings.push(Warning {
