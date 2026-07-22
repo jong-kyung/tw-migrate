@@ -14,7 +14,6 @@ import {
   isSassPath,
   loadProjectLess,
   loadProjectSass,
-  sourceMappings,
 } from './style-compiler.js';
 
 const run = promisify(execFile);
@@ -651,16 +650,7 @@ async function collectHtmlStyleContexts(state) {
   if (!state.styleSources.has(state.path)) state.styleSources.set(state.path, source);
   if (!owner) state.pathOwners.set(state.path, state.packageRoot);
 
-  if (extension(state.path) === '.css') {
-    const mapped = await mappedPreprocessorSource(state.path, source, state);
-    if (mapped) {
-      state.generatedPaths.add(state.path);
-      state.stylePaths.add(mapped);
-      state.contexts.push({ cssPath: mapped, variants: state.variants });
-      return;
-    }
-    if (addInferredPreprocessorContext(state)) return;
-  }
+  if (extension(state.path) === '.css' && addInferredPreprocessorContext(state)) return;
 
   state.stylePaths.add(state.path);
   state.contexts.push({ cssPath: state.path, variants: state.variants });
@@ -707,72 +697,9 @@ function addInferredPreprocessorContext(state) {
     state.path,
     0,
     0,
-    `The missing source map was replaced by the unique matching preprocessor filename ${basename(path)}.`,
+    `The linked CSS was matched to the unique preprocessor filename ${basename(path)}.`,
   ));
   return true;
-}
-
-async function mappedPreprocessorSource(cssPath, cssSource, state) {
-  const matches = [...cssSource.matchAll(/\/\*[#@]\s*sourceMappingURL=([^\s*]+)\s*\*\//g)];
-  const directive = matches.at(-1);
-  if (!directive) return undefined;
-  const warn = () => state.warnings.push(htmlWarning(
-    'unusable-source-map',
-    cssPath,
-    utf8Offset(cssSource, directive.index),
-    utf8Offset(cssSource, directive.index + directive[0].length),
-    'The generated stylesheet source map does not prove one authored preprocessor entry.',
-  ));
-  const mapPath = localHtmlReference(state.packageRoot, dirname(cssPath), directive[1]);
-  if (!mapPath || !isWithin(state.packageRoot, mapPath)) {
-    warn();
-    return undefined;
-  }
-
-  let rawMap;
-  try {
-    rawMap = await snapshotFile(state.snapshots, mapPath);
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    warn();
-    return undefined;
-  }
-  let mappings;
-  try {
-    mappings = sourceMappings(JSON.parse(rawMap), dirname(mapPath));
-  } catch {
-    warn();
-    return undefined;
-  }
-  const entries = [...new Set(mappings
-    .map((mapping) => mapping.sourcePath)
-    .filter((path) => isPreprocessorPath(path)
-      && isWithin(state.packageRoot, path)
-      && !basename(path).startsWith('_')))];
-  if (entries.length !== 1) {
-    warn();
-    return undefined;
-  }
-
-  const entryPath = entries[0];
-  const owner = state.pathOwners.get(entryPath);
-  if (owner && owner !== state.packageRoot) {
-    warn();
-    return undefined;
-  }
-  let entrySource = state.styleSources.get(entryPath);
-  if (entrySource === undefined) {
-    try {
-      entrySource = await snapshotFile(state.snapshots, entryPath);
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-      warn();
-      return undefined;
-    }
-    state.styleSources.set(entryPath, entrySource);
-  }
-  if (!owner) state.pathOwners.set(entryPath, state.packageRoot);
-  return entryPath;
 }
 
 function cssImports(source) {

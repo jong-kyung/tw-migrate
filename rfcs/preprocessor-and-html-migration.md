@@ -23,7 +23,7 @@ Static HTML support is limited to literal `class` and `id` attributes reached th
 7. Edit a shared partial only after every reachable entry and consumer proves the same edit safe.
 8. Support literal `class` and `id` attributes in static `.html` files.
 9. Scope HTML matching through local `<link rel="stylesheet">` and stylesheet import graphs.
-10. Follow source maps from linked generated CSS when available; otherwise infer one same-stem preprocessor entry by filename.
+10. Connect linked generated CSS to one unique same-stem preprocessor entry without requiring a prior build.
 11. Preserve the current package-batch snapshot, conflict, validation, and atomic-write guarantees.
 12. Preserve package-level `--force` failure isolation.
 
@@ -45,7 +45,7 @@ Static HTML support is limited to literal `class` and `id` attributes reached th
 ## Terminology
 
 - **Authored stylesheet**: a user-owned `.css`, `.scss`, `.sass`, or `.less` source file.
-- **Entry**: a stylesheet directly consumed by JS/TS, directly selected with `styleFile`, directly linked from HTML, or identified from linked generated CSS by a source map or unique same-stem filename.
+- **Entry**: a stylesheet directly consumed by JS/TS, directly selected with `styleFile`, directly linked from HTML, or identified from linked generated CSS by a unique same-stem filename.
 - **Partial**: a stylesheet loaded by an entry through CSS import, Sass `@use`/`@forward`/`@import`, or Less import semantics.
 - **Compiled context**: one entry's generated CSS, source map, loaded-source graph, and accumulated consumer condition such as link media.
 - **Provenance**: evidence connecting a generated CSS rule or declaration to one authored file and source span.
@@ -138,7 +138,7 @@ Remote, protocol-relative, `data:`, and dynamically generated links are ignored 
 
 ```text
 resolve package/workspace scope
-  -> snapshot relevant authored styles, generated maps, JS/TS, HTML, manifests
+  -> snapshot relevant authored styles, JS/TS, HTML, manifests
   -> discover consumer-to-entry relationships
   -> load project Sass/Less compiler when required
   -> compile each reachable preprocessor entry with source maps
@@ -185,16 +185,15 @@ Automatic migration does not treat every preprocessor file as an independent ent
 
 1. a supported JS/TS stylesheet import;
 2. a local HTML stylesheet link;
-3. a linked generated CSS source map;
-4. the unique non-partial preprocessor file whose stem matches a linked CSS filename;
-5. another admitted stylesheet's import graph where that stylesheet is itself an executable entry; or
-6. an explicit `styleFile` selection.
+3. the unique non-partial preprocessor file whose stem matches a linked CSS filename;
+4. another admitted stylesheet's import graph where that stylesheet is itself an executable entry; or
+5. an explicit `styleFile` selection.
 
 An explicitly selected partial is evaluated through every discovered entry that consumes it. If no complete consuming entry set can be established, it is retained rather than compiled as an invented entry.
 
 ### Compiler-Reported Dependencies
 
-Sass and Less compiler-loaded URLs/files are authoritative for entry-to-partial edges. The implementation must not recreate Sass partial/index/import resolution with regular expressions.
+Sass and Less compiler-loaded URLs/files are authoritative for entry-to-partial edges. A conservative static import scan may suppress filename inference, but it never admits dependencies or replaces the compiler-loaded graph.
 
 Only standard compiler resolution is enabled. Build-tool aliases, custom importers, and plugins are not loaded. An unresolved compiler dependency is a recoverable package input failure.
 
@@ -202,7 +201,7 @@ Only standard compiler resolution is enabled. Build-tool aliases, custom importe
 
 A static HTML page is affected only by styles reachable through its local stylesheet links and transitive local CSS imports.
 
-If linked generated CSS has a usable source map, its declared source graph connects it to authored SCSS/Sass/Less. Otherwise, including when the generated CSS does not exist yet, HTML migration connects it to a preprocessor entry only when exactly one non-partial file in the package has the same filename stem. The inferred relationship emits `inferred-preprocessor-source`; zero or multiple matches are not inferred.
+HTML migration does not inspect source maps emitted by prior project builds. Whether the linked CSS exists or not, it connects the link to a preprocessor entry only when exactly one non-partial file in the package has the same filename stem. The inferred relationship emits `inferred-preprocessor-source`; zero or multiple matches are not inferred. Once admitted, the project compiler's in-memory source map remains required to prove generated-to-authored edit spans.
 
 Root-relative links are resolved against the package root. Query strings and fragments are excluded from filesystem resolution but preserved in HTML. Remote or virtual URLs are not writable graph edges.
 
@@ -392,7 +391,7 @@ Phase 1 does not claim evaluated variables or source-map-backed cleanup; constru
 ### Phase 4: Static HTML Consumers
 
 - Add span-bearing static HTML parsing and attribute edits.
-- Build local link/import/source-map relationships.
+- Build local link/import and same-stem filename relationships.
 - Add supported link-media variants.
 - Route HTML matches through batch conflict handling.
 - Preserve global rules and reject dynamic/template attributes.
@@ -430,7 +429,7 @@ Each phase is independently testable and may merge separately. Public documentat
 - imported partials are not independently compiled as entries.
 - extensionless, underscore, index, `@use`, `@forward`, and Less import graphs use compiler-reported dependencies.
 - shared partials edit only after all entry contexts agree.
-- missing, split, virtual, and conflicting maps retain source.
+- missing, split, virtual, and conflicting compiler maps retain source.
 - post-edit recompilation failure writes nothing.
 - changed preprocessor sources emit one rebuild warning per affected entry.
 
@@ -439,7 +438,7 @@ Each phase is independently testable and may merge separately. Public documentat
 - local linked CSS updates literal class and id attributes.
 - unlinked pages and unrelated styles remain unchanged.
 - transitive local CSS imports are honored.
-- linked generated CSS reaches preprocessor source through a usable source map or one unique same-stem filename, including before the first build.
+- linked generated CSS reaches a preprocessor source only through one unique same-stem filename, including before the first build and regardless of prior build maps.
 - supported link media stacks variants; unsupported media retains.
 - quote style and unrelated HTML bytes remain unchanged.
 - template-looking values, bound attributes, inline styles, style blocks, scripts, and remote links are not rewritten.
@@ -473,7 +472,7 @@ Each phase is independently testable and may merge separately. Public documentat
 1. Full language evaluation produces conservative conversion coverage; valid constructs may remain when source provenance is ambiguous.
 2. Projects must already install the compiler required by their authored language.
 3. Custom build resolution is unsupported unless the standard compiler can resolve the graph independently.
-4. Without a source map, HTML-to-preprocessor relationships use a warned same-stem filename inference and skip ambiguous matches.
+4. HTML-to-preprocessor relationships ignore prior build maps, use a warned same-stem filename inference, and skip ambiguous matches.
 5. Generated CSS may remain absent or stale until the project rebuilds it.
 6. Global migrations intentionally duplicate validated utilities while retaining authored global rules.
 7. The immediate `cssFile` to `styleFile` rename is a breaking API change.

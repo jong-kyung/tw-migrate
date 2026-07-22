@@ -962,7 +962,7 @@ test('does not infer a comma-imported dotted-stem preprocessor dependency', asyn
   }
 });
 
-test('uses only genuinely mapped preprocessor sources for generated CSS links', async () => {
+test('ignores generated source maps and uses the unique same-stem preprocessor source', async () => {
   const cwd = await fixture();
   try {
     const generated = '.generated { color: red; }\n/*# sourceMappingURL=generated.css.map */\n';
@@ -987,17 +987,17 @@ test('uses only genuinely mapped preprocessor sources for generated CSS links', 
     ]);
 
     const report = await migrate({ cwd, write: true });
-    assert.deepEqual(report.candidates, ['p-[13px]']);
+    assert.deepEqual(report.candidates, ['text-[blue]']);
     assert.equal(await readFile(join(cwd, 'generated.css'), 'utf8'), generated);
     assert.equal(await readFile(join(cwd, 'source.scss'), 'utf8'), source);
-    assert.match(await readFile(join(cwd, 'index.html'), 'utf8'), /class="card generated p-\[13px\]"/);
-    assert.ok(!report.warnings.some((warning) => warning.code === 'unusable-source-map'));
+    assert.match(await readFile(join(cwd, 'index.html'), 'utf8'), /class="card generated text-\[blue\]"/);
+    assert.ok(report.warnings.some((warning) => warning.code === 'inferred-preprocessor-source'));
   } finally {
     await cleanup(cwd);
   }
 });
 
-test('falls back to generated CSS when a source map has no usable mappings', async () => {
+test('analyzes generated CSS when no unique same-stem preprocessor exists', async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -1012,7 +1012,7 @@ test('falls back to generated CSS when a source map has no usable mappings', asy
     const report = await migrate({ cwd });
     assert.deepEqual(report.candidates, ['text-[red]']);
     assert.match(report.diff, /class="card generated text-\[red\]"/);
-    assert.ok(report.warnings.some((warning) => warning.code === 'unusable-source-map'));
+    assert.ok(!report.warnings.some((warning) => warning.code === 'inferred-preprocessor-source'));
   } finally {
     await cleanup(cwd);
   }
