@@ -8,8 +8,6 @@
 //! `children` passthrough, and direct `className` prop forwarding. Anything
 //! else (conditional renders, portals, HOCs, dynamic components, arbitrary
 //! prop transformations, runtime trees) is never inferred.
-#![allow(dead_code)] // consumed by selector matching in a follow-up unit
-
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 

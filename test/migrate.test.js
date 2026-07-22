@@ -1317,3 +1317,50 @@ test('--force skips a broken workspace package and applies successful groups', a
     await cleanup(cwd);
   }
 });
+
+test('converts a proven CSS Module child relationship and stays a no-op on rerun', async () => {
+  const cwd = await fixture({
+    css: '.button { display: flex; }\n.button > .label { padding: 13px; }\n',
+    tsx: "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}><span className={styles.label}>Save</span></button>;\n",
+  });
+  try {
+    const first = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    assert.deepEqual(first.candidates, ['flex', 'p-[13px]']);
+    assert.equal(first.convertedRules, 2);
+    assert.equal(first.retainedRules, 0);
+    await assert.rejects(readFile(join(cwd, 'Button.module.css'), 'utf8'), { code: 'ENOENT' });
+    assert.equal(
+      await readFile(join(cwd, 'Button.tsx'), 'utf8'),
+      'export const Button = () => <button className="flex"><span className="p-[13px]">Save</span></button>;\n',
+    );
+
+    const second = await migrate({ cwd });
+    assert.deepEqual(second.changedFiles, []);
+    assert.equal(second.diff, '');
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('retains an unproven CSS Module relationship without touching sources', async () => {
+  const initial =
+    "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}><span className={styles.label}>Save</span></button>;\nexport const Loose = () => <span className={styles.label} />;\n";
+  const cwd = await fixture({
+    css: '.button > .label { padding: 13px; }\n',
+    tsx: initial,
+  });
+  try {
+    const report = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    assert.equal(report.convertedRules, 0);
+    assert.equal(report.retainedRules, 1);
+    assert.deepEqual(report.changedFiles, []);
+    assert.ok(report.warnings.some((warning) => warning.code === 'unproven-css-module-relationship'));
+    assert.equal(
+      await readFile(join(cwd, 'Button.module.css'), 'utf8'),
+      '.button > .label { padding: 13px; }\n',
+    );
+    assert.equal(await readFile(join(cwd, 'Button.tsx'), 'utf8'), initial);
+  } finally {
+    await cleanup(cwd);
+  }
+});

@@ -4,7 +4,10 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use oxc_css_parser::{
     Parser as CssParser, Syntax,
-    ast::{ComplexSelectorChild, InterpolableIdent, SimpleSelector, Statement, Stylesheet},
+    ast::{
+        CombinatorKind, ComplexSelectorChild, CompoundSelector, InterpolableIdent, SimpleSelector,
+        Statement, Stylesheet,
+    },
 };
 
 use crate::{
@@ -14,6 +17,7 @@ use crate::{
         GlobalAtRulePlan, conditional_variant, global_at_rule_plan, is_conditional,
         unsupported_warning,
     },
+    jsx_graph::Relation,
     utilities::{
         OverflowValues, SpacingValues, declaration_to_candidate, tailwind_utilities_conflict,
     },
@@ -25,11 +29,31 @@ pub(crate) enum SelectorKey {
     Id(String),
 }
 
+/// One pairwise proof obligation of a multi-compound CSS Module selector:
+/// every usage of `target` must be proven `relation` under `ancestor`.
+pub(crate) struct RelationshipStep {
+    pub(crate) ancestor: SelectorKey,
+    pub(crate) relation: Relation,
+    pub(crate) target: SelectorKey,
+}
+
+/// Decomposition of a supported multi-compound CSS Module selector whose
+/// conversion requires a JSX-graph proof.
+pub(crate) struct ModuleRelationship {
+    /// Obligations ordered from the selector target upward; the first step's
+    /// target is the rule's own key.
+    pub(crate) steps: Vec<RelationshipStep>,
+    /// An ancestor compound carries a pseudo-class (e.g. `.card:hover .title`);
+    /// converting it would require Tailwind's group pattern, so it is retained.
+    pub(crate) ancestor_state: bool,
+}
+
 pub(crate) struct RulePlan {
     pub(crate) span: std::ops::Range<usize>,
     pub(crate) selector: String,
     pub(crate) related_classes: Vec<String>,
     pub(crate) key: Option<SelectorKey>,
+    pub(crate) relationship: Option<ModuleRelationship>,
     pub(crate) candidates: Vec<String>,
     pub(crate) candidate_properties: HashMap<String, BTreeSet<String>>,
     pub(crate) warning: Option<&'static str>,
@@ -113,7 +137,15 @@ pub(crate) fn parse_css_rules(
 
     for (rule, outer_variants) in qualified_rules {
         let selector = source[rule.selector.span.start..rule.selector.span.end].to_string();
-        let selector_match = selector_match(rule, source, is_module);
+        let mut relationship = None;
+        let selector_match = selector_match(rule, source, is_module).or_else(|| {
+            if !is_module {
+                return None;
+            }
+            let (key, variant, decomposed) = module_relationship_match(rule)?;
+            relationship = Some(decomposed);
+            Some((key, variant))
+        });
         let key = selector_match.as_ref().map(|(key, _)| key.clone());
         let mut variants = outer_variants;
         if let Some(variant) = selector_match.and_then(|(_, variant)| variant) {
@@ -142,6 +174,7 @@ pub(crate) fn parse_css_rules(
             selector,
             related_classes: selector_classes(rule),
             key,
+            relationship,
             candidates,
             candidate_properties,
             warning,
@@ -517,6 +550,7 @@ fn retained_at_rule(
         selector: source[at_rule.span.start..end].trim().to_string(),
         related_classes: related_classes.into_iter().collect(),
         key: None,
+        relationship: None,
         candidates: Vec::new(),
         candidate_properties: HashMap::new(),
         warning: Some(warning),
@@ -583,16 +617,7 @@ fn selector_match(
             [_] => None,
             [_, SimpleSelector::PseudoClass(pseudo)] if pseudo.arg.is_none() => {
                 let name = literal_ident(&pseudo.name)?;
-                if !matches!(
-                    name,
-                    "active"
-                        | "disabled"
-                        | "focus"
-                        | "focus-visible"
-                        | "focus-within"
-                        | "hover"
-                        | "visited"
-                ) {
+                if !supported_pseudo_state(name) {
                     return None;
                 }
                 Some(name.to_string())
@@ -612,6 +637,92 @@ fn selector_match(
     let key = selector_key(target.children.first()?)?;
     let variant = arbitrary_selector_variant(rule, source, target)?;
     Some((key, variant))
+}
+
+fn supported_pseudo_state(name: &str) -> bool {
+    matches!(
+        name,
+        "active" | "disabled" | "focus" | "focus-visible" | "focus-within" | "hover" | "visited"
+    )
+}
+
+/// A compound that is a single module class/id key, optionally followed by
+/// one supported pseudo-state.
+fn compound_key_variant(compound: &CompoundSelector<'_>) -> Option<(SelectorKey, Option<String>)> {
+    let key = selector_key(compound.children.first()?)?;
+    let variant = match compound.children.as_slice() {
+        [_] => None,
+        [_, SimpleSelector::PseudoClass(pseudo)] if pseudo.arg.is_none() => {
+            let name = literal_ident(&pseudo.name)?;
+            if !supported_pseudo_state(name) {
+                return None;
+            }
+            Some(name.to_string())
+        }
+        _ => return None,
+    };
+    Some((key, variant))
+}
+
+/// Decompose a multi-compound CSS Module selector (descendant/child chains of
+/// module keys) into its target key, target variant, and proof obligations.
+/// Anything outside that shape returns None and stays on the generic
+/// unsupported-selector path.
+fn module_relationship_match(
+    rule: &oxc_css_parser::ast::QualifiedRule<'_>,
+) -> Option<(SelectorKey, Option<String>, ModuleRelationship)> {
+    if rule.selector.selectors.len() != 1 {
+        return None;
+    }
+    let selector = rule.selector.selectors.first()?;
+    let mut parts: Vec<(SelectorKey, Option<String>)> = Vec::new();
+    let mut relations: Vec<Relation> = Vec::new();
+    let mut expect_compound = true;
+    for child in &selector.children {
+        match child {
+            ComplexSelectorChild::CompoundSelector(compound) => {
+                if !expect_compound {
+                    return None;
+                }
+                parts.push(compound_key_variant(compound)?);
+                expect_compound = false;
+            }
+            ComplexSelectorChild::Combinator(combinator) => {
+                if expect_compound {
+                    return None;
+                }
+                relations.push(match combinator.kind {
+                    CombinatorKind::Descendant => Relation::Descendant,
+                    CombinatorKind::Child => Relation::Child,
+                    _ => return None,
+                });
+                expect_compound = true;
+            }
+        }
+    }
+    if expect_compound || parts.len() < 2 || parts.len() != relations.len() + 1 {
+        return None;
+    }
+    let ancestor_state = parts[..parts.len() - 1]
+        .iter()
+        .any(|(_, variant)| variant.is_some());
+    let steps = (1..parts.len())
+        .rev()
+        .map(|index| RelationshipStep {
+            ancestor: parts[index - 1].0.clone(),
+            relation: relations[index - 1],
+            target: parts[index].0.clone(),
+        })
+        .collect();
+    let (target_key, target_variant) = parts.pop()?;
+    Some((
+        target_key,
+        target_variant,
+        ModuleRelationship {
+            steps,
+            ancestor_state,
+        },
+    ))
 }
 
 fn selector_key(selector: &SimpleSelector<'_>) -> Option<SelectorKey> {

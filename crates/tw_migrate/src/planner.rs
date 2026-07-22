@@ -14,6 +14,7 @@ use crate::{
     at_rules::{append_global_at_rules, is_conditional},
     css_plan::{ParsedCss, RulePlan, SelectorKey, parse_css_rules},
     js_rewrite::{plan_source_file, validate_js},
+    jsx_graph,
     utilities::{css_properties_conflict, tailwind_utilities_conflict, tailwind_variants_match},
 };
 
@@ -125,8 +126,14 @@ pub(crate) struct Edit {
 
 pub fn plan_json(request: &str) -> Result<String, String> {
     let request: PlanRequest = serde_json::from_str(request).map_err(|error| error.to_string())?;
-    serde_json::to_string(&plan_request(request, &HashMap::new(), &HashSet::new(), false)?)
-        .map_err(|error| error.to_string())
+    serde_json::to_string(&plan_request(
+        request,
+        &HashMap::new(),
+        &HashSet::new(),
+        &HashMap::new(),
+        false,
+    )?)
+    .map_err(|error| error.to_string())
 }
 
 #[derive(Clone, Copy, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -145,6 +152,106 @@ struct RuleOrigin {
 struct CandidateMaps {
     candidates: HashMap<SelectorKey, Vec<String>>,
     origins: HashMap<(SelectorKey, String), Vec<RuleOrigin>>,
+    /// Multi-compound module rules whose relationship proof failed, with the
+    /// retained-rule message.
+    unproven: HashMap<RuleId, String>,
+}
+
+/// Run the JSX-graph proofs for every proof-needing rule against `files` (the
+/// request's immutable snapshot) and return the rules that must be retained
+/// with `unproven-css-module-relationship`, keyed by rule with their message.
+// ponytail: prove() re-parses every file per step; per-request memoization if
+// proof volume ever matters.
+fn unproven_relationship_rules(
+    rules: &[RulePlan],
+    css_path: &str,
+    files: &[SourceFile],
+) -> HashMap<RuleId, String> {
+    let proof_files = files
+        .iter()
+        .map(|file| (file.path.as_str(), file.source.as_str()))
+        .collect::<Vec<_>>();
+    let mut unproven = HashMap::new();
+    for rule in rules {
+        let Some(relationship) = &rule.relationship else {
+            continue;
+        };
+        if rule.warning.is_some() {
+            continue;
+        }
+        let rule_id = RuleId {
+            start: rule.span.start,
+            end: rule.span.end,
+        };
+        if relationship.ancestor_state {
+            unproven.insert(
+                rule_id,
+                format!(
+                    "Ancestor-state selectors like `{}` are not convertible yet, so the rule is retained.",
+                    rule.selector
+                ),
+            );
+            continue;
+        }
+        for (index, step) in relationship.steps.iter().enumerate() {
+            let outcome = jsx_graph::prove(
+                &proof_files,
+                css_path,
+                &step.ancestor,
+                step.relation,
+                &step.target,
+            );
+            if !outcome.aggregate_proven {
+                let reason = outcome.reason.unwrap_or("unproven");
+                let site = outcome
+                    .usages
+                    .iter()
+                    .find(|usage| !usage.proven)
+                    .map(|usage| format!(" at {}:{}", usage.file, usage.span.0))
+                    .unwrap_or_default();
+                unproven.insert(
+                    rule_id,
+                    format!(
+                        "The selector `{}` requires a relationship that could not be proven for every usage ({reason}{site}), so the rule is retained.",
+                        rule.selector
+                    ),
+                );
+                break;
+            }
+            // The first step's target is the rule's own key: its usage sites
+            // are the ones conversion would edit, so a non-writable site
+            // makes the proven rule unconvertible.
+            if index == 0
+                && let Some(usage) = outcome.usages.iter().find(|usage| {
+                    files
+                        .iter()
+                        .any(|file| !file.writable && file.path == usage.file)
+                })
+            {
+                unproven.insert(
+                    rule_id,
+                    format!(
+                        "The selector `{}` matches a usage in the reference-only file {}, so the rule is retained.",
+                        rule.selector, usage.file
+                    ),
+                );
+                break;
+            }
+        }
+    }
+    unproven
+}
+
+fn stamp_unproven_rules(rules: &mut [RulePlan], unproven: &HashMap<RuleId, String>) {
+    for rule in rules {
+        let rule_id = RuleId {
+            start: rule.span.start,
+            end: rule.span.end,
+        };
+        if rule.warning.is_none() && unproven.contains_key(&rule_id) {
+            rule.warning = Some("unproven-css-module-relationship");
+        }
+    }
 }
 
 fn prefix_rule_candidates(rules: &mut [RulePlan], prefix: &str) {
@@ -182,9 +289,14 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
     }
 
     let mut match_groups: HashMap<(String, usize, usize), Vec<BatchMatch>> = HashMap::new();
+    // Relationship proofs run here against the request's immutable file set,
+    // so every stylesheet is proven on the same snapshot regardless of the
+    // edits earlier stylesheets make during the main pass.
+    let mut unproven_maps = Vec::new();
     for (index, stylesheet) in request.stylesheets.iter().enumerate() {
-        let plan_request = batch_stylesheet_request(&request, stylesheet, Vec::new());
+        let plan_request = batch_stylesheet_request(&request, stylesheet, request.files.clone());
         let candidate_maps = candidate_map_for_request(&plan_request)?;
+        unproven_maps.push(candidate_maps.unproven);
         for file in request.files.iter().filter(|file| file.writable) {
             let result = crate::js_rewrite::plan_batch_source_file(
                 file,
@@ -297,6 +409,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
             stylesheet_request,
             &blocked_rules[index],
             &externally_blocked,
+            &unproven_maps[index],
             true,
         )?;
 
@@ -407,7 +520,9 @@ fn dedup_candidate_map(candidate_map: &mut HashMap<SelectorKey, Vec<String>>) {
 }
 
 fn candidate_map_for_request(request: &PlanRequest) -> Result<CandidateMaps, String> {
-    let (_, ParsedCss { rules, .. }) = parse_request_rules(request)?;
+    let (_, ParsedCss { mut rules, .. }) = parse_request_rules(request)?;
+    let unproven = unproven_relationship_rules(&rules, &request.css_path, &request.files);
+    stamp_unproven_rules(&mut rules, &unproven);
     let blocked_classes = rules
         .iter()
         .filter(|rule| rule.warning.is_some())
@@ -447,6 +562,7 @@ fn candidate_map_for_request(request: &PlanRequest) -> Result<CandidateMaps, Str
     Ok(CandidateMaps {
         candidates: candidate_map,
         origins,
+        unproven,
     })
 }
 
@@ -463,6 +579,7 @@ fn plan_request(
     request: PlanRequest,
     blocked_rules: &RuleConflicts,
     externally_blocked: &HashSet<RuleId>,
+    unproven_rules: &HashMap<RuleId, String>,
     batch_mode: bool,
 ) -> Result<PlanResponse, String> {
     let (
@@ -484,6 +601,18 @@ fn plan_request(
             rule.warning = Some("candidate-compilation-failure");
         }
     }
+    // In batch mode the caller passes proof results computed against the
+    // request snapshot; single-pass mode proves against its own files, which
+    // are that snapshot.
+    let computed_unproven;
+    let unproven_rules = if batch_mode {
+        unproven_rules
+    } else {
+        computed_unproven =
+            unproven_relationship_rules(&rules, &request.css_path, &request.files);
+        &computed_unproven
+    };
+    stamp_unproven_rules(&mut rules, unproven_rules);
 
     let preserved_module_classes = rules
         .iter()
@@ -640,6 +769,14 @@ fn plan_request(
                     format!(
                         "Generated utilities {conflicts} conflict on the same JSX element, so the contributing rule is retained."
                     ),
+                )
+            } else if rule.warning == Some("unproven-css-module-relationship") {
+                (
+                    "unproven-css-module-relationship",
+                    unproven_rules.get(&rule_id).cloned().unwrap_or_else(|| {
+                        "The CSS Module selector relationship could not be proven for every usage."
+                            .to_string()
+                    }),
                 )
             } else if let Some(code) = rule.warning {
                 (
@@ -3394,6 +3531,312 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|warning| warning["code"] == "reference-only-css-module-consumer")
+        );
+    }
+
+    fn warning_message(response: &serde_json::Value, code: &str) -> String {
+        response["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|warning| warning["code"] == code)
+            .unwrap_or_else(|| panic!("missing warning {code}: {:?}", response["warnings"]))
+            ["message"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn retains_an_unproven_module_relationship_with_a_site_hint() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card > .title { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.card}><span className={styles.title} /></div>;\nexport const Loose = () => <span className={styles.title} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["files"], serde_json::json!([]));
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 1);
+        let message = warning_message(&response, "unproven-css-module-relationship");
+        assert!(message.contains("/project/Card.tsx"), "{message}");
+    }
+
+    #[test]
+    fn retains_a_module_relationship_behind_a_conditional_return() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card .title { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nfunction Title(props) {\n  if (props.compact) {\n    return <span className={styles.title} />;\n  }\n  return <span className={styles.title} />;\n}\nexport const Card = () => <div className={styles.card}><Title /></div>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["files"], serde_json::json!([]));
+        assert_eq!(response["retainedRules"], 1);
+        let message = warning_message(&response, "unproven-css-module-relationship");
+        assert!(message.contains("conditional-return"), "{message}");
+    }
+
+    #[test]
+    fn batch_retains_a_proven_relationship_with_a_reference_only_target_usage() {
+        let request = serde_json::json!({
+            "stylesheets": [{
+                "cssPath": "/project/Card.module.css",
+                "cssSource": ".card > .title { padding: 13px; }\n"
+            }],
+            "files": [
+                {
+                    "path": "/project/Card.tsx",
+                    "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.card}><span className={styles.title} /></div>;\n"
+                },
+                {
+                    "path": "/project/Extra.tsx",
+                    "source": "import styles from './Card.module.css';\nexport const Extra = () => <div className={styles.card}><span className={styles.title} /></div>;\n",
+                    "writable": false
+                }
+            ]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["files"], serde_json::json!([]));
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 1);
+        let message = warning_message(&response, "unproven-css-module-relationship");
+        assert!(message.contains("/project/Extra.tsx"), "{message}");
+    }
+
+    #[test]
+    fn converts_a_proven_child_relationship_in_the_same_file() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { display: flex; }\n.card > .title { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.card}><span className={styles.title}>t</span></div>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 2);
+        assert_eq!(response["retainedRules"], 0);
+        assert_eq!(
+            response["deletedFiles"],
+            serde_json::json!(["/project/Card.module.css"])
+        );
+        assert_eq!(
+            response["files"][0]["source"],
+            "export const Card = () => <div className=\"flex\"><span className=\"p-[13px]\">t</span></div>;\n"
+        );
+    }
+
+    #[test]
+    fn converts_a_proven_relationship_through_an_imported_component() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { display: flex; }\n.card .title { padding: 13px; }\n",
+            "files": [
+                {
+                    "path": "/project/Card.tsx",
+                    "source": "import styles from './Card.module.css';\nimport Title from './Title';\nexport const Card = () => <div className={styles.card}><Title /></div>;\n"
+                },
+                {
+                    "path": "/project/Title.tsx",
+                    "source": "import styles from './Card.module.css';\nexport default function Title() {\n  return <h1 className={styles.title} />;\n}\n"
+                }
+            ]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 2);
+        assert_eq!(
+            response["deletedFiles"],
+            serde_json::json!(["/project/Card.module.css"])
+        );
+        let title = response["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == "/project/Title.tsx")
+            .unwrap()["source"]
+            .as_str()
+            .unwrap();
+        assert!(title.contains("className=\"p-[13px]\""), "{title}");
+        assert!(!title.contains("Card.module.css"), "{title}");
+    }
+
+    #[test]
+    fn converts_a_target_pseudo_state_on_a_proven_relationship() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { display: flex; }\n.card .title:hover { color: red; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.card}><span className={styles.title} /></div>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 2);
+        assert_eq!(
+            response["candidates"],
+            serde_json::json!(["flex", "hover:text-[red]"])
+        );
+        assert_eq!(
+            response["deletedFiles"],
+            serde_json::json!(["/project/Card.module.css"])
+        );
+    }
+
+    #[test]
+    fn converts_a_proven_three_compound_chain() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { display: flex; }\n.card > .list { margin: 1px; }\n.card .list > .item { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.card}><ul className={styles.list}><li className={styles.item} /></ul></div>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 3);
+        assert_eq!(response["retainedRules"], 0);
+        assert_eq!(
+            response["deletedFiles"],
+            serde_json::json!(["/project/Card.module.css"])
+        );
+        assert_eq!(
+            response["files"][0]["source"],
+            "export const Card = () => <div className=\"flex\"><ul className=\"m-[1px]\"><li className=\"p-[13px]\" /></ul></div>;\n"
+        );
+    }
+
+    #[test]
+    fn retains_an_ancestor_state_relationship() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card:hover .title { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.card}><span className={styles.title} /></div>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["files"], serde_json::json!([]));
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 1);
+        let message = warning_message(&response, "unproven-css-module-relationship");
+        assert!(message.contains("Ancestor-state"), "{message}");
+    }
+
+    #[test]
+    fn batch_proves_relationships_against_the_request_snapshot() {
+        let request = serde_json::json!({
+            "stylesheets": [
+                {
+                    "cssPath": "/project/A.module.css",
+                    "cssSource": ".a { padding: 13px; }\n"
+                },
+                {
+                    "cssPath": "/project/B.module.css",
+                    "cssSource": ".card { display: flex; }\n.card > .title { color: red; }\n"
+                }
+            ],
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = () => <div className={a.a}><div className={b.card}><span className={b.title} /></div></div>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 3);
+        assert_eq!(response["retainedRules"], 0);
+        assert_eq!(
+            response["deletedFiles"],
+            serde_json::json!(["/project/A.module.css", "/project/B.module.css"])
+        );
+        assert_eq!(
+            response["files"][0]["source"],
+            "export const App = () => <div className=\"p-[13px]\"><div className=\"flex\"><span className=\"text-[red]\" /></div></div>;\n"
+        );
+    }
+
+    #[test]
+    fn batch_keeps_the_module_when_a_sibling_relationship_is_unproven() {
+        let request = serde_json::json!({
+            "stylesheets": [{
+                "cssPath": "/project/Card.module.css",
+                "cssSource": ".card { display: flex; }\n.card > .title { padding: 13px; }\n.card .loose { margin: 1px; }\n"
+            }],
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.card}><span className={styles.title} /></div>;\nexport const Loose = () => <i className={styles.loose} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(response["retainedRules"], 2);
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        let card = response["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == "/project/Card.tsx")
+            .unwrap()["source"]
+            .as_str()
+            .unwrap();
+        assert!(card.contains("import styles from './Card.module.css'"), "{card}");
+        assert!(card.contains("className={styles.card}"), "{card}");
+        assert!(card.contains("className={styles.loose}"), "{card}");
+        assert!(card.contains("className=\"p-[13px]\""), "{card}");
+        let css = response["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == "/project/Card.module.css")
+            .unwrap()["source"]
+            .as_str()
+            .unwrap();
+        assert!(!css.contains(".title"), "{css}");
+        assert!(css.contains(".card {"), "{css}");
+        assert!(css.contains(".loose"), "{css}");
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| warning["code"] == "unproven-css-module-relationship")
         );
     }
 
