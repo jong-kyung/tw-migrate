@@ -11,6 +11,7 @@ import { promisify } from 'node:util';
 import { __unstable__loadDesignSystem as loadDesignSystem } from 'tailwindcss';
 
 import { migrate } from '../index.js';
+import { sourceMappings } from '../style-compiler.js';
 
 const run = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -873,6 +874,22 @@ test('treats invalid writable HTML as a recoverable package input failure', asyn
   } finally {
     await cleanup(cwd);
   }
+});
+
+test('normalizes separators when resolving source map roots', () => {
+  const sourceRoot = pathToFileURL(`${join(tmpdir(), 'nested')}/`).href;
+  assert.equal(
+    sourceMappings({ version: 3, sourceRoot, sources: ['input.scss'], names: [], mappings: 'AAAA' })[0].sourcePath,
+    join(tmpdir(), 'nested', 'input.scss'),
+  );
+  assert.equal(
+    sourceMappings({ version: 3, sourceRoot, sources: ['../input.scss'], names: [], mappings: 'AAAA' })[0].sourcePath,
+    join(tmpdir(), 'input.scss'),
+  );
+  assert.equal(
+    sourceMappings({ version: 3, sourceRoot: `${sourceRoot}/`, sources: ['../input.scss'], names: [], mappings: 'AAAA' })[0].sourcePath,
+    join(tmpdir(), 'input.scss'),
+  );
 });
 
 test('uses only genuinely mapped preprocessor sources for generated CSS links', async () => {

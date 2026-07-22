@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { eachMapping, TraceMap } from '@jridgewell/trace-mapping';
+import { decodeSourceMap } from './native.js';
 
 const SASS_EXTENSIONS = new Set(['.scss', '.sass']);
 
@@ -96,27 +96,29 @@ export async function compileLessEntry(less, entryPath, source) {
 }
 
 export function sourceMappings(sourceMap, sourceBase) {
-  const mappings = [];
-  eachMapping(new TraceMap(sourceMap), (mapping) => {
-    if (mapping.source === null || mapping.originalLine === null || mapping.originalColumn === null) return;
-    const sourcePath = sourcePathFromMap(mapping.source, sourceBase);
-    if (!sourcePath) return;
-    mappings.push({
-      generatedLine: mapping.generatedLine - 1,
-      generatedColumn: mapping.generatedColumn,
-      sourcePath,
-      originalLine: mapping.originalLine - 1,
-      originalColumn: mapping.originalColumn,
-    });
+  return JSON.parse(decodeSourceMap(JSON.stringify(sourceMap))).flatMap(({ source, ...mapping }) => {
+    const sourcePath = sourcePathFromMap(sourceReferenceFromMap(source, sourceMap.sourceRoot), sourceBase);
+    return sourcePath ? [{ ...mapping, sourcePath }] : [];
   });
-  return mappings;
+}
+
+function sourceReferenceFromMap(source, sourceRoot) {
+  if (!sourceRoot) return source;
+  if (isAbsolute(sourceRoot)) return resolve(sourceRoot, source);
+  try {
+    const root = new URL(sourceRoot);
+    root.pathname = `${root.pathname.replace(/\/+$/, '')}/`;
+    return new URL(source, root).href;
+  } catch {
+    return join(sourceRoot, source);
+  }
 }
 
 function sourcePathFromMap(source, sourceBase) {
   if (isAbsolute(source)) return resolve(source);
   try {
     const url = new URL(source);
-    return url.protocol === 'file:' ? fileURLToPath(url) : undefined;
+    return url.protocol === 'file:' ? resolve(fileURLToPath(url)) : undefined;
   } catch {
     return sourceBase ? resolve(sourceBase, source) : undefined;
   }
