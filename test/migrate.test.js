@@ -635,6 +635,154 @@ test('updates linked static HTML literals while preserving bytes and scope', asy
   }
 });
 
+test('removes a fully migrated CSS Module and its static HTML link', async () => {
+  const cwd = await fixture();
+  try {
+    await writeFile(
+      join(cwd, 'index.html'),
+      '<link rel="stylesheet" href="./globals.css">\n<link rel="stylesheet" href="./Button.module.css">\n<button class="button">HTML</button>\n',
+    );
+
+    await migrate({ cwd, write: true });
+
+    await assert.rejects(readFile(join(cwd, 'Button.module.css'), 'utf8'), { code: 'ENOENT' });
+    assert.equal(
+      await readFile(join(cwd, 'index.html'), 'utf8'),
+      '<link rel="stylesheet" href="./globals.css">\n\n<button class="button p-[13px]">HTML</button>\n',
+    );
+    assert.doesNotMatch(await readFile(join(cwd, 'Button.tsx'), 'utf8'), /Button\.module\.css/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('fully migrates a CSS Module consumed only by static HTML', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(
+        join(cwd, 'index.html'),
+        '<link rel="stylesheet" href="./globals.css">\n<link rel="stylesheet" href="./Button.module.css">\n<button class="button">HTML</button>\n',
+      ),
+    ]);
+
+    await migrate({ cwd, write: true });
+
+    await assert.rejects(readFile(join(cwd, 'Button.module.css'), 'utf8'), { code: 'ENOENT' });
+    assert.equal(
+      await readFile(join(cwd, 'index.html'), 'utf8'),
+      '<link rel="stylesheet" href="./globals.css">\n\n<button class="button p-[13px]">HTML</button>\n',
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('removes a generated CSS link after inferred preprocessor module migration', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'Button.module.scss'), '$space: 13px;\n.button { padding: $space; }\n'),
+      writeFile(
+        join(cwd, 'index.html'),
+        '<link rel="stylesheet" href="./globals.css">\n<link rel="stylesheet" href="./Button.module.css">\n<button class="button">HTML</button>\n',
+      ),
+    ]);
+
+    await migrate({ cwd, write: true });
+
+    assert.equal(await readFile(join(cwd, 'Button.module.scss'), 'utf8'), '$space: 13px;\n\n');
+    assert.equal(
+      await readFile(join(cwd, 'index.html'), 'utf8'),
+      '<link rel="stylesheet" href="./globals.css">\n\n<button class="button p-[13px]">HTML</button>\n',
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('retains an HTML-linked CSS Module when an attribute is dynamic', async () => {
+  const cwd = await fixture();
+  try {
+    await writeFile(
+      join(cwd, 'index.html'),
+      '<link rel="stylesheet" href="./Button.module.css">\n<button class="{{ buttonClass }}">HTML</button>\n',
+    );
+
+    await migrate({ cwd, write: true });
+
+    assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
+    assert.match(await readFile(join(cwd, 'index.html'), 'utf8'), /Button\.module\.css/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('retains a CSS Module linked from gitignored HTML', async () => {
+  const cwd = await fixture();
+  try {
+    await run('git', ['init', '-q'], { cwd });
+    await Promise.all([
+      writeFile(join(cwd, '.gitignore'), 'generated.html\n'),
+      writeFile(
+        join(cwd, 'generated.html'),
+        '<link rel="stylesheet" href="./Button.module.css"><button class="button">HTML</button>\n',
+      ),
+    ]);
+
+    await migrate({ cwd, write: true });
+
+    assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
+    assert.equal(
+      await readFile(join(cwd, 'generated.html'), 'utf8'),
+      '<link rel="stylesheet" href="./Button.module.css"><button class="button">HTML</button>\n',
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('removes an entity-bearing HTML link with its migrated CSS Module', async () => {
+  const cwd = await fixture();
+  try {
+    await writeFile(
+      join(cwd, 'index.html'),
+      '<link rel="stylesheet" href="./globals.css">\n<link rel="stylesheet" href="./Button.module.css?v=1&amp;x=2">\n<button class="button">HTML</button>\n',
+    );
+
+    await migrate({ cwd, write: true });
+
+    await assert.rejects(readFile(join(cwd, 'Button.module.css'), 'utf8'), { code: 'ENOENT' });
+    assert.equal(
+      await readFile(join(cwd, 'index.html'), 'utf8'),
+      '<link rel="stylesheet" href="./globals.css">\n\n<button class="button p-[13px]">HTML</button>\n',
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('retains a CSS Module when one HTML link has unsupported media', async () => {
+  const cwd = await fixture();
+  try {
+    await writeFile(
+      join(cwd, 'index.html'),
+      '<link rel="stylesheet" href="./Button.module.css">\n<link rel="stylesheet" href="./Button.module.css" media="speech">\n<button class="button">HTML</button>\n',
+    );
+
+    const report = await migrate({ cwd, write: true });
+
+    assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
+    assert.match(await readFile(join(cwd, 'index.html'), 'utf8'), /Button\.module\.css/);
+    assert.ok(report.warnings.some((warning) => warning.code === 'unsupported-link-media'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('adds a class attribute for an id-only HTML match', async () => {
   const cwd = await fixture();
   try {

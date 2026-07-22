@@ -15,7 +15,7 @@ pub(crate) fn plan_html_file(
     let contexts = file
         .html_stylesheets
         .iter()
-        .filter(|context| context.css_path == css_path)
+        .filter(|context| context.analyzable && context.css_path == css_path)
         .collect::<Vec<_>>();
     if contexts.is_empty() {
         return empty_plan();
@@ -25,6 +25,8 @@ pub(crate) fn plan_html_file(
     let mut edits = Vec::new();
     let mut emitted = BTreeSet::new();
     let mut matches = Vec::new();
+    let mut module_refs = HashMap::new();
+    let mut matched_module_refs = HashMap::new();
     for element in &file.html_elements {
         let Some(class_attribute) = element
             .class_attribute
@@ -41,8 +43,13 @@ pub(crate) fn plan_html_file(
         let mut additions = Vec::new();
 
         for class in classes.clone() {
+            let key = SelectorKey::Class(class.clone());
+            let matched = candidates.contains_key(&key);
+            if matched {
+                *module_refs.entry(class.clone()).or_default() += 1;
+            }
             collect_candidates(
-                SelectorKey::Class(class),
+                key,
                 class_attribute,
                 &contexts,
                 candidates,
@@ -51,6 +58,9 @@ pub(crate) fn plan_html_file(
                 &mut emitted,
                 &mut matches,
             );
+            if matched {
+                *matched_module_refs.entry(class).or_default() += 1;
+            }
         }
         if let Some(id) = element
             .id_attribute
@@ -93,8 +103,8 @@ pub(crate) fn plan_html_file(
         removable_import_edits: Vec::new(),
         candidates: emitted.into_iter().collect(),
         matches,
-        module_refs: HashMap::new(),
-        matched_module_refs: HashMap::new(),
+        module_refs,
+        matched_module_refs,
         module_references_safe: true,
         warnings: Vec::new(),
     }
@@ -287,7 +297,10 @@ mod tests {
             html_stylesheets: vec![HtmlStylesheet {
                 css_path: "/project/site.css".to_string(),
                 variants: vec!["print".to_string()],
+                direct: true,
+                analyzable: true,
             }],
+            html_references_safe: true,
         };
         let candidates = HashMap::from([
             (

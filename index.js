@@ -64,8 +64,7 @@ export async function migrate(options = {}) {
       // and every supported reference names the module literally. Unrelated
       // gitignored files (coverage output, generated bundles) must reach
       // neither the parser nor the snapshot ledger.
-      if (!scope.targetable.has(path)
-        && (extension(path) === '.html' || !mentionsStylesheetModule(source))) return undefined;
+      if (!scope.targetable.has(path) && !mentionsStylesheetModule(source)) return undefined;
       return { path, source: recordSnapshot(snapshots, path, source) };
     })),
     ...selectedPackages.map((packageRoot) => snapshotFile(snapshots, join(packageRoot, 'package.json'))),
@@ -356,6 +355,7 @@ async function planPackage(context, packageRoot) {
     return { failure: packageFailure(workspaceRoot, packageRoot, error) };
   }
 
+  removeMigratedHtmlLinks(plan, preparedHtml);
   plan.warnings.push(...preparedHtml.warnings);
   await validateCandidates(tailwind, plan.candidates);
   for (const file of plan.files.filter((file) => extension(file.path) === '.html')) {
@@ -372,6 +372,35 @@ async function planPackage(context, packageRoot) {
     }
   }
   return { plan };
+}
+
+function removeMigratedHtmlLinks(plan, preparedHtml) {
+  const unlinked = new Set(plan.unlinkedFiles);
+  const linksByFile = new Map();
+  for (const link of preparedHtml.removableLinks) {
+    if (!unlinked.has(link.cssPath)) continue;
+    const links = linksByFile.get(link.filePath) ?? new Set();
+    links.add(`${link.href}\0${link.media}`);
+    linksByFile.set(link.filePath, links);
+  }
+
+  for (const [filePath, removable] of linksByFile) {
+    const planned = plan.files.find((file) => file.path === filePath);
+    const original = preparedHtml.files.find((file) => file.path === filePath);
+    if (!original) continue;
+    const source = planned?.source ?? original.source;
+    const links = parseHtmlSource(filePath, source).links
+      .filter((link) => removable.has(`${link.href}\0${link.media}`))
+      .sort((left, right) => right.tagStart - left.tagStart);
+    let bytes = Buffer.from(source);
+    for (const link of links) {
+      bytes = Buffer.concat([bytes.subarray(0, link.tagStart), bytes.subarray(link.tagEnd)]);
+    }
+    const updated = bytes.toString();
+    if (updated === source) continue;
+    if (planned) planned.source = updated;
+    else plan.files.push({ path: filePath, source: updated });
+  }
 }
 
 function mergePlans(plans, originals) {
@@ -532,6 +561,7 @@ async function preparePackageHtml({
   const files = [];
   const stylePaths = new Set();
   const generatedPaths = new Set();
+  const removableLinks = [];
   const warnings = [];
 
   for (const file of sourceFiles.filter(
@@ -560,17 +590,6 @@ async function preparePackageHtml({
       }
     }
     for (const link of parsed.links) {
-      const variants = mediaVariants(link.media);
-      if (variants === undefined) {
-        warnings.push(htmlWarning(
-          'unsupported-link-media',
-          file.path,
-          link.start,
-          link.end,
-          `The stylesheet link media condition ${JSON.stringify(link.media)} cannot be represented safely.`,
-        ));
-        continue;
-      }
       const linkedPath = linkBase && localHtmlReference(packageRoot, linkBase, link.href);
       if (!linkedPath || !isWithin(packageRoot, linkedPath)) {
         warnings.push(htmlWarning(
@@ -582,9 +601,30 @@ async function preparePackageHtml({
         ));
         continue;
       }
+      const variants = mediaVariants(link.media);
+      if (variants === undefined) {
+        const cssPath = inferredPreprocessorPath({
+          path: linkedPath,
+          packageRoot,
+          styleSources,
+          pathOwners,
+          styleDependents,
+        }) ?? linkedPath;
+        contexts.push({ cssPath, variants: [], direct: true, analyzable: false });
+        warnings.push(htmlWarning(
+          'unsupported-link-media',
+          file.path,
+          link.start,
+          link.end,
+          `The stylesheet link media condition ${JSON.stringify(link.media)} cannot be represented safely.`,
+        ));
+        continue;
+      }
+      const contextStart = contexts.length;
       await collectHtmlStyleContexts({
         path: linkedPath,
         variants,
+        direct: true,
         packageRoot,
         styleSources,
         snapshots,
@@ -596,6 +636,15 @@ async function preparePackageHtml({
         warnings,
         visited: new Set(),
       });
+      const directContext = contexts[contextStart];
+      if (directContext?.direct) {
+        removableLinks.push({
+          filePath: file.path,
+          cssPath: directContext.cssPath,
+          href: link.href,
+          media: link.media,
+        });
+      }
     }
 
     if (contexts.length > 0) {
@@ -613,10 +662,11 @@ async function preparePackageHtml({
       ...file,
       htmlElements: parsed.elements,
       htmlStylesheets: deduplicateHtmlContexts(contexts),
+      htmlReferencesSafe: parsed.dynamicAttributes.length === 0,
     });
   }
 
-  return { files, stylePaths, generatedPaths, warnings };
+  return { files, stylePaths, generatedPaths, removableLinks, warnings };
 }
 
 async function collectHtmlStyleContexts(state) {
@@ -653,7 +703,12 @@ async function collectHtmlStyleContexts(state) {
   if (extension(state.path) === '.css' && addInferredPreprocessorContext(state)) return;
 
   state.stylePaths.add(state.path);
-  state.contexts.push({ cssPath: state.path, variants: state.variants });
+  state.contexts.push({
+    cssPath: state.path,
+    variants: state.variants,
+    direct: state.direct,
+    analyzable: true,
+  });
   if (extension(state.path) !== '.css') return;
 
   for (const imported of cssImports(source)) {
@@ -674,11 +729,12 @@ async function collectHtmlStyleContexts(state) {
       ...state,
       path: importedPath,
       variants: [...state.variants, ...variants],
+      direct: false,
     });
   }
 }
 
-function addInferredPreprocessorContext(state) {
+function inferredPreprocessorPath(state) {
   const stem = basename(state.path, '.css');
   const matches = [...state.styleSources.keys()].filter((path) =>
     isPreprocessorPath(path)
@@ -687,11 +743,20 @@ function addInferredPreprocessorContext(state) {
       && !state.styleDependents.has(path)
       && basename(path, extension(path)) === stem,
   );
-  if (matches.length !== 1) return false;
-  const [path] = matches;
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function addInferredPreprocessorContext(state) {
+  const path = inferredPreprocessorPath(state);
+  if (!path) return false;
   state.generatedPaths.add(state.path);
   state.stylePaths.add(path);
-  state.contexts.push({ cssPath: path, variants: state.variants });
+  state.contexts.push({
+    cssPath: path,
+    variants: state.variants,
+    direct: state.direct,
+    analyzable: true,
+  });
   state.warnings.push(htmlWarning(
     'inferred-preprocessor-source',
     state.path,
@@ -778,13 +843,14 @@ function mediaVariants(media) {
 }
 
 function deduplicateHtmlContexts(contexts) {
-  const seen = new Set();
-  return contexts.filter((context) => {
-    const key = `${context.cssPath}\0${context.variants.join(':')}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  const unique = new Map();
+  for (const context of contexts) {
+    const key = `${context.cssPath}\0${context.variants.join(':')}\0${context.analyzable}`;
+    const existing = unique.get(key);
+    if (existing) existing.direct ||= context.direct;
+    else unique.set(key, { ...context });
+  }
+  return [...unique.values()];
 }
 
 function htmlWarning(code, file, start, end, message) {

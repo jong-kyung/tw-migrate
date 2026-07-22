@@ -30,7 +30,17 @@ export function parseHtmlSource(path, source) {
           && !attributes.has('disabled')) {
           const href = locatedAttribute(source, locations.href, attributes.get('href'));
           const media = locatedAttribute(source, locations.media, attributes.get('media'));
-          if (href?.writable) links.push({ href: href.value, media: media?.value ?? '', start: href.start, end: href.end });
+          const tag = node.sourceCodeLocation?.startTag ?? node.sourceCodeLocation;
+          if (href && tag) {
+            links.push({
+              href: href.value,
+              media: media?.value ?? '',
+              start: href.start,
+              end: href.end,
+              tagStart: tag.startOffset,
+              tagEnd: tag.endOffset,
+            });
+          }
         }
         if (node.tagName === 'base' && bases.length === 0) {
           const href = locatedAttribute(source, locations.href, attributes.get('href'));
@@ -68,7 +78,13 @@ function toByteOffsets(source, parsed) {
   const offset = (index) => Buffer.byteLength(source.slice(0, index));
   const attribute = (value) => value && { ...value, start: offset(value.start), end: offset(value.end) };
   return {
-    links: parsed.links.map((link) => ({ ...link, start: offset(link.start), end: offset(link.end) })),
+    links: parsed.links.map((link) => ({
+      ...link,
+      start: offset(link.start),
+      end: offset(link.end),
+      tagStart: offset(link.tagStart),
+      tagEnd: offset(link.tagEnd),
+    })),
     bases: parsed.bases.map((base) => ({ ...base, start: offset(base.start), end: offset(base.end) })),
     elements: parsed.elements.map((element) => ({
       classAttribute: attribute(element.classAttribute),

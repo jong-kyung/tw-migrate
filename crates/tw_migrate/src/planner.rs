@@ -145,6 +145,10 @@ pub(crate) struct HtmlElement {
 pub(crate) struct HtmlStylesheet {
     pub(crate) css_path: String,
     pub(crate) variants: Vec<String>,
+    #[serde(default)]
+    pub(crate) direct: bool,
+    #[serde(default = "default_writable")]
+    pub(crate) analyzable: bool,
 }
 
 fn default_writable() -> bool {
@@ -161,6 +165,8 @@ pub(crate) struct SourceFile {
     pub(crate) html_elements: Vec<HtmlElement>,
     #[serde(default, rename = "htmlStylesheets")]
     pub(crate) html_stylesheets: Vec<HtmlStylesheet>,
+    #[serde(default = "default_writable", rename = "htmlReferencesSafe")]
+    pub(crate) html_references_safe: bool,
 }
 
 #[derive(Serialize)]
@@ -168,6 +174,7 @@ pub(crate) struct SourceFile {
 struct PlanResponse {
     files: Vec<PlannedFile>,
     deleted_files: Vec<String>,
+    unlinked_files: Vec<String>,
     candidates: Vec<String>,
     converted_rules: usize,
     retained_rules: usize,
@@ -372,6 +379,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
     }
     let mut current = originals.clone();
     let mut deleted = HashSet::new();
+    let mut unlinked = HashSet::new();
     let mut candidates = BTreeSet::new();
     let mut converted_rules = 0;
     let mut retained_rules = 0;
@@ -411,6 +419,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
             current.remove(&path);
             deleted.insert(path);
         }
+        unlinked.extend(response.unlinked_files);
         candidates.extend(response.candidates);
         converted_rules += response.converted_rules;
         retained_rules += response.retained_rules;
@@ -426,6 +435,8 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
     files.sort_by(|left, right| left.path.cmp(&right.path));
     let mut deleted_files = deleted.into_iter().collect::<Vec<_>>();
     deleted_files.sort();
+    let mut unlinked_files = unlinked.into_iter().collect::<Vec<_>>();
+    unlinked_files.sort();
     warnings.sort_by(|left, right| {
         (&left.file, left.start, left.end, left.code).cmp(&(
             &right.file,
@@ -438,6 +449,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
     serde_json::to_string(&PlanResponse {
         files,
         deleted_files,
+        unlinked_files,
         candidates: candidates.into_iter().collect(),
         converted_rules,
         retained_rules,
@@ -849,9 +861,21 @@ fn plan_request(
         )?;
 
         module_references_safe &= result.module_references_safe;
+        let direct_html_link = file
+            .html_stylesheets
+            .iter()
+            .any(|context| context.direct && context.css_path == request.css_path);
+        let unsafe_html_link = file.html_stylesheets.iter().any(|context| {
+            context.direct && !context.analyzable && context.css_path == request.css_path
+        });
+        if is_module && (unsafe_html_link || (direct_html_link && !file.html_references_safe)) {
+            module_references_safe = false;
+        }
         if !file.writable {
             if is_module
-                && (!result.module_refs.is_empty() || !result.removable_import_edits.is_empty())
+                && (direct_html_link
+                    || !result.module_refs.is_empty()
+                    || !result.removable_import_edits.is_empty())
             {
                 module_references_safe = false;
                 warnings.push(Warning {
@@ -1089,6 +1113,9 @@ fn plan_request(
     Ok(PlanResponse {
         files: planned_files,
         deleted_files,
+        unlinked_files: module_import_is_unused
+            .then(|| vec![request.css_path])
+            .unwrap_or_default(),
         candidates: candidates.into_iter().collect(),
         converted_rules,
         retained_rules,
@@ -2713,6 +2740,7 @@ mod tests {
             writable: true,
             html_elements: Vec::new(),
             html_stylesheets: Vec::new(),
+            html_references_safe: true,
         };
         let candidates = HashMap::from([(
             SelectorKey::Class("a".to_string()),
