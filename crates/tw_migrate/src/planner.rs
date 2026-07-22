@@ -2093,6 +2093,51 @@ mod tests {
         );
     }
 
+    fn retained_at_rule_warning(css_source: &str) -> Vec<String> {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": css_source,
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        response["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|warning| warning["code"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn retains_an_unconvertible_media_query() {
+        let codes = retained_at_rule_warning(
+            "@media /* screens */ (min-width: 48rem) { .button { padding: 13px; } }\n",
+        );
+        assert!(codes.contains(&"unsupported-media-query".to_string()));
+    }
+
+    #[test]
+    fn retains_an_unconvertible_supports_query() {
+        let codes = retained_at_rule_warning(
+            "@supports (content: \"x\") { .button { padding: 13px; } }\n",
+        );
+        assert!(codes.contains(&"unsupported-supports-query".to_string()));
+    }
+
+    #[test]
+    fn retains_an_unconvertible_container_query() {
+        let codes = retained_at_rule_warning(
+            "@container /* card */ (min-width: 20rem) { .button { padding: 13px; } }\n",
+        );
+        assert!(codes.contains(&"unsupported-container-query".to_string()));
+    }
+
     #[test]
     fn converts_a_global_descendant_selector_to_an_arbitrary_variant() {
         let request = serde_json::json!({

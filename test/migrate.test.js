@@ -1342,6 +1342,193 @@ test('converts a proven CSS Module child relationship and stays a no-op on rerun
   }
 });
 
+async function snapshotFlatTree(cwd) {
+  const names = (await readdir(cwd)).sort();
+  return Promise.all(names.map(async (name) => [name, await readFile(join(cwd, name))]));
+}
+
+test('migrates a jsx component end-to-end', async () => {
+  const cwd = await fixture();
+  try {
+    await rm(join(cwd, 'Button.tsx'));
+    await writeFile(join(cwd, 'Button.jsx'), initialTsx);
+
+    const report = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    assert.deepEqual(report.changedFiles, ['Button.jsx', 'Button.module.css']);
+    assert.deepEqual(report.candidates, ['p-[13px]']);
+    await assert.rejects(readFile(join(cwd, 'Button.module.css'), 'utf8'), { code: 'ENOENT' });
+    assert.equal(
+      await readFile(join(cwd, 'Button.jsx'), 'utf8'),
+      'export const Button = () => <button className="p-[13px]">Save</button>;\n',
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('migrates a js component containing JSX end-to-end', async () => {
+  const cwd = await fixture();
+  try {
+    await rm(join(cwd, 'Button.tsx'));
+    await writeFile(join(cwd, 'Button.js'), initialTsx);
+
+    const report = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    assert.deepEqual(report.changedFiles, ['Button.js', 'Button.module.css']);
+    await assert.rejects(readFile(join(cwd, 'Button.module.css'), 'utf8'), { code: 'ENOENT' });
+    assert.equal(
+      await readFile(join(cwd, 'Button.js'), 'utf8'),
+      'export const Button = () => <button className="p-[13px]">Save</button>;\n',
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('retains the module when a plain ts helper aliases it', async () => {
+  const cwd = await fixture();
+  try {
+    const helperTs =
+      "import styles from './Button.module.css';\nexport const buttonClass: string = styles.button;\n";
+    await writeFile(join(cwd, 'helper.ts'), helperTs);
+
+    const report = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    assert.equal(report.convertedRules, 0);
+    assert.equal(report.retainedRules, 1);
+    assert.ok(report.warnings.some((warning) => warning.code === 'aliased-css-module-reference'));
+    assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
+    assert.equal(await readFile(join(cwd, 'helper.ts'), 'utf8'), helperTs);
+
+    const second = await migrate({ cwd, cssFile: 'Button.module.css' });
+    assert.deepEqual(second.changedFiles, []);
+    assert.equal(second.diff, '');
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('malformed CSS fails the run and writes nothing', async () => {
+  const cwd = await fixture({ css: '}\n' });
+  try {
+    const before = await snapshotFlatTree(cwd);
+    await assert.rejects(
+      migrate({ cwd, cssFile: 'Button.module.css', write: true }),
+      /Failed to parse .*Button\.module\.css/,
+    );
+    assert.deepEqual(await snapshotFlatTree(cwd), before);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('a malformed migration-target source fails the run and writes nothing', async () => {
+  const cwd = await fixture({ tsx: 'export const Button = ( => <button />;\n' });
+  try {
+    const before = await snapshotFlatTree(cwd);
+    await assert.rejects(
+      migrate({ cwd, cssFile: 'Button.module.css', write: true }),
+      /Failed to parse .*Button\.tsx/,
+    );
+    assert.deepEqual(await snapshotFlatTree(cwd), before);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('preserves CRLF line endings through a partial migration', async () => {
+  const cwd = await fixture({
+    css: '.button {\r\n  padding: 13px;\r\n}\r\n.other {\r\n  display: grid;\r\n}\r\n',
+    tsx: initialTsx.replaceAll('\n', '\r\n'),
+  });
+  try {
+    const first = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    assert.deepEqual(first.changedFiles, ['Button.module.css', 'Button.tsx']);
+    // The removed rule leaves its trailing line break behind; untouched
+    // lines keep their CRLF endings byte-for-byte.
+    assert.deepEqual(
+      await readFile(join(cwd, 'Button.module.css')),
+      Buffer.from('\r\n.other {\r\n  display: grid;\r\n}\r\n'),
+    );
+    assert.deepEqual(
+      await readFile(join(cwd, 'Button.tsx')),
+      Buffer.from(
+        "import styles from './Button.module.css';\r\nexport const Button = () => <button className=\"p-[13px]\">Save</button>;\r\n",
+      ),
+    );
+
+    const second = await migrate({ cwd, cssFile: 'Button.module.css' });
+    assert.deepEqual(second.changedFiles, []);
+    assert.equal(second.diff, '');
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('preserves multibyte text adjacent to replaced spans byte-exactly', async () => {
+  const cwd = await fixture({
+    css: '.button { padding: 13px; }\n.other { --label: "저장 😀"; }\n',
+    tsx: "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>저장 😀</button>;\n",
+  });
+  try {
+    const first = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    assert.deepEqual(first.changedFiles, ['Button.module.css', 'Button.tsx']);
+    assert.deepEqual(
+      await readFile(join(cwd, 'Button.module.css')),
+      Buffer.from('\n.other { --label: "저장 😀"; }\n'),
+    );
+    assert.deepEqual(
+      await readFile(join(cwd, 'Button.tsx')),
+      Buffer.from(
+        "import styles from './Button.module.css';\nexport const Button = () => <button className=\"p-[13px]\">저장 😀</button>;\n",
+      ),
+    );
+
+    const second = await migrate({ cwd, cssFile: 'Button.module.css' });
+    assert.deepEqual(second.changedFiles, []);
+    assert.equal(second.diff, '');
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('removes a rule at EOF without a final newline cleanly', async () => {
+  const cwd = await fixture({
+    css: '.other { display: grid; }\n.button { padding: 13px; }',
+  });
+  try {
+    const first = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    assert.deepEqual(first.changedFiles, ['Button.module.css', 'Button.tsx']);
+    assert.deepEqual(
+      await readFile(join(cwd, 'Button.module.css')),
+      Buffer.from('.other { display: grid; }\n'),
+    );
+
+    const second = await migrate({ cwd, cssFile: 'Button.module.css' });
+    assert.deepEqual(second.changedFiles, []);
+    assert.equal(second.diff, '');
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('preserves a BOM prefix when editing a source file', async () => {
+  const cwd = await fixture({ tsx: `\uFEFF${initialTsx}` });
+  try {
+    const first = await migrate({ cwd, cssFile: 'Button.module.css', write: true });
+    assert.deepEqual(first.changedFiles, ['Button.module.css', 'Button.tsx']);
+    await assert.rejects(readFile(join(cwd, 'Button.module.css'), 'utf8'), { code: 'ENOENT' });
+    assert.deepEqual(
+      await readFile(join(cwd, 'Button.tsx')),
+      Buffer.from('\uFEFFexport const Button = () => <button className="p-[13px]">Save</button>;\n'),
+    );
+
+    const second = await migrate({ cwd });
+    assert.deepEqual(second.changedFiles, []);
+    assert.equal(second.diff, '');
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('retains an unproven CSS Module relationship without touching sources', async () => {
   const initial =
     "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}><span className={styles.label}>Save</span></button>;\nexport const Loose = () => <span className={styles.label} />;\n";
