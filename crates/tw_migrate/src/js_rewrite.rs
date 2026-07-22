@@ -42,7 +42,7 @@ pub(crate) struct SourcePlan {
     pub(crate) warnings: Vec<Warning>,
 }
 
-fn source_type_for_path(path: &str) -> Result<SourceType, String> {
+pub(crate) fn source_type_for_path(path: &str) -> Result<SourceType, String> {
     let source_type = SourceType::from_path(Path::new(path)).map_err(|error| error.to_string())?;
     Ok(
         if Path::new(path)
@@ -910,14 +910,14 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
     }
 }
 
-fn resolve_import(file_path: &str, import: &str) -> PathBuf {
+pub(crate) fn resolve_import(file_path: &str, import: &str) -> PathBuf {
     let parent = Path::new(file_path)
         .parent()
         .unwrap_or_else(|| Path::new("."));
     normalize_path(&parent.join(import))
 }
 
-fn normalize_path(path: &Path) -> PathBuf {
+pub(crate) fn normalize_path(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
         match component {

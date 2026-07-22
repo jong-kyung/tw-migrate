@@ -3,6 +3,7 @@ mod arbitrary;
 mod at_rules;
 mod css_plan;
 mod js_rewrite;
+mod jsx_graph;
 mod planner;
 mod theme;
 mod utilities;
