@@ -289,6 +289,55 @@ test('retains Sass module rules generated from an imported partial', async () =>
   }
 });
 
+test('retains a Sass entry loaded by another admitted entry', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      writeFile(join(cwd, 'Shared.module.scss'), '.shared { color: red; }\n'),
+      writeFile(join(cwd, 'Button.module.scss'), "@use 'Shared.module';\n.button { padding: 13px; }\n"),
+      writeFile(
+        join(cwd, 'Button.tsx'),
+        "import button from './Button.module.scss';\nimport shared from './Shared.module.scss';\nexport const Button = () => <><button className={button.button} /><span className={shared.shared} /></>;\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd, write: true });
+    assert.equal(await readFile(join(cwd, 'Shared.module.scss'), 'utf8'), '.shared { color: red; }\n');
+    assert.match(await readFile(join(cwd, 'Button.tsx'), 'utf8'), /shared\.shared/);
+    assert.ok(report.warnings.some((warning) => warning.code === 'shared-preprocessor-source'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+for (const [extension, source] of [
+  ['scss', '$name: button;\n.#{$name} { padding: 13px; }\n'],
+  ['less', '@name: button;\n.@{name} { padding: 13px; }\n'],
+]) {
+  test(`retains .${extension} selectors whose authored form uses interpolation`, async () => {
+    const cwd = await fixture();
+    const stylePath = `Button.module.${extension}`;
+    try {
+      await Promise.all([
+        rm(join(cwd, 'Button.module.css')),
+        writeFile(join(cwd, stylePath), source),
+        writeFile(
+          join(cwd, 'Button.tsx'),
+          `import styles from './${stylePath}';\nexport const Button = () => <button className={styles.button} />;\n`,
+        ),
+      ]);
+
+      const report = await migrate({ cwd, styleFile: stylePath, write: true });
+      assert.deepEqual(report.changedFiles, []);
+      assert.ok(report.warnings.some((warning) => warning.code === 'unproven-source-map'));
+      assert.match(await readFile(join(cwd, 'Button.tsx'), 'utf8'), /styles\.button/);
+    } finally {
+      await cleanup(cwd);
+    }
+  });
+}
+
 test('reports a missing project Sass compiler as a recoverable package failure', async () => {
   const cwd = await externalSassFixture();
   try {
@@ -349,6 +398,29 @@ test('post-edit Sass recompilation remains fatal under force', async () => {
     assert.equal(
       await readFile(join(cwd, 'Button.module.scss'), 'utf8'),
       '$space: 13px;\n.button { padding: $space; }\n',
+    );
+    assert.match(await readFile(join(cwd, 'Button.tsx'), 'utf8'), /styles\.button/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('rejects malformed CSS returned by post-edit Sass compilation', async () => {
+  const cwd = await externalSassFixture();
+  try {
+    const sassRoot = join(cwd, 'node_modules', 'sass');
+    await mkdir(sassRoot);
+    await Promise.all([
+      writeFile(join(sassRoot, 'package.json'), '{"type":"module","exports":"./index.js"}'),
+      writeFile(
+        join(sassRoot, 'index.js'),
+        `import sass from ${JSON.stringify(pathToFileURL(require.resolve('sass')).href)};\nexport const compileAsync = (...args) => sass.compileAsync(...args);\nexport const compileStringAsync = async (...args) => ({ ...await sass.compileStringAsync(...args), css: '}' });\n`,
+      ),
+    ]);
+
+    await assert.rejects(
+      migrate({ cwd, styleFile: 'Button.module.scss', force: true, write: true }),
+      /Edited stylesheet no longer parses/,
     );
     assert.match(await readFile(join(cwd, 'Button.tsx'), 'utf8'), /styles\.button/);
   } finally {
@@ -504,6 +576,29 @@ test('post-edit Less rendering remains fatal under force', async () => {
   }
 });
 
+test('rejects malformed CSS returned by post-edit Less rendering', async () => {
+  const cwd = await externalLessFixture();
+  try {
+    const lessRoot = join(cwd, 'node_modules', 'less');
+    await mkdir(lessRoot);
+    await Promise.all([
+      writeFile(join(lessRoot, 'package.json'), '{"type":"module","exports":"./index.js"}'),
+      writeFile(
+        join(lessRoot, 'index.js'),
+        `import less from ${JSON.stringify(pathToFileURL(require.resolve('less')).href)};\nlet calls = 0;\nexport default { render: async (...args) => { const result = await less.render(...args); calls += 1; return calls > 1 ? { ...result, css: '}' } : result; } };\n`,
+      ),
+    ]);
+
+    await assert.rejects(
+      migrate({ cwd, styleFile: 'Button.module.less', force: true, write: true }),
+      /Edited stylesheet no longer parses/,
+    );
+    assert.match(await readFile(join(cwd, 'Button.tsx'), 'utf8'), /styles\.button/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('updates linked static HTML literals while preserving bytes and scope', async () => {
   const cwd = await fixture();
   try {
@@ -541,19 +636,70 @@ test('adds a class attribute for an id-only HTML match', async () => {
     await Promise.all([
       rm(join(cwd, 'Button.module.css')),
       rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'accent.css'), '#hero { color: red; }\n'),
       writeFile(join(cwd, 'legacy.css'), '#hero { height: 100vh; }\n'),
       writeFile(
         join(cwd, 'index.html'),
-        '<link rel="stylesheet" href="./legacy.css"><main id="hero">Hi</main>\n',
+        '<link rel="stylesheet" href="./accent.css"><link rel="stylesheet" href="./legacy.css"><main id="hero">Hi</main>\n',
+      ),
+    ]);
+
+    const report = await migrate({ cwd, write: true });
+    assert.deepEqual(report.changedFiles, ['index.html']);
+    assert.equal(
+      await readFile(join(cwd, 'index.html'), 'utf8'),
+      '<link rel="stylesheet" href="./accent.css"><link rel="stylesheet" href="./legacy.css"><main id="hero" class="text-[red] h-[100vh]">Hi</main>\n',
+    );
+    const second = await migrate({ cwd });
+    assert.equal(second.diff, '');
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('uses UTF-8 byte offsets for non-ASCII HTML class edits and id-only insertion', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'legacy.css'), '.card { padding: 13px; }\n#hero { height: 100vh; }\n'),
+      writeFile(
+        join(cwd, 'index.html'),
+        '<link rel="stylesheet" href="./legacy.css"><p>한글😀</p><div class="card"></div><main id="hero">😀</main>\n',
+      ),
+    ]);
+
+    await migrate({ cwd, styleFile: 'legacy.css', write: true });
+    assert.equal(
+      await readFile(join(cwd, 'index.html'), 'utf8'),
+      '<link rel="stylesheet" href="./legacy.css"><p>한글😀</p><div class="card p-[13px]"></div><main id="hero" class="h-[100vh]">😀</main>\n',
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('does not synthesize a duplicate class for an entity-bearing class attribute', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'legacy.css'), '#hero { height: 100vh; }\n'),
+      writeFile(
+        join(cwd, 'index.html'),
+        '<link rel="stylesheet" href="./legacy.css"><main id="hero" class="card&amp;note"></main>\n',
       ),
     ]);
 
     const report = await migrate({ cwd, styleFile: 'legacy.css', write: true });
-    assert.deepEqual(report.changedFiles, ['index.html']);
+    assert.deepEqual(report.changedFiles, []);
     assert.equal(
       await readFile(join(cwd, 'index.html'), 'utf8'),
-      '<link rel="stylesheet" href="./legacy.css"><main id="hero" class="h-[100vh]">Hi</main>\n',
+      '<link rel="stylesheet" href="./legacy.css"><main id="hero" class="card&amp;note"></main>\n',
     );
+    assert.ok(report.warnings.some((warning) => warning.code === 'dynamic-html-attribute'));
   } finally {
     await cleanup(cwd);
   }
@@ -576,6 +722,56 @@ test('follows transitive CSS imports and applies exact print link media', async 
     const report = await migrate({ cwd });
     assert.ok(report.candidates.includes('print:p-[13px]'));
     assert.match(report.diff, /class="card print:p-\[13px\]"/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('only follows real top-level CSS imports and preserves media warning offsets', async () => {
+  const cwd = await fixture();
+  try {
+    const base = '/* 한글 */\n.fake::before { content: "@import \'./trap.css\';"; }\n@import "./print.css" print;\n@import "./speech.css" speech;\n';
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'base.css'), base),
+      writeFile(join(cwd, 'trap.css'), '.trap { color: red; }\n'),
+      writeFile(join(cwd, 'print.css'), '.print { padding: 13px; }\n'),
+      writeFile(join(cwd, 'speech.css'), '.speech { height: 100vh; }\n'),
+      writeFile(
+        join(cwd, 'index.html'),
+        '<link rel="stylesheet" href="./base.css"><div class="trap print speech"></div>\n',
+      ),
+    ]);
+
+    const report = await migrate({ cwd });
+    assert.deepEqual(report.candidates, ['print:p-[13px]']);
+    assert.match(report.diff, /class="trap print speech print:p-\[13px\]"/);
+    const warning = report.warnings.find((item) => item.code === 'unsupported-link-media' && item.file === 'base.css');
+    assert.equal(warning.start, Buffer.byteLength(base.slice(0, base.indexOf('@import "./speech.css"'))));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('resolves stylesheet links against a local base and skips remote bases', async () => {
+  const cwd = await fixture();
+  try {
+    await mkdir(join(cwd, 'assets'));
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'assets', 'legacy.css'), '.card { padding: 13px; }\n'),
+      writeFile(join(cwd, 'local.html'), '<base href="./assets/"><link rel="stylesheet" href="legacy.css"><div class="card"></div>\n'),
+      writeFile(join(cwd, 'empty.html'), '<base href=""><link rel="stylesheet" href="./assets/legacy.css"><div class="card"></div>\n'),
+      writeFile(join(cwd, 'remote.html'), '<base href="https://example.com/"><link rel="stylesheet" href="legacy.css"><div class="card"></div>\n'),
+    ]);
+
+    const report = await migrate({ cwd });
+    assert.match(report.diff, /empty\.html[\s\S]*class="card p-\[13px\]"/);
+    assert.match(report.diff, /local\.html[\s\S]*class="card p-\[13px\]"/);
+    assert.doesNotMatch(report.diff, /remote\.html/);
+    assert.ok(report.warnings.some((warning) => warning.code === 'unsupported-html-base'));
   } finally {
     await cleanup(cwd);
   }
@@ -675,31 +871,111 @@ test('treats invalid writable HTML as a recoverable package input failure', asyn
   }
 });
 
-test('uses a generated CSS source map to reach an authored Sass entry without editing artifacts', async () => {
+test('uses only genuinely mapped preprocessor sources for generated CSS links', async () => {
   const cwd = await fixture();
   try {
-    const generated = '.card { padding: 13px; }\n/*# sourceMappingURL=generated.css.map */\n';
+    const generated = '.generated { color: red; }\n/*# sourceMappingURL=generated.css.map */\n';
     const source = '$space: 13px;\n.card { padding: $space; }\n';
     await Promise.all([
       rm(join(cwd, 'Button.module.css')),
       rm(join(cwd, 'Button.tsx')),
       writeFile(join(cwd, 'generated.css'), generated),
-      writeFile(join(cwd, 'generated.css.map'), JSON.stringify({ version: 3, sources: ['source.scss'], names: [], mappings: '' })),
+      writeFile(join(cwd, 'generated.css.map'), JSON.stringify({
+        version: 3,
+        sourceRoot: pathToFileURL(`${cwd}/`).href,
+        sources: ['source.scss'],
+        names: [],
+        mappings: 'AAAA',
+      })),
       writeFile(join(cwd, 'source.scss'), source),
       writeFile(
         join(cwd, 'index.html'),
-        '<link rel="stylesheet" href="./generated.css"><div class="card"></div>\n',
+        '<link rel="stylesheet" href="./generated.css"><div class="card generated"></div>\n',
       ),
     ]);
 
     const report = await migrate({ cwd, write: true });
-    assert.ok(report.candidates.includes('p-[13px]'));
+    assert.deepEqual(report.candidates, ['p-[13px]']);
     assert.equal(await readFile(join(cwd, 'generated.css'), 'utf8'), generated);
     assert.equal(await readFile(join(cwd, 'source.scss'), 'utf8'), source);
-    assert.match(await readFile(join(cwd, 'index.html'), 'utf8'), /class="card p-\[13px\]"/);
-    assert.ok(!report.warnings.some((warning) => warning.code === 'rebuild-required'));
+    assert.match(await readFile(join(cwd, 'index.html'), 'utf8'), /class="card generated p-\[13px\]"/);
+    assert.ok(!report.warnings.some((warning) => warning.code === 'unusable-source-map'));
   } finally {
     await cleanup(cwd);
+  }
+});
+
+test('falls back to generated CSS when a source map has no usable mappings', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'generated.css'), '.generated { color: red; }\n/*# sourceMappingURL=generated.css.map */\n'),
+      writeFile(join(cwd, 'generated.css.map'), JSON.stringify({ version: 3, sources: ['source.scss'], names: [], mappings: '' })),
+      writeFile(join(cwd, 'source.scss'), '.card { padding: 13px; }\n'),
+      writeFile(join(cwd, 'index.html'), '<link rel="stylesheet" href="./generated.css"><div class="card generated"></div>\n'),
+    ]);
+
+    const report = await migrate({ cwd });
+    assert.deepEqual(report.candidates, ['text-[red]']);
+    assert.match(report.diff, /class="card generated text-\[red\]"/);
+    assert.ok(report.warnings.some((warning) => warning.code === 'unusable-source-map'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('does not let root HTML claim a stylesheet owned by a nested package', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      mkdir(join(cwd, 'nested')),
+    ]);
+    await Promise.all([
+      writeFile(join(cwd, 'nested', 'package.json'), '{"private":true}'),
+      writeFile(join(cwd, 'nested', 'legacy.css'), '.card { padding: 13px; }\n'),
+      writeFile(join(cwd, 'index.html'), '<link rel="stylesheet" href="./nested/legacy.css"><div class="card"></div>\n'),
+    ]);
+
+    const report = await migrate({ cwd, write: true });
+    assert.deepEqual(report.changedFiles, []);
+    assert.equal(await readFile(join(cwd, 'nested', 'legacy.css'), 'utf8'), '.card { padding: 13px; }\n');
+    assert.equal(await readFile(join(cwd, 'index.html'), 'utf8'), '<link rel="stylesheet" href="./nested/legacy.css"><div class="card"></div>\n');
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('rejects stylesheet targets reached through symlinks', async () => {
+  const cwd = await fixture();
+  const external = await mkdtemp(join(tmpdir(), 'tw-migrate-external-'));
+  try {
+    await Promise.all([
+      writeFile(join(cwd, 'real.module.css'), '.card { padding: 13px; }\n'),
+      writeFile(join(external, 'external.module.css'), '.card { padding: 17px; }\n'),
+      symlink('real.module.css', join(cwd, 'linked.module.css')),
+      symlink(external, join(cwd, 'linked-directory')),
+    ]);
+    await assert.rejects(
+      migrate({ cwd, styleFile: 'linked.module.css', write: true }),
+      /symbolic-link target/,
+    );
+    await writeFile(
+      join(cwd, 'index.html'),
+      '<link rel="stylesheet" href="./linked.module.css"><div class="card"></div>\n',
+    );
+    await assert.rejects(migrate({ cwd, write: true }), /symbolic-link target/);
+    await assert.rejects(
+      migrate({ cwd, styleFile: 'linked-directory/external.module.css', write: true }),
+      /symbolic-link target/,
+    );
+    assert.equal(await readFile(join(cwd, 'real.module.css'), 'utf8'), '.card { padding: 13px; }\n');
+    assert.equal(await readFile(join(external, 'external.module.css'), 'utf8'), '.card { padding: 17px; }\n');
+  } finally {
+    await Promise.all([cleanup(cwd), cleanup(external)]);
   }
 });
 
@@ -1422,7 +1698,7 @@ test('detects source changes between planning reads', async () => {
     ]);
 
     await assert.rejects(
-      migrate({ cwd, workspaces: true }),
+      migrate({ cwd, workspaces: true, force: true }),
       /Source changed during planning: .*bbb[/\\]globals\.css/,
     );
   } finally {

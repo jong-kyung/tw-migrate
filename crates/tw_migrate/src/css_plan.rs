@@ -41,16 +41,26 @@ pub(crate) struct ParsedCss {
     pub(crate) global_at_rules: Vec<GlobalAtRulePlan>,
 }
 
+pub(crate) struct ParseOptions {
+    pub(crate) syntax: Syntax,
+    pub(crate) is_module: bool,
+    pub(crate) can_move_at_rules: bool,
+    pub(crate) relative_urls_stable: bool,
+}
+
 pub(crate) fn parse_css_rules(
     path: &str,
     keyframe_scope: &str,
     source: &str,
     theme_tokens: &HashMap<String, String>,
-    syntax: Syntax,
-    is_module: bool,
-    can_move_at_rules: bool,
-    relative_urls_stable: bool,
+    options: ParseOptions,
 ) -> Result<ParsedCss, String> {
+    let ParseOptions {
+        syntax,
+        is_module,
+        can_move_at_rules,
+        relative_urls_stable,
+    } = options;
     let allocator = oxc_css_parser::Allocator::default();
     let mut parser = CssParser::new(&allocator, source, syntax);
     let stylesheet = parser

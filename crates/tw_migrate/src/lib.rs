@@ -11,6 +11,11 @@ mod utilities;
 use napi_derive::napi;
 
 #[napi]
+pub fn validate_css(source: String) -> napi::Result<()> {
+    planner::validate_css(&source).map_err(napi::Error::from_reason)
+}
+
+#[napi]
 pub fn plan_migration(request: String) -> napi::Result<String> {
     planner::plan_json(&request).map_err(|error| napi::Error::from_reason(error.to_string()))
 }

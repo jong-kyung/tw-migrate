@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { decodedMappings, originalPositionFor, TraceMap } from '@jridgewell/trace-mapping';
+import { eachMapping, TraceMap } from '@jridgewell/trace-mapping';
 
 const SASS_EXTENSIONS = new Set(['.scss', '.sass']);
 
@@ -73,29 +73,20 @@ export async function compileLessEntry(less, entryPath, source) {
   };
 }
 
-function sourceMappings(sourceMap, sourceBase) {
-  const traceMap = new TraceMap(sourceMap);
+export function sourceMappings(sourceMap, sourceBase) {
   const mappings = [];
-  for (const [generatedLine, segments] of decodedMappings(traceMap).entries()) {
-    for (const segment of segments) {
-      if (segment.length < 4) continue;
-      const generatedColumn = segment[0];
-      const original = originalPositionFor(traceMap, {
-        line: generatedLine + 1,
-        column: generatedColumn,
-      });
-      if (original.source === null || original.line === null || original.column === null) continue;
-      const sourcePath = sourcePathFromMap(original.source, sourceBase);
-      if (!sourcePath) continue;
-      mappings.push({
-        generatedLine,
-        generatedColumn,
-        sourcePath,
-        originalLine: original.line - 1,
-        originalColumn: original.column,
-      });
-    }
-  }
+  eachMapping(new TraceMap(sourceMap), (mapping) => {
+    if (mapping.source === null || mapping.originalLine === null || mapping.originalColumn === null) return;
+    const sourcePath = sourcePathFromMap(mapping.source, sourceBase);
+    if (!sourcePath) return;
+    mappings.push({
+      generatedLine: mapping.generatedLine - 1,
+      generatedColumn: mapping.generatedColumn,
+      sourcePath,
+      originalLine: mapping.originalLine - 1,
+      originalColumn: mapping.originalColumn,
+    });
+  });
   return mappings;
 }
 

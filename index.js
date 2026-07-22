@@ -1,12 +1,12 @@
 import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { chmod, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, lstat, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 import { parseHtmlSource } from './html.js';
-import { planBatchMigration } from './native.js';
+import { planBatchMigration, validateCss } from './native.js';
 import {
   compileLessEntry,
   compileSassEntry,
@@ -14,6 +14,7 @@ import {
   isSassPath,
   loadProjectLess,
   loadProjectSass,
+  sourceMappings,
 } from './style-compiler.js';
 
 const run = promisify(execFile);
@@ -158,6 +159,9 @@ async function resolveScope(options) {
   if (configuredEntry && !(await stat(configuredEntry)).isFile()) {
     throw new TypeError('The Tailwind CSS entry must be a file');
   }
+  for (const path of [explicitStyle, configuredEntry]) {
+    if (path) await rejectSymlinkTarget(path, currentPackage);
+  }
   if (explicitStyle && !isWithin(currentPackage, explicitStyle)) {
     throw new TypeError('The selected stylesheet must belong to the current package');
   }
@@ -222,7 +226,7 @@ async function planPackage(context, packageRoot) {
       pathOwners,
     });
   } catch (error) {
-    if (!options.force) throw error;
+    if (!options.force || isIntegrityError(error)) throw error;
     return { failure: packageFailure(workspaceRoot, packageRoot, error) };
   }
   const packageSources = [
@@ -267,7 +271,7 @@ async function planPackage(context, packageRoot) {
   try {
     tailwind = await loadTailwind(packageRoot, tailwindPath, snapshots, workspaceRoot);
   } catch (error) {
-    if (!options.force) throw error;
+    if (!options.force || isIntegrityError(error)) throw error;
     return { failure: packageFailure(workspaceRoot, packageRoot, error) };
   }
 
@@ -284,7 +288,9 @@ async function planPackage(context, packageRoot) {
   let less;
   try {
     stylesheets = [];
+    const compilerDependents = new Map();
     for (const stylePath of targets.sort()) {
+      await rejectSymlinkTarget(stylePath, packageRoot);
       const isPartial = isSassPath(stylePath) && basename(stylePath).startsWith('_');
       const stylesheet = {
         cssPath: stylePath,
@@ -304,18 +310,30 @@ async function planPackage(context, packageRoot) {
         compiled = await compileLessEntry(less, stylePath, stylesheet.cssSource);
       }
       if (compiled) {
+        validateCss(compiled.css);
         for (const loadedPath of compiled.loadedPaths) {
           if (!isProjectInput(workspaceRoot, loadedPath)) continue;
           const source = await snapshotFile(snapshots, loadedPath);
           if (!styleSources.has(loadedPath)) styleSources.set(loadedPath, source);
+          if (loadedPath !== stylePath) {
+            const dependents = compilerDependents.get(loadedPath) ?? [];
+            dependents.push(stylePath);
+            compilerDependents.set(loadedPath, dependents);
+          }
         }
         stylesheet.analysisSource = compiled.css;
         stylesheet.sourceMappings = compiled.sourceMappings;
       }
       stylesheets.push(stylesheet);
     }
+    for (const stylesheet of stylesheets) {
+      const dependents = compilerDependents.get(stylesheet.cssPath) ?? [];
+      if (dependents.length === 0) continue;
+      stylesheet.isPartial = true;
+      stylesheet.cssDependents = [...new Set([...stylesheet.cssDependents, ...dependents])].sort();
+    }
   } catch (error) {
-    if (!options.force) throw error;
+    if (!options.force || isIntegrityError(error)) throw error;
     return { failure: packageFailure(workspaceRoot, packageRoot, error) };
   }
 
@@ -348,9 +366,9 @@ async function planPackage(context, packageRoot) {
     if (!changed && !plan.deletedFiles.includes(stylesheet.cssPath)) continue;
     const source = changed?.source ?? '';
     if (isSassPath(stylesheet.cssPath)) {
-      await compileSassEntry(sass, stylesheet.cssPath, source);
+      validateCss((await compileSassEntry(sass, stylesheet.cssPath, source)).css);
     } else {
-      await compileLessEntry(less, stylesheet.cssPath, source);
+      validateCss((await compileLessEntry(less, stylesheet.cssPath, source)).css);
     }
   }
   return { plan };
@@ -520,6 +538,26 @@ async function preparePackageHtml({
   )) {
     const parsed = parseHtmlSource(file.path, file.source);
     const contexts = [];
+    let linkBase = dirname(file.path);
+    const base = parsed.bases[0];
+    if (base) {
+      const baseReference = base.href.split(/[?#]/, 1)[0];
+      const basePath = base.writable && (baseReference === ''
+        ? file.path
+        : localHtmlReference(packageRoot, dirname(file.path), base.href));
+      if (!basePath || !isWithin(packageRoot, basePath)) {
+        warnings.push(htmlWarning(
+          'unsupported-html-base',
+          file.path,
+          base.start,
+          base.end,
+          'A remote or unrepresentable base URL prevents safe stylesheet link resolution.',
+        ));
+        linkBase = undefined;
+      } else {
+        linkBase = base.href.split(/[?#]/, 1)[0].endsWith('/') ? basePath : dirname(basePath);
+      }
+    }
     for (const link of parsed.links) {
       const variants = mediaVariants(link.media);
       if (variants === undefined) {
@@ -532,7 +570,7 @@ async function preparePackageHtml({
         ));
         continue;
       }
-      const linkedPath = localHtmlReference(packageRoot, dirname(file.path), link.href);
+      const linkedPath = linkBase && localHtmlReference(packageRoot, linkBase, link.href);
       if (!linkedPath || !isWithin(packageRoot, linkedPath)) {
         warnings.push(htmlWarning(
           'unsupported-html-stylesheet-link',
@@ -584,6 +622,17 @@ async function collectHtmlStyleContexts(state) {
   if (state.visited.has(key)) return;
   state.visited.add(key);
   if (!isStylesheetPath(state.path)) return;
+  const owner = state.pathOwners.get(state.path);
+  if (owner && owner !== state.packageRoot) {
+    state.warnings.push(htmlWarning(
+      'cross-package-stylesheet-link',
+      state.path,
+      0,
+      0,
+      'A stylesheet owned by another package is not analyzed outside workspace mode.',
+    ));
+    return;
+  }
 
   let source;
   try {
@@ -594,7 +643,7 @@ async function collectHtmlStyleContexts(state) {
     throw error;
   }
   if (!state.styleSources.has(state.path)) state.styleSources.set(state.path, source);
-  state.pathOwners.set(state.path, state.packageRoot);
+  if (!owner) state.pathOwners.set(state.path, state.packageRoot);
 
   if (extension(state.path) === '.css') {
     const mapped = await mappedPreprocessorSource(state.path, source, state);
@@ -634,58 +683,117 @@ async function collectHtmlStyleContexts(state) {
 
 async function mappedPreprocessorSource(cssPath, cssSource, state) {
   const matches = [...cssSource.matchAll(/\/\*[#@]\s*sourceMappingURL=([^\s*]+)\s*\*\//g)];
-  const reference = matches.at(-1)?.[1];
-  const mapPath = reference && localHtmlReference(state.packageRoot, dirname(cssPath), reference);
-  if (!mapPath || !isWithin(state.packageRoot, mapPath)) return undefined;
+  const directive = matches.at(-1);
+  if (!directive) return undefined;
+  const warn = () => state.warnings.push(htmlWarning(
+    'unusable-source-map',
+    cssPath,
+    utf8Offset(cssSource, directive.index),
+    utf8Offset(cssSource, directive.index + directive[0].length),
+    'The generated stylesheet source map does not prove one authored preprocessor entry.',
+  ));
+  const mapPath = localHtmlReference(state.packageRoot, dirname(cssPath), directive[1]);
+  if (!mapPath || !isWithin(state.packageRoot, mapPath)) {
+    warn();
+    return undefined;
+  }
 
   let rawMap;
   try {
     rawMap = await snapshotFile(state.snapshots, mapPath);
   } catch (error) {
-    if (error.code === 'ENOENT') return undefined;
-    throw error;
-  }
-  let sourceMap;
-  try {
-    sourceMap = JSON.parse(rawMap);
-  } catch {
+    if (error.code !== 'ENOENT') throw error;
+    warn();
     return undefined;
   }
-  const sources = (sourceMap.sources ?? [])
-    .map((source) => sourceMapSource(mapPath, sourceMap.sourceRoot, source))
-    .filter((path) => path && isPreprocessorPath(path) && isWithin(state.packageRoot, path));
-  const uniqueSources = [...new Set(sources)];
-  const entries = uniqueSources.filter((path) => !basename(path).startsWith('_'));
-  if (entries.length !== 1) return undefined;
+  let mappings;
+  try {
+    mappings = sourceMappings(JSON.parse(rawMap), dirname(mapPath));
+  } catch {
+    warn();
+    return undefined;
+  }
+  const entries = [...new Set(mappings
+    .map((mapping) => mapping.sourcePath)
+    .filter((path) => isPreprocessorPath(path)
+      && isWithin(state.packageRoot, path)
+      && !basename(path).startsWith('_')))];
+  if (entries.length !== 1) {
+    warn();
+    return undefined;
+  }
 
   const entryPath = entries[0];
-  const entrySource = state.styleSources.get(entryPath)
-    ?? await snapshotFile(state.snapshots, entryPath);
-  if (!state.styleSources.has(entryPath)) state.styleSources.set(entryPath, entrySource);
-  state.pathOwners.set(entryPath, state.packageRoot);
-  return entryPath;
-}
-
-function sourceMapSource(mapPath, sourceRoot, source) {
-  try {
-    const url = new URL(source);
-    return url.protocol === 'file:' ? fileURLToPath(url) : undefined;
-  } catch {
-    return resolve(dirname(mapPath), sourceRoot ?? '', source);
+  const owner = state.pathOwners.get(entryPath);
+  if (owner && owner !== state.packageRoot) {
+    warn();
+    return undefined;
   }
+  let entrySource = state.styleSources.get(entryPath);
+  if (entrySource === undefined) {
+    try {
+      entrySource = await snapshotFile(state.snapshots, entryPath);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      warn();
+      return undefined;
+    }
+    state.styleSources.set(entryPath, entrySource);
+  }
+  if (!owner) state.pathOwners.set(entryPath, state.packageRoot);
+  return entryPath;
 }
 
 function cssImports(source) {
   const imports = [];
-  const withoutComments = stripCssComments(source);
-  const pattern = /@import\s+(?:url\(\s*)?(?:["']([^"']+)["']|([^"'()\s;]+))\s*\)?\s*([^;]*);/g;
-  for (const match of withoutComments.matchAll(pattern)) {
-    imports.push({
+  const masked = maskCssComments(source);
+  let depth = 0;
+  let quote;
+  for (let index = 0; index < masked.length; index += 1) {
+    const character = masked[index];
+    if (quote) {
+      if (character === '\\') index += 1;
+      else if (character === quote) quote = undefined;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === '{') {
+      depth += 1;
+      continue;
+    }
+    if (character === '}') {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+    if (depth !== 0 || masked.slice(index, index + 7).toLowerCase() !== '@import'
+      || /[-\w]/.test(masked[index + 7] ?? '')) continue;
+
+    let end = index + 7;
+    let importQuote;
+    let parentheses = 0;
+    for (; end < masked.length; end += 1) {
+      const next = masked[end];
+      if (importQuote) {
+        if (next === '\\') end += 1;
+        else if (next === importQuote) importQuote = undefined;
+      } else if (next === '"' || next === "'") importQuote = next;
+      else if (next === '(') parentheses += 1;
+      else if (next === ')') parentheses = Math.max(0, parentheses - 1);
+      else if (next === ';' && parentheses === 0) break;
+    }
+    if (end >= masked.length) continue;
+    const statement = masked.slice(index, end + 1);
+    const match = /^@import\s+(?:url\(\s*)?(?:["']([^"']+)["']|([^"'()\s;]+))\s*\)?\s*([^;]*);$/i.exec(statement);
+    if (match) imports.push({
       href: match[1] ?? match[2],
       media: match[3].trim(),
-      start: match.index,
-      end: match.index + match[0].length,
+      start: utf8Offset(source, index),
+      end: utf8Offset(source, end + 1),
     });
+    index = end;
   }
   return imports;
 }
@@ -730,6 +838,15 @@ function isProjectInput(workspaceRoot, path) {
     && !relative(workspaceRoot, path).split(/[\\/]/).includes('node_modules');
 }
 
+async function rejectSymlinkTarget(path, root) {
+  for (let current = path; isWithin(root, current); current = dirname(current)) {
+    if ((await lstat(current)).isSymbolicLink()) {
+      throw new Error(`Refusing to migrate a symbolic-link target: ${path}`);
+    }
+    if (current === root) break;
+  }
+}
+
 async function snapshotFile(snapshots, path) {
   return recordSnapshot(snapshots, path, await readFile(path, 'utf8'));
 }
@@ -755,6 +872,11 @@ function packageFailure(workspaceRoot, packageRoot, error) {
 function isRecoverablePlanningError(error) {
   const message = error instanceof Error ? error.message : String(error);
   return message.startsWith(RECOVERABLE_INPUT_ERROR);
+}
+
+function isIntegrityError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.startsWith('Source changed during planning:');
 }
 
 async function readSources(paths, snapshots) {
@@ -788,8 +910,16 @@ function normalizedRelativePath(root, path) {
   return relative(root, path).split(sep).join('/');
 }
 
+function maskCssComments(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\r\n]/g, ' '));
+}
+
 function stripCssComments(source) {
-  return source.replace(/\/\*[\s\S]*?\*\//g, '');
+  return maskCssComments(source);
+}
+
+function utf8Offset(source, index) {
+  return Buffer.byteLength(source.slice(0, index));
 }
 
 function indexStylesheetDependents(styleSources) {

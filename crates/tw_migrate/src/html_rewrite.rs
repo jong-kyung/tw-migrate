@@ -142,6 +142,7 @@ fn rebased_attributes(file: &SourceFile) -> HashMap<usize, HtmlAttribute> {
             ]
             .into_iter()
             .flatten()
+            .filter(|attribute| attribute.writable)
         })
         .collect::<Vec<_>>();
     attributes.sort_by_key(|attribute| attribute.start);
@@ -171,6 +172,7 @@ fn rebased_attributes(file: &SourceFile) -> HashMap<usize, HtmlAttribute> {
                 start,
                 end,
                 synthetic: false,
+                writable: true,
             },
         );
     }
@@ -186,6 +188,7 @@ fn live_synthetic_class(source: &str, start: usize) -> Option<(HtmlAttribute, us
                 start,
                 end: start,
                 synthetic: true,
+                writable: true,
             },
             0,
         ));
@@ -198,6 +201,7 @@ fn live_synthetic_class(source: &str, start: usize) -> Option<(HtmlAttribute, us
             start: value_start,
             end: value_end,
             synthetic: false,
+            writable: true,
         },
         value_end + 1 - start,
     ))
@@ -270,12 +274,14 @@ mod tests {
                     start: 13,
                     end: 26,
                     synthetic: false,
+                    writable: true,
                 }),
                 id_attribute: Some(HtmlAttribute {
                     value: "hero".to_string(),
                     start: 31,
                     end: 35,
                     synthetic: false,
+                    writable: true,
                 }),
             }],
             html_stylesheets: vec![HtmlStylesheet {

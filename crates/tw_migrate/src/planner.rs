@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     animations::append_keyframes,
     at_rules::{append_global_at_rules, is_conditional},
-    css_plan::{ParsedCss, RulePlan, SelectorKey, parse_css_rules},
+    css_plan::{ParseOptions, ParsedCss, RulePlan, SelectorKey, parse_css_rules},
     html_rewrite::plan_html_file,
     js_rewrite::{SourcePlan, plan_batch_source_file, plan_source_file, validate_js},
     utilities::{css_properties_conflict, tailwind_utilities_conflict, tailwind_variants_match},
@@ -129,6 +129,8 @@ pub(crate) struct HtmlAttribute {
     pub(crate) end: usize,
     #[serde(default)]
     pub(crate) synthetic: bool,
+    #[serde(default = "default_writable")]
+    pub(crate) writable: bool,
 }
 
 #[derive(Clone, Deserialize)]
@@ -503,10 +505,12 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss), Strin
         keyframe_scope,
         analysis_source,
         &request.theme_tokens,
-        analysis_syntax,
-        is_module,
-        can_move_at_rules,
-        relative_urls_stable,
+        ParseOptions {
+            syntax: analysis_syntax,
+            is_module,
+            can_move_at_rules,
+            relative_urls_stable,
+        },
     )?;
     if request.analysis_source.is_some() {
         map_authored_rule_spans(request, analysis_source, &mut parsed.rules)?;
@@ -589,13 +593,13 @@ fn map_authored_rule_spans(
         }
         rule.authored_span = authored_rules
             .iter()
-            .filter(|span| {
+            .filter(|(span, _)| {
                 original_offsets
                     .iter()
                     .all(|offset| span.start <= *offset && *offset < span.end)
             })
-            .min_by_key(|span| span.end - span.start)
-            .cloned();
+            .min_by_key(|(span, _)| span.end - span.start)
+            .map(|(span, _)| span.clone());
     }
 
     let mut shared_spans: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
@@ -627,17 +631,38 @@ fn map_authored_rule_spans(
     for index in ambiguous {
         rules[index].authored_span = None;
     }
+    let interpolation = match request.syntax {
+        StylesheetSyntax::Scss | StylesheetSyntax::Sass => Some("#{"),
+        StylesheetSyntax::Less => Some("@{"),
+        StylesheetSyntax::Css => None,
+    };
+    if let Some(interpolation) = interpolation {
+        for rule in rules {
+            let interpolated = rule.authored_span.as_ref().is_some_and(|authored_span| {
+                authored_rules.iter().any(|(span, selector_span)| {
+                    span == authored_span
+                        && request.css_source[selector_span.clone()].contains(interpolation)
+                })
+            });
+            if interpolated {
+                rule.authored_span = None;
+            }
+        }
+    }
     Ok(())
 }
 
 fn collect_qualified_rule_spans(
     statements: &[Statement<'_>],
-    spans: &mut Vec<std::ops::Range<usize>>,
+    spans: &mut Vec<(std::ops::Range<usize>, std::ops::Range<usize>)>,
 ) {
     for statement in statements {
         match statement {
             Statement::QualifiedRule(rule) => {
-                spans.push(rule.span.start..rule.span.end);
+                spans.push((
+                    rule.span.start..rule.span.end,
+                    rule.selector.span.start..rule.selector.span.end,
+                ));
                 collect_qualified_rule_spans(&rule.block.statements, spans);
             }
             Statement::AtRule(at_rule) => {
@@ -1131,7 +1156,7 @@ fn collect_empty_conditionals(statements: &[Statement<'_>], edits: &mut Vec<Edit
     }
 }
 
-fn validate_css(source: &str) -> Result<(), String> {
+pub(crate) fn validate_css(source: &str) -> Result<(), String> {
     validate_stylesheet(source, Syntax::Css)
 }
 

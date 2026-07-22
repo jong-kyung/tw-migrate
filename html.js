@@ -16,6 +16,7 @@ export function parseHtmlSource(path, source) {
   }
 
   const links = [];
+  const bases = [];
   const elements = [];
   const dynamicAttributes = [];
 
@@ -29,13 +30,17 @@ export function parseHtmlSource(path, source) {
           && !attributes.has('disabled')) {
           const href = locatedAttribute(source, locations.href, attributes.get('href'));
           const media = locatedAttribute(source, locations.media, attributes.get('media'));
-          if (href) links.push({ href: href.value, media: media?.value ?? '', start: href.start, end: href.end });
+          if (href?.writable) links.push({ href: href.value, media: media?.value ?? '', start: href.start, end: href.end });
+        }
+        if (node.tagName === 'base' && bases.length === 0) {
+          const href = locatedAttribute(source, locations.href, attributes.get('href'));
+          if (href) bases.push({ href: href.value, writable: href.writable, start: href.start, end: href.end });
         }
 
         let classAttribute = locatedAttribute(source, locations.class, attributes.get('class'));
         const idAttribute = locatedAttribute(source, locations.id, attributes.get('id'));
         const dynamic = [classAttribute, idAttribute].find((attribute) =>
-          attribute && isTemplateValue(attribute.value),
+          attribute && (!attribute.writable || isTemplateValue(attribute.value)),
         ) ?? (classAttribute && !classAttribute.quoted ? classAttribute : undefined);
         if (dynamic) {
           dynamicAttributes.push({ start: dynamic.start, end: dynamic.end });
@@ -56,7 +61,21 @@ export function parseHtmlSource(path, source) {
   }
 
   visit(document);
-  return { links, elements, dynamicAttributes };
+  return toByteOffsets(source, { links, bases, elements, dynamicAttributes });
+}
+
+function toByteOffsets(source, parsed) {
+  const offset = (index) => Buffer.byteLength(source.slice(0, index));
+  const attribute = (value) => value && { ...value, start: offset(value.start), end: offset(value.end) };
+  return {
+    links: parsed.links.map((link) => ({ ...link, start: offset(link.start), end: offset(link.end) })),
+    bases: parsed.bases.map((base) => ({ ...base, start: offset(base.start), end: offset(base.end) })),
+    elements: parsed.elements.map((element) => ({
+      classAttribute: attribute(element.classAttribute),
+      idAttribute: attribute(element.idAttribute),
+    })),
+    dynamicAttributes: parsed.dynamicAttributes.map(attribute),
+  };
 }
 
 function classInsertionOffset(source, startTag) {
@@ -92,10 +111,10 @@ function locatedAttribute(source, location, parsedValue) {
     while (end < raw.length && !/\s/.test(raw[end])) end += 1;
   }
   const value = raw.slice(start, end);
-  if (value.includes('&')) return undefined;
   return {
-    value,
+    value: value.includes('&') ? parsedValue : value,
     quoted,
+    writable: !value.includes('&'),
     start: location.startOffset + start,
     end: location.startOffset + end,
   };
