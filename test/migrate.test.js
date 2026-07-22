@@ -721,7 +721,7 @@ test('retains an HTML-linked CSS Module when an attribute is dynamic', async () 
   }
 });
 
-test('retains a CSS Module linked from gitignored HTML', async () => {
+test('retains a CSS Module linked with an entity from gitignored HTML', async () => {
   const cwd = await fixture();
   try {
     await run('git', ['init', '-q'], { cwd });
@@ -729,7 +729,7 @@ test('retains a CSS Module linked from gitignored HTML', async () => {
       writeFile(join(cwd, '.gitignore'), 'generated.html\n'),
       writeFile(
         join(cwd, 'generated.html'),
-        '<link rel="stylesheet" href="./Button.module.css"><button class="button">HTML</button>\n',
+        '<link rel="stylesheet" href="./Button.module&#46;css"><button class="button">HTML</button>\n',
       ),
     ]);
 
@@ -738,7 +738,7 @@ test('retains a CSS Module linked from gitignored HTML', async () => {
     assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
     assert.equal(
       await readFile(join(cwd, 'generated.html'), 'utf8'),
-      '<link rel="stylesheet" href="./Button.module.css"><button class="button">HTML</button>\n',
+      '<link rel="stylesheet" href="./Button.module&#46;css"><button class="button">HTML</button>\n',
     );
   } finally {
     await cleanup(cwd);

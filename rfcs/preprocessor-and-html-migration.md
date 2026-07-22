@@ -24,8 +24,9 @@ Static HTML support is limited to literal `class` and `id` attributes reached th
 8. Support literal `class` and `id` attributes in static `.html` files.
 9. Scope HTML matching through local `<link rel="stylesheet">` and stylesheet import graphs.
 10. Connect linked generated CSS to one unique same-stem preprocessor entry without requiring a prior build.
-11. Preserve the current package-batch snapshot, conflict, validation, and atomic-write guarantees.
-12. Preserve package-level `--force` failure isolation.
+11. Remove a fully migrated CSS Module and each writable direct HTML link that consumed it.
+12. Preserve the current package-batch snapshot, conflict, validation, and atomic-write guarantees.
+13. Preserve package-level `--force` failure isolation.
 
 ## Non-Goals
 
@@ -204,6 +205,8 @@ A static HTML page is affected only by styles reachable through its local styles
 HTML migration does not inspect source maps emitted by prior project builds. Whether the linked CSS exists or not, it connects the link to a preprocessor entry only when exactly one non-partial file in the package has the same filename stem. The inferred relationship emits `inferred-preprocessor-source`; zero or multiple matches are not inferred. Once admitted, the project compiler's in-memory source map remains required to prove generated-to-authored edit spans.
 
 Root-relative links are resolved against the package root. Query strings and fragments are excluded from filesystem resolution but preserved in HTML. Remote or virtual URLs are not writable graph edges.
+
+When every rule and every JS/TS and static HTML reference to a CSS Module is migrated, each writable direct HTML `<link>` for that module is removed with the now-unused module dependency. A reference-only HTML file, dynamic attribute, unsupported media condition, retained rule, or otherwise unproven consumer retains both the module and its link. Transitive links are not removed; their stylesheet import edge retains the dependency instead.
 
 ### Shared Partials
 
@@ -443,6 +446,8 @@ Each phase is independently testable and may merge separately. Public documentat
 - quote style and unrelated HTML bytes remain unchanged.
 - template-looking values, bound attributes, inline styles, style blocks, scripts, and remote links are not rewritten.
 - linked cross-stylesheet conflicts retain contributing rules and consumer edits.
+- fully migrated CSS Modules remove direct writable HTML links, including HTML-only and inferred-preprocessor consumption.
+- reference-only HTML, entity-bearing links, dynamic attributes, and unsupported link media cannot leave a dangling link.
 
 ### Transaction and Regression
 
@@ -465,7 +470,8 @@ Each phase is independently testable and may merge separately. Public documentat
 7. Static HTML edits are link-scoped, literal-only, and byte-local.
 8. Global rules are never automatically deleted.
 9. Generated CSS is not edited; changed preprocessor entries produce rebuild warnings.
-10. Existing snapshot, conflict, atomic write, rollback, `--force`, determinism, and idempotence guarantees remain intact.
+10. A CSS Module is unlinked from static HTML only when every rule and consumer is safely migrated.
+11. Existing snapshot, conflict, atomic write, rollback, `--force`, determinism, and idempotence guarantees remain intact.
 
 ## Accepted Trade-offs
 

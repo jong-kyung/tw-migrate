@@ -1113,9 +1113,11 @@ fn plan_request(
     Ok(PlanResponse {
         files: planned_files,
         deleted_files,
-        unlinked_files: module_import_is_unused
-            .then(|| vec![request.css_path])
-            .unwrap_or_default(),
+        unlinked_files: if module_import_is_unused {
+            vec![request.css_path]
+        } else {
+            Vec::new()
+        },
         candidates: candidates.into_iter().collect(),
         converted_rules,
         retained_rules,
