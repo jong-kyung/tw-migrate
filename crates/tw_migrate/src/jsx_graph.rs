@@ -153,7 +153,7 @@ pub(crate) fn prove_prepared(
             let Ok(nodes) = &comp.body else { continue };
             for (node_ix, node) in nodes.iter().enumerate() {
                 match &node.kind {
-                    NodeKind::Element { keys } => {
+                    NodeKind::Element { keys, .. } => {
                         for (key, span) in keys {
                             if key == target {
                                 let result = prove_up(
@@ -234,9 +234,12 @@ enum TagRef {
 
 #[derive(Debug)]
 enum NodeKind {
-    /// Host element with its statically known CSS Module keys.
+    /// Host element with its statically known CSS Module keys. `tainted`
+    /// marks a spread attribute: runtime props may override `className`, so
+    /// the keys remain valid target usages but never witness an ancestor.
     Element {
         keys: Vec<(SelectorKey, (usize, usize))>,
+        tainted: bool,
     },
     /// Invocation of a (possibly unresolved) component, with any CSS Module
     /// class names passed through the `className` prop.
@@ -510,6 +513,9 @@ fn extract_file(path: &str, source: &str, css_path: &str) -> Option<FileIr> {
                             decl,
                             true,
                         );
+                    }
+                    Some(Declaration::ClassDeclaration(class)) => {
+                        sweeps.push((SweepTarget::Class(class), R_BOUNDARY));
                     }
                     _ => {}
                 }
@@ -1020,6 +1026,7 @@ impl<'s> CompBuilder<'_, 's> {
             None => {
                 let mut keys = Vec::new();
                 let mut forward = false;
+                let mut tainted = false;
                 for item in &element.opening_element.attributes {
                     match item {
                         JSXAttributeItem::Attribute(attribute) => {
@@ -1037,13 +1044,15 @@ impl<'s> CompBuilder<'_, 's> {
                             }
                         }
                         JSXAttributeItem::SpreadAttribute(spread) => {
-                            // ponytail: spread props may override className;
-                            // usages stay recorded, ancestors stay conservative.
+                            // Spread props may override className at runtime:
+                            // usages stay recorded, but the element can no
+                            // longer witness an ancestor.
+                            tainted = true;
                             self.sweep_expr(&spread.argument, R_BOUNDARY);
                         }
                     }
                 }
-                let ix = self.push(parent, NodeKind::Element { keys });
+                let ix = self.push(parent, NodeKind::Element { keys, tainted });
                 if forward {
                     self.forward_targets.push(ix);
                 }
@@ -1614,8 +1623,13 @@ fn prove_up(
     let mut current = nodes[node].parent;
     while let Some(parent) = current {
         match &nodes[parent].kind {
-            NodeKind::Element { keys } => {
+            NodeKind::Element { keys, tainted } => {
                 if keys.iter().any(|(key, _)| key == query.ancestor) {
+                    if *tainted {
+                        // A spread on the witness could drop the ancestor
+                        // class at runtime.
+                        return Err(R_BOUNDARY);
+                    }
                     return Ok(());
                 }
                 if query.relation == Relation::Child {
@@ -2053,6 +2067,100 @@ export function App() {
         let child = run(&files, Relation::Child, "parent", "child");
         assert!(!child.aggregate_proven);
         assert_eq!(child.reason, Some("unproven-ancestry"));
+    }
+
+    #[test]
+    fn export_class_component_usage_disqualifies() {
+        let files = [(
+            "src/App.tsx",
+            r#"import styles from "./App.module.css";
+export class Legacy {
+  render() {
+    return <span className={styles.child} />;
+  }
+}
+export function App() {
+  return <div className={styles.parent}><span className={styles.child} /></div>;
+}
+"#,
+        )];
+        let outcome = run(&files, Relation::Descendant, "parent", "child");
+        assert!(!outcome.aggregate_proven, "{outcome:?}");
+        assert_eq!(outcome.usages.len(), 2);
+        assert_eq!(outcome.reason, Some("dynamic-content-boundary"));
+    }
+
+    #[test]
+    fn spread_props_on_ancestor_disqualify() {
+        let files = [(
+            "src/App.tsx",
+            r#"import styles from "./App.module.css";
+export function App({ extra }) {
+  return <div className={styles.parent} {...extra}><span className={styles.child} /></div>;
+}
+"#,
+        )];
+        let outcome = run(&files, Relation::Descendant, "parent", "child");
+        assert!(!outcome.aggregate_proven, "{outcome:?}");
+        assert_eq!(outcome.usages.len(), 1);
+        assert_eq!(outcome.usages[0].reason, Some("dynamic-content-boundary"));
+    }
+
+    #[test]
+    fn spread_props_on_unrelated_sibling_still_prove() {
+        let files = [(
+            "src/App.tsx",
+            r#"import styles from "./App.module.css";
+export function App({ extra }) {
+  return <div className={styles.parent}><em {...extra} /><span className={styles.child} /></div>;
+}
+"#,
+        )];
+        for relation in [Relation::Child, Relation::Descendant] {
+            let outcome = run(&files, relation, "parent", "child");
+            assert!(outcome.aggregate_proven, "{relation:?}: {outcome:?}");
+        }
+    }
+
+    #[test]
+    fn hoc_wrapped_component_disqualifies() {
+        let files = [(
+            "src/App.tsx",
+            r#"import styles from "./App.module.css";
+import { withTheme } from "./theme";
+function Inner() {
+  return <span className={styles.child} />;
+}
+const Fancy = withTheme(Inner);
+export function App() {
+  return <div className={styles.parent}><Fancy /></div>;
+}
+"#,
+        )];
+        let outcome = run(&files, Relation::Descendant, "parent", "child");
+        assert!(!outcome.aggregate_proven, "{outcome:?}");
+        assert_eq!(outcome.usages.len(), 1);
+        assert_eq!(outcome.usages[0].reason, Some("hoc-or-dynamic-component"));
+    }
+
+    #[test]
+    fn dynamic_component_tag_disqualifies() {
+        let files = [(
+            "src/App.tsx",
+            r#"import styles from "./App.module.css";
+function Section() {
+  return <span className={styles.child} />;
+}
+const Tag = flag ? Section : "div";
+export function App() {
+  return <div className={styles.parent}><Tag /></div>;
+}
+"#,
+        )];
+        let outcome = run(&files, Relation::Descendant, "parent", "child");
+        assert!(!outcome.aggregate_proven, "{outcome:?}");
+        assert_eq!(outcome.usages.len(), 1);
+        assert_eq!(outcome.usages[0].reason, Some("hoc-or-dynamic-component"));
     }
 
     #[test]

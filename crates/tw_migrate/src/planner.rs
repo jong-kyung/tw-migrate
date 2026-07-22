@@ -4202,6 +4202,47 @@ mod tests {
     }
 
     #[test]
+    fn retains_a_module_relationship_used_inside_an_export_class() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card .title { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.card}><span className={styles.title} /></div>;\nexport class Legacy {\n  render() {\n    return <span className={styles.title} />;\n  }\n}\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["files"], serde_json::json!([]));
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 1);
+        let message = warning_message(&response, "unproven-css-module-relationship");
+        assert!(message.contains("dynamic-content-boundary"), "{message}");
+    }
+
+    #[test]
+    fn retains_a_module_relationship_behind_a_hoc() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card .title { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nimport { withTheme } from './theme';\nfunction Title() {\n  return <span className={styles.title} />;\n}\nconst Fancy = withTheme(Title);\nexport const Card = () => <div className={styles.card}><Fancy /></div>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["files"], serde_json::json!([]));
+        assert_eq!(response["retainedRules"], 1);
+        let message = warning_message(&response, "unproven-css-module-relationship");
+        assert!(message.contains("hoc-or-dynamic-component"), "{message}");
+    }
+
+    #[test]
     fn batch_retains_a_proven_relationship_with_a_reference_only_target_usage() {
         let request = serde_json::json!({
             "stylesheets": [{

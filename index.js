@@ -60,12 +60,13 @@ export async function migrate(options = {}) {
     readSources(stylePaths, snapshots),
     Promise.all(sourcePaths.map(async (path) => {
       const source = await readFile(path, 'utf8');
-      // Scan-only sources matter solely as potential CSS Module references.
-      // HTML entities can encode any part of a linked filename, so retain
-      // ignored HTML containing a link for parse5 to classify safely.
-      const mayReferenceModule = extension(path) === '.html'
-        ? /<link\b/i.test(source)
-        : mentionsStylesheetModule(source);
+      // Scan-only scripts are always retained as reference-only inputs: even
+      // without a ".module." mention they can render components whose trees
+      // the closed-world relationship proofs must see. Scan-only HTML matters
+      // solely as a potential stylesheet consumer, and HTML entities can
+      // encode any part of a linked filename, so retain ignored HTML
+      // containing a link for parse5 to classify safely.
+      const mayReferenceModule = extension(path) !== '.html' || /<link\b/i.test(source);
       if (!scope.targetable.has(path) && !mayReferenceModule) return undefined;
       return { path, source: recordSnapshot(snapshots, path, source) };
     })),
@@ -597,10 +598,6 @@ function stylesheetSyntax(path) {
 function isStylesheetModule(path) {
   const syntax = stylesheetSyntax(path);
   return syntax !== undefined && path.endsWith(`.module.${syntax}`);
-}
-
-function mentionsStylesheetModule(source) {
-  return [...STYLESHEET_SYNTAX.keys()].some((extension) => source.includes(`.module${extension}`));
 }
 
 function sourceReferencesStyle(file, stylePath) {

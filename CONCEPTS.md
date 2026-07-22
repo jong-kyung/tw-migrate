@@ -16,7 +16,7 @@ The uniform fallback for any reference that cannot be proven safe to migrate: ke
 Retention blocks deleting the stylesheet and removing links or imports to it, but does not block adding utilities to consumers that were safely analyzed.
 
 ### Candidate
-A Tailwind utility string proposed to replace a stylesheet rule's declarations. Candidates are validated against the project's own Tailwind installation before any edit is planned; a rule that yields no valid candidate is retained.
+A Tailwind utility string proposed to replace a stylesheet rule's declarations. A rule whose declarations cannot be expressed as candidates is retained during planning; when the project's own Tailwind installation cannot generate CSS for a candidate, its owning rule is blocked and the plan is recomputed until every applied candidate compiles.
 
 ### Tailwind entry
 The CSS file that imports Tailwind itself. A run requires exactly one detected entry per package unless one is explicitly configured; entries are never migration targets, and only plain CSS may serve as one.

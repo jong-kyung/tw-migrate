@@ -2399,6 +2399,38 @@ test('retains a module referenced only from a gitignored consumer', async () => 
   }
 });
 
+test('retains a relationship disproven by a gitignored render site', async () => {
+  const cwd = await fixture({
+    css: '.button .label { padding: 13px; }\n',
+    tsx: "import styles from './Button.module.css';\nexport const Label = () => <span className={styles.label} />;\nexport const Button = () => <button className={styles.button}><Label /></button>;\n",
+  });
+  try {
+    await run('git', ['init', '-q'], { cwd });
+    await Promise.all([
+      // preview.jsx never mentions ".module.", yet it renders Label outside
+      // .button: the proof world must still see it or the relationship is
+      // proven vacuously.
+      writeFile(join(cwd, '.gitignore'), 'preview.jsx\n'),
+      writeFile(
+        join(cwd, 'preview.jsx'),
+        "import { Label } from './Button';\nexport const Preview = () => <div><Label /></div>;\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd, styleFile: 'Button.module.css', write: true });
+    assert.equal(report.convertedRules, 0);
+    assert.equal(report.retainedRules, 1);
+    assert.ok(report.warnings.some((warning) => warning.code === 'unproven-css-module-relationship'));
+    assert.equal(
+      await readFile(join(cwd, 'Button.module.css'), 'utf8'),
+      '.button .label { padding: 13px; }\n',
+    );
+    assert.ok(!report.changedFiles.includes('preview.jsx'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('retains a module composed by a gitignored stylesheet', async () => {
   const cwd = await fixture();
   try {
