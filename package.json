@@ -12,7 +12,8 @@
     "bin",
     "index.js",
     "index.d.ts",
-    "native.js"
+    "native.js",
+    "style-compiler.js"
   ],
   "engines": {
     "node": ">=20"
@@ -36,6 +37,7 @@
   },
   "devDependencies": {
     "@napi-rs/cli": "3.7.3",
+    "sass": "1.101.3",
     "tailwindcss": "4.3.3"
   },
   "optionalDependencies": {
@@ -44,5 +46,8 @@
     "tw-migrate-linux-arm64-gnu": "workspace:0.0.0",
     "tw-migrate-linux-x64-gnu": "workspace:0.0.0",
     "tw-migrate-win32-x64-msvc": "workspace:0.0.0"
+  },
+  "dependencies": {
+    "@jridgewell/trace-mapping": "0.3.31"
   }
 }

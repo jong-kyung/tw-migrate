@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 import { planBatchMigration } from './native.js';
+import { compileSassEntry, isSassPath, loadProjectSass } from './style-compiler.js';
 
 const run = promisify(execFile);
 const SOURCE_EXTENSIONS = new Set(['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts']);
@@ -223,7 +224,10 @@ async function planPackage(context, packageRoot) {
   const excludedEntries = new Set([...tailwindEntries, tailwindPath]);
   const targets = explicitStyle
     ? [explicitStyle]
-    : ownedStyles.filter((path) => !excludedEntries.has(path));
+    : ownedStyles.filter((path) =>
+      !excludedEntries.has(path)
+      && (!isSassPath(path) || sourceFiles.some((file) => sourceReferencesStyle(file, path))),
+    );
   if (targets.length === 0) return {};
   if (targets.some((path) => excludedEntries.has(path))) {
     throw new Error('The Tailwind CSS entry cannot be migrated.');
@@ -245,14 +249,39 @@ async function planPackage(context, packageRoot) {
         && (options.workspaces ? writablePackages.has(owner) : owner === packageRoot),
     };
   });
-  const stylesheets = targets.sort().map((stylePath) => ({
-    cssPath: stylePath,
-    cssSource: styleSources.get(stylePath),
-    cssModuleId: normalizedRelativePath(packageRoot, stylePath),
-    cssDependents: styleDependents.get(stylePath) ?? [],
-    syntax: stylesheetSyntax(stylePath),
-    isModule: isStylesheetModule(stylePath),
-  }));
+  let stylesheets;
+  let sass;
+  try {
+    stylesheets = [];
+    for (const stylePath of targets.sort()) {
+      const isPartial = isSassPath(stylePath) && basename(stylePath).startsWith('_');
+      const stylesheet = {
+        cssPath: stylePath,
+        cssSource: styleSources.get(stylePath),
+        cssModuleId: normalizedRelativePath(packageRoot, stylePath),
+        cssDependents: styleDependents.get(stylePath) ?? [],
+        syntax: stylesheetSyntax(stylePath),
+        isModule: isStylesheetModule(stylePath),
+        isPartial,
+      };
+      if (isSassPath(stylePath) && !isPartial) {
+        sass ??= await loadProjectSass(packageRoot);
+        const compiled = await compileSassEntry(sass, stylePath);
+        for (const loadedPath of compiled.loadedPaths) {
+          if (!isProjectInput(workspaceRoot, loadedPath)) continue;
+          const source = await snapshotFile(snapshots, loadedPath);
+          if (!styleSources.has(loadedPath)) styleSources.set(loadedPath, source);
+        }
+        stylesheet.analysisSource = compiled.css;
+        stylesheet.sourceMappings = compiled.sourceMappings;
+      }
+      stylesheets.push(stylesheet);
+    }
+  } catch (error) {
+    if (!options.force) throw error;
+    return { failure: packageFailure(workspaceRoot, packageRoot, error) };
+  }
+
   let plan;
   try {
     plan = JSON.parse(
@@ -273,6 +302,11 @@ async function planPackage(context, packageRoot) {
   }
 
   await validateCandidates(tailwind, plan.candidates);
+  for (const stylesheet of stylesheets.filter((stylesheet) => isSassPath(stylesheet.cssPath))) {
+    const changed = plan.files.find((file) => file.path === stylesheet.cssPath);
+    if (!changed && !plan.deletedFiles.includes(stylesheet.cssPath)) continue;
+    await compileSassEntry(sass, stylesheet.cssPath, changed?.source ?? '');
+  }
   return { plan };
 }
 
@@ -414,6 +448,13 @@ function isStylesheetModule(path) {
 
 function mentionsStylesheetModule(source) {
   return [...STYLESHEET_SYNTAX.keys()].some((extension) => source.includes(`.module${extension}`));
+}
+
+function sourceReferencesStyle(file, stylePath) {
+  let importPath = normalizedRelativePath(dirname(file.path), stylePath);
+  if (!importPath.startsWith('.')) importPath = `./${importPath}`;
+  return [`'${importPath}'`, `"${importPath}"`, `\`${importPath}\``]
+    .some((literal) => file.source.includes(literal));
 }
 
 function isProjectInput(workspaceRoot, path) {

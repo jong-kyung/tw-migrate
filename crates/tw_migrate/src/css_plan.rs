@@ -25,6 +25,8 @@ pub(crate) enum SelectorKey {
 
 pub(crate) struct RulePlan {
     pub(crate) span: std::ops::Range<usize>,
+    pub(crate) authored_span: Option<std::ops::Range<usize>>,
+    pub(crate) provenance_offsets: Vec<usize>,
     pub(crate) selector: String,
     pub(crate) related_classes: Vec<String>,
     pub(crate) key: Option<SelectorKey>,
@@ -137,8 +139,12 @@ pub(crate) fn parse_css_rules(
         }
         candidates.sort();
         candidates.dedup();
+        let mut provenance_offsets = vec![rule.selector.span.start];
+        collect_declaration_offsets(&rule.block.statements, &mut provenance_offsets);
         rules.push(RulePlan {
             span: rule.span.start..rule.span.end,
+            authored_span: None,
+            provenance_offsets,
             selector,
             related_classes: selector_classes(rule),
             key,
@@ -171,6 +177,20 @@ pub(crate) fn parse_css_rules(
         keyframes,
         global_at_rules,
     })
+}
+
+fn collect_declaration_offsets(statements: &[Statement<'_>], offsets: &mut Vec<usize>) {
+    for statement in statements {
+        match statement {
+            Statement::Declaration(declaration) => offsets.push(declaration.span.start),
+            Statement::AtRule(at_rule) => {
+                if let Some(block) = &at_rule.block {
+                    collect_declaration_offsets(&block.statements, offsets);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn declaration_is_plain_css(
@@ -477,6 +497,8 @@ fn retained_at_rule(
     }
     RulePlan {
         span: at_rule.span.start..at_rule.span.end,
+        authored_span: None,
+        provenance_offsets: Vec::new(),
         selector: source[at_rule.span.start..end].trim().to_string(),
         related_classes: related_classes.into_iter().collect(),
         key: None,

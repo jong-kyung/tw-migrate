@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { chmod, mkdtemp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { chmod, mkdtemp, mkdir, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { promisify } from 'node:util';
 
@@ -10,6 +13,7 @@ import { __unstable__loadDesignSystem as loadDesignSystem } from 'tailwindcss';
 import { migrate } from '../index.js';
 
 const run = promisify(execFile);
+const require = createRequire(import.meta.url);
 const initialCss = '.button { padding: 13px; }\n';
 const initialTsx = "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n";
 
@@ -25,6 +29,23 @@ async function fixture({
     writeFile(join(cwd, 'globals.css'), tailwind),
     writeFile(join(cwd, 'Button.module.css'), css),
     writeFile(join(cwd, 'Button.tsx'), tsx),
+  ]);
+  return cwd;
+}
+
+async function externalSassFixture(source = '$space: 13px;\n.button { padding: $space; }\n') {
+  const cwd = await mkdtemp(join(tmpdir(), 'tw-migrate-fixture-'));
+  const nodeModules = join(cwd, 'node_modules');
+  await mkdir(nodeModules);
+  await Promise.all([
+    writeFile(join(cwd, 'package.json'), '{"private":true}'),
+    writeFile(join(cwd, 'globals.css'), '@import "tailwindcss";\n'),
+    writeFile(join(cwd, 'Button.module.scss'), source),
+    writeFile(
+      join(cwd, 'Button.tsx'),
+      "import styles from './Button.module.scss';\nexport const Button = () => <button className={styles.button} />;\n",
+    ),
+    symlink(dirname(require.resolve('tailwindcss/package.json')), join(nodeModules, 'tailwindcss'), 'dir'),
   ]);
   return cwd;
 }
@@ -97,7 +118,7 @@ for (const [extension, source] of [
   });
 }
 
-test('retains preprocessor declarations that require semantic evaluation', async () => {
+test('evaluates Sass variables and edits the proven authored module rule', async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -109,10 +130,210 @@ test('retains preprocessor declarations that require semantic evaluation', async
       ),
     ]);
 
-    const report = await migrate({ cwd, styleFile: 'Button.module.scss' });
+    const report = await migrate({ cwd, styleFile: 'Button.module.scss', write: true });
+    assert.deepEqual(report.candidates, ['p-[13px]']);
+    assert.equal(await readFile(join(cwd, 'Button.module.scss'), 'utf8'), '$space: 13px;\n\n');
+    assert.equal(
+      await readFile(join(cwd, 'Button.tsx'), 'utf8'),
+      'export const Button = () => <button className="p-[13px]">Save</button>;\n',
+    );
+    assert.ok(report.warnings.some((warning) => warning.code === 'rebuild-required'));
+    const second = await migrate({ cwd, styleFile: 'Button.module.scss' });
+    assert.deepEqual(second.changedFiles, []);
+    assert.equal(second.diff, '');
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('evaluates variables in indented Sass syntax', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      writeFile(join(cwd, 'Button.module.sass'), '$space: 13px\n.button\n  padding: $space\n'),
+      writeFile(
+        join(cwd, 'Button.tsx'),
+        "import styles from './Button.module.sass';\nexport const Button = () => <button className={styles.button}>Save</button>;\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd, styleFile: 'Button.module.sass' });
+    assert.deepEqual(report.candidates, ['p-[13px]']);
+    assert.equal(report.convertedRules, 1);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('uses evaluated Sass values for global rules without editing authored Sass', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(join(cwd, 'legacy.scss'), '$space: 13px;\n.card { padding: $space; }\n'),
+      writeFile(join(cwd, 'Card.tsx'), 'export const Card = () => <div className="card" />;\n'),
+    ]);
+
+    const report = await migrate({ cwd, styleFile: 'legacy.scss', write: true });
+    assert.deepEqual(report.changedFiles, ['Card.tsx']);
+    assert.deepEqual(report.candidates, ['p-[13px]']);
+    assert.equal(await readFile(join(cwd, 'legacy.scss'), 'utf8'), '$space: 13px;\n.card { padding: $space; }\n');
+    assert.ok(report.warnings.some((warning) => warning.code === 'retained-global-rule'));
+    assert.ok(!report.warnings.some((warning) => warning.code === 'rebuild-required'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('evaluates Sass functions and nesting for global selectors', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, 'legacy.scss'),
+        '@function gap() { @return 13px; }\n.card { .child { padding: gap(); } }\n',
+      ),
+      writeFile(join(cwd, 'Card.tsx'), 'export const Card = () => <div className="child" />;\n'),
+    ]);
+
+    const report = await migrate({ cwd, styleFile: 'legacy.scss' });
+    assert.deepEqual(report.candidates, ['[.card_&]:p-[13px]']);
+    assert.match(report.diff, /className="child \[\.card_&\]:p-\[13px\]"/);
+    assert.ok(report.warnings.some((warning) => warning.code === 'retained-global-rule'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('retains a Sass module rule generated by a mixin with ambiguous provenance', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      writeFile(
+        join(cwd, 'Button.module.scss'),
+        '@mixin pad { padding: 13px; }\n.button { @include pad; }\n',
+      ),
+      writeFile(
+        join(cwd, 'Button.tsx'),
+        "import styles from './Button.module.scss';\nexport const Button = () => <button className={styles.button}>Save</button>;\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd, styleFile: 'Button.module.scss', write: true });
     assert.deepEqual(report.changedFiles, []);
     assert.deepEqual(report.candidates, []);
-    assert.ok(report.warnings.some((warning) => warning.code === 'unsupported-declaration'));
+    assert.ok(report.warnings.some((warning) => warning.code === 'unproven-source-map'));
+    assert.match(await readFile(join(cwd, 'Button.tsx'), 'utf8'), /styles\.button/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('does not migrate an explicitly selected Sass partial as an entry', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(join(cwd, '_shared.scss'), '.card { padding: 13px; }\n'),
+      writeFile(join(cwd, 'Card.tsx'), 'export const Card = () => <div className="card" />;\n'),
+    ]);
+
+    const report = await migrate({ cwd, styleFile: '_shared.scss' });
+    assert.deepEqual(report.changedFiles, []);
+    assert.deepEqual(report.candidates, []);
+    assert.ok(report.warnings.some((warning) => warning.code === 'shared-preprocessor-source'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('retains Sass module rules generated from an imported partial', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      writeFile(join(cwd, '_mixins.scss'), '@mixin pad { padding: 13px; }\n'),
+      writeFile(
+        join(cwd, 'Button.module.scss'),
+        "@use 'mixins';\n.button { @include mixins.pad; }\n",
+      ),
+      writeFile(
+        join(cwd, 'Button.tsx'),
+        "import styles from './Button.module.scss';\nexport const Button = () => <button className={styles.button}>Save</button>;\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd, styleFile: 'Button.module.scss', write: true });
+    assert.deepEqual(report.changedFiles, []);
+    assert.ok(report.warnings.some((warning) => warning.code === 'unproven-source-map'));
+    assert.match(await readFile(join(cwd, 'Button.tsx'), 'utf8'), /styles\.button/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('reports a missing project Sass compiler as a recoverable package failure', async () => {
+  const cwd = await externalSassFixture();
+  try {
+    await assert.rejects(
+      migrate({ cwd, styleFile: 'Button.module.scss' }),
+      /Sass must be installed in the target project/,
+    );
+    const report = await migrate({ cwd, styleFile: 'Button.module.scss', force: true });
+    assert.equal(report.failures.length, 1);
+    assert.match(report.failures[0].message, /Sass must be installed in the target project/);
+    assert.deepEqual(report.changedFiles, []);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('reports Sass compile errors through the existing force contract', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      writeFile(join(cwd, 'Button.module.scss'), '.button { padding: ;\n'),
+      writeFile(
+        join(cwd, 'Button.tsx'),
+        "import styles from './Button.module.scss';\nexport const Button = () => <button className={styles.button} />;\n",
+      ),
+    ]);
+
+    await assert.rejects(migrate({ cwd, styleFile: 'Button.module.scss' }));
+    const report = await migrate({ cwd, styleFile: 'Button.module.scss', force: true });
+    assert.equal(report.failures.length, 1);
+    assert.deepEqual(report.changedFiles, []);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('post-edit Sass recompilation remains fatal under force', async () => {
+  const cwd = await externalSassFixture();
+  try {
+    const sassRoot = join(cwd, 'node_modules', 'sass');
+    await mkdir(sassRoot);
+    await Promise.all([
+      writeFile(
+        join(sassRoot, 'package.json'),
+        '{"type":"module","exports":"./index.js"}',
+      ),
+      writeFile(
+        join(sassRoot, 'index.js'),
+        `import sass from ${JSON.stringify(pathToFileURL(require.resolve('sass')).href)};\nexport const compileAsync = (...args) => sass.compileAsync(...args);\nexport const compileStringAsync = async () => { throw new Error('post-edit compile failed'); };\n`,
+      ),
+    ]);
+
+    await assert.rejects(
+      migrate({ cwd, styleFile: 'Button.module.scss', force: true, write: true }),
+      /post-edit compile failed/,
+    );
+    assert.equal(
+      await readFile(join(cwd, 'Button.module.scss'), 'utf8'),
+      '$space: 13px;\n.button { padding: $space; }\n',
+    );
+    assert.match(await readFile(join(cwd, 'Button.tsx'), 'utf8'), /styles\.button/);
   } finally {
     await cleanup(cwd);
   }
