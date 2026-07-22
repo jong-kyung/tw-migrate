@@ -19,8 +19,14 @@ export function parseHtmlSource(path, source) {
   const bases = [];
   const elements = [];
   const dynamicAttributes = [];
+  const scriptTexts = [];
 
   function visit(node) {
+    if (node.tagName === 'script') {
+      for (const child of node.childNodes ?? []) {
+        if (child.nodeName === '#text' && child.value) scriptTexts.push(child.value);
+      }
+    }
     if (node.tagName) {
       const attributes = new Map(node.attrs.map((attribute) => [attribute.name, attribute.value]));
       const locations = node.sourceCodeLocation?.attrs;
@@ -78,7 +84,10 @@ export function parseHtmlSource(path, source) {
   }
 
   visit(document);
-  return toByteOffsets(source, { links, bases, elements, dynamicAttributes });
+  return {
+    ...toByteOffsets(source, { links, bases, elements, dynamicAttributes }),
+    scriptText: scriptTexts.join('\n'),
+  };
 }
 
 function toByteOffsets(source, parsed) {

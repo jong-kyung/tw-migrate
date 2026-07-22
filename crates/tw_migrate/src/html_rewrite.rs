@@ -301,6 +301,7 @@ mod tests {
                 analyzable: true,
             }],
             html_references_safe: true,
+            html_script_text: String::new(),
         };
         let candidates = HashMap::from([
             (

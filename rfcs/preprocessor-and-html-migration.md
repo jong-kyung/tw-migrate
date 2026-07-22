@@ -357,6 +357,7 @@ New stable warning categories include:
 - `unproven-source-map`;
 - `shared-preprocessor-source`;
 - `dynamic-html-attribute`;
+- `unproven-script-reference`;
 - `unsupported-html-base`;
 - `unsupported-html-stylesheet-link`;
 - `unsupported-link-media`;

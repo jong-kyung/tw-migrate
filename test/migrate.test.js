@@ -390,7 +390,7 @@ test('post-edit Sass recompilation remains fatal under force', async () => {
       ),
       writeFile(
         join(sassRoot, 'index.js'),
-        `import sass from ${JSON.stringify(pathToFileURL(require.resolve('sass')).href)};\nexport const compileAsync = async (...args) => { const result = await sass.compileAsync(...args); return { ...result, sourceMap: { ...result.sourceMap, sources: [${JSON.stringify(pathToFileURL(mappedPath).href)}] } }; };\nexport const compileStringAsync = async () => { throw new Error('post-edit compile failed'); };\n`,
+        `import sass from ${JSON.stringify(pathToFileURL(require.resolve('sass')).href)};\nlet calls = 0;\nexport const compileStringAsync = async (...args) => { calls += 1; if (calls > 1) throw new Error('post-edit compile failed'); const result = await sass.compileStringAsync(...args); return { ...result, sourceMap: { ...result.sourceMap, sources: [${JSON.stringify(pathToFileURL(mappedPath).href)}] } }; };\n`,
       ),
     ]);
 
@@ -419,7 +419,7 @@ test('rejects malformed CSS returned by post-edit Sass compilation', async () =>
       writeFile(join(sassRoot, 'package.json'), '{"type":"module","exports":"./index.js"}'),
       writeFile(
         join(sassRoot, 'index.js'),
-        `import sass from ${JSON.stringify(pathToFileURL(require.resolve('sass')).href)};\nexport const compileAsync = async (...args) => { const result = await sass.compileAsync(...args); return { ...result, sourceMap: { ...result.sourceMap, sources: [${JSON.stringify(pathToFileURL(mappedPath).href)}] } }; };\nexport const compileStringAsync = async (...args) => ({ ...await sass.compileStringAsync(...args), css: '}' });\n`,
+        `import sass from ${JSON.stringify(pathToFileURL(require.resolve('sass')).href)};\nlet calls = 0;\nexport const compileStringAsync = async (...args) => { calls += 1; const result = await sass.compileStringAsync(...args); if (calls > 1) return { ...result, css: '}' }; return { ...result, sourceMap: { ...result.sourceMap, sources: [${JSON.stringify(pathToFileURL(mappedPath).href)}] } }; };\n`,
       ),
     ]);
 
@@ -721,6 +721,43 @@ test('retains an HTML-linked CSS Module when an attribute is dynamic', async () 
   }
 });
 
+test('retains a CSS Module named by an inline script', async () => {
+  const cwd = await fixture();
+  try {
+    const script = '<script>document.body.insertAdjacentHTML("beforeend", \'<button class="button">More</button>\');</script>\n';
+    await writeFile(
+      join(cwd, 'index.html'),
+      `<link rel="stylesheet" href="./Button.module.css"><button class="button">HTML</button>\n${script}`,
+    );
+
+    const report = await migrate({ cwd, write: true });
+    assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
+    assert.equal(
+      await readFile(join(cwd, 'index.html'), 'utf8'),
+      `<link rel="stylesheet" href="./Button.module.css"><button class="button p-[13px]">HTML</button>\n${script}`,
+    );
+    assert.ok(report.warnings.some((warning) => warning.code === 'unproven-script-reference'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('ignores inline scripts that do not name module classes', async () => {
+  const cwd = await fixture();
+  try {
+    await writeFile(
+      join(cwd, 'index.html'),
+      '<link rel="stylesheet" href="./Button.module.css"><button class="button">HTML</button>\n'
+        + '<script>console.log("buttons ready");</script>\n',
+    );
+
+    await migrate({ cwd, write: true });
+    await assert.rejects(readFile(join(cwd, 'Button.module.css'), 'utf8'), { code: 'ENOENT' });
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('retains a CSS Module linked with an entity from gitignored HTML', async () => {
   const cwd = await fixture();
   try {
@@ -903,7 +940,7 @@ test('follows transitive CSS imports and applies exact print link media', async 
 test('only follows real top-level CSS imports and preserves media warning offsets', async () => {
   const cwd = await fixture();
   try {
-    const base = '/* 한글 */\n.fake::before { content: "@import \'./trap.css\';"; }\n@import "./print.css" print;\n@import "./speech.css" speech;\n';
+    const base = '/* 한글 */\n@import "./print.css" print;\n@import "./speech.css" speech;\n.fake::before { content: "@import \'./trap.css\';"; }\n';
     await Promise.all([
       rm(join(cwd, 'Button.module.css')),
       rm(join(cwd, 'Button.tsx')),
@@ -944,6 +981,28 @@ test('terminates cyclic stylesheet imports carrying media conditions', async () 
     const report = await migrate({ cwd });
     assert.deepEqual(report.candidates, ['print:p-[13px]']);
     assert.match(report.diff, /class="card print:p-\[13px\]"/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('ignores stylesheet imports that browsers never apply', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'base.css'), '.existing { padding: 13px; }\n@import "./legacy.css";\n'),
+      writeFile(join(cwd, 'legacy.css'), '.legacy { height: 100vh; }\n'),
+      writeFile(
+        join(cwd, 'index.html'),
+        '<link rel="stylesheet" href="./base.css"><div class="existing legacy"></div>\n',
+      ),
+    ]);
+
+    const report = await migrate({ cwd });
+    assert.deepEqual(report.candidates, ['p-[13px]']);
+    assert.match(report.diff, /class="existing legacy p-\[13px\]"/);
   } finally {
     await cleanup(cwd);
   }

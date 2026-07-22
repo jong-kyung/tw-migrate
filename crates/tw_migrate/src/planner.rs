@@ -167,6 +167,8 @@ pub(crate) struct SourceFile {
     pub(crate) html_stylesheets: Vec<HtmlStylesheet>,
     #[serde(default = "default_writable", rename = "htmlReferencesSafe")]
     pub(crate) html_references_safe: bool,
+    #[serde(default, rename = "htmlScriptText")]
+    pub(crate) html_script_text: String,
 }
 
 #[derive(Serialize)]
@@ -724,6 +726,23 @@ fn line_column_to_offset(source: &str, target_line: usize, target_column: usize)
     (line == target_line && column == target_column).then_some(source.len())
 }
 
+fn mentions_word(text: &str, word: &str) -> bool {
+    if word.is_empty() {
+        return false;
+    }
+    let bytes = text.as_bytes();
+    text.match_indices(word).any(|(start, _)| {
+        let end = start + word.len();
+        let before_ok = start == 0 || !is_ident_byte(bytes[start - 1]);
+        let after_ok = end >= bytes.len() || !is_ident_byte(bytes[end]);
+        before_ok && after_ok
+    })
+}
+
+fn is_ident_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-'
+}
+
 fn dedup_candidate_map(candidate_map: &mut HashMap<SelectorKey, Vec<String>>) {
     for candidates in candidate_map.values_mut() {
         candidates.sort();
@@ -870,6 +889,31 @@ fn plan_request(
         });
         if is_module && (unsafe_html_link || (direct_html_link && !file.html_references_safe)) {
             module_references_safe = false;
+        }
+        // Inline scripts are never analyzed, so a script that names one of the
+        // module's classes may create consumers at runtime; retain the module.
+        let any_html_context = file
+            .html_stylesheets
+            .iter()
+            .any(|context| context.css_path == request.css_path);
+        if is_module
+            && any_html_context
+            && !file.html_script_text.is_empty()
+            && rules.iter().any(|rule| {
+                rule.related_classes
+                    .iter()
+                    .any(|class| mentions_word(&file.html_script_text, class))
+            })
+        {
+            module_references_safe = false;
+            warnings.push(Warning {
+                code: "unproven-script-reference",
+                file: file.path.clone(),
+                start: 0,
+                end: 0,
+                message: "An inline script names a CSS Module class, so the module is retained."
+                    .to_string(),
+            });
         }
         if !file.writable {
             if is_module
@@ -2743,6 +2787,7 @@ mod tests {
             html_elements: Vec::new(),
             html_stylesheets: Vec::new(),
             html_references_safe: true,
+            html_script_text: String::new(),
         };
         let candidates = HashMap::from([(
             SelectorKey::Class("a".to_string()),

@@ -305,7 +305,9 @@ async function planPackage(context, packageRoot) {
       let compiled;
       if (isSassPath(stylePath) && !isPartial) {
         sass ??= await loadProjectSass(packageRoot);
-        compiled = await compileSassEntry(sass, stylePath);
+        // Compile the snapshotted source, not the on-disk file: code loaded
+        // during planning (e.g. Tailwind plugins) may have rewritten it since.
+        compiled = await compileSassEntry(sass, stylePath, stylesheet.cssSource);
       } else if (extension(stylePath) === '.less') {
         less ??= await loadProjectLess(packageRoot);
         compiled = await compileLessEntry(less, stylePath, stylesheet.cssSource);
@@ -686,6 +688,7 @@ async function preparePackageHtml({
       htmlElements: parsed.elements,
       htmlStylesheets: deduplicateHtmlContexts(contexts),
       htmlReferencesSafe: parsed.dynamicAttributes.length === 0,
+      htmlScriptText: parsed.scriptText,
     });
   }
 
@@ -812,6 +815,9 @@ function cssImports(source) {
   const masked = maskCssComments(source);
   let depth = 0;
   let quote;
+  // Browsers ignore @import once any block rule has appeared, so imports
+  // after the first top-level `{` never load and must not be traversed.
+  let importsAllowed = true;
   for (let index = 0; index < masked.length; index += 1) {
     const character = masked[index];
     if (quote) {
@@ -825,13 +831,15 @@ function cssImports(source) {
     }
     if (character === '{') {
       depth += 1;
+      importsAllowed = false;
       continue;
     }
     if (character === '}') {
       depth = Math.max(0, depth - 1);
       continue;
     }
-    if (depth !== 0 || masked.slice(index, index + 7).toLowerCase() !== '@import'
+    if (!importsAllowed || depth !== 0
+      || masked.slice(index, index + 7).toLowerCase() !== '@import'
       || /[-\w]/.test(masked[index + 7] ?? '')) continue;
 
     let end = index + 7;
