@@ -1,9 +1,16 @@
+/// CSS whitespace per CSS Syntax. Other Unicode whitespace (NBSP, em space,
+/// ...) are ident code points and must be preserved verbatim: Tailwind passes
+/// them through candidates unchanged.
+fn is_css_whitespace(character: char) -> bool {
+    matches!(character, ' ' | '\t' | '\n' | '\r' | '\x0C')
+}
+
 pub(crate) fn encode(value: &str) -> String {
     let mut encoded = String::with_capacity(value.len());
     let mut whitespace = false;
 
     for character in value.chars() {
-        if character.is_whitespace() {
+        if is_css_whitespace(character) {
             whitespace = !encoded.is_empty();
             continue;
         }
@@ -28,6 +35,16 @@ pub(crate) fn encode(value: &str) -> String {
 /// - Outside `url()`, whitespace between tokens becomes `_` and literal `_`
 ///   becomes `\_`; this applies inside quoted strings too, where Tailwind
 ///   also decodes `_` to a space and `\_` to an underscore.
+/// - Only CSS whitespace (space, tab, newline, carriage return, form feed)
+///   counts as whitespace. Other Unicode whitespace such as NBSP is a CSS
+///   ident code point: it is copied verbatim (Tailwind emits it unchanged)
+///   and it keeps the surrounding ident running, so `A\u{a0}url(...)` is not
+///   a `url()` function - neither here nor in Tailwind's decoder.
+/// - The first CSS whitespace character after a hex escape (`\41 `) is the
+///   escape terminator, consumed by the escape per CSS syntax. It is part of
+///   the token and always becomes its own `_` (Tailwind decodes each `_` to
+///   exactly one space), so `\41  B` ("A B") encodes as `\41__B` while
+///   `\41 B` ("AB") encodes as `\41_B`.
 /// - Tailwind emits `url()` bodies verbatim (no underscore decoding), so the
 ///   body is copied through unchanged and whitespace there is
 ///   unrepresentable. Tailwind applies the same treatment to any function
@@ -43,10 +60,18 @@ pub(crate) fn encode_value(value: &str) -> Option<String> {
     let mut parens = 0usize;
     let mut brackets = 0usize;
     let mut ident_start: Option<usize> = None;
+    let mut hex_digits = 0u8;
 
     while let Some((index, character)) = chars.next() {
-        if character.is_whitespace() {
-            pending_space = !encoded.is_empty();
+        if is_css_whitespace(character) {
+            if hex_digits > 0 {
+                // The escape terminator: consumed by the hex escape, so it is
+                // part of the token and must round-trip as its own space.
+                encoded.push('_');
+            } else {
+                pending_space = !encoded.is_empty();
+            }
+            hex_digits = 0;
             ident_start = None;
             continue;
         }
@@ -54,6 +79,8 @@ pub(crate) fn encode_value(value: &str) -> Option<String> {
             encoded.push('_');
             pending_space = false;
         }
+        let hex_run = hex_digits;
+        hex_digits = 0;
         match character {
             ';' => return None,
             '"' | '\'' => {
@@ -87,7 +114,9 @@ pub(crate) fn encode_value(value: &str) -> Option<String> {
                 ident_start = None;
             }
             '\\' => {
-                push_escape(&mut chars, &mut encoded)?;
+                if push_escape(&mut chars, &mut encoded)? {
+                    hex_digits = 1;
+                }
                 ident_start = None;
             }
             '_' => {
@@ -97,27 +126,38 @@ pub(crate) fn encode_value(value: &str) -> Option<String> {
             character if character.is_alphanumeric() || character == '-' => {
                 encoded.push(character);
                 ident_start.get_or_insert(index);
+                if hex_run > 0 && hex_run < 6 && character.is_ascii_hexdigit() {
+                    hex_digits = hex_run + 1;
+                }
             }
             character => {
                 encoded.push(character);
-                ident_start = None;
+                if character.is_ascii() {
+                    ident_start = None;
+                } else {
+                    // Non-ASCII code points (e.g. NBSP) are CSS ident code
+                    // points and keep the current ident running.
+                    ident_start.get_or_insert(index);
+                }
             }
         }
     }
     (parens == 0 && brackets == 0).then_some(encoded)
 }
 
+/// Copies a backslash escape and reports whether it starts a hex escape,
+/// whose trailing whitespace (if any) is the escape terminator.
 fn push_escape(
     chars: &mut impl Iterator<Item = (usize, char)>,
     encoded: &mut String,
-) -> Option<()> {
+) -> Option<bool> {
     let (_, escaped) = chars.next()?;
-    if escaped.is_whitespace() {
+    if is_css_whitespace(escaped) {
         return None;
     }
     encoded.push('\\');
     encoded.push(escaped);
-    Some(())
+    Some(escaped.is_ascii_hexdigit())
 }
 
 fn encode_quoted(
@@ -132,10 +172,12 @@ fn encode_quoted(
             return Some(());
         }
         match character {
-            '\\' => push_escape(chars, encoded)?,
+            '\\' => {
+                push_escape(chars, encoded)?;
+            }
             '_' => encoded.push_str("\\_"),
             ' ' => encoded.push('_'),
-            character if character.is_whitespace() => return None,
+            character if is_css_whitespace(character) => return None,
             character => encoded.push(character),
         }
     }
@@ -148,7 +190,7 @@ fn encode_url_body(
     let mut quote: Option<char> = None;
     loop {
         let (_, character) = chars.next()?;
-        if character.is_whitespace() {
+        if is_css_whitespace(character) {
             return None;
         }
         match quote {
@@ -237,6 +279,35 @@ mod tests {
             encode_value(" var(--font_key, Open Sans) ").as_deref(),
             Some("var(--font\\_key,_Open_Sans)")
         );
+    }
+
+    #[test]
+    fn preserves_hex_escape_terminators() {
+        // `\41  B` is the ident sequence "A B": the first space is consumed
+        // by the escape as its terminator, so it must round-trip as its own
+        // underscore (Tailwind decodes each `_` to one space).
+        assert_eq!(encode_value("\\41  B").as_deref(), Some("\\41__B"));
+        assert_eq!(encode_value("\\41 B").as_deref(), Some("\\41_B"));
+        assert_eq!(encode_value("\\4B  C").as_deref(), Some("\\4B__C"));
+        assert_eq!(encode_value("\\41 ").as_deref(), Some("\\41_"));
+        // A hex escape consumes at most six digits: the seventh character is
+        // an ordinary ident character and the space a plain separator.
+        assert_eq!(encode_value("\\0000411 B").as_deref(), Some("\\0000411_B"));
+    }
+
+    #[test]
+    fn treats_non_css_whitespace_as_ident_code_points() {
+        // NBSP is a CSS ident code point, not whitespace; Tailwind passes it
+        // through candidates verbatim.
+        assert_eq!(encode_value("A\u{a0}B").as_deref(), Some("A\u{a0}B"));
+        assert_eq!(encode_value("\"A\u{a0}B\"").as_deref(), Some("\"A\u{a0}B\""));
+        // NBSP glues to a following ident, so this is not a `url()` function
+        // and Tailwind decodes underscores inside its parentheses.
+        assert_eq!(
+            encode_value("A\u{a0}url(x y)").as_deref(),
+            Some("A\u{a0}url(x_y)")
+        );
+        assert_eq!(encode("A\u{a0}B"), "A\u{a0}B");
     }
 
     #[test]

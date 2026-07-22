@@ -913,28 +913,37 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
                     ),
                 });
             }
+            // A previous --write run may already have appended the preserved
+            // candidates as a static segment; appending them again would grow
+            // the template on every run.
+            let preserved_candidates: Vec<String> = preserved_candidates
+                .into_iter()
+                .filter(|candidate| !static_classes.contains(candidate))
+                .collect();
             if let Some(expression) = preserved_expression {
-                let appended = format!(" {}", preserved_candidates.join(" "));
-                self.edits.push(Edit {
-                    start: container.span.start as usize,
-                    end: container.span.end as usize,
-                    replacement: format!(
-                        "{{`${{{expression}}}${{{}}}`}}",
-                        serde_json::to_string(&appended).expect("string serialization")
-                    ),
-                });
-            } else if let Some(append_at) = append_at
-                && !preserved_candidates.is_empty()
-            {
-                let appended = format!(" {}", preserved_candidates.join(" "));
-                partial_edits.push(Edit {
-                    start: append_at,
-                    end: append_at,
-                    replacement: format!(
-                        "${{{}}}",
-                        serde_json::to_string(&appended).expect("string serialization")
-                    ),
-                });
+                if !preserved_candidates.is_empty() {
+                    let appended = format!(" {}", preserved_candidates.join(" "));
+                    self.edits.push(Edit {
+                        start: container.span.start as usize,
+                        end: container.span.end as usize,
+                        replacement: format!(
+                            "{{`${{{expression}}}${{{}}}`}}",
+                            serde_json::to_string(&appended).expect("string serialization")
+                        ),
+                    });
+                }
+            } else if let Some(append_at) = append_at {
+                if !preserved_candidates.is_empty() {
+                    let appended = format!(" {}", preserved_candidates.join(" "));
+                    partial_edits.push(Edit {
+                        start: append_at,
+                        end: append_at,
+                        replacement: format!(
+                            "${{{}}}",
+                            serde_json::to_string(&appended).expect("string serialization")
+                        ),
+                    });
+                }
                 self.edits.extend(partial_edits);
             } else if partial_edits.is_empty() {
                 self.edits.push(Edit {

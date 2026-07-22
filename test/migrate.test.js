@@ -2667,6 +2667,25 @@ test('retains the owning rule when its candidate fails compilation', async () =>
   }
 });
 
+test('does not re-append preserved candidates on repeated writes', async () => {
+  const cwd = await fixture({
+    css: '.button { padding: 13px; }\n.button { COLOR: red; }\n',
+    tsx: "import styles from './Button.module.css';\nexport const buttonClass = styles.button;\nexport const Button = () => <button className={styles.button}>Save</button>;\n",
+  });
+  try {
+    await migrate({ cwd, write: true });
+    const first = await readFile(join(cwd, 'Button.tsx'), 'utf8');
+    assert.match(first, /\$\{styles\.button\}\$\{" p-\[13px\]"\}/);
+
+    const second = await migrate({ cwd, write: true });
+    assert.deepEqual(second.changedFiles, []);
+    assert.equal(second.diff, '');
+    assert.equal(await readFile(join(cwd, 'Button.tsx'), 'utf8'), first);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('completes with every rule retained when all candidates fail compilation', async () => {
   const allFailingCss = '.button { COLOR: red; }\n.other { BACKGROUND: blue; }\n';
   const bothTsx = "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}><i className={styles.other} /></button>;\n";
