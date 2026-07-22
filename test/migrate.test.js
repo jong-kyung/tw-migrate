@@ -858,6 +858,26 @@ test('does not synthesize a duplicate class for an entity-bearing class attribut
   }
 });
 
+test('treats a valueless class attribute as unwritable', async () => {
+  const cwd = await fixture();
+  try {
+    const html = '<link rel="stylesheet" href="./legacy.css"><main class id="hero">Hi</main>\n';
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'legacy.css'), '#hero { height: 100vh; }\n'),
+      writeFile(join(cwd, 'index.html'), html),
+    ]);
+
+    const report = await migrate({ cwd, styleFile: 'legacy.css', write: true });
+    assert.deepEqual(report.changedFiles, []);
+    assert.equal(await readFile(join(cwd, 'index.html'), 'utf8'), html);
+    assert.ok(report.warnings.some((warning) => warning.code === 'dynamic-html-attribute'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('follows transitive CSS imports and applies exact print link media', async () => {
   const cwd = await fixture();
   try {
@@ -902,6 +922,28 @@ test('only follows real top-level CSS imports and preserves media warning offset
     assert.match(report.diff, /class="trap print speech print:p-\[13px\]"/);
     const warning = report.warnings.find((item) => item.code === 'unsupported-link-media' && item.file === 'base.css');
     assert.equal(warning.start, Buffer.byteLength(base.slice(0, base.indexOf('@import "./speech.css"'))));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('terminates cyclic stylesheet imports carrying media conditions', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      writeFile(join(cwd, 'a.css'), '@import "./b.css" print;\n'),
+      writeFile(join(cwd, 'b.css'), '@import "./a.css";\n.card { padding: 13px; }\n'),
+      writeFile(
+        join(cwd, 'index.html'),
+        '<link rel="stylesheet" href="./a.css"><div class="card"></div>\n',
+      ),
+    ]);
+
+    const report = await migrate({ cwd });
+    assert.deepEqual(report.candidates, ['print:p-[13px]']);
+    assert.match(report.diff, /class="card print:p-\[13px\]"/);
   } finally {
     await cleanup(cwd);
   }
@@ -1161,6 +1203,51 @@ test('analyzes generated CSS when no unique same-stem preprocessor exists', asyn
     assert.deepEqual(report.candidates, ['text-[red]']);
     assert.match(report.diff, /class="card generated text-\[red\]"/);
     assert.ok(!report.warnings.some((warning) => warning.code === 'inferred-preprocessor-source'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('keeps the authored entry when a source imports its generated CSS', async () => {
+  const cwd = await fixture();
+  try {
+    const scss = '$space: 13px;\n.button { padding: $space; }\n';
+    await Promise.all([
+      writeFile(join(cwd, 'Button.module.scss'), scss),
+      writeFile(
+        join(cwd, 'index.html'),
+        '<link rel="stylesheet" href="./Button.module.css"><button class="button">HTML</button>\n',
+      ),
+    ]);
+
+    const report = await migrate({ cwd, write: true });
+    assert.equal(await readFile(join(cwd, 'Button.module.scss'), 'utf8'), scss);
+    assert.equal(
+      await readFile(join(cwd, 'Button.tsx'), 'utf8'),
+      'export const Button = () => <button className="p-[13px]">Save</button>;\n',
+    );
+    assert.ok(!report.warnings.some((warning) => warning.code === 'inferred-preprocessor-source'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('retains a CSS Module imported by a link-discovered stylesheet', async () => {
+  const cwd = await fixture();
+  try {
+    await mkdir(join(cwd, 'dist'));
+    await Promise.all([
+      writeFile(join(cwd, 'dist', 'main.css'), '@import "../Button.module.css";\n'),
+      writeFile(
+        join(cwd, 'index.html'),
+        '<link rel="stylesheet" href="./dist/main.css"><button class="button">HTML</button>\n',
+      ),
+    ]);
+
+    const report = await migrate({ cwd, write: true });
+    assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
+    assert.equal(await readFile(join(cwd, 'dist', 'main.css'), 'utf8'), '@import "../Button.module.css";\n');
+    assert.ok(report.warnings.some((warning) => warning.code === 'unsupported-css-module-reference'));
   } finally {
     await cleanup(cwd);
   }
@@ -1767,6 +1854,25 @@ test('reference-only workspace consumers prevent CSS Module deletion', async () 
   }
 });
 
+test('retains a CSS Module linked from a nested package HTML page', async () => {
+  const cwd = await fixture();
+  try {
+    const html = '<link rel="stylesheet" href="../Button.module.css"><button class="button">HTML</button>\n';
+    await mkdir(join(cwd, 'nested'));
+    await Promise.all([
+      writeFile(join(cwd, 'nested', 'package.json'), '{"private":true}'),
+      writeFile(join(cwd, 'nested', 'index.html'), html),
+    ]);
+
+    const report = await migrate({ cwd, write: true });
+    assert.equal(await readFile(join(cwd, 'Button.module.css'), 'utf8'), initialCss);
+    assert.equal(await readFile(join(cwd, 'nested', 'index.html'), 'utf8'), html);
+    assert.ok(report.warnings.some((warning) => warning.code === 'reference-only-css-module-consumer'));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('workspace mode updates a selected cross-package consumer', async () => {
   const cwd = await fixture();
   try {
@@ -1795,6 +1901,40 @@ test('workspace mode updates a selected cross-package consumer', async () => {
     assert.equal(
       await readFile(join(cwd, 'app', 'Button.tsx'), 'utf8'),
       'export const Button = () => <button className="p-[13px]" />;\n',
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('workspace mode migrates a cross-package HTML consumer', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      rm(join(cwd, 'Button.tsx')),
+      rm(join(cwd, 'globals.css')),
+      run('git', ['init', '-q'], { cwd }),
+      mkdir(join(cwd, 'shared')),
+      mkdir(join(cwd, 'app')),
+    ]);
+    await Promise.all([
+      writeFile(join(cwd, 'shared', 'package.json'), '{"private":true}'),
+      writeFile(join(cwd, 'shared', 'globals.css'), '@import "tailwindcss";\n'),
+      writeFile(join(cwd, 'shared', 'Button.module.css'), '.button { padding: 13px; }\n'),
+      writeFile(join(cwd, 'app', 'package.json'), '{"private":true}'),
+      writeFile(
+        join(cwd, 'app', 'index.html'),
+        '<link rel="stylesheet" href="../shared/Button.module.css"><button class="button">HTML</button>\n',
+      ),
+    ]);
+
+    const report = await migrate({ cwd, workspaces: true, write: true });
+    assert.ok(report.changedFiles.includes('app/index.html'));
+    await assert.rejects(readFile(join(cwd, 'shared', 'Button.module.css'), 'utf8'), { code: 'ENOENT' });
+    assert.equal(
+      await readFile(join(cwd, 'app', 'index.html'), 'utf8'),
+      '<button class="button p-[13px]">HTML</button>\n',
     );
   } finally {
     await cleanup(cwd);

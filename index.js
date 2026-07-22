@@ -566,9 +566,21 @@ async function preparePackageHtml({
   const removableLinks = [];
   const warnings = [];
 
-  for (const file of sourceFiles.filter(
-    (file) => extension(file.path) === '.html' && pathOwners.get(file.path) === packageRoot,
-  )) {
+  const htmlFiles = sourceFiles.filter((file) => extension(file.path) === '.html');
+  // Package-owned HTML goes first so stylesheets it discovers are claimed for
+  // this package before foreign consumers are matched against that ownership.
+  const orderedFiles = [
+    ...htmlFiles.filter((file) => pathOwners.get(file.path) === packageRoot),
+    ...htmlFiles.filter((file) => pathOwners.get(file.path) !== packageRoot),
+  ];
+  for (const file of orderedFiles) {
+    const owner = pathOwners.get(file.path);
+    // Foreign HTML is analyzed only as a consumer of this package's
+    // stylesheets; its other links and attributes are its own package's
+    // concern, so they never warn here.
+    const foreign = owner !== packageRoot;
+    if (foreign && !owner) continue;
+    const referenceRoot = foreign ? owner : packageRoot;
     const parsed = parseHtmlSource(file.path, file.source);
     const contexts = [];
     let linkBase = dirname(file.path);
@@ -577,49 +589,56 @@ async function preparePackageHtml({
       const baseReference = base.href.split(/[?#]/, 1)[0];
       const basePath = base.writable && (baseReference === ''
         ? file.path
-        : localHtmlReference(packageRoot, dirname(file.path), base.href));
-      if (!basePath || !isWithin(packageRoot, basePath)) {
-        warnings.push(htmlWarning(
-          'unsupported-html-base',
-          file.path,
-          base.start,
-          base.end,
-          'A remote or unrepresentable base URL prevents safe stylesheet link resolution.',
-        ));
+        : localHtmlReference(referenceRoot, dirname(file.path), base.href));
+      if (!basePath || !isWithin(referenceRoot, basePath)) {
+        if (!foreign) {
+          warnings.push(htmlWarning(
+            'unsupported-html-base',
+            file.path,
+            base.start,
+            base.end,
+            'A remote or unrepresentable base URL prevents safe stylesheet link resolution.',
+          ));
+        }
         linkBase = undefined;
       } else {
         linkBase = base.href.split(/[?#]/, 1)[0].endsWith('/') ? basePath : dirname(basePath);
       }
     }
     for (const link of parsed.links) {
-      const linkedPath = linkBase && localHtmlReference(packageRoot, linkBase, link.href);
-      if (!linkedPath || !isWithin(packageRoot, linkedPath)) {
-        warnings.push(htmlWarning(
-          'unsupported-html-stylesheet-link',
-          file.path,
-          link.start,
-          link.end,
-          'Only local package stylesheet links are analyzed.',
-        ));
+      const linkedPath = linkBase && localHtmlReference(referenceRoot, linkBase, link.href);
+      if (!linkedPath || !isWithin(packageRoot, linkedPath)
+        || (foreign && pathOwners.get(linkedPath) !== packageRoot)) {
+        if (!foreign) {
+          warnings.push(htmlWarning(
+            'unsupported-html-stylesheet-link',
+            file.path,
+            link.start,
+            link.end,
+            'Only local package stylesheet links are analyzed.',
+          ));
+        }
         continue;
       }
       const variants = mediaVariants(link.media);
       if (variants === undefined) {
-        const cssPath = inferredPreprocessorPath({
+        const cssPath = (foreign ? undefined : inferredPreprocessorPath({
           path: linkedPath,
           packageRoot,
           styleSources,
           pathOwners,
           styleDependents,
-        }) ?? linkedPath;
+        })) ?? linkedPath;
         contexts.push({ cssPath, variants: [], direct: true, analyzable: false });
-        warnings.push(htmlWarning(
-          'unsupported-link-media',
-          file.path,
-          link.start,
-          link.end,
-          `The stylesheet link media condition ${JSON.stringify(link.media)} cannot be represented safely.`,
-        ));
+        if (!foreign) {
+          warnings.push(htmlWarning(
+            'unsupported-link-media',
+            file.path,
+            link.start,
+            link.end,
+            `The stylesheet link media condition ${JSON.stringify(link.media)} cannot be represented safely.`,
+          ));
+        }
         continue;
       }
       const contextStart = contexts.length;
@@ -628,6 +647,7 @@ async function preparePackageHtml({
         variants,
         direct: true,
         packageRoot,
+        sourceFiles,
         styleSources,
         snapshots,
         pathOwners,
@@ -649,7 +669,8 @@ async function preparePackageHtml({
       }
     }
 
-    if (contexts.length > 0) {
+    if (foreign && contexts.length === 0) continue;
+    if (!foreign && contexts.length > 0) {
       for (const attribute of parsed.dynamicAttributes) {
         warnings.push(htmlWarning(
           'dynamic-html-attribute',
@@ -727,10 +748,19 @@ async function collectHtmlStyleContexts(state) {
     }
     const importedPath = localHtmlReference(state.packageRoot, dirname(state.path), imported.href);
     if (!importedPath || !isWithin(state.packageRoot, importedPath)) continue;
+    // Link-discovered stylesheets never went through indexStylesheetDependents,
+    // so record their import edges here or deletion could leave this importer
+    // pointing at a removed module.
+    if (importedPath !== state.path
+      && (isStylesheetModule(importedPath) || isPreprocessorPath(importedPath))) {
+      addStyleDependent(state.styleDependents, importedPath, state.path);
+    }
     await collectHtmlStyleContexts({
       ...state,
       path: importedPath,
-      variants: [...state.variants, ...variants],
+      // Deduplicate so a cyclic import chain cannot grow the variant list and
+      // mint a fresh visited key on every lap.
+      variants: [...new Set([...state.variants, ...variants])],
       direct: false,
     });
   }
@@ -749,6 +779,14 @@ function inferredPreprocessorPath(state) {
 }
 
 function addInferredPreprocessorContext(state) {
+  // A source importing the generated CSS pins the artifact itself: excluding
+  // it from planning while migrating the inferred entry could delete the only
+  // source able to rebuild the file that import depends on.
+  if (state.styleSources.has(state.path)
+    && state.sourceFiles.some((file) =>
+      extension(file.path) !== '.html' && sourceReferencesStyle(file, state.path))) {
+    return false;
+  }
   const path = inferredPreprocessorPath(state);
   if (!path) return false;
   state.generatedPaths.add(state.path);
@@ -974,6 +1012,14 @@ function indexStylesheetDependents(styleSources) {
   }
   for (const [target, paths] of dependents) dependents.set(target, [...new Set(paths)].sort());
   return dependents;
+}
+
+function addStyleDependent(styleDependents, target, importer) {
+  const paths = styleDependents.get(target) ?? [];
+  if (paths.includes(importer)) return;
+  paths.push(importer);
+  paths.sort();
+  styleDependents.set(target, paths);
 }
 
 function stylesheetReferenceTargets(importer, reference, styleSources) {

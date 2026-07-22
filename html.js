@@ -49,9 +49,16 @@ export function parseHtmlSource(path, source) {
 
         let classAttribute = locatedAttribute(source, locations.class, attributes.get('class'));
         const idAttribute = locatedAttribute(source, locations.id, attributes.get('id'));
-        const dynamic = [classAttribute, idAttribute].find((attribute) =>
-          attribute && (!attribute.writable || isTemplateValue(attribute.value)),
-        ) ?? (classAttribute && !classAttribute.quoted ? classAttribute : undefined);
+        // A class attribute that exists but cannot be located as a writable
+        // value (e.g. valueless `<main class>`) must not look absent, or the
+        // id-only branch would synthesize a duplicate class attribute.
+        const unparsedClass = !classAttribute && idAttribute && locations.class
+          ? { start: locations.class.startOffset, end: locations.class.endOffset }
+          : undefined;
+        const dynamic = unparsedClass
+          ?? [classAttribute, idAttribute].find((attribute) =>
+            attribute && (!attribute.writable || isTemplateValue(attribute.value)),
+          ) ?? (classAttribute && !classAttribute.quoted ? classAttribute : undefined);
         if (dynamic) {
           dynamicAttributes.push({ start: dynamic.start, end: dynamic.end });
         } else if (classAttribute || idAttribute) {
