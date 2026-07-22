@@ -164,6 +164,27 @@ fn plan_source_file_with_mode(
     if is_module {
         imports.visit_program(&parsed.program);
     }
+    // On the global path, members of CSS Module imports can never match a
+    // global class: they are module references handled by the module's own
+    // plan, not dynamic class names.
+    let mut global_module_symbols = Vec::new();
+    if !is_module {
+        for statement in &parsed.program.body {
+            let oxc_ast::ast::Statement::ImportDeclaration(declaration) = statement else {
+                continue;
+            };
+            if !declaration.source.value.ends_with(".module.css") {
+                continue;
+            }
+            for specifier in declaration.specifiers.iter().flatten() {
+                if let ImportDeclarationSpecifier::ImportDefaultSpecifier(specifier) = specifier
+                    && let Some(symbol) = specifier.local.symbol_id.get()
+                {
+                    global_module_symbols.push(symbol);
+                }
+            }
+        }
+    }
 
     let scoping = semantic.semantic.scoping();
     let total_import_refs = imports
@@ -177,6 +198,7 @@ fn plan_source_file_with_mode(
         is_module,
         scoping,
         import_bindings: &imports.bindings,
+        global_module_symbols: &global_module_symbols,
         candidates,
         preserved_module_classes,
         batch_mode,
@@ -348,6 +370,7 @@ struct UsageCollector<'s> {
     is_module: bool,
     scoping: &'s Scoping,
     import_bindings: &'s [ImportBinding],
+    global_module_symbols: &'s [SymbolId],
     candidates: &'s HashMap<SelectorKey, Vec<String>>,
     preserved_module_classes: &'s BTreeSet<String>,
     batch_mode: bool,
@@ -382,6 +405,27 @@ impl UsageCollector<'_> {
     fn module_member_name<'a>(&self, member: &'a StaticMemberExpression<'a>) -> Option<&'a str> {
         self.is_module_object(&member.object)
             .then(|| member.property.name.as_str())
+    }
+
+    /// Whether a global-path className expression is a member of a CSS Module
+    /// import, which can never match a global class and is classified by the
+    /// module's own plan instead.
+    fn is_global_module_member(&self, expression: &JSXExpression<'_>) -> bool {
+        let object = match expression {
+            JSXExpression::StaticMemberExpression(member) => &member.object,
+            JSXExpression::ComputedMemberExpression(member) => &member.object,
+            _ => return false,
+        };
+        let Expression::Identifier(object) = object else {
+            return false;
+        };
+        let Some(reference) = object.reference_id.get() else {
+            return false;
+        };
+        let Some(symbol) = self.scoping.get_reference(reference).symbol_id() else {
+            return false;
+        };
+        self.global_module_symbols.contains(&symbol)
     }
 
     fn static_template(&self, template: &TemplateLiteral<'_>) -> Option<StaticTemplate> {
@@ -534,15 +578,17 @@ impl UsageCollector<'_> {
                                 let cooked = template.quasis[0].value.cooked.as_ref().unwrap();
                                 class_literal = Some((container.span, cooked.to_string()));
                             }
-                            _ => {
-                                self.warnings.push(Warning {
-                                    code: "dynamic-class-name",
-                                    file: self.file_path.to_string(),
-                                    start: container.span.start as usize,
-                                    end: container.span.end as usize,
-                                    message: "Only static className values are supported."
-                                        .to_string(),
-                                });
+                            expression => {
+                                if !self.is_global_module_member(expression) {
+                                    self.warnings.push(Warning {
+                                        code: "dynamic-class-name",
+                                        file: self.file_path.to_string(),
+                                        start: container.span.start as usize,
+                                        end: container.span.end as usize,
+                                        message: "Only static className values are supported."
+                                            .to_string(),
+                                    });
+                                }
                             }
                         }
                     }

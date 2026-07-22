@@ -16,15 +16,48 @@ The CLI previews changes by default. Pass `--tailwind-css path/to/globals.css` w
 ## Current support
 
 - `.js`, `.jsx`, `.ts`, and `.tsx` source files
-- direct CSS Module members and static template literals
+- direct CSS Module members, static template literals, and static expression literals
 - global `className` and `id` literals
-- common state pseudo-classes
-- global arbitrary descendant variants
-- exact Tailwind theme tokens with arbitrary-value fallback
-- spacing shorthand normalization
-- exact Tailwind breakpoints
+- multi-compound CSS Module selectors whose element relationships are proven from the JSX graph
+- common state pseudo-classes, global arbitrary descendant variants, and conditional at-rules (`@media`, `@supports`, `@container`, `@starting-style`)
+- the tier-1 property mapping families with shorthand/longhand normalization
+- exact Tailwind theme tokens and breakpoints with arbitrary-value fallback
+- generated candidates are compiled against the project's Tailwind entry; failures retain the source rule
+- batch migration of every stylesheet in a package, and `--workspaces` runs across packages
 - CSS Module cleanup when every reference is safely migrated
 
-Dynamic class builders, unproven CSS Module relationships, unsupported at-rules, `!important`, and `composes` dependencies are retained with warnings.
+Everything outside this subset is retained and reported with one of the warning codes below.
+
+## Warning codes
+
+| Code | Meaning |
+| --- | --- |
+| `aliased-css-module-reference` | A CSS Module class is aliased to a local binding, so the module is retained. |
+| `batch-stylesheet-conflict` | Utilities generated from different stylesheets conflict on the same JSX element, so the contributing rule is retained. |
+| `candidate-compilation-failure` | A generated candidate did not compile under the project's Tailwind entry, so its rule is retained. |
+| `computed-css-module-reference` | A computed CSS Module access cannot be verified, so the module is retained. |
+| `css-module-composes` | The rule uses or is targeted by `composes`, so it is retained. |
+| `dynamic-class-name` | A `className` value is dynamic, so the element cannot be migrated. |
+| `existing-tailwind-conflict` | A generated utility may conflict with a Tailwind class already on the element. |
+| `module-utilities-conflict` | Utilities generated from different module classes on one element overlap, so their rules are retained. |
+| `non-classname-css-module-reference` | A CSS Module class is used outside a supported `className`, so the module is retained. |
+| `reference-only-css-module-consumer` | A reference-only (non-writable) source uses the CSS Module, so it is retained. |
+| `retained-global-rule` | Global CSS is never deleted automatically. |
+| `unproven-css-module-relationship` | A compound selector's element relationship could not be proven for every usage. |
+| `unresolved-selector-target` | No exclusively supported `className` references were found for the rule. |
+| `unsupported-animation` | The animation references keyframes that cannot be converted. |
+| `unsupported-at-rule` | The rule contains or sits inside an at-rule outside the supported set. |
+| `unsupported-container-query` | The `@container` condition has no Tailwind variant equivalent. |
+| `unsupported-css-module-reference` | The CSS Module has an import or reference that cannot be migrated safely. |
+| `unsupported-declaration` | A declaration is outside the supported property subset. |
+| `unsupported-important` | `!important` declarations are not migrated. |
+| `unsupported-media-query` | The `@media` condition has no Tailwind variant equivalent. |
+| `unsupported-nested-at-rule` | A nested conditional at-rule could not be fully converted. |
+| `unsupported-overlap` | Shorthand and longhand declarations overlap in a way that cannot be normalized. |
+| `unsupported-rule-content` | The rule contains non-declaration content that cannot be converted. |
+| `unsupported-selector` | The selector is outside the supported subset. |
+| `unsupported-starting-style` | The `@starting-style` condition could not be converted. |
+| `unsupported-supports-query` | The `@supports` condition has no Tailwind variant equivalent. |
+| `unsupported-value` | A declaration value cannot be represented as a Tailwind utility. |
 
 See [the RFC](./rfcs/css-to-tailwind-migration-cli.md) for the complete design and remaining scope.

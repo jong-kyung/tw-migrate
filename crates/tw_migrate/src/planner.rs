@@ -117,6 +117,42 @@ pub(crate) struct Warning {
     pub(crate) message: String,
 }
 
+/// Every warning code the migration can emit, including reason strings that
+/// flow through `rule.warning` and the JS-side `candidate-compilation-failure`
+/// stamped in index.js. Adding or removing a code requires updating this list
+/// and the README warning table; `tests::warning_codes_are_pinned_to_the_readme`
+/// enforces both.
+#[cfg(test)]
+const WARNING_CODES: &[&str] = &[
+    "aliased-css-module-reference",
+    "batch-stylesheet-conflict",
+    "candidate-compilation-failure",
+    "computed-css-module-reference",
+    "css-module-composes",
+    "dynamic-class-name",
+    "existing-tailwind-conflict",
+    "module-utilities-conflict",
+    "non-classname-css-module-reference",
+    "reference-only-css-module-consumer",
+    "retained-global-rule",
+    "unproven-css-module-relationship",
+    "unresolved-selector-target",
+    "unsupported-animation",
+    "unsupported-at-rule",
+    "unsupported-container-query",
+    "unsupported-css-module-reference",
+    "unsupported-declaration",
+    "unsupported-important",
+    "unsupported-media-query",
+    "unsupported-nested-at-rule",
+    "unsupported-overlap",
+    "unsupported-rule-content",
+    "unsupported-selector",
+    "unsupported-starting-style",
+    "unsupported-supports-query",
+    "unsupported-value",
+];
+
 #[derive(Clone)]
 pub(crate) struct Edit {
     pub(crate) start: usize,
@@ -1049,6 +1085,29 @@ mod tests {
             .map(|warning| warning["code"].as_str().unwrap().to_string())
             .collect::<Vec<_>>();
         assert_eq!(codes, ["dynamic-class-name", "retained-global-rule"]);
+    }
+
+    #[test]
+    fn does_not_flag_module_members_as_dynamic_for_global_css() {
+        let request = serde_json::json!({
+            "cssPath": "/project/global.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.card} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        let codes = response["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|warning| warning["code"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(codes, ["retained-global-rule"]);
     }
 
     #[test]
@@ -3873,5 +3932,82 @@ mod tests {
                 .iter()
                 .any(|warning| warning["code"] == "reference-only-css-module-consumer")
         );
+    }
+
+    #[test]
+    fn retains_an_unreferenced_module_rule_with_unresolved_selector_target() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".unused { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.card} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["retainedRules"], 1);
+        assert_eq!(
+            warning_message(&response, "unresolved-selector-target"),
+            "No exclusively supported className references were found."
+        );
+    }
+
+    #[test]
+    fn warning_codes_are_pinned_to_the_readme() {
+        let readme = include_str!("../../../README.md");
+        let documented = readme
+            .lines()
+            .filter_map(|line| line.strip_prefix("| `")?.split('`').next())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            documented,
+            super::WARNING_CODES,
+            "the README warning table must list exactly the emitted codes, sorted"
+        );
+
+        // Strip the canonical list itself so it cannot satisfy its own check.
+        let planner = include_str!("planner.rs");
+        let const_start = planner.find("const WARNING_CODES").unwrap();
+        let const_end = const_start + planner[const_start..].find("];").unwrap();
+        let sources = [
+            &planner[..const_start],
+            &planner[const_end..],
+            include_str!("js_rewrite.rs"),
+            include_str!("jsx_graph.rs"),
+            include_str!("css_plan.rs"),
+            include_str!("at_rules.rs"),
+            include_str!("utilities.rs"),
+            include_str!("animations.rs"),
+            include_str!("arbitrary.rs"),
+            include_str!("theme.rs"),
+            include_str!("lib.rs"),
+            include_str!("../../../index.js"),
+        ]
+        .join("\n");
+        for code in super::WARNING_CODES {
+            assert!(
+                sources.contains(&format!("\"{code}\"")) || sources.contains(&format!("'{code}'")),
+                "documented warning code `{code}` no longer appears in the sources"
+            );
+        }
+
+        // Every directly constructed warning code must be documented. Reason
+        // strings flowing through `rule.warning` are covered by the check
+        // above plus the comment on WARNING_CODES. The patterns are built at
+        // runtime so this test's own source cannot match them.
+        let rust_sites = format!("{}: \"", "code");
+        let js_sites = format!("{}: '", "code");
+        for (pattern, quote) in [(rust_sites.as_str(), '"'), (js_sites.as_str(), '\'')] {
+            for site in sources.split(pattern).skip(1) {
+                let code = site.split(quote).next().unwrap();
+                assert!(
+                    super::WARNING_CODES.contains(&code),
+                    "emitted warning code `{code}` is missing from WARNING_CODES and the README"
+                );
+            }
+        }
     }
 }
