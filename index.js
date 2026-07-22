@@ -403,7 +403,7 @@ function replanCompileFailures(tailwind, request, initialPlan) {
       const key = `${rule.ruleId.start}-${rule.ruleId.end}`;
       let entry = blocked.get(key);
       if (!entry) {
-        blocked.set(key, entry = { ruleId: rule.ruleId, candidates: new Set() });
+        blocked.set(key, entry = { ruleId: rule.ruleId, authoredSpan: rule.authoredSpan, candidates: new Set() });
         progressed = true;
       }
       for (const candidate of failed) entry.candidates.add(candidate);
@@ -421,13 +421,14 @@ function replanCompileFailures(tailwind, request, initialPlan) {
     })));
   }
   for (const [cssPath, blocked] of blockedByStylesheet) {
-    for (const { ruleId, candidates } of blocked.values()) {
+    for (const { authoredSpan, candidates } of blocked.values()) {
       const failed = [...candidates].sort().map((candidate) => `\`${candidate}\``).join(', ');
       plan.warnings.push({
         code: 'candidate-compilation-failure',
         file: cssPath,
-        start: ruleId.start,
-        end: ruleId.end,
+        // ruleId is a compiled-domain span; warnings anchor to the authored file.
+        start: authoredSpan.start,
+        end: authoredSpan.end,
         message: `Tailwind did not generate CSS for ${failed}, so the rule is retained.`,
       });
     }

@@ -203,12 +203,17 @@ struct RuleReport {
     candidates: Vec<String>,
     file: String,
     rule_id: RuleId,
+    /// Authored-domain rule span for anchoring caller-side warnings, or
+    /// (0, 0) when the rule has no unique authored mapping.
+    authored_span: RuleId,
 }
 
 #[derive(Serialize)]
 pub(crate) struct Warning {
     pub(crate) code: &'static str,
     pub(crate) file: String,
+    /// Byte offsets into the authored file, or (0, 0) when a preprocessor
+    /// rule has no unique authored mapping.
     pub(crate) start: usize,
     pub(crate) end: usize,
     pub(crate) message: String,
@@ -279,6 +284,9 @@ pub fn plan_json(request: &str) -> Result<String, String> {
     .map_err(|error| error.to_string())
 }
 
+/// Span of a rule in the analysis source (the compiled CSS for preprocessor
+/// stylesheets), stable only across plans over identical `analysisSource`;
+/// it round-trips through `blockedRules` in that domain.
 #[derive(Clone, Copy, Deserialize, Eq, Hash, PartialEq, Serialize)]
 struct RuleId {
     start: usize,
@@ -1166,6 +1174,13 @@ fn plan_request(
             };
 
         let rule_id = rule_id(&rule);
+        let report_authored_span = rule.authored_span.as_ref().map_or(
+            RuleId { start: 0, end: 0 },
+            |span| RuleId {
+                start: span.start,
+                end: span.end,
+            },
+        );
         if can_remove {
             converted_rules += 1;
             let authored_span = rule
@@ -1183,6 +1198,7 @@ fn plan_request(
                 candidates: rule.candidates,
                 file: request.css_path.clone(),
                 rule_id,
+                authored_span: report_authored_span,
             });
         } else if rule.warning == Some("candidate-compilation-failure") {
             // The caller blocked this rule after a Tailwind compilation
@@ -1194,6 +1210,7 @@ fn plan_request(
                 candidates: rule.candidates,
                 file: request.css_path.clone(),
                 rule_id,
+                authored_span: report_authored_span,
             });
         } else {
             retained_rules += 1;
@@ -1247,18 +1264,11 @@ fn plan_request(
                     "No exclusively supported className references were found.".to_string(),
                 )
             };
-            let warning_span = rule.authored_span.as_ref().unwrap_or(&rule.span);
-            let (start, end) = if request.analysis_source.is_some() && rule.authored_span.is_none()
-            {
-                (0, 0)
-            } else {
-                (warning_span.start, warning_span.end)
-            };
             warnings.push(Warning {
                 code,
                 file: request.css_path.clone(),
-                start,
-                end,
+                start: report_authored_span.start,
+                end: report_authored_span.end,
                 message,
             });
             rule_reports.push(RuleReport {
@@ -1267,6 +1277,7 @@ fn plan_request(
                 candidates: rule.candidates,
                 file: request.css_path.clone(),
                 rule_id,
+                authored_span: report_authored_span,
             });
         }
     }
@@ -3373,6 +3384,7 @@ mod tests {
         assert_eq!(blocked["status"], "retained");
         assert_eq!(blocked["file"], "/project/Button.module.css");
         assert_eq!(blocked["ruleId"], serde_json::json!({ "start": 0, "end": 20 }));
+        assert_eq!(blocked["authoredSpan"], serde_json::json!({ "start": 0, "end": 20 }));
         let converted = rules.iter().find(|rule| rule["selector"] == ".good").unwrap();
         assert_eq!(converted["status"], "converted");
         let source = response["files"]

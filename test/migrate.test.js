@@ -312,6 +312,89 @@ test('retains a Sass entry loaded by another admitted entry', async () => {
   }
 });
 
+const compoundScss = '$m: 12px;\n.parent { padding: 13px; }\n.parent .child { margin: $m; }\n';
+
+test('converts a proven descendant relationship authored in SCSS', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      writeFile(join(cwd, 'Card.module.scss'), compoundScss),
+      writeFile(
+        join(cwd, 'Card.tsx'),
+        "import styles from './Card.module.scss';\nexport const Card = () => <div className={styles.parent}><span className={styles.child} /></div>;\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd, styleFile: 'Card.module.scss', write: true });
+    assert.equal(report.convertedRules, 2);
+    assert.deepEqual(report.candidates, ['m-[12px]', 'p-[13px]']);
+    const tsx = await readFile(join(cwd, 'Card.tsx'), 'utf8');
+    assert.match(tsx, /"p-\[13px\]"/);
+    assert.match(tsx, /"m-\[12px\]"/);
+    const second = await migrate({ cwd, styleFile: 'Card.module.scss' });
+    assert.deepEqual(second.changedFiles, []);
+    assert.equal(second.diff, '');
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('retains nested SCSS rules whose expansion prevents a unique authored mapping', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      writeFile(join(cwd, 'Card.module.scss'), '.parent { padding: 13px; .child { margin: 12px; } }\n'),
+      writeFile(
+        join(cwd, 'Card.tsx'),
+        "import styles from './Card.module.scss';\nexport const Card = () => <div className={styles.parent}><span className={styles.child} /></div>;\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd, styleFile: 'Card.module.scss', write: true });
+    assert.deepEqual(report.changedFiles, []);
+    assert.equal(report.diff, '');
+    assert.equal(report.convertedRules, 0);
+    assert.equal(report.retainedRules, 2);
+    // Nested expansion maps both compiled rules into the same authored rule,
+    // so neither gets a unique authored span and warnings anchor to (0, 0).
+    assert.deepEqual(
+      report.warnings.map((warning) => [warning.code, warning.start, warning.end]),
+      [['unproven-source-map', 0, 0], ['unproven-source-map', 0, 0]],
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('retains a disproven SCSS descendant relationship with authored offsets', async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      writeFile(join(cwd, 'Card.module.scss'), compoundScss),
+      writeFile(
+        join(cwd, 'Card.tsx'),
+        "import styles from './Card.module.scss';\nexport const Card = () => <><div className={styles.parent} /><span className={styles.child} /></>;\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd, styleFile: 'Card.module.scss', write: true });
+    assert.deepEqual(report.changedFiles, []);
+    assert.equal(report.convertedRules, 0);
+    const warning = report.warnings.find((entry) => entry.code === 'unproven-css-module-relationship');
+    assert.equal(warning.file, 'Card.module.scss');
+    const ruleStart = compoundScss.indexOf('.parent .child');
+    const ruleEnd = compoundScss.indexOf('}', ruleStart) + 1;
+    assert.equal(warning.start, ruleStart);
+    assert.equal(warning.end, ruleEnd);
+    assert.equal(await readFile(join(cwd, 'Card.module.scss'), 'utf8'), compoundScss);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 for (const [extension, source] of [
   ['scss', '$name: button;\n.#{$name} { padding: 13px; }\n'],
   ['less', '@name: button;\n.@{name} { padding: 13px; }\n'],
@@ -2698,6 +2781,36 @@ test('completes both workspace packages retaining the compile-failing rule', asy
     const warning = report.warnings.find((entry) => entry.code === 'candidate-compilation-failure');
     assert.equal(warning.file, 'broken/Broken.module.css');
     assert.match(warning.message, /\[COLOR:red\]/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('anchors Sass compile-failure warnings to authored offsets', async () => {
+  const scss = '$space: 13px;\n.pad { padding: $space; }\n.button { COLOR: red; }\n';
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, 'Button.module.css')),
+      writeFile(join(cwd, 'Button.module.scss'), scss),
+      writeFile(
+        join(cwd, 'Button.tsx'),
+        "import styles from './Button.module.scss';\nexport const Button = () => <button className={styles.button}><i className={styles.pad} /></button>;\n",
+      ),
+    ]);
+
+    const report = await migrate({ cwd, styleFile: 'Button.module.scss' });
+    assert.equal(report.convertedRules, 1);
+    assert.equal(report.retainedRules, 1);
+    const warning = report.warnings.find((entry) => entry.code === 'candidate-compilation-failure');
+    assert.equal(warning.file, 'Button.module.scss');
+    assert.match(warning.message, /\[COLOR:red\]/);
+    const ruleStart = scss.indexOf('.button');
+    const ruleEnd = scss.indexOf('}', ruleStart) + 1;
+    assert.ok(
+      warning.start >= ruleStart && warning.end <= ruleEnd && warning.end > warning.start,
+      `warning span ${warning.start}-${warning.end} is outside the authored rule ${ruleStart}-${ruleEnd}`,
+    );
   } finally {
     await cleanup(cwd);
   }

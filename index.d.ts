@@ -10,6 +10,7 @@ export interface MigrateOptions {
 export interface MigrationWarning {
   code: string;
   file: string;
+  /** Byte offsets into the authored file, or (0, 0) when no unique mapping exists. */
   start: number;
   end: number;
   message: string;
@@ -20,7 +21,10 @@ export interface RuleReport {
   status: 'converted' | 'retained';
   candidates: string[];
   file: string;
+  /** Rule span in the analysis source (compiled CSS for preprocessor stylesheets). */
   ruleId: { start: number; end: number };
+  /** Rule span in the authored file, or (0, 0) when no unique mapping exists. */
+  authoredSpan: { start: number; end: number };
 }
 
 export interface MigrationFailure {

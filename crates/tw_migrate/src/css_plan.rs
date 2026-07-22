@@ -49,8 +49,14 @@ pub(crate) struct ModuleRelationship {
 }
 
 pub(crate) struct RulePlan {
+    /// Rule span in the analysis source (compiled CSS for preprocessor
+    /// stylesheets, the authored file otherwise).
     pub(crate) span: std::ops::Range<usize>,
+    /// Rule span in the authored file; `None` until source-map resolution
+    /// proves a unique mapping (always `Some` for plain CSS).
     pub(crate) authored_span: Option<std::ops::Range<usize>>,
+    /// Declaration offsets in the analysis source used to source-map the
+    /// rule back to its authored span.
     pub(crate) provenance_offsets: Vec<usize>,
     pub(crate) selector: String,
     pub(crate) related_classes: Vec<String>,
