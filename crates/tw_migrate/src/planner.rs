@@ -178,6 +178,13 @@ struct RuleId {
     end: usize,
 }
 
+fn rule_id(rule: &RulePlan) -> RuleId {
+    RuleId {
+        start: rule.span.start,
+        end: rule.span.end,
+    }
+}
+
 type RuleConflicts = HashMap<RuleId, BTreeSet<(String, String)>>;
 
 struct RuleOrigin {
@@ -196,8 +203,8 @@ struct CandidateMaps {
 /// Run the JSX-graph proofs for every proof-needing rule against `files` (the
 /// request's immutable snapshot) and return the rules that must be retained
 /// with `unproven-css-module-relationship`, keyed by rule with their message.
-// ponytail: prove() re-parses every file per step; per-request memoization if
-// proof volume ever matters.
+// ponytail: the world is rebuilt once per stylesheet; share it across a
+// batch's stylesheets if proof volume ever matters.
 fn unproven_relationship_rules(
     rules: &[RulePlan],
     css_path: &str,
@@ -207,6 +214,7 @@ fn unproven_relationship_rules(
         .iter()
         .map(|file| (file.path.as_str(), file.source.as_str()))
         .collect::<Vec<_>>();
+    let mut prepared = None;
     let mut unproven = HashMap::new();
     for rule in rules {
         let Some(relationship) = &rule.relationship else {
@@ -215,10 +223,7 @@ fn unproven_relationship_rules(
         if rule.warning.is_some() {
             continue;
         }
-        let rule_id = RuleId {
-            start: rule.span.start,
-            end: rule.span.end,
-        };
+        let rule_id = rule_id(rule);
         if relationship.ancestor_state {
             unproven.insert(
                 rule_id,
@@ -230,12 +235,14 @@ fn unproven_relationship_rules(
             continue;
         }
         for (index, step) in relationship.steps.iter().enumerate() {
-            let outcome = jsx_graph::prove(
-                &proof_files,
-                css_path,
+            let prepared = prepared
+                .get_or_insert_with(|| jsx_graph::prepare(&proof_files, css_path));
+            let outcome = jsx_graph::prove_prepared(
+                prepared,
                 &step.ancestor,
                 step.relation,
                 &step.target,
+                true,
             );
             if !outcome.aggregate_proven {
                 let reason = outcome.reason.unwrap_or("unproven");
@@ -280,10 +287,7 @@ fn unproven_relationship_rules(
 
 fn stamp_unproven_rules(rules: &mut [RulePlan], unproven: &HashMap<RuleId, String>) {
     for rule in rules {
-        let rule_id = RuleId {
-            start: rule.span.start,
-            end: rule.span.end,
-        };
+        let rule_id = rule_id(rule);
         if rule.warning.is_none() && unproven.contains_key(&rule_id) {
             rule.warning = Some("unproven-css-module-relationship");
         }
@@ -567,14 +571,11 @@ fn candidate_map_for_request(request: &PlanRequest) -> Result<CandidateMaps, Str
     let mut candidate_map: HashMap<SelectorKey, Vec<String>> = HashMap::new();
     let mut origins: HashMap<(SelectorKey, String), Vec<RuleOrigin>> = HashMap::new();
     for rule in rules {
+        let rule_id = rule_id(&rule);
         if let Some(key) = rule.key
             && rule.warning.is_none()
             && !matches!(&key, SelectorKey::Class(name) if blocked_classes.contains(name))
         {
-            let rule_id = RuleId {
-                start: rule.span.start,
-                end: rule.span.end,
-            };
             for candidate in &rule.candidates {
                 origins
                     .entry((key.clone(), candidate.clone()))
@@ -627,10 +628,7 @@ fn plan_request(
         },
     ) = parse_request_rules(&request)?;
     for rule in &mut rules {
-        let rule_id = RuleId {
-            start: rule.span.start,
-            end: rule.span.end,
-        };
+        let rule_id = rule_id(rule);
         if blocked_rules.contains_key(&rule_id) {
             rule.warning = Some("batch-stylesheet-conflict");
         } else if rule.warning.is_none() && externally_blocked.contains(&rule_id) {
@@ -761,10 +759,7 @@ fn plan_request(
                 _ => false,
             };
 
-        let rule_id = RuleId {
-            start: rule.span.start,
-            end: rule.span.end,
-        };
+        let rule_id = rule_id(&rule);
         if can_remove {
             converted_rules += 1;
             css_edits.push(Edit {

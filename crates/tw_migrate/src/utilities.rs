@@ -125,7 +125,7 @@ fn overflow_candidate(property: &str, value: &str) -> Option<String> {
     if matches!(value, "auto" | "hidden" | "clip" | "visible" | "scroll") {
         Some(format!("{property}-{value}"))
     } else {
-        encode_value(value).map(|value| format!("[{property}:{value}]"))
+        arbitrary_property(property, value).ok()
     }
 }
 
@@ -522,7 +522,7 @@ fn themed_candidate(
     if let Some(name) = exact_theme_token(namespace, value, theme_tokens) {
         Some(format!("{prefix}-{name}"))
     } else {
-        encode_value(value).map(|value| format!("{prefix}-[{value}]"))
+        arbitrary_value(prefix, value).ok()
     }
 }
 

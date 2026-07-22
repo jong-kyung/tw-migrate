@@ -64,6 +64,7 @@ const R_EXPORTED: &str = "exported-render-sites-unknown";
 /// Prove `ancestor relation target` for every usage of `target` under the
 /// closed-world assumption: `files` is the whole scanned project, so every
 /// render site of every component can be enumerated within it.
+#[cfg(test)]
 pub(crate) fn prove(
     files: &[(&str, &str)],
     css_path: &str,
@@ -76,6 +77,7 @@ pub(crate) fn prove(
 
 /// Like [`prove`], but `closed_world: false` marks exported components as
 /// having unknown render sites (`exported-render-sites-unknown`).
+#[cfg(test)]
 pub(crate) fn prove_in_world(
     files: &[(&str, &str)],
     css_path: &str,
@@ -84,6 +86,24 @@ pub(crate) fn prove_in_world(
     target: &SelectorKey,
     closed_world: bool,
 ) -> ProofOutcome {
+    prove_prepared(
+        &prepare(files, css_path),
+        ancestor,
+        relation,
+        target,
+        closed_world,
+    )
+}
+
+/// The extracted-and-linked world for one (files, css_path) pair: the
+/// query-invariant part of a proof, reusable across many queries.
+pub(crate) struct PreparedWorld {
+    world: World,
+    linked: Linked,
+}
+
+/// Build the [`PreparedWorld`] (per-file extraction plus cross-file linking).
+pub(crate) fn prepare(files: &[(&str, &str)], css_path: &str) -> PreparedWorld {
     let mut world = World {
         files: Vec::new(),
         parse_failure: false,
@@ -95,8 +115,27 @@ pub(crate) fn prove_in_world(
         }
     }
     let linked = link(&world);
+    PreparedWorld { world, linked }
+}
+
+/// Run one `ancestor relation target` query against a [`PreparedWorld`].
+pub(crate) fn prove_prepared(
+    prepared: &PreparedWorld,
+    ancestor: &SelectorKey,
+    relation: Relation,
+    target: &SelectorKey,
+    closed_world: bool,
+) -> ProofOutcome {
+    let PreparedWorld { world, linked } = prepared;
     let target_name = match target {
         SelectorKey::Class(name) | SelectorKey::Id(name) => name.as_str(),
+    };
+    let query = ProofQuery {
+        linked,
+        world,
+        relation,
+        ancestor,
+        closed_world,
     };
     let mut usages = Vec::new();
     for (file_ix, file) in world.files.iter().enumerate() {
@@ -118,16 +157,12 @@ pub(crate) fn prove_in_world(
                         for (key, span) in keys {
                             if key == target {
                                 let result = prove_up(
-                                    &linked,
-                                    &world,
+                                    &query,
                                     (file_ix, comp_ix),
                                     node_ix,
-                                    relation,
-                                    ancestor,
                                     &[],
                                     &BTreeSet::new(),
                                     0,
-                                    closed_world,
                                 );
                                 usages.push(usage_proof(&file.path, *span, result));
                             }
@@ -140,14 +175,10 @@ pub(crate) fn prove_in_world(
                         for (name, span) in class_keys {
                             if name == target_name {
                                 let result = prove_forward(
-                                    &linked,
-                                    &world,
+                                    &query,
                                     (file_ix, comp_ix),
                                     node_ix,
                                     tag,
-                                    relation,
-                                    ancestor,
-                                    closed_world,
                                 );
                                 usages.push(usage_proof(&file.path, *span, result));
                             }
@@ -996,27 +1027,11 @@ impl<'s> CompBuilder<'_, 's> {
                                 continue;
                             };
                             match name.name.as_str() {
-                                "className" => {
-                                    if let Some(JSXAttributeValue::ExpressionContainer(
-                                        container,
-                                    )) = &attribute.value
-                                    {
-                                        match &container.expression {
-                                            JSXExpression::EmptyExpression(_) => {}
-                                            expression => {
-                                                if let Some(inner) = expression.as_expression() {
-                                                    let mut forward_here = false;
-                                                    self.class_part(
-                                                        inner,
-                                                        &mut keys,
-                                                        &mut forward_here,
-                                                    );
-                                                    forward |= forward_here;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                                "className" => self.element_class_value(
+                                    &attribute.value,
+                                    &mut keys,
+                                    &mut forward,
+                                ),
                                 "id" => self.element_id_value(&attribute.value, &mut keys),
                                 _ => self.sweep_attribute_value(&attribute.value),
                             }
@@ -1137,6 +1152,27 @@ impl<'s> CompBuilder<'_, 's> {
         }
     }
 
+    fn element_class_value(
+        &mut self,
+        value: &Option<JSXAttributeValue<'_>>,
+        keys: &mut Vec<(SelectorKey, (usize, usize))>,
+        forward: &mut bool,
+    ) {
+        let Some(JSXAttributeValue::ExpressionContainer(container)) = value else {
+            return;
+        };
+        match &container.expression {
+            JSXExpression::EmptyExpression(_) => {}
+            expression => {
+                if let Some(inner) = expression.as_expression() {
+                    let mut forward_here = false;
+                    self.class_part(inner, keys, &mut forward_here);
+                    *forward |= forward_here;
+                }
+            }
+        }
+    }
+
     fn element_id_value(
         &mut self,
         value: &Option<JSXAttributeValue<'_>>,
@@ -1213,7 +1249,7 @@ impl<'s> CompBuilder<'_, 's> {
         }
     }
 
-    /// KTD4: `{expr.map(cb)}` whose callback statically returns a single JSX
+    /// `{expr.map(cb)}` whose callback statically returns a single JSX
     /// expression is part of the tree (a repeated static subtree).
     fn try_map_call(&mut self, parent: Option<usize>, call: &CallExpression<'_>) -> bool {
         let Expression::StaticMemberExpression(callee) = &call.callee else {
@@ -1548,44 +1584,48 @@ struct Frame {
     node: usize,
 }
 
+/// Recursion-invariant inputs shared by every step of one proof.
+struct ProofQuery<'a> {
+    linked: &'a Linked,
+    world: &'a World,
+    relation: Relation,
+    ancestor: &'a SelectorKey,
+    closed_world: bool,
+}
+
 /// Walk up from `node` inside `comp` looking for the ancestor key. At a
 /// component-use ancestor, interpose the wrapper's children-slot chains; at a
 /// tree root, resume via `cont` or expand every render site of `comp`.
-#[allow(clippy::too_many_arguments)]
 fn prove_up(
-    linked: &Linked,
-    world: &World,
+    query: &ProofQuery<'_>,
     comp: CompId,
     node: usize,
-    relation: Relation,
-    ancestor: &SelectorKey,
     cont: &[Frame],
     visited: &BTreeSet<CompId>,
     depth: u32,
-    closed_world: bool,
 ) -> Result<(), &'static str> {
     // ponytail: depth cap instead of full interposition-cycle detection;
     // pathological wrapper cycles bail out as recursive.
     if depth > 64 {
         return Err(R_RECURSIVE);
     }
-    let comp_ir = &world.files[comp.0].comps[comp.1];
+    let comp_ir = &query.world.files[comp.0].comps[comp.1];
     let nodes = comp_ir.body.as_ref().map_err(|reason| *reason)?;
     let mut current = nodes[node].parent;
     while let Some(parent) = current {
         match &nodes[parent].kind {
             NodeKind::Element { keys } => {
-                if keys.iter().any(|(key, _)| key == ancestor) {
+                if keys.iter().any(|(key, _)| key == query.ancestor) {
                     return Ok(());
                 }
-                if relation == Relation::Child {
+                if query.relation == Relation::Child {
                     // The first element ancestor is the parent; it lacks A.
                     return Err(R_ANCESTRY);
                 }
             }
             NodeKind::ComponentUse { tag, .. } => {
-                let wrapper = resolve_tag(linked, world, comp.0, tag)?;
-                let wrapper_ir = &world.files[wrapper.0].comps[wrapper.1];
+                let wrapper = resolve_tag(query.linked, query.world, comp.0, tag)?;
+                let wrapper_ir = &query.world.files[wrapper.0].comps[wrapper.1];
                 if let Err(reason) = &wrapper_ir.body {
                     return Err(reason);
                 }
@@ -1595,18 +1635,7 @@ fn prove_up(
                 let mut inner_cont = vec![Frame { comp, node: parent }];
                 inner_cont.extend_from_slice(cont);
                 for &slot in &wrapper_ir.slots {
-                    prove_up(
-                        linked,
-                        world,
-                        wrapper,
-                        slot,
-                        relation,
-                        ancestor,
-                        &inner_cont,
-                        visited,
-                        depth + 1,
-                        closed_world,
-                    )?;
+                    prove_up(query, wrapper, slot, &inner_cont, visited, depth + 1)?;
                 }
                 return Ok(());
             }
@@ -1615,48 +1644,31 @@ fn prove_up(
         current = nodes[parent].parent;
     }
     if let Some((first, rest)) = cont.split_first() {
-        return prove_up(
-            linked,
-            world,
-            first.comp,
-            first.node,
-            relation,
-            ancestor,
-            rest,
-            visited,
-            depth + 1,
-            closed_world,
-        );
+        return prove_up(query, first.comp, first.node, rest, visited, depth + 1);
     }
     // Render-site expansion: the relationship must hold at every site.
     if visited.contains(&comp) {
         return Err(R_RECURSIVE);
     }
-    if !closed_world && comp_ir.exported {
+    if !query.closed_world && comp_ir.exported {
         return Err(R_EXPORTED);
     }
-    if let Some(reason) = linked.unanalyzable.get(&comp) {
+    if let Some(reason) = query.linked.unanalyzable.get(&comp) {
         return Err(reason);
     }
-    let sites = linked.sites.get(&comp).map(Vec::as_slice).unwrap_or_default();
+    let sites = query
+        .linked
+        .sites
+        .get(&comp)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
     if sites.is_empty() {
         return Err(R_ANCESTRY);
     }
     let mut expanded = visited.clone();
     expanded.insert(comp);
     for (site_comp, site_node) in sites {
-        prove_up(
-            linked,
-            world,
-            *site_comp,
-            *site_node,
-            relation,
-            ancestor,
-            &[],
-            &expanded,
-            depth + 1,
-            closed_world,
-        )?;
+        prove_up(query, *site_comp, *site_node, &[], &expanded, depth + 1)?;
     }
     Ok(())
 }
@@ -1664,34 +1676,25 @@ fn prove_up(
 /// Prove a `className={styles.B}` passed to a forwarding component: the
 /// effective element is the wrapper's forward target, and its ancestry
 /// continues at this invocation site.
-#[allow(clippy::too_many_arguments)]
 fn prove_forward(
-    linked: &Linked,
-    world: &World,
+    query: &ProofQuery<'_>,
     comp: CompId,
     node: usize,
     tag: &TagRef,
-    relation: Relation,
-    ancestor: &SelectorKey,
-    closed_world: bool,
 ) -> Result<(), &'static str> {
-    let wrapper = resolve_tag(linked, world, comp.0, tag)?;
-    let wrapper_ir = &world.files[wrapper.0].comps[wrapper.1];
+    let wrapper = resolve_tag(query.linked, query.world, comp.0, tag)?;
+    let wrapper_ir = &query.world.files[wrapper.0].comps[wrapper.1];
     if let Err(reason) = &wrapper_ir.body {
         return Err(reason);
     }
     match wrapper_ir.forward {
         Forward::Target(target) => prove_up(
-            linked,
-            world,
+            query,
             wrapper,
             target,
-            relation,
-            ancestor,
             &[Frame { comp, node }],
             &BTreeSet::new(),
             0,
-            closed_world,
         ),
         _ => Err(R_BOUNDARY),
     }

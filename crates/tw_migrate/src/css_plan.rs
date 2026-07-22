@@ -612,19 +612,21 @@ fn selector_match(
         let ComplexSelectorChild::CompoundSelector(compound) = &selector.children[0] else {
             return None;
         };
+        if let Some(result) = compound_key_variant(compound) {
+            return Some(result);
+        }
+        // A key plus one argument-less pseudo-class was already rejected above
+        // (unsupported state); it must not fall through to an arbitrary variant.
+        if is_module
+            || matches!(
+                compound.children.as_slice(),
+                [_, SimpleSelector::PseudoClass(pseudo)] if pseudo.arg.is_none()
+            )
+        {
+            return None;
+        }
         let key = selector_key(compound.children.first()?)?;
-        let variant = match compound.children.as_slice() {
-            [_] => None,
-            [_, SimpleSelector::PseudoClass(pseudo)] if pseudo.arg.is_none() => {
-                let name = literal_ident(&pseudo.name)?;
-                if !supported_pseudo_state(name) {
-                    return None;
-                }
-                Some(name.to_string())
-            }
-            _ if !is_module => arbitrary_selector_variant(rule, source, compound)?,
-            _ => return None,
-        };
+        let variant = arbitrary_selector_variant(rule, source, compound)?;
         return Some((key, variant));
     }
 

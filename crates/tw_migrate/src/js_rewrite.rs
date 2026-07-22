@@ -387,14 +387,16 @@ struct UsageCollector<'s> {
 }
 
 impl UsageCollector<'_> {
+    fn identifier_symbol(&self, expr: &Expression<'_>) -> Option<SymbolId> {
+        let Expression::Identifier(identifier) = expr else {
+            return None;
+        };
+        let reference = identifier.reference_id.get()?;
+        self.scoping.get_reference(reference).symbol_id()
+    }
+
     fn is_module_object(&self, object: &Expression<'_>) -> bool {
-        let Expression::Identifier(object) = object else {
-            return false;
-        };
-        let Some(reference) = object.reference_id.get() else {
-            return false;
-        };
-        let Some(symbol) = self.scoping.get_reference(reference).symbol_id() else {
+        let Some(symbol) = self.identifier_symbol(object) else {
             return false;
         };
         self.import_bindings
@@ -416,13 +418,7 @@ impl UsageCollector<'_> {
             JSXExpression::ComputedMemberExpression(member) => &member.object,
             _ => return false,
         };
-        let Expression::Identifier(object) = object else {
-            return false;
-        };
-        let Some(reference) = object.reference_id.get() else {
-            return false;
-        };
-        let Some(symbol) = self.scoping.get_reference(reference).symbol_id() else {
+        let Some(symbol) = self.identifier_symbol(object) else {
             return false;
         };
         self.global_module_symbols.contains(&symbol)

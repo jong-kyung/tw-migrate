@@ -87,12 +87,7 @@ pub(crate) fn encode_value(value: &str) -> Option<String> {
                 ident_start = None;
             }
             '\\' => {
-                let (_, escaped) = chars.next()?;
-                if escaped.is_whitespace() {
-                    return None;
-                }
-                encoded.push('\\');
-                encoded.push(escaped);
+                push_escape(&mut chars, &mut encoded)?;
                 ident_start = None;
             }
             '_' => {
@@ -112,6 +107,19 @@ pub(crate) fn encode_value(value: &str) -> Option<String> {
     (parens == 0 && brackets == 0).then_some(encoded)
 }
 
+fn push_escape(
+    chars: &mut impl Iterator<Item = (usize, char)>,
+    encoded: &mut String,
+) -> Option<()> {
+    let (_, escaped) = chars.next()?;
+    if escaped.is_whitespace() {
+        return None;
+    }
+    encoded.push('\\');
+    encoded.push(escaped);
+    Some(())
+}
+
 fn encode_quoted(
     chars: &mut impl Iterator<Item = (usize, char)>,
     quote: char,
@@ -124,14 +132,7 @@ fn encode_quoted(
             return Some(());
         }
         match character {
-            '\\' => {
-                let (_, escaped) = chars.next()?;
-                if escaped.is_whitespace() {
-                    return None;
-                }
-                encoded.push('\\');
-                encoded.push(escaped);
-            }
+            '\\' => push_escape(chars, encoded)?,
             '_' => encoded.push_str("\\_"),
             ' ' => encoded.push('_'),
             character if character.is_whitespace() => return None,
@@ -153,12 +154,7 @@ fn encode_url_body(
         match quote {
             Some(closing) => {
                 if character == '\\' {
-                    let (_, escaped) = chars.next()?;
-                    if escaped.is_whitespace() {
-                        return None;
-                    }
-                    encoded.push('\\');
-                    encoded.push(escaped);
+                    push_escape(chars, encoded)?;
                     continue;
                 }
                 encoded.push(character);
