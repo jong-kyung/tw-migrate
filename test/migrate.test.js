@@ -379,15 +379,17 @@ test('post-edit Sass recompilation remains fatal under force', async () => {
   const cwd = await externalSassFixture();
   try {
     const sassRoot = join(cwd, 'node_modules', 'sass');
+    const mappedPath = join(cwd, 'Mapped.module.scss');
     await mkdir(sassRoot);
     await Promise.all([
+      symlink('Button.module.scss', mappedPath),
       writeFile(
         join(sassRoot, 'package.json'),
         '{"type":"module","exports":"./index.js"}',
       ),
       writeFile(
         join(sassRoot, 'index.js'),
-        `import sass from ${JSON.stringify(pathToFileURL(require.resolve('sass')).href)};\nexport const compileAsync = (...args) => sass.compileAsync(...args);\nexport const compileStringAsync = async () => { throw new Error('post-edit compile failed'); };\n`,
+        `import sass from ${JSON.stringify(pathToFileURL(require.resolve('sass')).href)};\nexport const compileAsync = async (...args) => { const result = await sass.compileAsync(...args); return { ...result, sourceMap: { ...result.sourceMap, sources: [${JSON.stringify(pathToFileURL(mappedPath).href)}] } }; };\nexport const compileStringAsync = async () => { throw new Error('post-edit compile failed'); };\n`,
       ),
     ]);
 
@@ -409,12 +411,14 @@ test('rejects malformed CSS returned by post-edit Sass compilation', async () =>
   const cwd = await externalSassFixture();
   try {
     const sassRoot = join(cwd, 'node_modules', 'sass');
+    const mappedPath = join(cwd, 'Mapped.module.scss');
     await mkdir(sassRoot);
     await Promise.all([
+      symlink('Button.module.scss', mappedPath),
       writeFile(join(sassRoot, 'package.json'), '{"type":"module","exports":"./index.js"}'),
       writeFile(
         join(sassRoot, 'index.js'),
-        `import sass from ${JSON.stringify(pathToFileURL(require.resolve('sass')).href)};\nexport const compileAsync = (...args) => sass.compileAsync(...args);\nexport const compileStringAsync = async (...args) => ({ ...await sass.compileStringAsync(...args), css: '}' });\n`,
+        `import sass from ${JSON.stringify(pathToFileURL(require.resolve('sass')).href)};\nexport const compileAsync = async (...args) => { const result = await sass.compileAsync(...args); return { ...result, sourceMap: { ...result.sourceMap, sources: [${JSON.stringify(pathToFileURL(mappedPath).href)}] } }; };\nexport const compileStringAsync = async (...args) => ({ ...await sass.compileStringAsync(...args), css: '}' });\n`,
       ),
     ]);
 

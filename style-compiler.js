@@ -1,3 +1,4 @@
+import { realpath } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -48,13 +49,34 @@ export async function compileSassEntry(sass, entryPath, source) {
     });
 
   if (!result.sourceMap) throw new Error(`Sass did not produce a source map for ${entryPath}`);
+  const loadedPaths = result.loadedUrls
+    .filter((url) => url.protocol === 'file:')
+    .map(fileURLToPath);
+  const mappings = sourceMappings(result.sourceMap);
+  const normalizedPaths = await normalizeEntryPaths(
+    [...loadedPaths, ...mappings.map((mapping) => mapping.sourcePath)],
+    entryPath,
+  );
   return {
     css: result.css,
-    loadedPaths: result.loadedUrls
-      .filter((url) => url.protocol === 'file:')
-      .map(fileURLToPath),
-    sourceMappings: sourceMappings(result.sourceMap),
+    loadedPaths: loadedPaths.map((path) => normalizedPaths.get(path)),
+    sourceMappings: mappings.map((mapping) => ({
+      ...mapping,
+      sourcePath: normalizedPaths.get(mapping.sourcePath),
+    })),
   };
+}
+
+async function normalizeEntryPaths(paths, entryPath) {
+  const canonicalEntryPath = await realpath(entryPath);
+  return new Map(await Promise.all([...new Set(paths)].map(async (path) => {
+    if (path === entryPath) return [path, path];
+    try {
+      return [path, await realpath(path) === canonicalEntryPath ? entryPath : path];
+    } catch {
+      return [path, path];
+    }
+  })));
 }
 
 export async function compileLessEntry(less, entryPath, source) {
