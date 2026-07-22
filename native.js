@@ -29,5 +29,7 @@ if (!binding) {
   throw new Error(`No tw-migrate native addon was found for ${target}. Reinstall the package or build it locally.`);
 }
 
+export const decodeSourceMap = binding.decodeSourceMap;
 export const planMigration = binding.planMigration;
 export const planBatchMigration = binding.planBatchMigration;
+export const validateCss = binding.validateCss;

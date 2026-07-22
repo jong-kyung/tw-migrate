@@ -1,13 +1,13 @@
 # tw-migrate
 
-Preview and migrate static React/Next.js CSS references to Tailwind v4 utilities.
+Preview and migrate static React/Next.js stylesheet references to Tailwind v4 utilities.
 
 ```bash
 pnpm install
 pnpm build:debug
 node bin/tw-migrate.js                         # Preview the current package
 node bin/tw-migrate.js --write                 # Migrate the current package
-node bin/tw-migrate.js path/to/Button.module.css
+node bin/tw-migrate.js path/to/Button.module.scss
 node bin/tw-migrate.js --workspaces --write    # Migrate every package
 ```
 
@@ -15,7 +15,10 @@ The CLI previews changes by default. Pass `--tailwind-css path/to/globals.css` w
 
 ## Current support
 
+- `.css`, `.scss`, `.sass`, and `.less` stylesheets
+- SCSS/Sass/Less values evaluated with the target project's installed compiler; ambiguous mixin and partial origins are retained
 - `.js`, `.jsx`, `.ts`, and `.tsx` source files
+- static `.html` literal `class`/`id` attributes scoped by local external stylesheet links (link-level `print` media supported; other link media conditions are retained)
 - direct CSS Module members, static template literals, and static expression literals
 - global `className` and `id` literals
 - multi-compound CSS Module selectors whose element relationships are proven from the JSX graph
@@ -41,9 +44,13 @@ Everything outside this subset is retained and reported with one of the warning 
 | `existing-tailwind-conflict` | A generated utility may conflict with a Tailwind class already on the element. |
 | `module-utilities-conflict` | Utilities generated from different module classes on one element overlap, so their rules are retained. |
 | `non-classname-css-module-reference` | A CSS Module class is used outside a supported `className`, so the module is retained. |
+| `rebuild-required` | A preprocessor entry was migrated; rebuild it to refresh its generated CSS. |
 | `reference-only-css-module-consumer` | A reference-only (non-writable) source uses the CSS Module, so it is retained. |
 | `retained-global-rule` | Global CSS is never deleted automatically. |
+| `shared-preprocessor-source` | A Sass partial must be analyzed through every consuming entry, so it is retained. |
 | `unproven-css-module-relationship` | A compound selector's element relationship could not be proven for every usage. |
+| `unproven-script-reference` | An inline script names a CSS Module class, so the module is retained. |
+| `unproven-source-map` | A generated rule does not map uniquely to one authored source rule, so it is retained. |
 | `unresolved-selector-target` | No exclusively supported `className` references were found for the rule. |
 | `unsupported-animation` | The animation references keyframes that cannot be converted. |
 | `unsupported-at-rule` | The rule contains or sits inside an at-rule outside the supported set. |
@@ -60,4 +67,4 @@ Everything outside this subset is retained and reported with one of the warning 
 | `unsupported-supports-query` | The `@supports` condition has no Tailwind variant equivalent. |
 | `unsupported-value` | A declaration value cannot be represented as a Tailwind utility. |
 
-See [the RFC](./rfcs/css-to-tailwind-migration-cli.md) for the complete design and remaining scope.
+See the [core RFC](./rfcs/css-to-tailwind-migration-cli.md) and [preprocessor/HTML RFC](./rfcs/preprocessor-and-html-migration.md) for the complete design and remaining scope.

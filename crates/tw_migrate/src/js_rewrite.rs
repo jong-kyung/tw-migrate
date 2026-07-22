@@ -29,6 +29,7 @@ pub(crate) struct CandidateMatch {
     pub(crate) end: usize,
     pub(crate) key: SelectorKey,
     pub(crate) candidate: String,
+    pub(crate) origin_candidate: String,
 }
 
 pub(crate) struct SourcePlan {
@@ -626,6 +627,7 @@ impl UsageCollector<'_> {
                     end: insertion,
                     key: key.clone(),
                     candidate: candidate.clone(),
+                    origin_candidate: candidate.clone(),
                 });
             }
             self.edits.push(Edit {
@@ -666,6 +668,7 @@ impl UsageCollector<'_> {
                         end: span.end as usize,
                         key: key.clone(),
                         candidate: candidate.clone(),
+                        origin_candidate: candidate.clone(),
                     });
                     if !classes.contains(candidate) {
                         classes.push(candidate.clone());
@@ -680,6 +683,7 @@ impl UsageCollector<'_> {
                 end: span.end as usize,
                 key: key.clone(),
                 candidate: candidate.clone(),
+                origin_candidate: candidate.clone(),
             });
             if !classes.contains(candidate) {
                 classes.push(candidate.clone());
@@ -880,6 +884,7 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
                         end: container.span.end as usize,
                         key: key.clone(),
                         candidate: candidate.clone(),
+                        origin_candidate: candidate.clone(),
                     });
                 }
             }
