@@ -39,9 +39,12 @@ Everything outside this subset is retained and reported with one of the warning 
 | `batch-stylesheet-conflict` | Utilities generated from different stylesheets conflict on the same JSX element, so the contributing rule is retained. |
 | `candidate-compilation-failure` | A generated candidate did not compile under the project's Tailwind entry, so its rule is retained. |
 | `computed-css-module-reference` | A computed CSS Module access cannot be verified, so the module is retained. |
+| `cross-package-stylesheet-link` | A linked stylesheet is owned by another package, so it is not analyzed outside workspace mode. |
 | `css-module-composes` | The rule uses or is targeted by `composes`, so it is retained. |
 | `dynamic-class-name` | A `className` value is dynamic, so the element cannot be migrated. |
+| `dynamic-html-attribute` | An HTML attribute is not a safely writable quoted literal, so the element cannot be migrated. |
 | `existing-tailwind-conflict` | A generated utility may conflict with a Tailwind class already on the element. |
+| `inferred-preprocessor-source` | A linked CSS file was matched to a uniquely named preprocessor source file. |
 | `module-utilities-conflict` | Utilities generated from different module classes on one element overlap, so their rules are retained. |
 | `non-classname-css-module-reference` | A CSS Module class is used outside a supported `className`, so the module is retained. |
 | `rebuild-required` | A preprocessor entry was migrated; rebuild it to refresh its generated CSS. |
@@ -57,7 +60,10 @@ Everything outside this subset is retained and reported with one of the warning 
 | `unsupported-container-query` | The `@container` condition has no Tailwind variant equivalent. |
 | `unsupported-css-module-reference` | The CSS Module has an import or reference that cannot be migrated safely. |
 | `unsupported-declaration` | A declaration is outside the supported property subset. |
+| `unsupported-html-base` | A remote or unrepresentable base URL prevents safe stylesheet link resolution. |
+| `unsupported-html-stylesheet-link` | Only local package stylesheet links are analyzed. |
 | `unsupported-important` | `!important` declarations are not migrated. |
+| `unsupported-link-media` | A stylesheet link or `@import` media condition cannot be represented safely. |
 | `unsupported-media-query` | The `@media` condition has no Tailwind variant equivalent. |
 | `unsupported-nested-at-rule` | A nested conditional at-rule could not be fully converted. |
 | `unsupported-overlap` | Shorthand and longhand declarations overlap in a way that cannot be normalized. |

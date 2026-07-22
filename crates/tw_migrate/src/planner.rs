@@ -225,9 +225,12 @@ const WARNING_CODES: &[&str] = &[
     "batch-stylesheet-conflict",
     "candidate-compilation-failure",
     "computed-css-module-reference",
+    "cross-package-stylesheet-link",
     "css-module-composes",
     "dynamic-class-name",
+    "dynamic-html-attribute",
     "existing-tailwind-conflict",
+    "inferred-preprocessor-source",
     "module-utilities-conflict",
     "non-classname-css-module-reference",
     "rebuild-required",
@@ -243,7 +246,10 @@ const WARNING_CODES: &[&str] = &[
     "unsupported-container-query",
     "unsupported-css-module-reference",
     "unsupported-declaration",
+    "unsupported-html-base",
+    "unsupported-html-stylesheet-link",
     "unsupported-important",
+    "unsupported-link-media",
     "unsupported-media-query",
     "unsupported-nested-at-rule",
     "unsupported-overlap",
@@ -4566,21 +4572,21 @@ mod tests {
         let planner = include_str!("planner.rs");
         let const_start = planner.find("const WARNING_CODES").unwrap();
         let const_end = const_start + planner[const_start..].find("];").unwrap();
-        let sources = [
-            &planner[..const_start],
-            &planner[const_end..],
-            include_str!("js_rewrite.rs"),
-            include_str!("jsx_graph.rs"),
-            include_str!("css_plan.rs"),
-            include_str!("at_rules.rs"),
-            include_str!("utilities.rs"),
-            include_str!("animations.rs"),
-            include_str!("arbitrary.rs"),
-            include_str!("theme.rs"),
-            include_str!("lib.rs"),
-            include_str!("../../../index.js"),
-        ]
-        .join("\n");
+        // Scan every crate source and every repo-root JS file so a new module
+        // cannot silently escape the pinning check.
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut sources = format!("{}\n{}", &planner[..const_start], &planner[const_end..]);
+        for (dir, extension) in [(manifest.join("src"), "rs"), (manifest.join("../.."), "js")] {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.extension().is_some_and(|ext| ext == extension)
+                    && path.file_name().is_some_and(|name| name != "planner.rs")
+                {
+                    sources.push('\n');
+                    sources.push_str(&std::fs::read_to_string(path).unwrap());
+                }
+            }
+        }
         for code in super::WARNING_CODES {
             assert!(
                 sources.contains(&format!("\"{code}\"")) || sources.contains(&format!("'{code}'")),
@@ -4588,15 +4594,20 @@ mod tests {
             );
         }
 
-        // Every directly constructed warning code must be documented. Reason
-        // strings flowing through `rule.warning` are covered by the check
-        // above plus the comment on WARNING_CODES. The patterns are built at
-        // runtime so this test's own source cannot match them.
-        let rust_sites = format!("{}: \"", "code");
-        let js_sites = format!("{}: '", "code");
-        for (pattern, quote) in [(rust_sites.as_str(), '"'), (js_sites.as_str(), '\'')] {
+        // Every directly constructed warning code must be documented, whether
+        // stamped as a `code:` field or passed positionally to `htmlWarning`.
+        // Reason strings flowing through `rule.warning` are covered by the
+        // check above plus the comment on WARNING_CODES. The patterns are
+        // built at runtime so this test's own source cannot match them.
+        let field_sites = format!("{}: ", "code");
+        let helper_sites = format!("{}(", "htmlWarning");
+        for pattern in [field_sites.as_str(), helper_sites.as_str()] {
             for site in sources.split(pattern).skip(1) {
-                let code = site.split(quote).next().unwrap();
+                let site = site.trim_start();
+                let Some(quote) = site.chars().next().filter(|c| matches!(c, '"' | '\'')) else {
+                    continue;
+                };
+                let code = site[1..].split(quote).next().unwrap();
                 assert!(
                     super::WARNING_CODES.contains(&code),
                     "emitted warning code `{code}` is missing from WARNING_CODES and the README"
