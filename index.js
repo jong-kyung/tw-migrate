@@ -471,6 +471,7 @@ function mergePlans(plans, originals) {
   const candidates = new Set();
   const rules = [];
   const warnings = [];
+  const seenWarnings = new Set();
   let convertedRules = 0;
   let retainedRules = 0;
 
@@ -493,7 +494,14 @@ function mergePlans(plans, originals) {
     convertedRules += plan.convertedRules;
     retainedRules += plan.retainedRules;
     rules.push(...plan.rules);
-    warnings.push(...plan.warnings);
+    // Per-stylesheet planning repeats the same source-site warning once per
+    // stylesheet; the user-facing report keeps the first of each.
+    for (const warning of plan.warnings) {
+      const key = `${warning.code}\0${warning.file}\0${warning.start}\0${warning.end}`;
+      if (seenWarnings.has(key)) continue;
+      seenWarnings.add(key);
+      warnings.push(warning);
+    }
   }
   return { filesByPath, deletedPaths, candidates, rules, warnings, convertedRules, retainedRules };
 }

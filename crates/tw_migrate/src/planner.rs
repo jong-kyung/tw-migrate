@@ -478,7 +478,12 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
     let mut unproven_maps = Vec::new();
     for (index, stylesheet) in request.stylesheets.iter().enumerate() {
         let plan_request = batch_stylesheet_request(&request, stylesheet, request.files.clone());
-        let candidate_maps = candidate_map_for_request(&plan_request)?;
+        let externally_blocked = stylesheet
+            .blocked_rules
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>();
+        let candidate_maps = candidate_map_for_request(&plan_request, &externally_blocked)?;
         unproven_maps.push(candidate_maps.unproven);
         for file in request.files.iter().filter(|file| file.writable) {
             let result = plan_consumer_file(
@@ -938,7 +943,10 @@ fn dedup_candidate_map(candidate_map: &mut HashMap<SelectorKey, Vec<String>>) {
     }
 }
 
-fn candidate_map_for_request(request: &PlanRequest) -> Result<CandidateMaps, String> {
+fn candidate_map_for_request(
+    request: &PlanRequest,
+    externally_blocked: &HashSet<RuleId>,
+) -> Result<CandidateMaps, String> {
     let (_, ParsedCss { mut rules, .. }) = parse_request_rules(request)?;
     let unproven = unproven_relationship_rules(&rules, &request.css_path, &request.files);
     stamp_unproven_rules(&mut rules, &unproven);
@@ -951,6 +959,11 @@ fn candidate_map_for_request(request: &PlanRequest) -> Result<CandidateMaps, Str
     let mut origins: HashMap<(SelectorKey, String), Vec<RuleOrigin>> = HashMap::new();
     for rule in rules {
         let rule_id = rule_id(&rule);
+        // Externally blocked rules never apply their candidates, so they must
+        // not create cross-stylesheet conflicts.
+        if externally_blocked.contains(&rule_id) {
+            continue;
+        }
         if let Some(key) = rule.key
             && rule.warning.is_none()
             && !matches!(&key, SelectorKey::Class(name) if blocked_classes.contains(name))
@@ -1008,10 +1021,13 @@ fn plan_request(
     ) = parse_request_rules(&request)?;
     for rule in &mut rules {
         let rule_id = rule_id(rule);
-        if blocked_rules.contains_key(&rule_id) {
-            rule.warning = Some("batch-stylesheet-conflict");
-        } else if rule.warning.is_none() && externally_blocked.contains(&rule_id) {
+        // The externally-blocked stamp wins over conflict stamping so a
+        // blocked rule surfaces only the caller-attributed
+        // candidate-compilation-failure warning.
+        if rule.warning.is_none() && externally_blocked.contains(&rule_id) {
             rule.warning = Some("candidate-compilation-failure");
+        } else if blocked_rules.contains_key(&rule_id) {
+            rule.warning = Some("batch-stylesheet-conflict");
         }
     }
     // In batch mode the caller passes proof results computed against the
@@ -3397,6 +3413,43 @@ mod tests {
             .unwrap();
         assert!(source.contains("styles.bad"));
         assert!(source.contains("\"p-[13px]\""));
+    }
+
+    #[test]
+    fn batch_excludes_blocked_rules_from_cross_stylesheet_conflicts() {
+        let request = serde_json::json!({
+            "stylesheets": [
+                {
+                    "cssPath": "/project/A.module.css",
+                    "cssSource": ".a { padding: 8px; }\n",
+                    "blockedRules": [{ "start": 0, "end": 20 }]
+                },
+                {
+                    "cssPath": "/project/B.module.css",
+                    "cssSource": ".b { padding: 16px; }\n"
+                }
+            ],
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = () => <div className={`${a.a} ${b.b}`} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        // The blocked rule's candidates never apply, so they must not create
+        // a batch-stylesheet-conflict; the healthy sibling converts and the
+        // blocked rule stays silently retained (the caller attributes
+        // candidate-compilation-failure itself).
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(response["retainedRules"], 1);
+        assert_eq!(response["warnings"], serde_json::json!([]));
+        let rules = response["rules"].as_array().unwrap();
+        let blocked = rules.iter().find(|rule| rule["selector"] == ".a").unwrap();
+        assert_eq!(blocked["status"], "retained");
+        let converted = rules.iter().find(|rule| rule["selector"] == ".b").unwrap();
+        assert_eq!(converted["status"], "converted");
     }
 
     #[test]

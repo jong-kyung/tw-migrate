@@ -358,10 +358,11 @@ test('retains nested SCSS rules whose expansion prevents a unique authored mappi
     assert.equal(report.convertedRules, 0);
     assert.equal(report.retainedRules, 2);
     // Nested expansion maps both compiled rules into the same authored rule,
-    // so neither gets a unique authored span and warnings anchor to (0, 0).
+    // so neither gets a unique authored span, warnings anchor to (0, 0), and
+    // the identically anchored pair dedupes to one report warning.
     assert.deepEqual(
       report.warnings.map((warning) => [warning.code, warning.start, warning.end]),
-      [['unproven-source-map', 0, 0], ['unproven-source-map', 0, 0]],
+      [['unproven-source-map', 0, 0]],
     );
   } finally {
     await cleanup(cwd);
@@ -1466,6 +1467,23 @@ test('updates global classes and ids while retaining global CSS', async () => {
         ['retained-global-rule', 'dynamic-class-name'].includes(warning.code),
       ),
     );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test('reports one dynamic-class-name warning across multiple global stylesheets', async () => {
+  const cwd = await fixture({
+    tsx: 'export const Button = ({ variant }) => <button className={variant} />;\n',
+  });
+  try {
+    await Promise.all([
+      writeFile(join(cwd, 'a.css'), '.a { padding: 8px; }\n'),
+      writeFile(join(cwd, 'b.css'), '.b { padding: 9px; }\n'),
+    ]);
+    const report = await migrate({ cwd });
+    const dynamic = report.warnings.filter((warning) => warning.code === 'dynamic-class-name');
+    assert.equal(dynamic.length, 1);
   } finally {
     await cleanup(cwd);
   }
