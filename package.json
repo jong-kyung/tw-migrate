@@ -26,7 +26,8 @@
     "build:debug": "napi build --manifest-path crates/tw_migrate/Cargo.toml --package-json-path package.json --output-dir . --platform --no-js --dts binding.d.ts",
     "artifacts": "napi artifacts --output-dir . --npm-dir npm",
     "test": "cargo test && pnpm build:debug && node --test",
-    "test:rust": "cargo test"
+    "test:rust": "cargo test",
+    "test:snapshots": "node -e \"const fs=require('node:fs'); for(const dir of fs.readdirSync('npm')) for(const file of fs.readdirSync('npm/'+dir)) if(file.endsWith('.node')) fs.rmSync('npm/'+dir+'/'+file)\" && pnpm build && pnpm artifacts && cargo test -p tw-migrate-snapshots"
   },
   "napi": {
     "binaryName": "tw-migrate",

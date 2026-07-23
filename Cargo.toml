@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+default-members = ["crates/tw_migrate"]
 
 [workspace.package]
 edition = "2024"

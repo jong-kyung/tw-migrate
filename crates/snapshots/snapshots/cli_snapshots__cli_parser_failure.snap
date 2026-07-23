@@ -1,0 +1,26 @@
+---
+source: crates/snapshots/tests/cli_snapshots.rs
+expression: document
+---
+case: cli_parser_failure
+
+--- step: unknown option ---
+status: 1
+stdout: ""
+stderr: "tw-migrate: Unknown option: --unknown\n"
+workspace delta:
+  unchanged
+
+--- step: missing tailwind path ---
+status: 1
+stdout: ""
+stderr: "tw-migrate: Usage: tw-migrate [style-file] [--tailwind-css <entry.css>] [--workspaces] [--force] [--write]\n--tailwind-css requires a path.\n"
+workspace delta:
+  unchanged
+
+--- step: extra positional argument ---
+status: 1
+stdout: ""
+stderr: "tw-migrate: Unexpected argument: two.css\n"
+workspace delta:
+  unchanged

@@ -1,0 +1,4 @@
+[[steps]]
+name = "help"
+args = ["--help"]
+status = 0

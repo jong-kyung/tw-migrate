@@ -1,0 +1,14 @@
+[[steps]]
+name = "unknown option"
+args = ["--unknown"]
+status = 1
+
+[[steps]]
+name = "missing tailwind path"
+args = ["--tailwind-css"]
+status = 1
+
+[[steps]]
+name = "extra positional argument"
+args = ["one.css", "two.css"]
+status = 1

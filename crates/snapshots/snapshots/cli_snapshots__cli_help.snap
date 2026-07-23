@@ -1,0 +1,12 @@
+---
+source: crates/snapshots/tests/cli_snapshots.rs
+expression: document
+---
+case: cli_help
+
+--- step: help ---
+status: 0
+stdout: "Usage: tw-migrate [style-file] [--tailwind-css <entry.css>] [--workspaces] [--force] [--write]\n"
+stderr: ""
+workspace delta:
+  unchanged
