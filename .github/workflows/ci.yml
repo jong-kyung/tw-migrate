@@ -30,32 +30,41 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: pnpm artifacts
-      - name: Install packed packages and run the CLI
-        shell: bash
-        run: |
-          set -euo pipefail
-          pack_dir="$(mktemp -d)"
-          # Publishing rewrites workspace:* optionalDependencies to concrete
-          # versions (napi prepublish); mirror that so the packed tarball
-          # resolves like the published package would.
-          node -e "
-            const fs = require('fs');
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            for (const key of Object.keys(pkg.optionalDependencies ?? {})) {
-              pkg.optionalDependencies[key] = pkg.version;
-            }
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-          "
-          npm pack --pack-destination "$pack_dir"
-          git checkout -- package.json
-          platform_dir="$(for dir in npm/*/; do if ls "$dir"*.node >/dev/null 2>&1; then echo "$dir"; fi; done)"
-          npm pack "./$platform_dir" --pack-destination "$pack_dir"
-          install_dir="$(mktemp -d)"
-          cd "$install_dir"
-          npm init -y >/dev/null
-          npm install --omit=optional "$pack_dir"/*.tgz
-          npx --no-install tw-migrate --help
       - uses: actions/upload-artifact@v4
         with:
           name: native-${{ matrix.runner }}
           path: 'npm/**/*.node'
+
+  packaged-cli-snapshots:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-latest
+          - macos-14
+          - windows-latest
+    runs-on: ${{ matrix.runner }}
+    env:
+      CI: true
+      INSTA_UPDATE: no
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.95.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm snapshots:prepare
+      - name: Install snapshot review CLI
+        if: runner.os == 'Linux'
+        run: cargo install cargo-insta --version 1.48.0 --locked
+      - name: Run snapshots and reject pending or unreferenced files
+        if: runner.os == 'Linux'
+        run: cargo insta test --check --unreferenced reject -p tw-migrate-snapshots
+      - name: Run snapshots
+        if: runner.os != 'Linux'
+        run: cargo test -p tw-migrate-snapshots
