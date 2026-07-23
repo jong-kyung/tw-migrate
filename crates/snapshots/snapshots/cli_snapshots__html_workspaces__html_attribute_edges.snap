@@ -1,0 +1,12 @@
+---
+source: crates/snapshots/tests/cli_snapshots/html_workspaces.rs
+expression: document
+---
+case: html_attribute_edges
+
+--- step: write ---
+status: 0
+stdout: "Applied 0 file(s); 0 rule(s) converted, 1 retained.\n"
+stderr: "warning[dynamic-html-attribute] entity.html:66-79 This HTML attribute is not a safely writable quoted literal.\nwarning[retained-global-rule] legacy.css:0-24 Global CSS is never deleted automatically.\nwarning[dynamic-html-attribute] valueless.html:49-54 This HTML attribute is not a safely writable quoted literal.\n"
+workspace delta:
+  unchanged

@@ -1,0 +1,17 @@
+---
+source: crates/snapshots/tests/cli_snapshots/html_workspaces.rs
+expression: document
+---
+case: html_base_resolution
+
+--- step: write ---
+status: 0
+stdout: "--- a/empty.html\n+++ b/empty.html\n@@ -1,2 +1,2 @@\n-<base href=\"\"><link rel=\"stylesheet\" href=\"./assets/legacy.css\"><div class=\"card\"></div>\n \n+<base href=\"\"><link rel=\"stylesheet\" href=\"./assets/legacy.css\"><div class=\"card p-[13px]\"></div>\n \n--- a/local.html\n+++ b/local.html\n@@ -1,2 +1,2 @@\n-<base href=\"./assets/\"><link rel=\"stylesheet\" href=\"legacy.css\"><div class=\"card\"></div>\n \n+<base href=\"./assets/\"><link rel=\"stylesheet\" href=\"legacy.css\"><div class=\"card p-[13px]\"></div>\n \nApplied 2 file(s); 0 rule(s) converted, 1 retained.\n"
+stderr: "warning[retained-global-rule] assets/legacy.css:0-24 Global CSS is never deleted automatically.\nwarning[unsupported-html-base] remote.html:12-32 A remote or unrepresentable base URL prevents safe stylesheet link resolution.\nwarning[unsupported-html-stylesheet-link] remote.html:63-73 Only local package stylesheet links are analyzed.\n"
+workspace delta:
+  modified empty.html
+    before: "<base href=\"\"><link rel=\"stylesheet\" href=\"./assets/legacy.css\"><div class=\"card\"></div>\n"
+    after: "<base href=\"\"><link rel=\"stylesheet\" href=\"./assets/legacy.css\"><div class=\"card p-[13px]\"></div>\n"
+  modified local.html
+    before: "<base href=\"./assets/\"><link rel=\"stylesheet\" href=\"legacy.css\"><div class=\"card\"></div>\n"
+    after: "<base href=\"./assets/\"><link rel=\"stylesheet\" href=\"legacy.css\"><div class=\"card p-[13px]\"></div>\n"

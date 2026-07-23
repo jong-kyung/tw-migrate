@@ -1,0 +1,4 @@
+[[steps]]
+name = "write"
+args = ["assets/legacy.css", "--tailwind-css", "globals.css", "--write"]
+status = 0

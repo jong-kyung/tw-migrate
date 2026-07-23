@@ -1,0 +1,12 @@
+---
+source: crates/snapshots/tests/cli_snapshots/html_workspaces.rs
+expression: document
+---
+case: html_unsupported_links
+
+--- step: preview ---
+status: 0
+stdout: "Previewed 0 file(s); 0 rule(s) converted, 1 retained.\n"
+stderr: "warning[dynamic-html-attribute] dynamic.html:55-71 This HTML attribute is not a safely writable quoted literal.\nwarning[retained-global-rule] legacy.css:0-24 Global CSS is never deleted automatically.\nwarning[unsupported-html-stylesheet-link] remote.html:29-59 Only local package stylesheet links are analyzed.\nwarning[unsupported-link-media] speech.html:29-41 The stylesheet link media condition \"speech\" cannot be represented safely.\n"
+workspace delta:
+  unchanged

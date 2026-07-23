@@ -1,0 +1,4 @@
+[[steps]]
+name = "write"
+args = ["--tailwind-css", "globals.css", "--write"]
+status = 0

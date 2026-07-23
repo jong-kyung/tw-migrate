@@ -1,0 +1,272 @@
+# Source: test/migrate.test.js at branch baseline 697c55a.
+# Each title in the HTML, discovery, and workspace slice is classified once.
+
+[[cases]]
+title = "updates linked static HTML literals while preserving bytes and scope"
+disposition = "e2e"
+target = "html_static_literals"
+
+[[cases]]
+title = "removes a fully migrated CSS Module and its static HTML link"
+disposition = "e2e"
+target = "html_static_module_link"
+
+[[cases]]
+title = "fully migrates a CSS Module consumed only by static HTML"
+disposition = "e2e"
+target = "html_static_module_link"
+
+[[cases]]
+title = "removes a generated CSS link after inferred preprocessor module migration"
+disposition = "e2e"
+target = "inferred_preprocessor_source"
+
+[[cases]]
+title = "retains an HTML-linked CSS Module when an attribute is dynamic"
+disposition = "e2e"
+target = "html_dynamic_attribute"
+
+[[cases]]
+title = "retains a CSS Module named by an inline script"
+disposition = "e2e"
+target = "html_inline_script_reference"
+
+[[cases]]
+title = "ignores inline scripts that do not name module classes"
+disposition = "e2e"
+target = "html_irrelevant_inline_script"
+
+[[cases]]
+title = "retains a CSS Module linked with an entity from gitignored HTML"
+disposition = "safety"
+reason = "requires runtime Git initialization and ignore semantics"
+
+[[cases]]
+title = "removes an entity-bearing HTML link with its migrated CSS Module"
+disposition = "e2e"
+target = "html_static_module_link"
+
+[[cases]]
+title = "retains a CSS Module when one HTML link has unsupported media"
+disposition = "e2e"
+target = "html_unsupported_links"
+
+[[cases]]
+title = "adds a class attribute for an id-only HTML match"
+disposition = "e2e"
+target = "html_static_literals"
+
+[[cases]]
+title = "uses UTF-8 byte offsets for non-ASCII HTML class edits and id-only insertion"
+disposition = "e2e"
+target = "html_static_literals"
+
+[[cases]]
+title = "does not synthesize a duplicate class for an entity-bearing class attribute"
+disposition = "e2e"
+target = "html_attribute_edges"
+
+[[cases]]
+title = "treats a valueless class attribute as unwritable"
+disposition = "e2e"
+target = "html_attribute_edges"
+
+[[cases]]
+title = "follows transitive CSS imports and applies exact print link media"
+disposition = "e2e"
+target = "html_import_graphs"
+
+[[cases]]
+title = "only follows real top-level CSS imports and preserves media warning offsets"
+disposition = "e2e"
+target = "html_import_graphs"
+
+[[cases]]
+title = "terminates cyclic stylesheet imports carrying media conditions"
+disposition = "e2e"
+target = "html_import_graphs"
+
+[[cases]]
+title = "ignores stylesheet imports that browsers never apply"
+disposition = "e2e"
+target = "html_late_import"
+
+[[cases]]
+title = "resolves stylesheet links against a local base and skips remote bases"
+disposition = "e2e"
+target = "html_base_resolution"
+
+[[cases]]
+title = "retains unsupported media and template-looking HTML attributes"
+disposition = "e2e"
+target = "html_unsupported_links"
+
+[[cases]]
+title = "combines independent linked stylesheets on multiple HTML elements"
+disposition = "e2e"
+target = "html_linked_stylesheets"
+
+[[cases]]
+title = "retains conflicting rules linked to the same HTML element"
+disposition = "e2e"
+target = "html_linked_conflict"
+
+[[cases]]
+title = "treats invalid writable HTML as a recoverable package input failure"
+disposition = "e2e"
+target = "html_invalid_force"
+
+[[cases]]
+title = "normalizes separators when resolving source map roots"
+disposition = "retained"
+reason = "sourceMappings is an internal helper with no CLI-observable result"
+
+[[cases]]
+title = "infers one preprocessor source by filename without generated CSS"
+disposition = "e2e"
+target = "inferred_preprocessor_source"
+
+[[cases]]
+title = "does not infer an ambiguous preprocessor filename"
+disposition = "e2e"
+target = "ambiguous_preprocessor_source"
+
+[[cases]]
+title = "does not infer a comma-imported dotted-stem preprocessor dependency"
+disposition = "e2e"
+target = "ambiguous_preprocessor_source"
+
+[[cases]]
+title = "ignores generated source maps and uses the unique same-stem preprocessor source"
+disposition = "e2e"
+target = "generated_css_same_stem"
+
+[[cases]]
+title = "analyzes generated CSS when no unique same-stem preprocessor exists"
+disposition = "e2e"
+target = "generated_css_same_stem"
+
+[[cases]]
+title = "keeps the authored entry when a source imports its generated CSS"
+disposition = "e2e"
+target = "generated_css_same_stem"
+
+[[cases]]
+title = "retains a CSS Module imported by a link-discovered stylesheet"
+disposition = "e2e"
+target = "link_discovered_module_import"
+
+[[cases]]
+title = "does not let root HTML claim a stylesheet owned by a nested package"
+disposition = "e2e"
+target = "nested_package_ownership"
+
+[[cases]]
+title = "rejects stylesheet targets reached through symlinks"
+disposition = "safety"
+reason = "requires runtime symlink and external-target setup"
+
+[[cases]]
+title = "fails fast when leftover files from an interrupted run exist"
+disposition = "safety"
+reason = "transaction-leftover setup belongs to U5"
+
+[[cases]]
+title = "auto-discovers supported stylesheet targets in the current package"
+disposition = "e2e"
+target = "multi_module_single_source"
+
+[[cases]]
+title = "batch migration updates one source from multiple CSS Modules without lost edits"
+disposition = "e2e"
+target = "multi_module_single_source"
+
+[[cases]]
+title = "explicit CSS paths bypass Git ignore filtering"
+disposition = "safety"
+reason = "requires runtime Git initialization and ignore semantics"
+
+[[cases]]
+title = "reference-only workspace consumers prevent CSS Module deletion"
+disposition = "safety"
+reason = "requires runtime Git-root workspace setup"
+
+[[cases]]
+title = "retains a CSS Module linked from a nested package HTML page"
+disposition = "e2e"
+target = "nested_html_reference"
+
+[[cases]]
+title = "workspace mode updates a selected cross-package consumer"
+disposition = "safety"
+reason = "requires runtime Git-root workspace setup"
+
+[[cases]]
+title = "workspace mode migrates a cross-package HTML consumer"
+disposition = "safety"
+reason = "requires runtime Git-root workspace setup"
+
+[[cases]]
+title = "rejects positional CSS owned by a nested package"
+disposition = "e2e"
+target = "nested_target_errors"
+
+[[cases]]
+title = "rejects a Tailwind override owned by another package"
+disposition = "e2e"
+target = "nested_target_errors"
+
+[[cases]]
+title = "excludes every detected Tailwind entry when an override selects one"
+disposition = "e2e"
+target = "tailwind_override_discovery"
+
+[[cases]]
+title = "combines classes from two stylesheets on one element end-to-end"
+disposition = "e2e"
+target = "multi_module_single_source"
+
+[[cases]]
+title = "retains conflicting rules combined from two stylesheets on one element"
+disposition = "e2e"
+target = "multi_module_conflict"
+
+[[cases]]
+title = "detects source changes between planning reads"
+disposition = "safety"
+reason = "requires runtime Git setup and a mutation plugin"
+
+[[cases]]
+title = "detects leftover files stranded outside the selected package"
+disposition = "safety"
+reason = "requires runtime Git-root multi-package transaction setup"
+
+[[cases]]
+title = "ignores unparseable gitignored files without module references"
+disposition = "safety"
+reason = "requires runtime Git initialization and ignore semantics"
+
+[[cases]]
+title = "retains a module named by an unparseable gitignored file"
+disposition = "safety"
+reason = "requires runtime Git initialization and ignore semantics"
+
+[[cases]]
+title = "retains a module referenced only from a gitignored consumer"
+disposition = "safety"
+reason = "requires runtime Git initialization and ignore semantics"
+
+[[cases]]
+title = "retains a relationship disproven by a gitignored render site"
+disposition = "safety"
+reason = "requires runtime Git initialization and ignore semantics"
+
+[[cases]]
+title = "retains a module composed by a gitignored stylesheet"
+disposition = "safety"
+reason = "requires runtime Git initialization and ignore semantics"
+
+[[cases]]
+title = "verifies reference-only source snapshots before writing"
+disposition = "safety"
+reason = "requires concurrent source mutation setup"
