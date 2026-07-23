@@ -20,3 +20,12 @@ snapshot_cases! {
     cli_parser_failure => default_setup,
     module_flow => default_setup,
 }
+
+#[path = "cli_snapshots/styles.rs"]
+mod styles;
+
+#[path = "cli_snapshots/html_workspaces.rs"]
+mod html_workspaces;
+
+#[path = "cli_snapshots/safety.rs"]
+mod safety;
