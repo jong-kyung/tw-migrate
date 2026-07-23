@@ -1,0 +1,9 @@
+[[steps]]
+name = "migrate"
+args = ["legacy.css", "--tailwind-css", "globals.css", "--write"]
+status = 0
+
+[[steps]]
+name = "second run"
+args = ["legacy.css", "--tailwind-css", "globals.css", "--write"]
+status = 0

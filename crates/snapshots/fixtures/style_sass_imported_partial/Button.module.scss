@@ -1,0 +1,2 @@
+@use 'mixins';
+.button { @include mixins.pad; }

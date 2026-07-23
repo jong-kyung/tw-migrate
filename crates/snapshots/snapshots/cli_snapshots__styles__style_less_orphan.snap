@@ -1,0 +1,12 @@
+---
+source: crates/snapshots/tests/cli_snapshots/styles.rs
+expression: document
+---
+case: style_less_orphan
+
+--- step: automatic ---
+status: 0
+stdout: "Previewed 0 file(s); 0 rule(s) converted, 0 retained.\n"
+stderr: ""
+workspace delta:
+  unchanged

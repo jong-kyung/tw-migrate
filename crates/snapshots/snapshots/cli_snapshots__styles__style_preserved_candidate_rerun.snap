@@ -1,0 +1,21 @@
+---
+source: crates/snapshots/tests/cli_snapshots/styles.rs
+expression: document
+---
+case: style_preserved_candidate_rerun
+
+--- step: first ---
+status: 0
+stdout: "--- a/Button.tsx\n+++ b/Button.tsx\n@@ -1,4 +1,4 @@\n-import styles from './Button.module.css';\n-export const buttonClass = styles.button;\n-export const Button = () => <button className={styles.button}>Save</button>;\n \n+import styles from './Button.module.css';\n+export const buttonClass = styles.button;\n+export const Button = () => <button className={`${styles.button}${\" p-[13px]\"}`}>Save</button>;\n \nApplied 1 file(s); 0 rule(s) converted, 2 retained.\n"
+stderr: "warning[unresolved-selector-target] Button.module.css:0-26 No exclusively supported className references were found.\nwarning[candidate-compilation-failure] Button.module.css:27-50 Tailwind did not generate CSS for `[COLOR:red]`, so the rule is retained.\nwarning[aliased-css-module-reference] Button.tsx:55-82 A CSS Module class is aliased to a binding, so the module is retained.\n"
+workspace delta:
+  modified Button.tsx
+    before: "import styles from './Button.module.css';\nexport const buttonClass = styles.button;\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+    after: "import styles from './Button.module.css';\nexport const buttonClass = styles.button;\nexport const Button = () => <button className={`${styles.button}${\" p-[13px]\"}`}>Save</button>;\n"
+
+--- step: second ---
+status: 0
+stdout: "Applied 0 file(s); 0 rule(s) converted, 2 retained.\n"
+stderr: "warning[unresolved-selector-target] Button.module.css:0-26 No exclusively supported className references were found.\nwarning[candidate-compilation-failure] Button.module.css:27-50 Tailwind did not generate CSS for `[COLOR:red]`, so the rule is retained.\nwarning[aliased-css-module-reference] Button.tsx:55-82 A CSS Module class is aliased to a binding, so the module is retained.\n"
+workspace delta:
+  unchanged

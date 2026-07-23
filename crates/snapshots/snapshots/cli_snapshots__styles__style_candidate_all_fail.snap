@@ -1,0 +1,12 @@
+---
+source: crates/snapshots/tests/cli_snapshots/styles.rs
+expression: document
+---
+case: style_candidate_all_fail
+
+--- step: migrate ---
+status: 0
+stdout: "Applied 0 file(s); 0 rule(s) converted, 2 retained.\n"
+stderr: "warning[candidate-compilation-failure] Button.module.css:0-23 Tailwind did not generate CSS for `[COLOR:red]`, so the rule is retained.\nwarning[candidate-compilation-failure] Button.module.css:24-52 Tailwind did not generate CSS for `[BACKGROUND:blue]`, so the rule is retained.\n"
+workspace delta:
+  unchanged

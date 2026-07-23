@@ -1,0 +1,12 @@
+---
+source: crates/snapshots/tests/cli_snapshots/styles.rs
+expression: document
+---
+case: style_malformed_css
+
+--- step: write ---
+status: 1
+stdout: ""
+stderr: "tw-migrate: TW_MIGRATE_RECOVERABLE_INPUT:Failed to parse [WORKSPACE]/Button.module.css: Error { kind: Unexpected(\"<eof>\", \"}\"), span: Span { start: 0, end: 1 } }\n"
+workspace delta:
+  unchanged

@@ -1,0 +1,2 @@
+@media screen and (min-width: 40rem) and (orientation: landscape) { .button { display: grid; } }
+@container card_grid (min-width: 20rem) and (max-width: 40rem) { .button { color: red; } }

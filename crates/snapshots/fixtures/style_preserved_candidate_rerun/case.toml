@@ -1,0 +1,9 @@
+[[steps]]
+name = "first"
+args = ["--tailwind-css", "globals.css", "--write"]
+status = 0
+
+[[steps]]
+name = "second"
+args = ["--tailwind-css", "globals.css", "--write"]
+status = 0

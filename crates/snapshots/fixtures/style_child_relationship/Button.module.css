@@ -1,0 +1,2 @@
+.button { display: flex; }
+.button > .label { padding: 13px; }

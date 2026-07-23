@@ -1,0 +1,2 @@
+@keyframes spin_it { to { transform: rotate(360deg); } }
+.button { COLOR: red; animation: spin_it 1s; }

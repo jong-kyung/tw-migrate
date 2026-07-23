@@ -1,0 +1,4 @@
+[[steps]]
+name = "migrate"
+args = ["legacy.scss", "--tailwind-css", "globals.css", "--write"]
+status = 0

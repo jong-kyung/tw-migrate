@@ -1,0 +1,4 @@
+[[steps]]
+name = "migrate"
+args = ["legacy.less", "--tailwind-css", "globals.css"]
+status = 0

@@ -1,0 +1,4 @@
+.fancyButton {
+  composes: button from './Button.module.css';
+  border: 1px solid;
+}

@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const TAILWIND_VERSION: &str = "4.3.3";
 const SASS_VERSION: &str = "1.101.3";
 const LESS_VERSION: &str = "4.7.0";
+const SOURCE_MAP_VERSION: &str = "0.6.1";
 
 static SUITE: OnceLock<Result<Suite, String>> = OnceLock::new();
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
@@ -171,7 +172,8 @@ impl Suite {
             .arg(&platform_tarball)
             .arg(format!("tailwindcss@{TAILWIND_VERSION}"))
             .arg(format!("sass@{SASS_VERSION}"))
-            .arg(format!("less@{LESS_VERSION}"));
+            .arg(format!("less@{LESS_VERSION}"))
+            .arg(format!("source-map@{SOURCE_MAP_VERSION}"));
         run_setup_command(&mut install, "install packed CLI and fixture dependencies")?;
 
         let bin = installed_bin(&install_root);

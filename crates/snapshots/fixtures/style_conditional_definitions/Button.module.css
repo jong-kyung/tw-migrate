@@ -1,0 +1,3 @@
+@property --progress { syntax: "<number>"; inherits: false; initial-value: 0; }
+@media (prefers-reduced-motion: reduce) { @starting-style { @container (min-width: 28rem) { .button { display: grid; } } } }
+@media (prefers-color-scheme: dark) { .button { color: white; } }

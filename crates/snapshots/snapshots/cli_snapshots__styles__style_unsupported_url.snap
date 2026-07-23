@@ -1,0 +1,12 @@
+---
+source: crates/snapshots/tests/cli_snapshots/styles.rs
+expression: document
+---
+case: style_unsupported_url
+
+--- step: migrate ---
+status: 0
+stdout: "Previewed 0 file(s); 0 rule(s) converted, 1 retained.\n"
+stderr: "warning[unsupported-value] Button.module.css:0-45 The rule is outside the supported declaration or selector subset.\n"
+workspace delta:
+  unchanged
