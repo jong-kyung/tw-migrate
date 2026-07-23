@@ -38,4 +38,4 @@ Use `cargo insta reject` to remove pending `.snap.new` files. Before committing,
 cargo insta test --check --unreferenced reject -p tw-migrate-snapshots
 ```
 
-Each fixture directory contains project files plus a strict `case.toml`. Each snapshot records the expected exit status, stdout, stderr, and immediate workspace delta for every step. Baselines are shared across Linux, macOS, and Windows; normalization is limited to line endings, path separators, known temporary roots, and transaction tokens. Do not normalize product-visible differences merely to make a platform pass.
+Each fixture directory contains project files plus a strict `case.toml`. Each snapshot records the expected exit status, stdout, stderr, and immediate workspace delta for every step. Baselines are shared across Linux, macOS, and Windows; normalization is limited to line endings, path separators, known temporary roots, transaction tokens, and a Windows-only strip of the workspace prefix in Sass root-stylesheet traces (Windows dart-sass prints absolute paths there while other platforms print bare filenames). Do not normalize product-visible differences merely to make a platform pass.

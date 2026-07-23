@@ -183,7 +183,7 @@ target = "tailwind_override_discovery"
 [[cases]]
 source = "combines classes from two stylesheets on one element end-to-end"
 disposition = "e2e"
-target = "multi_module_single_source"
+target = "multi_module_merged"
 
 [[cases]]
 source = "retains conflicting rules combined from two stylesheets on one element"

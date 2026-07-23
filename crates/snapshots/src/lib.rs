@@ -497,9 +497,16 @@ fn normalize_output(value: &str, suite: &Suite, workspace: &Path) -> String {
             normalized = normalized.replace(&spelling, replacement);
         }
     }
-    normalize_transaction_tokens(normalize_sass_diagnostic_paths(
-        normalize_known_path_separators(normalized),
-    ))
+    let normalized = normalize_known_path_separators(normalized);
+    // Windows dart-sass prints absolute workspace paths in "root stylesheet"
+    // traces where other platforms print the bare filename; strip only on
+    // Windows so a non-Windows regression to absolute paths stays visible.
+    let normalized = if cfg!(windows) {
+        normalize_sass_diagnostic_paths(normalized)
+    } else {
+        normalized
+    };
+    normalize_transaction_tokens(normalized)
 }
 
 fn normalize_sass_diagnostic_paths(value: String) -> String {
@@ -769,7 +776,11 @@ mod tests {
                 &suite,
                 workspace,
             ),
-            "  Button.module.scss 1:20  root stylesheet\n"
+            if cfg!(windows) {
+                "  Button.module.scss 1:20  root stylesheet\n"
+            } else {
+                "  [WORKSPACE]/Button.module.scss 1:20  root stylesheet\n"
+            }
         );
 
         let suite = Suite {
@@ -784,6 +795,17 @@ mod tests {
                 workspace,
             ),
             "[WORKSPACE]/file.css"
+        );
+    }
+
+    #[test]
+    fn sass_diagnostic_normalization_strips_only_workspace_trace_lines() {
+        assert_eq!(
+            normalize_sass_diagnostic_paths(
+                "  [WORKSPACE]/Button.module.scss 1:20  root stylesheet\n  [WORKSPACE]/other.css kept\n"
+                    .to_string()
+            ),
+            "  Button.module.scss 1:20  root stylesheet\n  [WORKSPACE]/other.css kept\n"
         );
     }
 

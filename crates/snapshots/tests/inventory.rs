@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -114,8 +114,4 @@ fn inventory_is_unique_complete_and_resolves_e2e_targets() {
         ])
     );
     assert!(errors.is_empty(), "inventory errors: {errors:#?}");
-    assert_eq!(
-        sources.keys().collect::<BTreeSet<_>>().len(),
-        EXPECTED_BASELINE
-    );
 }

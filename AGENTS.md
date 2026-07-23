@@ -152,7 +152,7 @@ Important properties:
 - It performs one registry-backed npm install per test process.
 - Workspaces live under the OS temporary directory, outside the repository, to prevent dependency and project-discovery leakage.
 - Snapshots share one Linux/macOS/Windows baseline and record status, stdout, stderr, and per-step workspace deltas.
-- Keep normalization limited to line endings, known roots, path separators inside known paths, and transaction tokens.
+- Keep normalization limited to line endings, known roots, path separators inside known paths, transaction tokens, and the Windows-only strip of the workspace prefix in Sass root-stylesheet traces.
 - Do not accept a snapshot until the expected exit status and workspace changes are correct.
 
 The workspace `default-members` excludes `crates/snapshots`, so plain `cargo test` does not run package/network E2E tests. `cargo test --workspace` includes the snapshot crate and requires release artifacts.

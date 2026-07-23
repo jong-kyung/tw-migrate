@@ -22,6 +22,7 @@ snapshot_cases! {
     nested_html_reference => default_setup,
     nested_target_errors => default_setup,
     multi_module_single_source => default_setup,
+    multi_module_merged => default_setup,
     multi_module_conflict => default_setup,
     tailwind_override_discovery => default_setup,
 }
