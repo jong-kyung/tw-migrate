@@ -1,0 +1,4 @@
+[[steps]]
+name = "workspace write"
+args = ["--workspaces", "--force", "--write"]
+status = 0

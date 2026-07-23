@@ -1,0 +1,12 @@
+---
+source: crates/snapshots/tests/cli_snapshots/safety.rs
+expression: document
+---
+case: safety_reference_only_workspace
+
+--- step: selected package only ---
+status: 0
+stdout: "Applied 0 file(s); 0 rule(s) converted, 1 retained.\n"
+stderr: "warning[reference-only-css-module-consumer] ../app/Button.tsx:0-0 A reference-only source uses this CSS Module, so it is retained.\nwarning[unresolved-selector-target] Button.module.css:0-26 No exclusively supported className references were found.\n"
+workspace delta:
+  unchanged

@@ -1,0 +1,14 @@
+---
+source: crates/snapshots/tests/cli_snapshots/safety.rs
+expression: document
+---
+case: safety_reference_mutation
+
+--- step: mutated reference-only source ---
+status: 1
+stdout: ""
+stderr: "tw-migrate: Source changed after planning: [WORKSPACE]/external/Note.tsx\n"
+workspace delta:
+  modified external/Note.tsx
+    before: "export const Note = () => <div />;\n"
+    after: "export const Note = () => <div />;\n// changed during planning\n"

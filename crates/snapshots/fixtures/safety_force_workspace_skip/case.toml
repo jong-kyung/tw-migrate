@@ -1,0 +1,8 @@
+[[steps]]
+name = "without force"
+args = ["--workspaces", "--write"]
+status = 1
+[[steps]]
+name = "with force"
+args = ["--workspaces", "--force", "--write"]
+status = 0

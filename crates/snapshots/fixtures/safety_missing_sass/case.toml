@@ -1,0 +1,9 @@
+isolated = true
+[[steps]]
+name = "without force"
+args = ["Button.module.scss", "--tailwind-css", "globals.css"]
+status = 1
+[[steps]]
+name = "with force"
+args = ["Button.module.scss", "--tailwind-css", "globals.css", "--force"]
+status = 0

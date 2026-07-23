@@ -1,0 +1,23 @@
+---
+source: crates/snapshots/tests/cli_snapshots/safety.rs
+expression: document
+---
+case: safety_force_workspace_skip
+
+--- step: without force ---
+status: 1
+stdout: ""
+stderr: "tw-migrate: TW_MIGRATE_RECOVERABLE_INPUT:Failed to parse [WORKSPACE]/broken/Broken.module.css: Error { kind: Unexpected(\"<eof>\", \"}\"), span: Span { start: 0, end: 1 } }\n"
+workspace delta:
+  unchanged
+
+--- step: with force ---
+status: 0
+stdout: "--- a/good/Good.module.css\n+++ b/good/Good.module.css\n@@ -1,2 +1,1 @@\n-.good { display: grid; }\n \n \n--- a/good/Good.tsx\n+++ b/good/Good.tsx\n@@ -1,3 +1,2 @@\n-import styles from './Good.module.css';\n-export const Good = () => <div className={styles.good} />;\n \n+export const Good = () => <div className=\"grid\" />;\n \nApplied 2 file(s); 1 rule(s) converted, 0 retained.\n"
+stderr: "skipped[broken] Failed to parse [WORKSPACE]/broken/Broken.module.css: Error { kind: Unexpected(\"<eof>\", \"}\"), span: Span { start: 0, end: 1 } }\n"
+workspace delta:
+  deleted good/Good.module.css
+    before: ".good { display: grid; }\n"
+  modified good/Good.tsx
+    before: "import styles from './Good.module.css';\nexport const Good = () => <div className={styles.good} />;\n"
+    after: "export const Good = () => <div className=\"grid\" />;\n"

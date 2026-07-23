@@ -1,0 +1,4 @@
+[[steps]]
+name = "mutated reference-only source"
+args = ["--tailwind-css", "globals.css", "--write"]
+status = 1

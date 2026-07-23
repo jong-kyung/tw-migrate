@@ -1,0 +1,19 @@
+---
+source: crates/snapshots/tests/cli_snapshots/safety.rs
+expression: document
+---
+case: safety_missing_less
+
+--- step: without force ---
+status: 1
+stdout: ""
+stderr: "tw-migrate: Less must be installed in the target project.\n"
+workspace delta:
+  unchanged
+
+--- step: with force ---
+status: 0
+stdout: "Previewed 0 file(s); 0 rule(s) converted, 0 retained.\n"
+stderr: "skipped[.] Less must be installed in the target project.\n"
+workspace delta:
+  unchanged

@@ -1,0 +1,16 @@
+---
+source: crates/snapshots/tests/cli_snapshots/safety.rs
+expression: document
+---
+case: safety_workspace_html_consumer
+
+--- step: workspace HTML write ---
+status: 0
+stdout: "--- a/app/index.html\n+++ b/app/index.html\n@@ -1,2 +1,2 @@\n-<link rel=\"stylesheet\" href=\"../shared/Button.module.css\"><button class=\"button\">HTML</button>\n \n+<button class=\"button p-[13px]\">HTML</button>\n \n--- a/shared/Button.module.css\n+++ b/shared/Button.module.css\n@@ -1,2 +1,1 @@\n-.button { padding: 13px; }\n \n \nApplied 2 file(s); 1 rule(s) converted, 0 retained.\n"
+stderr: ""
+workspace delta:
+  modified app/index.html
+    before: "<link rel=\"stylesheet\" href=\"../shared/Button.module.css\"><button class=\"button\">HTML</button>\n"
+    after: "<button class=\"button p-[13px]\">HTML</button>\n"
+  deleted shared/Button.module.css
+    before: ".button { padding: 13px; }\n"

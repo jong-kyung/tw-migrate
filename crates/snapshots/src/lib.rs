@@ -26,6 +26,8 @@ struct Suite {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Case {
+    #[serde(default)]
+    isolated: bool,
     steps: Vec<Step>,
 }
 
@@ -45,6 +47,7 @@ struct Step {
 pub struct CaseContext<'a> {
     pub workspace: &'a Path,
     pub home: &'a Path,
+    pub install_root: &'a Path,
 }
 
 pub fn default_setup(_: &CaseContext<'_>) -> Result<(), String> {
@@ -54,6 +57,14 @@ pub fn default_setup(_: &CaseContext<'_>) -> Result<(), String> {
 pub fn run_case(
     case_name: &str,
     setup: impl FnOnce(&CaseContext<'_>) -> Result<(), String>,
+) -> Result<String, String> {
+    run_case_with(case_name, setup, |_| Ok(()))
+}
+
+pub fn run_case_with(
+    case_name: &str,
+    setup: impl FnOnce(&CaseContext<'_>) -> Result<(), String>,
+    verify: impl FnOnce(&CaseContext<'_>) -> Result<(), String>,
 ) -> Result<String, String> {
     let suite = SUITE
         .get_or_init(Suite::initialize)
@@ -75,7 +86,16 @@ pub fn run_case(
         return Err(format!("fixture {case_name} must contain package.json"));
     }
 
-    let case_root = unique_dir(&suite.install_root.join("workspaces"), case_name)?;
+    let workspace_parent = if case.isolated {
+        suite
+            .install_root
+            .parent()
+            .expect("install root must have a suite root")
+            .join("isolated-workspaces")
+    } else {
+        suite.install_root.join("workspaces")
+    };
+    let case_root = unique_dir(&workspace_parent, case_name)?;
     let workspace = case_root.join("workspace");
     let home = case_root.join("home");
     let result = (|| {
@@ -89,11 +109,21 @@ pub fn run_case(
                 workspace.display()
             ));
         }
-        setup(&CaseContext {
+        let context = CaseContext {
             workspace: &workspace,
             home: &home,
-        })?;
-        run_steps(suite, case_name, &case, &workspace, &home)
+            install_root: &suite.install_root,
+        };
+        setup(&context)?;
+        let run_result = run_steps(suite, case_name, &case, &workspace, &home);
+        let verify_result = verify(&context);
+        match (run_result, verify_result) {
+            (Ok(rendered), Ok(())) => Ok(rendered),
+            (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+            (Err(run_error), Err(verify_error)) => Err(format!(
+                "{run_error}\nverification/teardown also failed: {verify_error}"
+            )),
+        }
     })();
     let cleanup = fs::remove_dir_all(&case_root);
     match (result, cleanup) {
@@ -457,7 +487,26 @@ fn normalize_output(value: &str, suite: &Suite, workspace: &Path) -> String {
             normalized = normalized.replace(&spelling, replacement);
         }
     }
-    normalized
+    normalize_transaction_tokens(normalized)
+}
+
+fn normalize_transaction_tokens(mut value: String) -> String {
+    for marker in [".tw-migrate-backup-", ".tw-migrate-stage-"] {
+        let mut search_from = 0;
+        while let Some(offset) = value[search_from..].find(marker) {
+            let start = search_from + offset + marker.len();
+            let end = value[start..]
+                .find(|character: char| !character.is_ascii_digit() && character != '-')
+                .map_or(value.len(), |offset| start + offset);
+            if end == start {
+                search_from = start;
+                continue;
+            }
+            value.replace_range(start..end, "[TOKEN]");
+            search_from = start + "[TOKEN]".len();
+        }
+    }
+    value
 }
 
 fn quoted(value: &str) -> String {
@@ -550,7 +599,7 @@ fn normalized_relative(path: &Path) -> String {
         .join("/")
 }
 
-fn copy_tree(source: &Path, destination: &Path, excluded: Option<&Path>) -> Result<(), String> {
+pub fn copy_tree(source: &Path, destination: &Path, excluded: Option<&Path>) -> Result<(), String> {
     if excluded.is_some_and(|path| source == path) {
         return Ok(());
     }
@@ -654,6 +703,16 @@ mod tests {
                 workspace,
             ),
             "[WORKSPACE]/file.css\nfile:[WORKSPACE]/url.css\n[REPO]/other.css relative-value\n"
+        );
+    }
+
+    #[test]
+    fn output_normalization_replaces_transaction_tokens() {
+        assert_eq!(
+            normalize_transaction_tokens(
+                "a/.file.tw-migrate-backup-123-456-0' b/.file.tw-migrate-stage-9-8-7\n".to_string()
+            ),
+            "a/.file.tw-migrate-backup-[TOKEN]' b/.file.tw-migrate-stage-[TOKEN]\n"
         );
     }
 }

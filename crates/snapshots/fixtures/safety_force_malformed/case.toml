@@ -1,0 +1,4 @@
+[[steps]]
+name = "force skips malformed package"
+args = ["--tailwind-css", "globals.css", "--force", "--write"]
+status = 0

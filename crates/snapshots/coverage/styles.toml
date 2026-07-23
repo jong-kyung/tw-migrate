@@ -89,24 +89,9 @@ disposition = "e2e"
 target = "style_less_interpolation"
 
 [[cases]]
-source = "reports a missing project Sass compiler as a recoverable package failure"
-disposition = "safety"
-notes = "Requires fixture outside shared dependency ancestry."
-
-[[cases]]
 source = "reports Sass compile errors through the existing force contract"
 disposition = "e2e"
 target = "style_sass_compile_error"
-
-[[cases]]
-source = "post-edit Sass recompilation remains fatal under force"
-disposition = "safety"
-notes = "Requires stateful fake compiler and symlink setup."
-
-[[cases]]
-source = "rejects malformed CSS returned by post-edit Sass compilation"
-disposition = "safety"
-notes = "Requires stateful fake compiler and symlink setup."
 
 [[cases]]
 source = "evaluates Less variables and edits the proven authored module rule"
@@ -129,24 +114,9 @@ disposition = "e2e"
 target = "style_less_import_retained"
 
 [[cases]]
-source = "reports a missing project Less compiler as a recoverable package failure"
-disposition = "safety"
-notes = "Requires fixture outside shared dependency ancestry."
-
-[[cases]]
 source = "reports Less render errors through the existing force contract"
 disposition = "e2e"
 target = "style_less_compile_error"
-
-[[cases]]
-source = "post-edit Less rendering remains fatal under force"
-disposition = "safety"
-notes = "Requires stateful fake compiler setup."
-
-[[cases]]
-source = "rejects malformed CSS returned by post-edit Less rendering"
-disposition = "safety"
-notes = "Requires stateful fake compiler setup."
 
 [[cases]]
 source = "normalizes separators when resolving source map roots"
@@ -286,11 +256,6 @@ disposition = "e2e"
 target = "style_alias_retained"
 
 [[cases]]
-source = "preserves source file permissions when writing changes"
-disposition = "safety"
-notes = "Requires typed Unix mode assertion."
-
-[[cases]]
 source = "a second run after applying a global migration is a no-op"
 disposition = "e2e"
 target = "style_global_classes_ids"
@@ -304,16 +269,6 @@ target = "style_global_expression_rerun"
 source = "a second run after a partial module migration is a no-op"
 disposition = "e2e"
 target = "style_partial_idempotent"
-
-[[cases]]
-source = "fails fast when leftover files from an interrupted run exist"
-disposition = "safety"
-notes = "Requires special interrupted-run setup."
-
-[[cases]]
-source = "restores originals when a write fails partway"
-disposition = "safety"
-notes = "Requires Unix permissions and typed rollback assertions."
 
 [[cases]]
 source = "previews and applies a complete CSS Module migration"
@@ -351,20 +306,10 @@ disposition = "e2e"
 target = "style_candidate_batch"
 
 [[cases]]
-source = "completes both workspace packages retaining the compile-failing rule"
-disposition = "safety"
-notes = "Workspace Git setup belongs to workspace/safety slice."
-
-[[cases]]
 source = "anchors Sass compile-failure warnings to authored offsets"
 disposition = "e2e"
 target = "style_scss_candidate_offsets"
 notes = "Exact structured offsets remain in Node."
-
-[[cases]]
-source = "--force skips a broken workspace package and applies successful groups"
-disposition = "safety"
-notes = "Requires Git workspace setup and group-level typed assertions."
 
 [[cases]]
 source = "converts a proven CSS Module child relationship and stays a no-op on rerun"

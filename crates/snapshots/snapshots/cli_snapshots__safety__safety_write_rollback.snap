@@ -1,0 +1,12 @@
+---
+source: crates/snapshots/tests/cli_snapshots/safety.rs
+expression: document
+---
+case: safety_write_rollback
+
+--- step: write failure rolls back ---
+status: 1
+stdout: ""
+stderr: "tw-migrate: EACCES: permission denied, rename '[WORKSPACE]/Button.module.css' -> '[WORKSPACE]/.Button.module.css.tw-migrate-backup-[TOKEN]'\n"
+workspace delta:
+  unchanged

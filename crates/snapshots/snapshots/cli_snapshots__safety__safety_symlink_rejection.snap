@@ -1,0 +1,26 @@
+---
+source: crates/snapshots/tests/cli_snapshots/safety.rs
+expression: document
+---
+case: safety_symlink_rejection
+
+--- step: explicit file symlink ---
+status: 1
+stdout: ""
+stderr: "tw-migrate: Refusing to migrate a symbolic-link target: [WORKSPACE]/linked.module.css\n"
+workspace delta:
+  unchanged
+
+--- step: discovered file symlink ---
+status: 1
+stdout: ""
+stderr: "tw-migrate: Refusing to migrate a symbolic-link target: [WORKSPACE]/linked.module.css\n"
+workspace delta:
+  unchanged
+
+--- step: directory symlink ---
+status: 1
+stdout: ""
+stderr: "tw-migrate: Refusing to migrate a symbolic-link target: [WORKSPACE]/linked-directory/external.module.css\n"
+workspace delta:
+  unchanged

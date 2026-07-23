@@ -1,0 +1,16 @@
+---
+source: crates/snapshots/tests/cli_snapshots/safety.rs
+expression: document
+---
+case: safety_workspace_candidate_failure
+
+--- step: workspace write ---
+status: 0
+stdout: "--- a/good/Good.module.css\n+++ b/good/Good.module.css\n@@ -1,2 +1,1 @@\n-.good { display: grid; }\n \n \n--- a/good/Good.tsx\n+++ b/good/Good.tsx\n@@ -1,3 +1,2 @@\n-import styles from './Good.module.css';\n-export const Good = () => <div className={styles.good} />;\n \n+export const Good = () => <div className=\"grid\" />;\n \nApplied 2 file(s); 1 rule(s) converted, 1 retained.\n"
+stderr: "warning[candidate-compilation-failure] broken/Broken.module.css:0-23 Tailwind did not generate CSS for `[COLOR:red]`, so the rule is retained.\n"
+workspace delta:
+  deleted good/Good.module.css
+    before: ".good { display: grid; }\n"
+  modified good/Good.tsx
+    before: "import styles from './Good.module.css';\nexport const Good = () => <div className={styles.good} />;\n"
+    after: "export const Good = () => <div className=\"grid\" />;\n"

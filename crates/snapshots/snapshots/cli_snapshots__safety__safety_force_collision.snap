@@ -1,0 +1,12 @@
+---
+source: crates/snapshots/tests/cli_snapshots/safety.rs
+expression: document
+---
+case: safety_force_collision
+
+--- step: cross-group collision ---
+status: 1
+stdout: ""
+stderr: "tw-migrate: Multiple package groups planned changes for [WORKSPACE]/app/App.tsx\n"
+workspace delta:
+  unchanged

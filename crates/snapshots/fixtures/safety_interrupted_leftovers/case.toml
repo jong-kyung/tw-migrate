@@ -1,0 +1,4 @@
+[[steps]]
+name = "leftover outside selected package"
+cwd = "packages/a"
+status = 1
