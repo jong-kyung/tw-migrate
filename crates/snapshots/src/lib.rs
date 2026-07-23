@@ -476,6 +476,13 @@ fn normalize_output(value: &str, suite: &Suite, workspace: &Path) -> String {
         if let Ok(canonical) = root.canonicalize() {
             spellings.push(canonical.to_string_lossy().into_owned());
         }
+        spellings.extend(spellings.clone().into_iter().filter_map(|spelling| {
+            if let Some(path) = spelling.strip_prefix(r"\\?\UNC\") {
+                Some(format!(r"\\{path}"))
+            } else {
+                spelling.strip_prefix(r"\\?\").map(str::to_owned)
+            }
+        }));
         spellings.extend(
             spellings
                 .clone()
@@ -723,6 +730,37 @@ mod tests {
                 workspace,
             ),
             "[WORKSPACE]/nested/file.css\nfile:[WORKSPACE]/url.css\n[REPO]/other.css escaped\\_value\n"
+        );
+    }
+
+    #[test]
+    fn output_normalization_strips_windows_verbatim_prefixes() {
+        let suite = Suite {
+            repo_root: PathBuf::from(r"\\?\C:\repo"),
+            install_root: PathBuf::from(r"\\?\C:\repo\install"),
+        };
+        let workspace = Path::new(r"\\?\C:\repo\install\workspaces\case");
+        assert_eq!(
+            normalize_output(
+                r"C:\repo\install\workspaces\case\file.css",
+                &suite,
+                workspace,
+            ),
+            "[WORKSPACE]/file.css"
+        );
+
+        let suite = Suite {
+            repo_root: PathBuf::from(r"\\?\UNC\server\share\repo"),
+            install_root: PathBuf::from(r"\\?\UNC\server\share\repo\install"),
+        };
+        let workspace = Path::new(r"\\?\UNC\server\share\repo\install\workspaces\case");
+        assert_eq!(
+            normalize_output(
+                r"\\server\share\repo\install\workspaces\case\file.css",
+                &suite,
+                workspace,
+            ),
+            "[WORKSPACE]/file.css"
         );
     }
 

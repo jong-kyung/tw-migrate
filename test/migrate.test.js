@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
@@ -28,6 +29,22 @@ async function fixture({ css = initialCss, tsx = initialTsx } = {}) {
 async function cleanup(cwd) {
   await rm(cwd, { recursive: true, force: true });
 }
+
+test('canonicalizes aliased cwd paths before Git discovery', async () => {
+  const cwd = await fixture();
+  const alias = `${cwd}-alias`;
+  let linked = false;
+  try {
+    execFileSync('git', ['init', '-q'], { cwd });
+    await symlink(cwd, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    linked = true;
+    const report = await migrate({ cwd: alias });
+    assert.deepEqual(report.changedFiles, ['Button.module.css', 'Button.tsx']);
+  } finally {
+    if (linked) await unlink(alias);
+    await cleanup(cwd);
+  }
+});
 
 test('validates API-only migration options', async () => {
   const cwd = await fixture();
