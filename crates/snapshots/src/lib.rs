@@ -497,7 +497,22 @@ fn normalize_output(value: &str, suite: &Suite, workspace: &Path) -> String {
             normalized = normalized.replace(&spelling, replacement);
         }
     }
-    normalize_transaction_tokens(normalize_known_path_separators(normalized))
+    normalize_transaction_tokens(normalize_sass_diagnostic_paths(
+        normalize_known_path_separators(normalized),
+    ))
+}
+
+fn normalize_sass_diagnostic_paths(value: String) -> String {
+    value
+        .split_inclusive('\n')
+        .map(|line| {
+            if line.starts_with("  [WORKSPACE]/") && line.trim_end().ends_with(" root stylesheet") {
+                line.replacen("  [WORKSPACE]/", "  ", 1)
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect()
 }
 
 fn normalize_known_path_separators(mut value: String) -> String {
@@ -747,6 +762,14 @@ mod tests {
                 workspace,
             ),
             "[WORKSPACE]/file.css"
+        );
+        assert_eq!(
+            normalize_output(
+                "  C:\\repo\\install\\workspaces\\case\\Button.module.scss 1:20  root stylesheet\n",
+                &suite,
+                workspace,
+            ),
+            "  Button.module.scss 1:20  root stylesheet\n"
         );
 
         let suite = Suite {
