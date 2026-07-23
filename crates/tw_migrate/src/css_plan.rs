@@ -4,7 +4,10 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use oxc_css_parser::{
     Parser as CssParser, Syntax,
-    ast::{ComplexSelectorChild, InterpolableIdent, SimpleSelector, Statement, Stylesheet},
+    ast::{
+        CombinatorKind, ComplexSelectorChild, CompoundSelector, InterpolableIdent, SimpleSelector,
+        Statement, Stylesheet,
+    },
 };
 
 use crate::{
@@ -14,7 +17,10 @@ use crate::{
         GlobalAtRulePlan, conditional_variant, global_at_rule_plan, is_conditional,
         unsupported_warning,
     },
-    utilities::{SpacingValues, declaration_to_candidate, tailwind_utilities_conflict},
+    jsx_graph::Relation,
+    utilities::{
+        OverflowValues, SpacingValues, declaration_to_candidate, tailwind_utilities_conflict,
+    },
 };
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -23,13 +29,39 @@ pub(crate) enum SelectorKey {
     Id(String),
 }
 
+/// One pairwise proof obligation of a multi-compound CSS Module selector:
+/// every usage of `target` must be proven `relation` under `ancestor`.
+pub(crate) struct RelationshipStep {
+    pub(crate) ancestor: SelectorKey,
+    pub(crate) relation: Relation,
+    pub(crate) target: SelectorKey,
+}
+
+/// Decomposition of a supported multi-compound CSS Module selector whose
+/// conversion requires a JSX-graph proof.
+pub(crate) struct ModuleRelationship {
+    /// Obligations ordered from the selector target upward; the first step's
+    /// target is the rule's own key.
+    pub(crate) steps: Vec<RelationshipStep>,
+    /// An ancestor compound carries a pseudo-class (e.g. `.card:hover .title`);
+    /// converting it would require Tailwind's group pattern, so it is retained.
+    pub(crate) ancestor_state: bool,
+}
+
 pub(crate) struct RulePlan {
+    /// Rule span in the analysis source (compiled CSS for preprocessor
+    /// stylesheets, the authored file otherwise).
     pub(crate) span: std::ops::Range<usize>,
+    /// Rule span in the authored file; `None` until source-map resolution
+    /// proves a unique mapping (always `Some` for plain CSS).
     pub(crate) authored_span: Option<std::ops::Range<usize>>,
+    /// Declaration offsets in the analysis source used to source-map the
+    /// rule back to its authored span.
     pub(crate) provenance_offsets: Vec<usize>,
     pub(crate) selector: String,
     pub(crate) related_classes: Vec<String>,
     pub(crate) key: Option<SelectorKey>,
+    pub(crate) relationship: Option<ModuleRelationship>,
     pub(crate) candidates: Vec<String>,
     pub(crate) candidate_properties: HashMap<String, BTreeSet<String>>,
     pub(crate) warning: Option<&'static str>,
@@ -124,7 +156,15 @@ pub(crate) fn parse_css_rules(
 
     for (rule, outer_variants) in qualified_rules {
         let selector = source[rule.selector.span.start..rule.selector.span.end].to_string();
-        let selector_match = selector_match(rule, source, is_module);
+        let mut relationship = None;
+        let selector_match = selector_match(rule, source, is_module).or_else(|| {
+            if !is_module {
+                return None;
+            }
+            let (key, variant, decomposed) = module_relationship_match(rule)?;
+            relationship = Some(decomposed);
+            Some((key, variant))
+        });
         let key = selector_match.as_ref().map(|(key, _)| key.clone());
         let mut variants = outer_variants;
         if let Some(variant) = selector_match.and_then(|(_, variant)| variant) {
@@ -158,6 +198,7 @@ pub(crate) fn parse_css_rules(
             selector,
             related_classes: selector_classes(rule),
             key,
+            relationship,
             candidates,
             candidate_properties,
             warning,
@@ -257,8 +298,12 @@ fn collect_declaration_candidates(
     let mut property_slots = HashMap::new();
     let mut margin = SpacingValues::default();
     let mut padding = SpacingValues::default();
+    let mut inset = SpacingValues::default();
+    let mut overflow = OverflowValues::default();
     let mut margin_properties = BTreeSet::new();
     let mut padding_properties = BTreeSet::new();
+    let mut inset_properties = BTreeSet::new();
+    let mut overflow_properties = BTreeSet::new();
     let mut warning = None;
 
     for statement in statements {
@@ -332,21 +377,60 @@ fn collect_declaration_candidates(
             })
             .collect::<Vec<_>>();
         let spacing_result = margin
-            .apply(property, "margin", value, &components)
+            .apply(
+                property,
+                "margin",
+                ["margin-top", "margin-right", "margin-bottom", "margin-left"],
+                value,
+                &components,
+            )
             .and_then(|handled| {
                 if handled {
-                    Ok(true)
-                } else {
-                    padding.apply(property, "padding", value, &components)
+                    return Ok(true);
                 }
+                padding.apply(
+                    property,
+                    "padding",
+                    [
+                        "padding-top",
+                        "padding-right",
+                        "padding-bottom",
+                        "padding-left",
+                    ],
+                    value,
+                    &components,
+                )
+            })
+            .and_then(|handled| {
+                if handled {
+                    return Ok(true);
+                }
+                inset.apply(
+                    property,
+                    "inset",
+                    ["top", "right", "bottom", "left"],
+                    value,
+                    &components,
+                )
+            })
+            .and_then(|handled| {
+                if handled {
+                    return Ok(true);
+                }
+                overflow.apply(property, value, &components)
             });
         match spacing_result {
             Ok(true) => {
-                if property == "margin" || property.starts_with("margin-") {
-                    margin_properties.insert(property.to_string());
+                let properties = if property == "margin" || property.starts_with("margin-") {
+                    &mut margin_properties
+                } else if property == "padding" || property.starts_with("padding-") {
+                    &mut padding_properties
+                } else if property == "overflow" || property.starts_with("overflow-") {
+                    &mut overflow_properties
                 } else {
-                    padding_properties.insert(property.to_string());
-                }
+                    &mut inset_properties
+                };
+                properties.insert(property.to_string());
                 continue;
             }
             Err(()) => {
@@ -356,29 +440,44 @@ fn collect_declaration_candidates(
             Ok(false) => {}
         }
         match declaration_to_candidate(property, value, theme_tokens) {
-            Some(candidate) => push_last_wins(
+            Ok(candidate) => push_last_wins(
                 &mut property_slots,
                 &mut local_candidates,
                 property,
                 candidate,
             ),
-            None => warning = Some("unsupported-declaration"),
+            Err(code) => warning = Some(code),
         }
     }
 
-    for candidate in margin.candidates("m", theme_tokens) {
-        merge_candidate(
-            &mut candidates,
-            candidate,
-            margin_properties.iter().cloned(),
-        );
-    }
-    for candidate in padding.candidates("p", theme_tokens) {
-        merge_candidate(
-            &mut candidates,
-            candidate,
-            padding_properties.iter().cloned(),
-        );
+    let normalized_families = [
+        (
+            margin.candidates("m", ["mt", "mr", "mb", "ml"], theme_tokens),
+            margin_properties,
+        ),
+        (
+            padding.candidates("p", ["pt", "pr", "pb", "pl"], theme_tokens),
+            padding_properties,
+        ),
+        (
+            inset.candidates("inset", ["top", "right", "bottom", "left"], theme_tokens),
+            inset_properties,
+        ),
+        (overflow.candidates(), overflow_properties),
+    ];
+    for (family_candidates, family_properties) in normalized_families {
+        match family_candidates {
+            Some(family_candidates) => {
+                for candidate in family_candidates {
+                    merge_candidate(
+                        &mut candidates,
+                        candidate,
+                        family_properties.iter().cloned(),
+                    );
+                }
+            }
+            None => warning = Some("unsupported-value"),
+        }
     }
     for (candidate, property) in local_candidates {
         merge_candidate(&mut candidates, candidate, [property]);
@@ -512,6 +611,7 @@ fn retained_at_rule(
         selector: source[at_rule.span.start..end].trim().to_string(),
         related_classes: related_classes.into_iter().collect(),
         key: None,
+        relationship: None,
         candidates: Vec::new(),
         candidate_properties: HashMap::new(),
         warning: Some(warning),
@@ -573,28 +673,21 @@ fn selector_match(
         let ComplexSelectorChild::CompoundSelector(compound) = &selector.children[0] else {
             return None;
         };
+        if let Some(result) = compound_key_variant(compound) {
+            return Some(result);
+        }
+        // A key plus one argument-less pseudo-class was already rejected above
+        // (unsupported state); it must not fall through to an arbitrary variant.
+        if is_module
+            || matches!(
+                compound.children.as_slice(),
+                [_, SimpleSelector::PseudoClass(pseudo)] if pseudo.arg.is_none()
+            )
+        {
+            return None;
+        }
         let key = selector_key(compound.children.first()?)?;
-        let variant = match compound.children.as_slice() {
-            [_] => None,
-            [_, SimpleSelector::PseudoClass(pseudo)] if pseudo.arg.is_none() => {
-                let name = literal_ident(&pseudo.name)?;
-                if !matches!(
-                    name,
-                    "active"
-                        | "disabled"
-                        | "focus"
-                        | "focus-visible"
-                        | "focus-within"
-                        | "hover"
-                        | "visited"
-                ) {
-                    return None;
-                }
-                Some(name.to_string())
-            }
-            _ if !is_module => arbitrary_selector_variant(rule, source, compound)?,
-            _ => return None,
-        };
+        let variant = arbitrary_selector_variant(rule, source, compound)?;
         return Some((key, variant));
     }
 
@@ -607,6 +700,92 @@ fn selector_match(
     let key = selector_key(target.children.first()?)?;
     let variant = arbitrary_selector_variant(rule, source, target)?;
     Some((key, variant))
+}
+
+fn supported_pseudo_state(name: &str) -> bool {
+    matches!(
+        name,
+        "active" | "disabled" | "focus" | "focus-visible" | "focus-within" | "hover" | "visited"
+    )
+}
+
+/// A compound that is a single module class/id key, optionally followed by
+/// one supported pseudo-state.
+fn compound_key_variant(compound: &CompoundSelector<'_>) -> Option<(SelectorKey, Option<String>)> {
+    let key = selector_key(compound.children.first()?)?;
+    let variant = match compound.children.as_slice() {
+        [_] => None,
+        [_, SimpleSelector::PseudoClass(pseudo)] if pseudo.arg.is_none() => {
+            let name = literal_ident(&pseudo.name)?;
+            if !supported_pseudo_state(name) {
+                return None;
+            }
+            Some(name.to_string())
+        }
+        _ => return None,
+    };
+    Some((key, variant))
+}
+
+/// Decompose a multi-compound CSS Module selector (descendant/child chains of
+/// module keys) into its target key, target variant, and proof obligations.
+/// Anything outside that shape returns None and stays on the generic
+/// unsupported-selector path.
+fn module_relationship_match(
+    rule: &oxc_css_parser::ast::QualifiedRule<'_>,
+) -> Option<(SelectorKey, Option<String>, ModuleRelationship)> {
+    if rule.selector.selectors.len() != 1 {
+        return None;
+    }
+    let selector = rule.selector.selectors.first()?;
+    let mut parts: Vec<(SelectorKey, Option<String>)> = Vec::new();
+    let mut relations: Vec<Relation> = Vec::new();
+    let mut expect_compound = true;
+    for child in &selector.children {
+        match child {
+            ComplexSelectorChild::CompoundSelector(compound) => {
+                if !expect_compound {
+                    return None;
+                }
+                parts.push(compound_key_variant(compound)?);
+                expect_compound = false;
+            }
+            ComplexSelectorChild::Combinator(combinator) => {
+                if expect_compound {
+                    return None;
+                }
+                relations.push(match combinator.kind {
+                    CombinatorKind::Descendant => Relation::Descendant,
+                    CombinatorKind::Child => Relation::Child,
+                    _ => return None,
+                });
+                expect_compound = true;
+            }
+        }
+    }
+    if expect_compound || parts.len() < 2 || parts.len() != relations.len() + 1 {
+        return None;
+    }
+    let ancestor_state = parts[..parts.len() - 1]
+        .iter()
+        .any(|(_, variant)| variant.is_some());
+    let steps = (1..parts.len())
+        .rev()
+        .map(|index| RelationshipStep {
+            ancestor: parts[index - 1].0.clone(),
+            relation: relations[index - 1],
+            target: parts[index].0.clone(),
+        })
+        .collect();
+    let (target_key, target_variant) = parts.pop()?;
+    Some((
+        target_key,
+        target_variant,
+        ModuleRelationship {
+            steps,
+            ancestor_state,
+        },
+    ))
 }
 
 fn selector_key(selector: &SimpleSelector<'_>) -> Option<SelectorKey> {

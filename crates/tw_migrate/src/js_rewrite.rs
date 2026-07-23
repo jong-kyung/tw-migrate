@@ -7,10 +7,10 @@ use std::{
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    Argument, CallExpression, ExportAllDeclaration, ExportNamedDeclaration, Expression,
-    ImportDeclaration, ImportDeclarationSpecifier, ImportExpression, JSXAttributeItem,
-    JSXAttributeName, JSXAttributeValue, JSXExpression, JSXOpeningElement, StaticMemberExpression,
-    TemplateLiteral,
+    Argument, CallExpression, ComputedMemberExpression, ExportAllDeclaration,
+    ExportNamedDeclaration, Expression, ImportDeclaration, ImportDeclarationSpecifier,
+    ImportExpression, JSXAttribute, JSXAttributeItem, JSXAttributeName, JSXAttributeValue,
+    JSXExpression, JSXOpeningElement, StaticMemberExpression, TemplateLiteral, VariableDeclarator,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::Parser;
@@ -43,7 +43,7 @@ pub(crate) struct SourcePlan {
     pub(crate) warnings: Vec<Warning>,
 }
 
-fn source_type_for_path(path: &str) -> Result<SourceType, String> {
+pub(crate) fn source_type_for_path(path: &str) -> Result<SourceType, String> {
     let source_type = SourceType::from_path(Path::new(path)).map_err(|error| error.to_string())?;
     Ok(
         if Path::new(path)
@@ -165,6 +165,27 @@ fn plan_source_file_with_mode(
     if is_module {
         imports.visit_program(&parsed.program);
     }
+    // On the global path, members of CSS Module imports can never match a
+    // global class: they are module references handled by the module's own
+    // plan, not dynamic class names.
+    let mut global_module_symbols = Vec::new();
+    if !is_module {
+        for statement in &parsed.program.body {
+            let oxc_ast::ast::Statement::ImportDeclaration(declaration) = statement else {
+                continue;
+            };
+            if !declaration.source.value.ends_with(".module.css") {
+                continue;
+            }
+            for specifier in declaration.specifiers.iter().flatten() {
+                if let ImportDeclarationSpecifier::ImportDefaultSpecifier(specifier) = specifier
+                    && let Some(symbol) = specifier.local.symbol_id.get()
+                {
+                    global_module_symbols.push(symbol);
+                }
+            }
+        }
+    }
 
     let scoping = semantic.semantic.scoping();
     let total_import_refs = imports
@@ -178,6 +199,7 @@ fn plan_source_file_with_mode(
         is_module,
         scoping,
         import_bindings: &imports.bindings,
+        global_module_symbols: &global_module_symbols,
         candidates,
         preserved_module_classes,
         batch_mode,
@@ -186,14 +208,25 @@ fn plan_source_file_with_mode(
         matches: Vec::new(),
         module_refs: HashMap::new(),
         matched_module_refs: HashMap::new(),
+        class_name_depth: 0,
+        alias_spans: HashMap::new(),
+        computed_refs: 0,
+        unsafe_reference: false,
         warnings: Vec::new(),
     };
     collector.visit_program(&parsed.program);
 
-    let classified_import_refs = collector.module_refs.values().sum::<usize>();
+    let classified_import_refs =
+        collector.module_refs.values().sum::<usize>() + collector.computed_refs;
+    let counts_match = total_import_refs == classified_import_refs;
     let module_references_safe =
-        !imports.unsupported_shape && total_import_refs == classified_import_refs;
-    if !module_references_safe && let Some(span) = imports.warning_span {
+        !imports.unsupported_shape && counts_match && !collector.unsafe_reference;
+    // Computed, aliased, and non-className sites already carry their own
+    // per-site warnings; the import-site warning covers the remaining
+    // import-shape and unclassified-identifier cases.
+    if (imports.unsupported_shape || !counts_match)
+        && let Some(span) = imports.warning_span
+    {
         collector.warnings.push(Warning {
             code: "unsupported-css-module-reference",
             file: file.path.clone(),
@@ -338,6 +371,7 @@ struct UsageCollector<'s> {
     is_module: bool,
     scoping: &'s Scoping,
     import_bindings: &'s [ImportBinding],
+    global_module_symbols: &'s [SymbolId],
     candidates: &'s HashMap<SelectorKey, Vec<String>>,
     preserved_module_classes: &'s BTreeSet<String>,
     batch_mode: bool,
@@ -346,20 +380,49 @@ struct UsageCollector<'s> {
     matches: Vec<CandidateMatch>,
     module_refs: HashMap<String, usize>,
     matched_module_refs: HashMap<String, usize>,
+    class_name_depth: u32,
+    alias_spans: HashMap<u32, Span>,
+    computed_refs: usize,
+    unsafe_reference: bool,
     warnings: Vec<Warning>,
 }
 
 impl UsageCollector<'_> {
-    fn module_member_name<'a>(&self, member: &'a StaticMemberExpression<'a>) -> Option<&'a str> {
-        let Expression::Identifier(object) = &member.object else {
+    fn identifier_symbol(&self, expr: &Expression<'_>) -> Option<SymbolId> {
+        let Expression::Identifier(identifier) = expr else {
             return None;
         };
-        let reference = object.reference_id.get()?;
-        let symbol = self.scoping.get_reference(reference).symbol_id()?;
+        let reference = identifier.reference_id.get()?;
+        self.scoping.get_reference(reference).symbol_id()
+    }
+
+    fn is_module_object(&self, object: &Expression<'_>) -> bool {
+        let Some(symbol) = self.identifier_symbol(object) else {
+            return false;
+        };
         self.import_bindings
             .iter()
             .any(|binding| binding.symbol == symbol)
+    }
+
+    fn module_member_name<'a>(&self, member: &'a StaticMemberExpression<'a>) -> Option<&'a str> {
+        self.is_module_object(&member.object)
             .then(|| member.property.name.as_str())
+    }
+
+    /// Whether a global-path className expression is a member of a CSS Module
+    /// import, which can never match a global class and is classified by the
+    /// module's own plan instead.
+    fn is_global_module_member(&self, expression: &JSXExpression<'_>) -> bool {
+        let object = match expression {
+            JSXExpression::StaticMemberExpression(member) => &member.object,
+            JSXExpression::ComputedMemberExpression(member) => &member.object,
+            _ => return false,
+        };
+        let Some(symbol) = self.identifier_symbol(object) else {
+            return false;
+        };
+        self.global_module_symbols.contains(&symbol)
     }
 
     fn static_template(&self, template: &TemplateLiteral<'_>) -> Option<StaticTemplate> {
@@ -493,8 +556,40 @@ impl UsageCollector<'_> {
             };
             if name.name == "className" {
                 has_class_name = true;
-                if let Some(JSXAttributeValue::StringLiteral(literal)) = &attribute.value {
-                    class_literal = Some((literal.span, literal.value.to_string()));
+                match &attribute.value {
+                    Some(JSXAttributeValue::StringLiteral(literal)) => {
+                        class_literal = Some((literal.span, literal.value.to_string()));
+                    }
+                    Some(JSXAttributeValue::ExpressionContainer(container)) => {
+                        match &container.expression {
+                            JSXExpression::StringLiteral(literal) => {
+                                class_literal = Some((container.span, literal.value.to_string()));
+                            }
+                            JSXExpression::TemplateLiteral(template)
+                                if template.expressions.is_empty()
+                                    && template
+                                        .quasis
+                                        .first()
+                                        .is_some_and(|quasi| quasi.value.cooked.is_some()) =>
+                            {
+                                let cooked = template.quasis[0].value.cooked.as_ref().unwrap();
+                                class_literal = Some((container.span, cooked.to_string()));
+                            }
+                            expression => {
+                                if !self.is_global_module_member(expression) {
+                                    self.warnings.push(Warning {
+                                        code: "dynamic-class-name",
+                                        file: self.file_path.to_string(),
+                                        start: container.span.start as usize,
+                                        end: container.span.end as usize,
+                                        message: "Only static className values are supported."
+                                            .to_string(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             } else if name.name == "id"
                 && let Some(JSXAttributeValue::StringLiteral(literal)) = &attribute.value
@@ -539,12 +634,14 @@ impl UsageCollector<'_> {
                 start: insertion,
                 end: insertion,
                 replacement: format!(
-                    " className=\"{}\"",
-                    id_candidates
-                        .iter()
-                        .map(|(_, candidate)| candidate.as_str())
-                        .collect::<Vec<_>>()
-                        .join(" ")
+                    " className={}",
+                    jsx_attribute_value(
+                        &id_candidates
+                            .iter()
+                            .map(|(_, candidate)| candidate.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    )
                 ),
             });
         }
@@ -596,12 +693,28 @@ impl UsageCollector<'_> {
         if replacement_value == value {
             return;
         }
-        let quote = self.source.as_bytes()[span.start as usize] as char;
         self.edits.push(Edit {
             start: span.start as usize,
             end: span.end as usize,
-            replacement: format!("{quote}{replacement_value}{quote}"),
+            replacement: jsx_attribute_value(&replacement_value),
         });
+    }
+}
+
+/// JSX string attributes have no escape sequences (the lexer scans to the
+/// matching quote), so quote-bearing values must pick the other quote, and a
+/// value with both quotes falls back to a JS string in an expression
+/// container, where escapes do apply.
+fn jsx_attribute_value(value: &str) -> String {
+    if !value.contains('"') {
+        format!("\"{value}\"")
+    } else if !value.contains('\'') {
+        format!("'{value}'")
+    } else {
+        format!(
+            "{{{}}}",
+            serde_json::to_string(value).expect("string serialization")
+        )
     }
 }
 
@@ -609,8 +722,71 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
     fn visit_static_member_expression(&mut self, member: &StaticMemberExpression<'a>) {
         if let Some(name) = self.module_member_name(member).map(str::to_string) {
             *self.module_refs.entry(name).or_default() += 1;
+            if self.class_name_depth == 0 {
+                self.unsafe_reference = true;
+                if let Some(declarator) = self.alias_spans.get(&member.span.start) {
+                    self.warnings.push(Warning {
+                        code: "aliased-css-module-reference",
+                        file: self.file_path.to_string(),
+                        start: declarator.start as usize,
+                        end: declarator.end as usize,
+                        message:
+                            "A CSS Module class is aliased to a binding, so the module is retained."
+                                .to_string(),
+                    });
+                } else {
+                    self.warnings.push(Warning {
+                        code: "non-classname-css-module-reference",
+                        file: self.file_path.to_string(),
+                        start: member.span.start as usize,
+                        end: member.span.end as usize,
+                        message: "A CSS Module class is used outside a supported className, so the module is retained."
+                            .to_string(),
+                    });
+                }
+            }
         }
         walk::walk_static_member_expression(self, member);
+    }
+
+    fn visit_computed_member_expression(&mut self, member: &ComputedMemberExpression<'a>) {
+        if self.is_module_object(&member.object) {
+            self.computed_refs += 1;
+            self.unsafe_reference = true;
+            self.warnings.push(Warning {
+                code: "computed-css-module-reference",
+                file: self.file_path.to_string(),
+                start: member.span.start as usize,
+                end: member.span.end as usize,
+                message:
+                    "A computed CSS Module access cannot be verified, so the module is retained."
+                        .to_string(),
+            });
+        }
+        walk::walk_computed_member_expression(self, member);
+    }
+
+    fn visit_variable_declarator(&mut self, declarator: &VariableDeclarator<'a>) {
+        if let Some(Expression::StaticMemberExpression(member)) = &declarator.init
+            && self.module_member_name(member).is_some()
+        {
+            self.alias_spans.insert(member.span.start, declarator.span);
+        }
+        walk::walk_variable_declarator(self, declarator);
+    }
+
+    fn visit_jsx_attribute(&mut self, attribute: &JSXAttribute<'a>) {
+        let class_name = matches!(
+            &attribute.name,
+            JSXAttributeName::Identifier(name) if name.name == "className"
+        );
+        if class_name {
+            self.class_name_depth += 1;
+        }
+        walk::walk_jsx_attribute(self, attribute);
+        if class_name {
+            self.class_name_depth -= 1;
+        }
     }
 
     fn visit_jsx_opening_element(&mut self, element: &JSXOpeningElement<'a>) {
@@ -737,35 +913,43 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
                     ),
                 });
             }
+            // A previous --write run may already have appended the preserved
+            // candidates as a static segment; appending them again would grow
+            // the template on every run.
+            let preserved_candidates: Vec<String> = preserved_candidates
+                .into_iter()
+                .filter(|candidate| !static_classes.contains(candidate))
+                .collect();
             if let Some(expression) = preserved_expression {
-                let appended = format!(" {}", preserved_candidates.join(" "));
-                self.edits.push(Edit {
-                    start: container.span.start as usize,
-                    end: container.span.end as usize,
-                    replacement: format!(
-                        "{{`${{{expression}}}${{{}}}`}}",
-                        serde_json::to_string(&appended).expect("string serialization")
-                    ),
-                });
-            } else if let Some(append_at) = append_at
-                && !preserved_candidates.is_empty()
-            {
-                let appended = format!(" {}", preserved_candidates.join(" "));
-                partial_edits.push(Edit {
-                    start: append_at,
-                    end: append_at,
-                    replacement: format!(
-                        "${{{}}}",
-                        serde_json::to_string(&appended).expect("string serialization")
-                    ),
-                });
+                if !preserved_candidates.is_empty() {
+                    let appended = format!(" {}", preserved_candidates.join(" "));
+                    self.edits.push(Edit {
+                        start: container.span.start as usize,
+                        end: container.span.end as usize,
+                        replacement: format!(
+                            "{{`${{{expression}}}${{{}}}`}}",
+                            serde_json::to_string(&appended).expect("string serialization")
+                        ),
+                    });
+                }
+            } else if let Some(append_at) = append_at {
+                if !preserved_candidates.is_empty() {
+                    let appended = format!(" {}", preserved_candidates.join(" "));
+                    partial_edits.push(Edit {
+                        start: append_at,
+                        end: append_at,
+                        replacement: format!(
+                            "${{{}}}",
+                            serde_json::to_string(&appended).expect("string serialization")
+                        ),
+                    });
+                }
                 self.edits.extend(partial_edits);
             } else if partial_edits.is_empty() {
                 self.edits.push(Edit {
                     start: container.span.start as usize,
                     end: container.span.end as usize,
-                    replacement: serde_json::to_string(&replacement_value)
-                        .expect("string serialization"),
+                    replacement: jsx_attribute_value(&replacement_value),
                 });
             } else {
                 self.edits.extend(partial_edits);
@@ -782,14 +966,14 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
     }
 }
 
-fn resolve_import(file_path: &str, import: &str) -> PathBuf {
+pub(crate) fn resolve_import(file_path: &str, import: &str) -> PathBuf {
     let parent = Path::new(file_path)
         .parent()
         .unwrap_or_else(|| Path::new("."));
     normalize_path(&parent.join(import))
 }
 
-fn normalize_path(path: &Path) -> PathBuf {
+pub(crate) fn normalize_path(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
         match component {

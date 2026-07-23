@@ -60,12 +60,13 @@ export async function migrate(options = {}) {
     readSources(stylePaths, snapshots),
     Promise.all(sourcePaths.map(async (path) => {
       const source = await readFile(path, 'utf8');
-      // Scan-only sources matter solely as potential CSS Module references.
-      // HTML entities can encode any part of a linked filename, so retain
-      // ignored HTML containing a link for parse5 to classify safely.
-      const mayReferenceModule = extension(path) === '.html'
-        ? /<link\b/i.test(source)
-        : mentionsStylesheetModule(source);
+      // Scan-only scripts are always retained as reference-only inputs: even
+      // without a ".module." mention they can render components whose trees
+      // the closed-world relationship proofs must see. Scan-only HTML matters
+      // solely as a potential stylesheet consumer, and HTML entities can
+      // encode any part of a linked filename, so retain ignored HTML
+      // containing a link for parse5 to classify safely.
+      const mayReferenceModule = extension(path) !== '.html' || /<link\b/i.test(source);
       if (!scope.targetable.has(path) && !mayReferenceModule) return undefined;
       return { path, source: recordSnapshot(snapshots, path, source) };
     })),
@@ -128,7 +129,7 @@ export async function migrate(options = {}) {
     diff,
     convertedRules,
     retainedRules,
-    rules,
+    rules: rules.map((rule) => ({ ...rule, file: normalizedRelativePath(cwd, rule.file) })),
     candidates: [...candidates].sort(),
     warnings: warnings.map((warning) => ({ ...warning, file: normalizedRelativePath(cwd, warning.file) })),
     failures,
@@ -340,28 +341,31 @@ async function planPackage(context, packageRoot) {
     return { failure: packageFailure(workspaceRoot, packageRoot, error) };
   }
 
+  const request = {
+    stylesheets,
+    tailwindPath: tailwind.path,
+    tailwindSource: tailwind.css,
+    utilityPrefix: tailwind.designSystem.theme.prefix,
+    themeTokens: tailwind.themeTokens,
+    files,
+  };
   let plan;
   try {
-    plan = JSON.parse(
-      planBatchMigration(
-        JSON.stringify({
-          stylesheets,
-          tailwindPath: tailwind.path,
-          tailwindSource: tailwind.css,
-          utilityPrefix: tailwind.designSystem.theme.prefix,
-          themeTokens: tailwind.themeTokens,
-          files,
-        }),
-      ),
-    );
+    plan = JSON.parse(planBatchMigration(JSON.stringify(request)));
   } catch (error) {
     if (!options.force || !isRecoverablePlanningError(error)) throw error;
     return { failure: packageFailure(workspaceRoot, packageRoot, error) };
   }
 
+  try {
+    plan = replanCompileFailures(tailwind, request, plan);
+  } catch (error) {
+    if (!options.force) throw error;
+    return { failure: packageFailure(workspaceRoot, packageRoot, error) };
+  }
+
   removeMigratedHtmlLinks(plan, preparedHtml);
   plan.warnings.push(...preparedHtml.warnings);
-  await validateCandidates(tailwind, plan.candidates);
   for (const file of plan.files.filter((file) => extension(file.path) === '.html')) {
     parseHtmlSource(file.path, file.source);
   }
@@ -376,6 +380,60 @@ async function planPackage(context, packageRoot) {
     }
   }
   return { plan };
+}
+
+// A candidate Tailwind refuses to compile retains its owning rule(s) instead
+// of aborting the run: block those rules and replan until every applied
+// candidate compiles. Each iteration blocks at least one new rule, so the
+// loop is bounded by the rule count; if a failing candidate cannot be
+// attributed to a new rule, fall back to the package-level failure path.
+function replanCompileFailures(tailwind, request, initialPlan) {
+  let plan = initialPlan;
+  const blockedByStylesheet = new Map();
+  const maxIterations = plan.rules.length + 1;
+  for (let iteration = 0; ; iteration += 1) {
+    const failing = invalidCandidates(tailwind, plan.candidates);
+    if (failing.length === 0) break;
+    let progressed = false;
+    for (const rule of plan.rules) {
+      const failed = rule.candidates.filter((candidate) => failing.includes(candidate));
+      if (failed.length === 0) continue;
+      let blocked = blockedByStylesheet.get(rule.file);
+      if (!blocked) blockedByStylesheet.set(rule.file, blocked = new Map());
+      const key = `${rule.ruleId.start}-${rule.ruleId.end}`;
+      let entry = blocked.get(key);
+      if (!entry) {
+        blocked.set(key, entry = { ruleId: rule.ruleId, authoredSpan: rule.authoredSpan, candidates: new Set() });
+        progressed = true;
+      }
+      for (const candidate of failed) entry.candidates.add(candidate);
+    }
+    if (!progressed || iteration >= maxIterations) {
+      throw new Error(`Tailwind did not generate CSS for candidate: ${failing[0]}`);
+    }
+    plan = JSON.parse(planBatchMigration(JSON.stringify({
+      ...request,
+      stylesheets: request.stylesheets.map((stylesheet) => ({
+        ...stylesheet,
+        blockedRules: [...(blockedByStylesheet.get(stylesheet.cssPath)?.values() ?? [])]
+          .map((entry) => entry.ruleId),
+      })),
+    })));
+  }
+  for (const [cssPath, blocked] of blockedByStylesheet) {
+    for (const { authoredSpan, candidates } of blocked.values()) {
+      const failed = [...candidates].sort().map((candidate) => `\`${candidate}\``).join(', ');
+      plan.warnings.push({
+        code: 'candidate-compilation-failure',
+        file: cssPath,
+        // ruleId is a compiled-domain span; warnings anchor to the authored file.
+        start: authoredSpan.start,
+        end: authoredSpan.end,
+        message: `Tailwind did not generate CSS for ${failed}, so the rule is retained.`,
+      });
+    }
+  }
+  return plan;
 }
 
 function removeMigratedHtmlLinks(plan, preparedHtml) {
@@ -413,6 +471,7 @@ function mergePlans(plans, originals) {
   const candidates = new Set();
   const rules = [];
   const warnings = [];
+  const seenWarnings = new Set();
   let convertedRules = 0;
   let retainedRules = 0;
 
@@ -435,7 +494,14 @@ function mergePlans(plans, originals) {
     convertedRules += plan.convertedRules;
     retainedRules += plan.retainedRules;
     rules.push(...plan.rules);
-    warnings.push(...plan.warnings);
+    // Per-stylesheet planning repeats the same source-site warning once per
+    // stylesheet; the user-facing report keeps the first of each.
+    for (const warning of plan.warnings) {
+      const key = `${warning.code}\0${warning.file}\0${warning.start}\0${warning.end}`;
+      if (seenWarnings.has(key)) continue;
+      seenWarnings.add(key);
+      warnings.push(warning);
+    }
   }
   return { filesByPath, deletedPaths, candidates, rules, warnings, convertedRules, retainedRules };
 }
@@ -541,10 +607,6 @@ function stylesheetSyntax(path) {
 function isStylesheetModule(path) {
   const syntax = stylesheetSyntax(path);
   return syntax !== undefined && path.endsWith(`.module.${syntax}`);
-}
-
-function mentionsStylesheetModule(source) {
-  return [...STYLESHEET_SYNTAX.keys()].some((extension) => source.includes(`.module${extension}`));
 }
 
 function sourceReferencesStyle(file, stylePath) {
@@ -1102,10 +1164,9 @@ async function extractThemeTokensFromGraph(css, base, loadStylesheet, seen = new
   return Object.assign(tokens, extractThemeTokens(css));
 }
 
-async function validateCandidates(tailwind, candidates) {
+function invalidCandidates(tailwind, candidates) {
   const generated = tailwind.designSystem.candidatesToCss(candidates);
-  const invalid = candidates.find((_, index) => generated[index] === null);
-  if (invalid) throw new Error(`Tailwind did not generate CSS for candidate: ${invalid}`);
+  return candidates.filter((_, index) => generated[index] === null);
 }
 
 function createModuleLoader(snapshots, workspaceRoot) {
