@@ -465,29 +465,49 @@ fn validate_cwd(workspace: &Path, relative: Option<&Path>, cwd: &Path) -> Result
 }
 
 fn normalize_output(value: &str, suite: &Suite, workspace: &Path) -> String {
-    let mut normalized = value
-        .replace("\r\n", "\n")
-        .replace('\r', "\n")
-        .replace('\\', "/");
+    let mut normalized = value.replace("\r\n", "\n").replace('\r', "\n");
     let roots = [
         (workspace, "[WORKSPACE]"),
         (suite.install_root.as_path(), "[INSTALL]"),
         (suite.repo_root.as_path(), "[REPO]"),
     ];
     for (root, replacement) in roots {
-        let mut spellings = vec![root.to_string_lossy().replace('\\', "/")];
+        let mut spellings = vec![root.to_string_lossy().into_owned()];
         if let Ok(canonical) = root.canonicalize() {
-            spellings.push(canonical.to_string_lossy().replace('\\', "/"));
+            spellings.push(canonical.to_string_lossy().into_owned());
         }
+        spellings.extend(
+            spellings
+                .clone()
+                .into_iter()
+                .map(|spelling| spelling.replace('\\', "/")),
+        );
         spellings.sort_by_key(|spelling| std::cmp::Reverse(spelling.len()));
         spellings.dedup();
         for spelling in spellings {
-            let file_url = format!("file:///{}", spelling.trim_start_matches('/'));
+            let file_url = format!("file:///{}", spelling.trim_start_matches(['/', '\\']));
             normalized = normalized.replace(&file_url, &format!("file:{replacement}"));
             normalized = normalized.replace(&spelling, replacement);
         }
     }
-    normalize_transaction_tokens(normalized)
+    normalize_transaction_tokens(normalize_known_path_separators(normalized))
+}
+
+fn normalize_known_path_separators(mut value: String) -> String {
+    for marker in ["[WORKSPACE]", "[INSTALL]", "[REPO]"] {
+        let mut search_from = 0;
+        while let Some(offset) = value[search_from..].find(marker) {
+            let start = search_from + offset + marker.len();
+            let end = value[start..]
+                .find(|character: char| {
+                    character.is_ascii_whitespace() || matches!(character, '\'' | '"' | ')' | ',')
+                })
+                .map_or(value.len(), |offset| start + offset);
+            value.replace_range(start..end, &value[start..end].replace('\\', "/"));
+            search_from = end;
+        }
+    }
+    value
 }
 
 fn normalize_transaction_tokens(mut value: String) -> String {
@@ -698,11 +718,11 @@ mod tests {
         let workspace = Path::new(r"C:\repo\install\workspaces\case");
         assert_eq!(
             normalize_output(
-                "C:\\repo\\install\\workspaces\\case\\file.css\r\nfile:///C:\\repo\\install\\workspaces\\case\\url.css\nC:\\repo\\other.css relative-value\n",
+                "C:\\repo\\install\\workspaces\\case\\nested\\file.css\r\nfile:///C:/repo/install/workspaces/case/url.css\nC:\\repo\\other.css escaped\\_value\n",
                 &suite,
                 workspace,
             ),
-            "[WORKSPACE]/file.css\nfile:[WORKSPACE]/url.css\n[REPO]/other.css relative-value\n"
+            "[WORKSPACE]/nested/file.css\nfile:[WORKSPACE]/url.css\n[REPO]/other.css escaped\\_value\n"
         );
     }
 
