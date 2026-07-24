@@ -61,6 +61,7 @@ jobs:
 
   case:
     needs: package
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.label.name == 'ecosystem') }}
     strategy:
       fail-fast: false
       matrix:

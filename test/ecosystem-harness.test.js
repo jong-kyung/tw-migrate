@@ -582,6 +582,11 @@ test('controlled manifest expands to the exact three-OS by three-case workflow m
   assert.ok(matrix.every(({ runner }) => ['ubuntu-latest', 'macos-latest', 'windows-latest'].includes(runner)));
 });
 
+test('case jobs run after non-cancelled partial package failure while preserving label gating', async () => {
+  const workflow = await readFile(new URL('../.github/workflows/ecosystem.yml', import.meta.url), 'utf8');
+  assert.match(workflow, /^  case:\n    needs: package\n    if: \$\{\{ !cancelled\(\) && \(github\.event_name != 'pull_request' \|\| github\.event\.label\.name == 'ecosystem'\) \}\}$/m);
+});
+
 test('fixture integration dependencies use the required exact pins', async () => {
   const expected = {
     'react-vite': { '@tailwindcss/vite': '4.3.3', tailwindcss: '4.3.3', vite: '8.1.5', react: '19.2.8', 'react-dom': '19.2.8' },
