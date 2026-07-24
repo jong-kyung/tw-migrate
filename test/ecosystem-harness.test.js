@@ -29,7 +29,7 @@ import {
   temporaryLifecyclePaths,
   waitForChild,
 } from '../ecosystem-ci/lifecycle.js';
-import { ecosystemMatrix, loadManifest, runHarness, validateManifest } from '../ecosystem-ci/run.js';
+import { loadManifest, runHarness, validateManifest } from '../ecosystem-ci/run.js';
 
 const selector = { type: 'role', value: 'button', name: 'Toggle details' };
 const desktop = { width: 1280, height: 720 };
@@ -574,12 +574,13 @@ test('every manifest probe declares exact stable target identities', async () =>
   }
 });
 
-test('controlled manifest expands to the exact three-OS by three-case workflow matrix', async () => {
-  const matrix = ecosystemMatrix(await loadManifest());
-  assert.equal(matrix.length, 9);
-  assert.deepEqual(new Set(matrix.map(({ os }) => os)), new Set(['linux', 'macos', 'windows']));
-  assert.deepEqual(new Set(matrix.map((entry) => entry.case)), new Set(['react-vite-css', 'next-css', 'vite-html-css']));
-  assert.ok(matrix.every(({ runner }) => ['ubuntu-latest', 'macos-latest', 'windows-latest'].includes(runner)));
+test('workflow case matrix matches the controlled manifest across all required OSes', async () => {
+  const manifest = await loadManifest();
+  const workflow = await readFile(new URL('../.github/workflows/ecosystem.yml', import.meta.url), 'utf8');
+  const matrices = [...workflow.matchAll(/^      matrix:\n        os: \[([a-z, ]+)\]\n        case: \[([a-z0-9-, ]+)\]\n        include:$/gm)];
+  assert.equal(matrices.length, 1, 'expected exactly one literal os/case workflow matrix');
+  assert.deepEqual(matrices[0][1].split(', '), ['linux', 'macos', 'windows']);
+  assert.deepEqual(matrices[0][2].split(', '), manifest.projects.filter(({ kind }) => kind === 'controlled').map(({ id }) => id));
 });
 
 test('case jobs run after non-cancelled partial package failure while preserving label gating', async () => {

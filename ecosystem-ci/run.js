@@ -219,12 +219,6 @@ export async function loadManifest(url = new URL('./projects.json', import.meta.
   return validateManifest(JSON.parse(await readFile(url, 'utf8')));
 }
 
-export function ecosystemMatrix(manifest) {
-  validateManifest(manifest);
-  const runners = { linux: 'ubuntu-latest', macos: 'macos-latest', windows: 'windows-latest' };
-  return Object.entries(runners).flatMap(([os, runner]) => manifest.projects.map((project) => ({ os, runner, case: project.id })));
-}
-
 function selectProjects(args, manifest) {
   if (args.length === 1 && args[0] === '--all') return manifest.projects;
   if (args.length === 2 && args[0] === '--case') {
