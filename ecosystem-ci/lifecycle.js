@@ -16,7 +16,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const caches = ['.next', 'dist', 'node_modules/.vite'];
 const migrationSourceExtensions = new Set(['.js', '.jsx', '.ts', '.tsx', '.html', '.css', '.scss', '.sass', '.less']);
 const generatedDirectories = new Set(['node_modules', '.next', 'dist', 'build', 'out', 'coverage', '.cache', '.vite']);
-export const lifecycleTimeoutMs = 30 * 60_000;
+export const lifecycleTimeoutMs = 2 * 60_000;
 
 function inside(path, root) {
   const rel = relative(root, path);
@@ -537,13 +537,21 @@ async function executeLifecycle({ project, artifactCase = project, artifactRoot,
     await recordFailure(error);
     throw error;
   } finally {
+    // Teardown steps land in the ledger so a post-completion hang is attributable from artifacts.
+    const teardownMark = async (step) => {
+      ledger.teardown = [...(ledger.teardown ?? []), { step, at: new Date().toISOString() }];
+      await writeFile(ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`).catch(() => {});
+    };
     let teardownError;
+    await teardownMark('server-stop-started');
     try {
       await teardownLifecycleServer(activeServer(), primaryError, recordFailure);
     } catch (error) {
       teardownError = error;
     }
+    await teardownMark('server-stopped');
     await rm(runRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await teardownMark('run-root-removed');
     if (succeeded && !teardownError && temporaryRoot) await rm(temporaryRoot, { recursive: true, force: true });
     if (teardownError) throw teardownError;
   }
