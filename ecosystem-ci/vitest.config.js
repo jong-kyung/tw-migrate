@@ -10,7 +10,7 @@ const outerTimeoutMs = lifecycleTimeoutMs + 60_000;
 
 export default defineConfig({
   test: {
-    projects: manifest.projects.map((project) => ({
+    projects: manifest.projects.filter(({ kind }) => kind !== 'external').map((project) => ({
       test: {
         name: project.id,
         include: ['ecosystem-ci/tests/ecosystem.browser.js'],

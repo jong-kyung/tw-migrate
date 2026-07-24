@@ -160,12 +160,8 @@ function validateProject(project, index) {
     if (!runtimes.has(project.runtime)) throw new Error(`${label}.runtime is unsupported`);
     if (!styles.has(project.style)) throw new Error(`${label}.style is unsupported`);
   } else if (project.kind === 'smoke') {
-    exactKeys(
-      project,
-      ['id', 'kind', 'source', 'probes'],
-      ['id', 'kind', 'source', 'probes'],
-      label,
-    );
+    exactKeys(project, ['id', 'kind', 'fixture'], ['id', 'kind', 'fixture'], label);
+    nonempty(project.fixture, `${label}.fixture`);
   } else if (project.kind === 'external') {
     exactKeys(
       project,
@@ -194,7 +190,7 @@ function validateProject(project, index) {
   } else {
     throw new Error(`${label}.kind must be controlled, smoke, or external`);
   }
-  validateCommon(project, label);
+  if (project.kind !== 'smoke') validateCommon(project, label);
 }
 
 export function validateManifest(manifest) {
@@ -215,6 +211,11 @@ export function validateManifest(manifest) {
       cells.add(cell);
     }
   });
+  for (const project of manifest.projects.filter(({ kind }) => kind === 'smoke')) {
+    if (!manifest.projects.some(({ id, kind }) => id === project.fixture && kind === 'controlled')) {
+      throw new Error(`smoke fixture ${JSON.stringify(project.fixture)} must reference a controlled case`);
+    }
+  }
   return manifest;
 }
 
@@ -223,21 +224,26 @@ export async function loadManifest(url = new URL('./projects.json', import.meta.
 }
 
 function selectProjects(args, manifest) {
-  if (args.length === 1 && args[0] === '--all') return manifest.projects;
+  if (args.length === 1 && args[0] === '--all') return manifest.projects.filter(({ kind }) => kind === 'controlled');
   if (args.length === 2 && args[0] === '--case') {
     const project = manifest.projects.find(({ id }) => id === args[1]);
+    if (project?.kind === 'external') throw new Error(`External case ${JSON.stringify(project.id)} is CI-only`);
     if (project) return [project];
-    throw new Error(`Unknown case ${JSON.stringify(args[1])}. Available ids: ${manifest.projects.map(({ id }) => id).join(', ')}`);
+    throw new Error(`Unknown case ${JSON.stringify(args[1])}. Available ids: ${manifest.projects.filter(({ kind }) => kind !== 'external').map(({ id }) => id).join(', ')}`);
   }
   throw new Error(usage);
+}
+
+export function resolveFixture(manifest, project) {
+  return project.kind === 'smoke'
+    ? manifest.projects.find(({ id }) => id === project.fixture)
+    : project;
 }
 
 export function runHarness(args, manifest, execute = executeVitest) {
   validateManifest(manifest);
   const selected = selectProjects(args, manifest);
-  execute(args[0] === '--all'
-    ? ['run', '--config', 'ecosystem-ci/vitest.config.js']
-    : ['run', '--config', 'ecosystem-ci/vitest.config.js', '--project', selected[0].id]);
+  execute(['run', '--config', 'ecosystem-ci/vitest.config.js', ...selected.flatMap(({ id }) => ['--project', id])]);
   return selected;
 }
 

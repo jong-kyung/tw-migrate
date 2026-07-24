@@ -1,5 +1,5 @@
-import { loadManifest } from './run.js';
-import { runLifecycle } from './lifecycle.js';
+import { loadManifest, resolveFixture } from './run.js';
+import { runLifecycle, runProductionSmoke } from './lifecycle.js';
 
 export const commands = {
   async runEcosystemCase(context, id) {
@@ -10,7 +10,10 @@ export const commands = {
     const manifest = await loadManifest();
     const project = manifest.projects.find((entry) => entry.id === id);
     if (!project) throw new Error(`unknown ecosystem case ${JSON.stringify(id)}`);
-    const result = await runLifecycle({ browser, project, artifactRoot: process.env.ECOSYSTEM_ARTIFACT_ROOT });
-    return { report: result.first, phases: result.ledger.phases.map(({ phase }) => phase) };
+    const fixture = resolveFixture(manifest, project);
+    const result = project.kind === 'smoke'
+      ? await runProductionSmoke({ browser, project, fixture, artifactRoot: process.env.ECOSYSTEM_ARTIFACT_ROOT })
+      : await runLifecycle({ browser, project, artifactRoot: process.env.ECOSYSTEM_ARTIFACT_ROOT });
+    return { report: result.first ?? null, phases: result.ledger.phases.map(({ phase }) => phase) };
   },
 };

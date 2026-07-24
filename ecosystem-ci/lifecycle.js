@@ -92,12 +92,14 @@ async function terminateTree(child) {
   }
 }
 
-async function startServer(project, cwd, artifactRoot, phase) {
+async function startServer(project, cwd, artifactRoot, phase, mode = 'dev') {
   const port = await availablePort();
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  const args = project.runtime === 'next'
-    ? ['run', 'dev', '--', '--hostname', '127.0.0.1', '--port', String(port)]
-    : ['run', 'dev', '--', '--host', '127.0.0.1', '--port', String(port), '--strictPort'];
+  const args = mode === 'preview'
+    ? ['run', 'preview', '--', '--host', '127.0.0.1', '--port', String(port), '--strictPort']
+    : project.runtime === 'next'
+      ? ['run', 'dev', '--', '--hostname', '127.0.0.1', '--port', String(port)]
+      : ['run', 'dev', '--', '--host', '127.0.0.1', '--port', String(port), '--strictPort'];
   const logPath = join(artifactRoot, `${phase}-server.log`);
   const log = openSync(logPath, 'a');
   const child = spawn(npm, args, {
@@ -308,6 +310,7 @@ async function existingArtifactNames(artifactRoot, names) {
 function caseArtifactNames(project) {
   return ['phase-ledger.json', 'failure.log', 'install.log', 'publish.log', 'registry-bootstrap.log', 'registry-install.log',
     'first-report.json', 'second-report.json', 'source.diff',
+    'baseline-build.log', 'post-build.log', 'first-cli.log', 'second-cli.log',
     ...['baseline', 'withheld', 'utilities-only', 'post'].flatMap((phase) => captureArtifactNames(project, phase))];
 }
 
@@ -451,6 +454,113 @@ export async function runLifecycle({
     await mark('complete');
     succeeded = true;
     return { baseline, first, second, post, ledger };
+  } catch (error) {
+    primaryError = error;
+    await recordFailure(error);
+    throw error;
+  } finally {
+    let teardownError;
+    try {
+      await teardownLifecycleServer(server, primaryError, recordFailure);
+    } catch (error) {
+      teardownError = error;
+    }
+    await rm(runRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    if (succeeded && !teardownError && temporaryRoot) await rm(temporaryRoot, { recursive: true, force: true });
+    if (teardownError) throw teardownError;
+  }
+}
+
+export async function runProductionSmoke({
+  browser,
+  project,
+  fixture,
+  artifactRoot,
+  packageArtifactRoot = process.env.ECOSYSTEM_PACKAGE_ARTIFACT_ROOT,
+}) {
+  let temporaryRoot;
+  if (!artifactRoot) {
+    temporaryRoot = await mkdtemp(join(tmpdir(), `tw-migrate-${project.id}-artifacts-`));
+    ({ artifactRoot, packageArtifactRoot } = temporaryLifecyclePaths(project.id, temporaryRoot));
+  }
+  artifactRoot = resolve(artifactRoot);
+  packageArtifactRoot = packageArtifactRoot ? resolve(packageArtifactRoot) : artifactRoot;
+  await rm(artifactRoot, { recursive: true, force: true });
+  await mkdir(artifactRoot, { recursive: true });
+  const ledger = { case: project.id, phases: [] };
+  const ledgerPath = join(artifactRoot, 'phase-ledger.json');
+  const mark = async (phase, files = []) => {
+    ledger.phases.push({ phase, files });
+    await writeFile(ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`);
+  };
+  await mark('initialized');
+  const runRoot = await mkdtemp(join(tmpdir(), `tw-migrate-${project.id}-`));
+  let server;
+  let succeeded = false;
+  let primaryError;
+  const recordFailure = async (error) => {
+    await appendFile(join(artifactRoot, 'failure.log'), `${error.stack ?? error}\n`).catch(() => {});
+    ledger.failure = error.message;
+    ledger.failureFiles = [];
+    for (const name of caseArtifactNames(fixture)) {
+      if ((await lstat(join(artifactRoot, name)).catch(() => null))?.isFile()) ledger.failureFiles.push(name);
+    }
+    await writeFile(ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`).catch(() => {});
+  };
+  const diagnostic = (phase, name, attempt) => {
+    const [browserJson, screenshot] = captureAttemptArtifactNames(phase, name, attempt);
+    return {
+      screenshot: join(artifactRoot, screenshot),
+      writeDiagnostics: (value) => writeFile(join(artifactRoot, browserJson), `${JSON.stringify(value, null, 2)}\n`),
+    };
+  };
+  try {
+    const { driverRoot, installed } = await prepareDriver(fixture, runRoot, packageArtifactRoot, artifactRoot);
+    await mark('installed', ['install.log', 'publish.log', 'registry-bootstrap.log', 'registry-install.log']);
+    const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+
+    await mark('baseline-build-started');
+    await run(npm, ['run', 'build'], { cwd: driverRoot, logPath: join(artifactRoot, 'baseline-build.log') });
+    await mark('baseline-build', ['baseline-build.log']);
+    server = await startServer(fixture, driverRoot, artifactRoot, 'baseline', 'preview');
+    const baseline = await captureAll(browser, server.url, fixture.probes, (name, attempt) => diagnostic('baseline', name, attempt));
+    await writeFile(join(artifactRoot, 'baseline-computed.json'), `${JSON.stringify(baseline, null, 2)}\n`);
+    await mark('baseline', await existingArtifactNames(artifactRoot, captureArtifactNames(fixture, 'baseline')));
+    await server.stop(); server = undefined;
+
+    await clearGeneratedCaches(driverRoot);
+    const sourcePath = await checkedMigrationPath(driverRoot, await realpath(driverRoot), fixture.source.path);
+    assert.ok((await readFile(sourcePath, 'utf8')).includes(fixture.source.before), 'production smoke source token before migration');
+    const treeBeforeFirst = await snapshotMigrationSources(driverRoot);
+    const cli = join(installed.root, 'bin', 'tw-migrate.js');
+    await mark('first-cli-started');
+    await run(process.execPath, [cli, '--write'], { cwd: driverRoot, logPath: join(artifactRoot, 'first-cli.log') });
+    const treeAfterFirst = await snapshotMigrationSources(driverRoot);
+    assert.notDeepEqual(treeAfterFirst, treeBeforeFirst, 'first CLI migration changes source-scoped files');
+    assert.ok(!(await readFile(sourcePath, 'utf8')).includes(fixture.source.before), 'production smoke rewrites the target stylesheet');
+    await mark('first-cli', ['first-cli.log']);
+
+    await mark('second-cli-started');
+    await run(process.execPath, [cli, '--write'], { cwd: driverRoot, logPath: join(artifactRoot, 'second-cli.log') });
+    assert.deepEqual(await snapshotMigrationSources(driverRoot), treeAfterFirst, 'second CLI run leaves source-scoped files unchanged');
+    await mark('second-cli', ['second-cli.log']);
+
+    await clearGeneratedCaches(driverRoot);
+    await mark('post-build-started');
+    await run(npm, ['run', 'build'], { cwd: driverRoot, logPath: join(artifactRoot, 'post-build.log') });
+    await mark('post-build', ['post-build.log']);
+    server = await startServer(fixture, driverRoot, artifactRoot, 'post', 'preview');
+    const post = await captureAll(browser, server.url, fixture.probes, (name, attempt) => diagnostic('post', name, attempt));
+    await writeFile(join(artifactRoot, 'post-computed.json'), `${JSON.stringify(post, null, 2)}\n`);
+    await mark('post', await existingArtifactNames(artifactRoot, captureArtifactNames(fixture, 'post')));
+    assert.deepEqual(
+      Object.fromEntries(Object.entries(post).map(([name, value]) => [name, value.elements])),
+      Object.fromEntries(Object.entries(baseline).map(([name, value]) => [name, value.elements])),
+      'production pre/post computed styles, identity, count, and order',
+    );
+    await mark('complete');
+    succeeded = true;
+    return { baseline, post, ledger };
   } catch (error) {
     primaryError = error;
     await recordFailure(error);

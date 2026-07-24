@@ -2063,6 +2063,11 @@
           ]
         }
       }
+    },
+    {
+      "id": "production-react-vite-css",
+      "kind": "smoke",
+      "fixture": "react-vite-css"
     }
   ]
 }

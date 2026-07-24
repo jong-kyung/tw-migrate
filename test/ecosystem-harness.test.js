@@ -82,7 +82,7 @@ async function readEcosystemWorkflow() {
 test('admits the complete controlled runtime and stylesheet matrix', async () => {
   const loaded = await loadManifest();
   assert.deepEqual(
-    loaded.projects.map(({ id, kind, runtime, style }) => [id, kind, runtime, style]),
+    loaded.projects.filter(({ kind }) => kind === 'controlled').map(({ id, kind, runtime, style }) => [id, kind, runtime, style]),
     [
       ['react-vite-css', 'controlled', 'react-vite', 'css'],
       ['react-vite-scss', 'controlled', 'react-vite', 'scss'],
@@ -98,6 +98,9 @@ test('admits the complete controlled runtime and stylesheet matrix', async () =>
       ['vite-html-less', 'controlled', 'vite-html', 'less'],
     ],
   );
+  assert.deepEqual(loaded.projects.filter(({ kind }) => kind === 'smoke'), [
+    { id: 'production-react-vite-css', kind: 'smoke', fixture: 'react-vite-css' },
+  ]);
   assert.ok(loaded.projects.every((project) => !('readiness' in project)));
   assert.doesNotThrow(() => validateManifest(loaded));
 });
@@ -115,7 +118,7 @@ test('smoke and external cases accept non-exhaustive probes without occupying co
     validateManifest(
       manifest(
         base,
-        { id: 'smoke', kind: 'smoke', ...probeFields },
+        { id: 'smoke', kind: 'smoke', fixture: base.id },
         {
           id: 'external',
           kind: 'external',
@@ -130,6 +133,7 @@ test('smoke and external cases accept non-exhaustive probes without occupying co
       ),
     ),
   );
+  errorFor([base, { id: 'smoke', kind: 'smoke', fixture: 'missing' }]);
 });
 
 test('controlled cases require independent hover, focus, and keyboard focus-visible probes', () => {
@@ -410,8 +414,14 @@ test('no arguments print usage and --all is the only full-run selection', async 
   const loaded = await loadManifest();
   assert.throws(() => runHarness([], loaded, () => assert.fail('must not execute')), /Usage:/);
   const calls = [];
-  assert.equal(runHarness(['--all'], loaded, (args) => calls.push(args)).length, 12);
-  assert.deepEqual(calls, [['run', '--config', 'ecosystem-ci/vitest.config.js']]);
+  const selected = runHarness(['--all'], loaded, (args) => calls.push(args));
+  assert.equal(selected.length, 12);
+  assert.deepEqual(calls, [[
+    'run',
+    '--config',
+    'ecosystem-ci/vitest.config.js',
+    ...selected.flatMap(({ id }) => ['--project', id]),
+  ]]);
 });
 
 test('the browser oracle sorts every standard computed property and excludes only custom properties', () => {
@@ -601,7 +611,7 @@ test('case failure uploads preserve package publication logs', async (t) => {
 
 test('every manifest probe declares exact stable target identities', async () => {
   const loaded = await loadManifest();
-  for (const project of loaded.projects) {
+  for (const project of loaded.projects.filter(({ kind }) => kind !== 'smoke')) {
     for (const probe of Object.values(project.probes)) {
       assert.equal(probe.identity.length, probe.cardinality);
       assert.ok(probe.identity.every((value) => typeof value === 'string' && value.length > 0));
@@ -609,13 +619,14 @@ test('every manifest probe declares exact stable target identities', async () =>
   }
 });
 
-test('workflow case matrix matches the controlled manifest across all required OSes', async () => {
+test('workflow matrices match the controlled and smoke manifests across all required OSes', async () => {
   const manifest = await loadManifest();
   const workflow = await readEcosystemWorkflow();
   const matrices = [...workflow.matchAll(/^      matrix:\n        os: \[([a-z, ]+)\]\n        case: \[([a-z0-9-, ]+)\]\n        include:$/gm)];
-  assert.equal(matrices.length, 1, 'expected exactly one literal os/case workflow matrix');
-  assert.deepEqual(matrices[0][1].split(', '), ['linux', 'macos', 'windows']);
+  assert.equal(matrices.length, 2, 'expected literal controlled and smoke workflow matrices');
+  for (const matrix of matrices) assert.deepEqual(matrix[1].split(', '), ['linux', 'macos', 'windows']);
   assert.deepEqual(matrices[0][2].split(', '), manifest.projects.filter(({ kind }) => kind === 'controlled').map(({ id }) => id));
+  assert.deepEqual(matrices[1][2].split(', '), manifest.projects.filter(({ kind }) => kind === 'smoke').map(({ id }) => id));
 });
 
 test('case jobs run after non-cancelled partial package failure while preserving label gating', async () => {
