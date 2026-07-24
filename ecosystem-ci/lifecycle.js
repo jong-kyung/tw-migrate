@@ -495,6 +495,54 @@ export function temporaryLifecyclePaths(projectId, temporaryRoot) {
   };
 }
 
+async function executeLifecycle({ project, artifactCase = project, artifactRoot, temporaryRoot, activeServer }, body) {
+  const ledger = { case: project.id, phases: [] };
+  const ledgerPath = join(artifactRoot, 'phase-ledger.json');
+  const mark = async (phase, files = []) => {
+    ledger.phases.push({ phase, files });
+    await writeFile(ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`);
+  };
+  const recordFailure = async (error) => {
+    await appendFile(join(artifactRoot, 'failure.log'), `${error.stack ?? error}\n`).catch(() => {});
+    ledger.failure = error.message;
+    ledger.failureFiles = [];
+    for (const name of caseArtifactNames(artifactCase)) {
+      if ((await lstat(join(artifactRoot, name)).catch(() => null))?.isFile()) ledger.failureFiles.push(name);
+    }
+    await writeFile(ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`).catch(() => {});
+  };
+  const diagnostic = (phase, name, attempt) => {
+    const [browserJson, screenshot] = captureAttemptArtifactNames(phase, name, attempt);
+    return {
+      screenshot: join(artifactRoot, screenshot),
+      writeDiagnostics: (value) => writeFile(join(artifactRoot, browserJson), `${JSON.stringify(value, null, 2)}\n`),
+    };
+  };
+  await mark('initialized');
+  const runRoot = await mkdtemp(join(tmpdir(), `tw-migrate-${project.id}-`));
+  let succeeded = false;
+  let primaryError;
+  try {
+    const result = await body({ ledger, mark, diagnostic, runRoot });
+    succeeded = true;
+    return result;
+  } catch (error) {
+    primaryError = error;
+    await recordFailure(error);
+    throw error;
+  } finally {
+    let teardownError;
+    try {
+      await teardownLifecycleServer(activeServer(), primaryError, recordFailure);
+    } catch (error) {
+      teardownError = error;
+    }
+    await rm(runRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    if (succeeded && !teardownError && temporaryRoot) await rm(temporaryRoot, { recursive: true, force: true });
+    if (teardownError) throw teardownError;
+  }
+}
+
 export async function runLifecycle({
   browser,
   project,
@@ -510,36 +558,10 @@ export async function runLifecycle({
   packageArtifactRoot = packageArtifactRoot ? resolve(packageArtifactRoot) : artifactRoot;
   await rm(artifactRoot, { recursive: true, force: true });
   await mkdir(artifactRoot, { recursive: true });
-  const ledger = { case: project.id, phases: [] };
-  const ledgerPath = join(artifactRoot, 'phase-ledger.json');
-  const mark = async (phase, files = []) => {
-    ledger.phases.push({ phase, files });
-    await writeFile(ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`);
-  };
-  await mark('initialized');
-  const runRoot = await mkdtemp(join(tmpdir(), `tw-migrate-${project.id}-`));
   let server;
-  let succeeded = false;
-  let primaryError;
-  const recordFailure = async (error) => {
-    await appendFile(join(artifactRoot, 'failure.log'), `${error.stack ?? error}\n`).catch(() => {});
-    ledger.failure = error.message;
-    ledger.failureFiles = [];
-    for (const name of caseArtifactNames(project)) {
-      if ((await lstat(join(artifactRoot, name)).catch(() => null))?.isFile()) ledger.failureFiles.push(name);
-    }
-    await writeFile(ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`).catch(() => {});
-  };
-  try {
+  return executeLifecycle({ project, artifactRoot, temporaryRoot, activeServer: () => server }, async ({ ledger, mark, diagnostic, runRoot }) => {
     const { driverRoot, installed } = await prepareDriver(project, runRoot, packageArtifactRoot, artifactRoot);
     await mark('installed', ['install.log', 'publish.log', 'registry-bootstrap.log', 'registry-install.log']);
-    const diagnostic = (phase, name, attempt) => {
-      const [browserJson, screenshot] = captureAttemptArtifactNames(phase, name, attempt);
-      return {
-        screenshot: join(artifactRoot, screenshot),
-        writeDiagnostics: (value) => writeFile(join(artifactRoot, browserJson), `${JSON.stringify(value, null, 2)}\n`),
-      };
-    };
 
     await mark('baseline-started');
     server = await startServer(project, driverRoot, artifactRoot, 'baseline');
@@ -605,23 +627,8 @@ export async function runLifecycle({
     await mark('post-captured', await existingArtifactNames(artifactRoot, captureArtifactNames(project, 'post')));
     assertOracle({ baseline, post, withheld, candidateTokens: expected.first.candidates });
     await mark('complete');
-    succeeded = true;
     return { baseline, first, second, post, ledger };
-  } catch (error) {
-    primaryError = error;
-    await recordFailure(error);
-    throw error;
-  } finally {
-    let teardownError;
-    try {
-      await teardownLifecycleServer(server, primaryError, recordFailure);
-    } catch (error) {
-      teardownError = error;
-    }
-    await rm(runRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    if (succeeded && !teardownError && temporaryRoot) await rm(temporaryRoot, { recursive: true, force: true });
-    if (teardownError) throw teardownError;
-  }
+  });
 }
 
 export async function runProductionSmoke({
@@ -640,34 +647,8 @@ export async function runProductionSmoke({
   packageArtifactRoot = packageArtifactRoot ? resolve(packageArtifactRoot) : artifactRoot;
   await rm(artifactRoot, { recursive: true, force: true });
   await mkdir(artifactRoot, { recursive: true });
-  const ledger = { case: project.id, phases: [] };
-  const ledgerPath = join(artifactRoot, 'phase-ledger.json');
-  const mark = async (phase, files = []) => {
-    ledger.phases.push({ phase, files });
-    await writeFile(ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`);
-  };
-  await mark('initialized');
-  const runRoot = await mkdtemp(join(tmpdir(), `tw-migrate-${project.id}-`));
   let server;
-  let succeeded = false;
-  let primaryError;
-  const recordFailure = async (error) => {
-    await appendFile(join(artifactRoot, 'failure.log'), `${error.stack ?? error}\n`).catch(() => {});
-    ledger.failure = error.message;
-    ledger.failureFiles = [];
-    for (const name of caseArtifactNames(fixture)) {
-      if ((await lstat(join(artifactRoot, name)).catch(() => null))?.isFile()) ledger.failureFiles.push(name);
-    }
-    await writeFile(ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`).catch(() => {});
-  };
-  const diagnostic = (phase, name, attempt) => {
-    const [browserJson, screenshot] = captureAttemptArtifactNames(phase, name, attempt);
-    return {
-      screenshot: join(artifactRoot, screenshot),
-      writeDiagnostics: (value) => writeFile(join(artifactRoot, browserJson), `${JSON.stringify(value, null, 2)}\n`),
-    };
-  };
-  try {
+  return executeLifecycle({ project, artifactCase: fixture, artifactRoot, temporaryRoot, activeServer: () => server }, async ({ ledger, mark, diagnostic, runRoot }) => {
     const { driverRoot, installed } = await prepareDriver(fixture, runRoot, packageArtifactRoot, artifactRoot);
     await mark('installed', ['install.log', 'publish.log', 'registry-bootstrap.log', 'registry-install.log']);
     const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -712,23 +693,8 @@ export async function runProductionSmoke({
       'production pre/post computed styles, identity, count, and order',
     );
     await mark('complete');
-    succeeded = true;
     return { baseline, post, ledger };
-  } catch (error) {
-    primaryError = error;
-    await recordFailure(error);
-    throw error;
-  } finally {
-    let teardownError;
-    try {
-      await teardownLifecycleServer(server, primaryError, recordFailure);
-    } catch (error) {
-      teardownError = error;
-    }
-    await rm(runRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    if (succeeded && !teardownError && temporaryRoot) await rm(temporaryRoot, { recursive: true, force: true });
-    if (teardownError) throw teardownError;
-  }
+  });
 }
 
 export async function runExternalLifecycle({ browser, project, packageFixture, artifactRoot, packageArtifactRoot = process.env.ECOSYSTEM_PACKAGE_ARTIFACT_ROOT }) {
@@ -744,34 +710,8 @@ export async function runExternalLifecycle({ browser, project, packageFixture, a
   packageArtifactRoot = resolve(packageArtifactRoot);
   await rm(artifactRoot, { recursive: true, force: true });
   await mkdir(artifactRoot, { recursive: true });
-  const ledger = { case: project.id, phases: [] };
-  const ledgerPath = join(artifactRoot, 'phase-ledger.json');
-  const mark = async (phase, files = []) => {
-    ledger.phases.push({ phase, files });
-    await writeFile(ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`);
-  };
-  await mark('initialized');
-  const runRoot = await mkdtemp(join(tmpdir(), `tw-migrate-${project.id}-`));
   let server;
-  let primaryError;
-  let succeeded = false;
-  const recordFailure = async (error) => {
-    await appendFile(join(artifactRoot, 'failure.log'), `${error.stack ?? error}\n`).catch(() => {});
-    ledger.failure = error.message;
-    ledger.failureFiles = [];
-    for (const name of caseArtifactNames(project)) {
-      if ((await lstat(join(artifactRoot, name)).catch(() => null))?.isFile()) ledger.failureFiles.push(name);
-    }
-    await writeFile(ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`).catch(() => {});
-  };
-  const diagnostic = (phase, name, attempt) => {
-    const [browserJson, screenshot] = captureAttemptArtifactNames(phase, name, attempt);
-    return {
-      screenshot: join(artifactRoot, screenshot),
-      writeDiagnostics: (value) => writeFile(join(artifactRoot, browserJson), `${JSON.stringify(value, null, 2)}\n`),
-    };
-  };
-  try {
+  return executeLifecycle({ project, artifactRoot, temporaryRoot, activeServer: () => server }, async ({ ledger, mark, diagnostic, runRoot }) => {
     const { installed } = await prepareDriver(packageFixture, runRoot, packageArtifactRoot, artifactRoot);
     const { migrate } = await import(`${pathToFileURL(join(installed.root, 'index.js')).href}?case=${Date.now()}`);
     await mark('package-installed', ['install.log', 'publish.log', 'registry-bootstrap.log', 'registry-install.log']);
@@ -880,21 +820,6 @@ export async function runExternalLifecycle({ browser, project, packageFixture, a
     await mark('post', await existingArtifactNames(artifactRoot, captureArtifactNames(project, 'post')));
     assertOracle({ baseline, post, withheld, candidateTokens: first.candidates });
     await mark('complete');
-    succeeded = true;
     return { first, second, baseline, post, ledger };
-  } catch (error) {
-    primaryError = error;
-    await recordFailure(error);
-    throw error;
-  } finally {
-    let teardownError;
-    try {
-      await teardownLifecycleServer(server, primaryError, recordFailure);
-    } catch (error) {
-      teardownError = error;
-    }
-    await rm(runRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    if (succeeded && !teardownError && temporaryRoot) await rm(temporaryRoot, { recursive: true, force: true });
-    if (teardownError) throw teardownError;
-  }
+  });
 }
