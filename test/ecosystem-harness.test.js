@@ -228,6 +228,23 @@ test('external commands must be argument arrays rather than shell strings', () =
   errorFor([external({ start: 'run dev' })]);
 });
 
+test('external installs admit a reviewed pnpm workspace build and nothing looser', () => {
+  assert.doesNotThrow(() => validateManifest(manifest(external({
+    installs: [
+      { cwd: '.', args: ['install', '--frozen-lockfile', '--ignore-scripts'] },
+      { cwd: '.', args: ['--filter', '@scope/pkg', 'run', 'build:tokens'] },
+    ],
+  }))));
+  errorFor([external({ installs: [{ cwd: '.', args: ['--filter', '../escape', 'run', 'build'] }] })]);
+  errorFor([external({ installs: [{ cwd: '.', args: ['--filter', '@scope/pkg', 'run', 'build && touch pwned'] }] })]);
+  errorFor([external({ installs: [{ cwd: '.', args: ['--filter', '@scope/pkg', 'exec', 'build'] }] })]);
+  errorFor([external({
+    packageManager: 'npm@11.0.0',
+    lockfile: 'package-lock.json',
+    installs: [{ cwd: '.', args: ['--filter', '@scope/pkg', 'run', 'build'] }],
+  })]);
+});
+
 test('external commands receive only the explicit non-secret environment', () => {
   process.env.ECOSYSTEM_SENTINEL_SECRET = 'must-not-leak';
   try {
