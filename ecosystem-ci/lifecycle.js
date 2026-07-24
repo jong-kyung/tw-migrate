@@ -119,10 +119,13 @@ async function startServer(project, cwd, artifactRoot, phase, mode = 'dev') {
     windowsHide: true,
     stdio: ['ignore', log, log],
   });
+  let launchError;
+  child.once('error', (error) => { launchError = error; });
   const url = `http://127.0.0.1:${port}`;
   const deadline = Date.now() + 60_000;
   try {
     while (Date.now() < deadline) {
+      if (launchError) throw launchError;
       if (child.exitCode !== null) throw new Error(`${phase} server exited with ${child.exitCode}`);
       try {
         const response = await fetch(url, { signal: AbortSignal.timeout(1_000) });
