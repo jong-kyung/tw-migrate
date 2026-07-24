@@ -722,7 +722,7 @@ test('workflow matrices match every manifest kind across all required OSes', asy
 
 test('case jobs run after non-cancelled partial package failure while preserving label gating', async () => {
   const workflow = await readEcosystemWorkflow();
-  assert.match(workflow, /^  case:\n    needs: package\n    if: \$\{\{ !cancelled\(\) && \(github\.event_name != 'pull_request' \|\| github\.event\.label\.name == 'ecosystem'\) \}\}$/m);
+  assert.match(workflow, /^  case:\n    needs: package\n    if: \$\{\{ !cancelled\(\) && \(github\.event_name != 'pull_request' \|\| github\.event\.label\.name == 'test:e2e'\) \}\}$/m);
 });
 
 test('fixture integration dependencies use the required exact pins', async () => {

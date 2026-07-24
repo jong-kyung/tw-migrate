@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   package:
-    if: github.event_name != 'pull_request' || github.event.label.name == 'ecosystem'
+    if: github.event_name != 'pull_request' || github.event.label.name == 'test:e2e'
     strategy:
       fail-fast: false
       matrix:
@@ -61,7 +61,7 @@ jobs:
 
   case:
     needs: package
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.label.name == 'ecosystem') }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.label.name == 'test:e2e') }}
     strategy:
       fail-fast: false
       matrix:
@@ -123,7 +123,7 @@ jobs:
 
   smoke:
     needs: package
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.label.name == 'ecosystem') }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.label.name == 'test:e2e') }}
     strategy:
       fail-fast: false
       matrix:
@@ -185,7 +185,7 @@ jobs:
 
   external:
     needs: package
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.label.name == 'ecosystem') }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.label.name == 'test:e2e') }}
     strategy:
       fail-fast: false
       matrix:
