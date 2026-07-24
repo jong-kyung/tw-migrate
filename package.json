@@ -26,6 +26,7 @@
     "build:debug": "napi build --manifest-path crates/tw_migrate/Cargo.toml --package-json-path package.json --output-dir . --platform --no-js --dts binding.d.ts",
     "artifacts": "napi artifacts --output-dir . --npm-dir npm",
     "test": "cargo test && pnpm build:debug && node --test",
+    "test:ecosystem": "node ecosystem-ci/run.js",
     "test:rust": "cargo test",
     "snapshots:prepare": "node -e \"const fs=require('node:fs'); for(const dir of fs.readdirSync('npm')) for(const file of fs.readdirSync('npm/'+dir)) if(file.endsWith('.node')) fs.rmSync('npm/'+dir+'/'+file)\" && pnpm build && pnpm artifacts",
     "test:snapshots": "pnpm snapshots:prepare && cargo test -p tw-migrate-snapshots"
@@ -42,9 +43,13 @@
   },
   "devDependencies": {
     "@napi-rs/cli": "3.7.3",
+    "@vitest/browser-playwright": "4.1.10",
     "less": "4.7.0",
+    "playwright": "1.61.1",
     "sass": "1.101.3",
-    "tailwindcss": "4.3.3"
+    "tailwindcss": "4.3.3",
+    "verdaccio": "6.8.0",
+    "vitest": "4.1.10"
   },
   "optionalDependencies": {
     "tw-migrate-darwin-arm64": "workspace:0.0.0",
