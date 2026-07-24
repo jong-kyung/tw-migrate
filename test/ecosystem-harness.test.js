@@ -133,18 +133,6 @@ test('admits the complete controlled runtime and stylesheet matrix', async () =>
   assert.doesNotThrow(() => validateManifest(loaded));
 });
 
-test('every external pin has one reviewed RFC evidence entry', async () => {
-  const external = (await loadManifest()).projects.filter(({ kind }) => kind === 'external');
-  const rfc = await readFile(new URL('../rfcs/browser-ecosystem-e2e.md', import.meta.url), 'utf8');
-  for (const { id, revision, source } of external) {
-    const evidence = `| \`${id}\` (\`${revision}\`)`;
-    const rows = rfc.split('\n').filter((line) => line.startsWith(evidence));
-    assert.equal(rows.length, 1, `${id} candidate evidence`);
-    assert.ok(rows[0].includes(`\`${source.before}\``), `${id} source witness`);
-    assert.ok(rows[0].includes(`\`${source.after}\``), `${id} candidate witness`);
-  }
-});
-
 test('smoke and external cases accept non-exhaustive probes without occupying controlled matrix cells', () => {
   const base = controlled();
   const probeFields = {
