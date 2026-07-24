@@ -26,6 +26,7 @@ import {
   captureAttemptArtifactNames,
   externalEnvironment,
   prepareCaseUpload,
+  restoreRuntimeWrites,
   runExternalLifecycle,
   snapshotMigrationSources,
   teardownLifecycleServer,
@@ -237,6 +238,31 @@ test('external commands receive only the explicit non-secret environment', () =>
   } finally {
     delete process.env.ECOSYSTEM_SENTINEL_SECRET;
   }
+});
+
+test('post-migration server phases preserve the expected tracked diff', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'tw-migrate-external-diff-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const git = (args) => execFileSync('git', args, { cwd: root, stdio: 'pipe' });
+  git(['init', '-q']);
+  git(['config', 'user.email', 'test@example.com']);
+  git(['config', 'user.name', 'Test']);
+  await Promise.all([
+    writeFile(join(root, 'src.css'), 'original\n'),
+    writeFile(join(root, 'tsconfig.json'), 'original\n'),
+  ]);
+  git(['add', '.']);
+  git(['commit', '-qm', 'fixture']);
+
+  await writeFile(join(root, 'src.css'), 'migrated\n');
+  const expectedDiff = git(['diff', 'HEAD', '--binary', '--no-ext-diff', '--no-textconv', '--']);
+  const originals = { 'tsconfig.json': Buffer.from('original\n') };
+  await writeFile(join(root, 'tsconfig.json'), 'framework update\n');
+  await assert.doesNotReject(restoreRuntimeWrites(root, originals, 'post', expectedDiff));
+  assert.equal(await readFile(join(root, 'tsconfig.json'), 'utf8'), 'original\n');
+
+  await writeFile(join(root, 'src.css'), 'server regression\n');
+  await assert.rejects(restoreRuntimeWrites(root, originals, 'post', expectedDiff), /unreviewed tracked files/);
 });
 
 test('external repositories and paths stay inside the CI checkout trust boundary', () => {

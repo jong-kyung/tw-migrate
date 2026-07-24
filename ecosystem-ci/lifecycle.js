@@ -281,6 +281,17 @@ function assertTrackedCheckoutClean(root, phase) {
   }
 }
 
+function trackedCheckoutDiff(root) {
+  const diff = spawnSync('git', ['diff', 'HEAD', '--binary', '--no-ext-diff', '--no-textconv', '--'], {
+    cwd: root,
+    env: externalEnvironment(),
+    maxBuffer: 100 * 1024 * 1024,
+    windowsHide: true,
+  });
+  if (diff.status !== 0) throw new Error(`could not diff external checkout: ${String(diff.stderr).trim()}`);
+  return diff.stdout;
+}
+
 async function snapshotRuntimeWrites(root, paths) {
   const canonicalRoot = await realpath(root);
   return Object.fromEntries(await Promise.all(paths.map(async (path) => [
@@ -289,18 +300,15 @@ async function snapshotRuntimeWrites(root, paths) {
   ])));
 }
 
-async function restoreRuntimeWrites(root, originals, phase) {
-  const allowed = new Set(Object.keys(originals));
-  const changes = trackedCheckoutChanges(root);
-  const unexpected = changes.filter(({ status, path }) => status !== ' M' || !allowed.has(path));
-  if (unexpected.length > 0) {
-    throw new Error(`external checkout changed unreviewed tracked files during ${phase}: ${unexpected.map(({ status, path }) => `${status} ${path}`).join(', ')}`);
-  }
+export async function restoreRuntimeWrites(root, originals, phase, expectedDiff = Buffer.alloc(0)) {
   const canonicalRoot = await realpath(root);
   for (const [path, contents] of Object.entries(originals)) {
     await writeFile(await checkedMigrationPath(root, canonicalRoot, path), contents);
   }
-  assertTrackedCheckoutClean(root, phase);
+  if (!trackedCheckoutDiff(root).equals(expectedDiff)) {
+    const changes = trackedCheckoutChanges(root);
+    throw new Error(`external checkout changed unreviewed tracked files during ${phase}: ${changes.map(({ status, path }) => `${status} ${path}`).join(', ')}`);
+  }
 }
 
 async function checkedProjectDirectory(root, relativePath) {
@@ -825,9 +833,11 @@ export async function runExternalLifecycle({ browser, project, packageFixture, a
     if (migratedSource !== null) {
       await writeFile(await checkedMigrationPath(packageRoot, canonicalPackageRoot, project.source.path), '');
     }
+    let utilitiesExpectedDiff;
     await mark('utilities-only-started');
     try {
       await clearGeneratedCaches(packageRoot);
+      utilitiesExpectedDiff = trackedCheckoutDiff(checkoutRoot);
       server = await startExternalServer(project, packageRoot, artifactRoot, 'utilities-only');
       const utilitiesOnly = await captureAll(browser, server.url, project.probes, (name, attempt) => diagnostic('utilities-only', name, attempt));
       await writeFile(join(artifactRoot, 'utilities-only-computed.json'), `${JSON.stringify(utilitiesOnly, null, 2)}\n`);
@@ -839,6 +849,9 @@ export async function runExternalLifecycle({ browser, project, packageFixture, a
       await mark('utilities-only', await existingArtifactNames(artifactRoot, captureArtifactNames(project, 'utilities-only')));
     } finally {
       await server?.stop(); server = undefined;
+      if (utilitiesExpectedDiff) {
+        await restoreRuntimeWrites(checkoutRoot, runtimeWriteOriginals, 'utilities-only', utilitiesExpectedDiff);
+      }
       if (migratedSource === null) {
         const recreated = await lstat(sourcePath).catch(() => null);
         if (recreated?.isSymbolicLink() || (recreated && !recreated.isFile())) {
@@ -851,10 +864,13 @@ export async function runExternalLifecycle({ browser, project, packageFixture, a
     }
 
     await clearGeneratedCaches(packageRoot);
+    const postExpectedDiff = trackedCheckoutDiff(checkoutRoot);
     await mark('post-started');
     server = await startExternalServer(project, packageRoot, artifactRoot, 'post');
     const post = await captureAll(browser, server.url, project.probes, (name, attempt) => diagnostic('post', name, attempt));
     await writeFile(join(artifactRoot, 'post-computed.json'), `${JSON.stringify(post, null, 2)}\n`);
+    await server.stop(); server = undefined;
+    await restoreRuntimeWrites(checkoutRoot, runtimeWriteOriginals, 'post', postExpectedDiff);
     await mark('post', await existingArtifactNames(artifactRoot, captureArtifactNames(project, 'post')));
     assertOracle({ baseline, post, withheld, candidateTokens: first.candidates });
     await mark('complete');
