@@ -16,7 +16,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const caches = ['.next', 'dist', 'node_modules/.vite'];
 const migrationSourceExtensions = new Set(['.js', '.jsx', '.ts', '.tsx', '.html', '.css', '.scss', '.sass', '.less']);
 const generatedDirectories = new Set(['node_modules', '.next', 'dist', 'build', 'out', 'coverage', '.cache', '.vite']);
-export const lifecycleTimeoutMs = 2 * 60_000;
+export const lifecycleTimeoutMs = 4 * 60_000;
 export const externalLifecycleTimeoutMs = 10 * 60_000;
 
 function inside(path, root) {

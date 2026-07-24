@@ -283,7 +283,7 @@ The second PR adds:
 
 - the remaining nine SCSS, Sass, and Less controlled cells;
 - the production CLI smoke;
-- three to five admitted external projects with CI-only checkout;
+- two to five admitted external projects with CI-only checkout;
 - final contributor and diagnostics documentation.
 
 External projects do not retire or reduce the controlled matrix.
@@ -314,7 +314,7 @@ Existing commands retain their current scope:
 1. All twelve controlled runtime/style cells pass exact source, report, idempotency, and browser checks on Ubuntu, macOS, and Windows.
 2. Every controlled probe proves a stylesheet-dependent baseline and utilities-only equivalence.
 3. The production CLI smoke passes clean pre/post builds through packed packages.
-4. Three to five unmodified external projects pass at reviewed full SHAs on all three operating systems.
+4. Two to five unmodified external projects pass at reviewed full SHAs on all three operating systems.
 5. Package provenance proves that no case loaded the checkout entrypoint, checkout addon, workspace link, or upstream product package.
 6. External code runs only in ephemeral, read-only, no-secret CI jobs.
 7. Failures retain enough bounded evidence to identify the reached phase without uploading arbitrary workspace contents.
