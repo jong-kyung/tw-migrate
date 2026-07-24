@@ -133,12 +133,12 @@ test('admits the complete controlled runtime and stylesheet matrix', async () =>
   assert.doesNotThrow(() => validateManifest(loaded));
 });
 
-test('every external pin has one reviewed candidate ledger entry', async () => {
+test('every external pin has one reviewed RFC evidence entry', async () => {
   const external = (await loadManifest()).projects.filter(({ kind }) => kind === 'external');
-  const ledger = await readFile(new URL('../ecosystem-ci/candidates.md', import.meta.url), 'utf8');
+  const rfc = await readFile(new URL('../rfcs/browser-ecosystem-e2e.md', import.meta.url), 'utf8');
   for (const { id, revision, source } of external) {
     const evidence = `| \`${id}\` (\`${revision}\`)`;
-    const rows = ledger.split('\n').filter((line) => line.startsWith(evidence));
+    const rows = rfc.split('\n').filter((line) => line.startsWith(evidence));
     assert.equal(rows.length, 1, `${id} candidate evidence`);
     assert.ok(rows[0].includes(`\`${source.before}\``), `${id} source witness`);
     assert.ok(rows[0].includes(`\`${source.after}\``), `${id} candidate witness`);
