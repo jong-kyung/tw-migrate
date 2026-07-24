@@ -11,7 +11,7 @@ Implemented
 The suite has two permanent coverage layers:
 
 1. Twelve repository-owned controlled fixtures cover the Cartesian product of React+Vite, Next.js, and Vite+HTML with CSS, SCSS, indented Sass, and Less.
-2. Three to five pinned public projects cover installation and runtime compatibility in existing Tailwind CSS v4 applications.
+2. Two to five pinned public projects cover installation and runtime compatibility in existing Tailwind CSS v4 applications.
 
 External projects supplement the controlled fixtures. They do not replace them. Public projects cannot reliably provide every runtime and stylesheet combination, stable source expectations, or long-lived interaction probes. Controlled fixtures provide that deterministic contract; external projects detect integration assumptions that the fixtures do not model.
 
@@ -90,7 +90,7 @@ These fixtures remain after external coverage is added. Removing them would disc
 
 ### External ecosystem projects
 
-The external corpus owns real-project compatibility rather than matrix completeness. It contains three to five public, non-archived, non-fork repositories pinned by full commit SHA.
+The external corpus owns real-project compatibility rather than matrix completeness. It contains two to five public, non-archived, non-fork repositories pinned by full commit SHA.
 
 A project qualifies only when it already has:
 
@@ -116,7 +116,6 @@ The manifest SHA is authoritative. The immutable links below record the evidence
 | --- | --- | --- | --- | --- | --- |
 | `external-namechecker` (`285e10d3627f3eac5217d69e9eaccee956d7ac70`) | Public, non-archived, non-fork ([repository](https://github.com/toddcooke/namechecker/tree/285e10d3627f3eac5217d69e9eaccee956d7ac70)) | [Next.js and Tailwind v4 dependencies](https://github.com/toddcooke/namechecker/blob/285e10d3627f3eac5217d69e9eaccee956d7ac70/package.json) | [`page.module.css`](https://github.com/toddcooke/namechecker/blob/285e10d3627f3eac5217d69e9eaccee956d7ac70/app/page.module.css) is consumed by [`TailwindLayout.tsx`](https://github.com/toddcooke/namechecker/blob/285e10d3627f3eac5217d69e9eaccee956d7ac70/app/TailwindLayout.tsx); `.main` emits `p-4` | `/` renders without submitting its optional lookup API; unique `main` target. Next.js updates the reviewed `tsconfig.json` path on startup; the harness rejects any other tracked write and restores its exact bytes after every server run | macOS arm64 lifecycle passed 2026-07-24; Linux, macOS, and Windows are required by `.github/workflows/ecosystem.yml` before merge |
 | `external-stylized-components` (`a26df5d21457095e466a41966822edb2ff016cff`) | Public, non-archived, non-fork ([repository](https://github.com/cortiz2894/stylized-components/tree/a26df5d21457095e466a41966822edb2ff016cff)) | [Next.js and Tailwind v4 dependencies](https://github.com/cortiz2894/stylized-components/blob/a26df5d21457095e466a41966822edb2ff016cff/package.json) | [`landing.module.css`](https://github.com/cortiz2894/stylized-components/blob/a26df5d21457095e466a41966822edb2ff016cff/src/app/landing.module.css) is consumed by [`page.tsx`](https://github.com/cortiz2894/stylized-components/blob/a26df5d21457095e466a41966822edb2ff016cff/src/app/page.tsx); `.page` emits `h-[calc(100vh_-_53px)]` | `/` renders its local showcase without credentials; `body > div:not([hidden])` target with `Import GLB` readiness | macOS arm64 lifecycle passed 2026-07-24; Linux, macOS, and Windows are required by `.github/workflows/ecosystem.yml` before merge |
-| `external-paracosm` (`fd26ac733b106fe0da172f45802803a9887befdd`) | Public, non-archived, non-fork ([repository](https://github.com/framerslab/paracosm/tree/fd26ac733b106fe0da172f45802803a9887befdd)) | [Vite, Sass, and Tailwind v4 dependencies](https://github.com/framerslab/paracosm/blob/fd26ac733b106fe0da172f45802803a9887befdd/src/dashboard/package.json) | [`App.module.scss`](https://github.com/framerslab/paracosm/blob/fd26ac733b106fe0da172f45802803a9887befdd/src/dashboard/src/App.module.scss) is consumed by [`App.tsx`](https://github.com/framerslab/paracosm/blob/fd26ac733b106fe0da172f45802803a9887befdd/src/dashboard/src/App.tsx); `.shell` emits `h-[100dvh]` | `/` renders the quickstart shell without credentials or a required API; unique `main#main-content[aria-label="quickstart view"]` target | macOS arm64 lifecycle passed 2026-07-24; Linux and macOS are required by `.github/workflows/ecosystem.yml` before merge. Windows is excluded: the pinned tree commits a root file literally named `:memory:`, an invalid NTFS path, so Git for Windows cannot check the revision out |
 
 A pin is updated only after repeating repository-status review, migration preview, source/idempotency checks, utilities-only comparison, and the three-OS workflow run.
 

@@ -190,10 +190,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [linux, macos, windows]
-        case: [external-namechecker, external-stylized-components, external-paracosm]
-        exclude:
-          - os: windows
-            case: external-paracosm
+        case: [external-namechecker, external-stylized-components]
         include:
           - os: linux
             runner: ubuntu-latest

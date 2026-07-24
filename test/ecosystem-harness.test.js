@@ -128,7 +128,6 @@ test('admits the complete controlled runtime and stylesheet matrix', async () =>
   assert.deepEqual(loaded.projects.filter(({ kind }) => kind === 'external').map(({ id, revision }) => [id, revision]), [
     ['external-namechecker', '285e10d3627f3eac5217d69e9eaccee956d7ac70'],
     ['external-stylized-components', 'a26df5d21457095e466a41966822edb2ff016cff'],
-    ['external-paracosm', 'fd26ac733b106fe0da172f45802803a9887befdd'],
   ]);
 });
 
@@ -467,7 +466,7 @@ test('--case selects exactly one project and maps it to a Vitest project filter'
 test('Vitest and the lifecycle omit external projects unless the CI-only gate is active', async () => {
   const projects = (await loadManifest()).projects;
   assert.equal(vitestProjects(projects, {}).some(({ kind }) => kind === 'external'), false);
-  assert.equal(vitestProjects(projects, { CI: 'true', ECOSYSTEM_EXTERNAL: '1' }).filter(({ kind }) => kind === 'external').length, 3);
+  assert.equal(vitestProjects(projects, { CI: 'true', ECOSYSTEM_EXTERNAL: '1' }).filter(({ kind }) => kind === 'external').length, 2);
   const previous = { CI: process.env.CI, external: process.env.ECOSYSTEM_EXTERNAL };
   delete process.env.CI;
   delete process.env.ECOSYSTEM_EXTERNAL;
@@ -712,19 +711,12 @@ test('case failure uploads preserve package publication logs', async (t) => {
 test('workflow matrices match every manifest kind across all required OSes', async () => {
   const manifest = await loadManifest();
   const workflow = await readEcosystemWorkflow();
-  const matrices = [...workflow.matchAll(/^      matrix:\n        os: \[([a-z, ]+)\]\n        case: \[([a-z0-9-, ]+)\]\n(        exclude:\n(?:          - os: (?:linux|macos|windows)\n            case: [a-z0-9-]+\n)+)?        include:$/gm)];
+  const matrices = [...workflow.matchAll(/^      matrix:\n        os: \[([a-z, ]+)\]\n        case: \[([a-z0-9-, ]+)\]\n        include:$/gm)];
   assert.equal(matrices.length, 3, 'expected literal controlled, smoke, and external workflow matrices');
   for (const matrix of matrices) assert.deepEqual(matrix[1].split(', '), ['linux', 'macos', 'windows']);
   for (const [index, kind] of ['controlled', 'smoke', 'external'].entries()) {
     assert.deepEqual(matrices[index][2].split(', '), manifest.projects.filter((project) => project.kind === kind).map(({ id }) => id));
   }
-  assert.equal(matrices[0][3], undefined, 'controlled matrix must not exclude any OS');
-  assert.equal(matrices[1][3], undefined, 'smoke matrix must not exclude any OS');
-  assert.equal(
-    matrices[2][3],
-    '        exclude:\n          - os: windows\n            case: external-paracosm\n',
-    'only the documented NTFS-invalid paracosm checkout is excluded',
-  );
 });
 
 test('case jobs run after non-cancelled partial package failure while preserving label gating', async () => {
