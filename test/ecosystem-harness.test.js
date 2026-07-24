@@ -79,14 +79,23 @@ async function readEcosystemWorkflow() {
   return (await readFile(new URL('../.github/workflows/ecosystem.yml', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
 }
 
-test('admits only the initial three controlled CSS cells', async () => {
+test('admits the complete controlled runtime and stylesheet matrix', async () => {
   const loaded = await loadManifest();
   assert.deepEqual(
     loaded.projects.map(({ id, kind, runtime, style }) => [id, kind, runtime, style]),
     [
       ['react-vite-css', 'controlled', 'react-vite', 'css'],
+      ['react-vite-scss', 'controlled', 'react-vite', 'scss'],
+      ['react-vite-sass', 'controlled', 'react-vite', 'sass'],
+      ['react-vite-less', 'controlled', 'react-vite', 'less'],
       ['next-css', 'controlled', 'next', 'css'],
+      ['next-scss', 'controlled', 'next', 'scss'],
+      ['next-sass', 'controlled', 'next', 'sass'],
+      ['next-less', 'controlled', 'next', 'less'],
       ['vite-html-css', 'controlled', 'vite-html', 'css'],
+      ['vite-html-scss', 'controlled', 'vite-html', 'scss'],
+      ['vite-html-sass', 'controlled', 'vite-html', 'sass'],
+      ['vite-html-less', 'controlled', 'vite-html', 'less'],
     ],
   );
   assert.ok(loaded.projects.every((project) => !('readiness' in project)));
@@ -401,7 +410,7 @@ test('no arguments print usage and --all is the only full-run selection', async 
   const loaded = await loadManifest();
   assert.throws(() => runHarness([], loaded, () => assert.fail('must not execute')), /Usage:/);
   const calls = [];
-  assert.equal(runHarness(['--all'], loaded, (args) => calls.push(args)).length, 3);
+  assert.equal(runHarness(['--all'], loaded, (args) => calls.push(args)).length, 12);
   assert.deepEqual(calls, [['run', '--config', 'ecosystem-ci/vitest.config.js']]);
 });
 
@@ -536,9 +545,11 @@ test('exact changed-file validation requires complete paths and bytes', () => {
 
 test('controlled expectations cover every reported changed file with exact bytes', async () => {
   for (const runtime of ['react-vite', 'next', 'vite-html']) {
-    const expected = JSON.parse(await readFile(new URL(`../ecosystem-ci/fixtures/controlled/${runtime}/css/expected.json`, import.meta.url)));
-    assert.deepEqual(Object.keys(expected.changedFiles).sort(), [...expected.first.changedFiles].sort());
-    assert.ok(Object.values(expected.changedFiles).every((contents) => typeof contents === 'string'));
+    for (const style of ['css', 'scss', 'sass', 'less']) {
+      const expected = JSON.parse(await readFile(new URL(`../ecosystem-ci/fixtures/controlled/${runtime}/${style}/expected.json`, import.meta.url)));
+      assert.deepEqual(Object.keys(expected.changedFiles).sort(), [...expected.first.changedFiles].sort());
+      assert.ok(Object.values(expected.changedFiles).every((contents) => typeof contents === 'string'));
+    }
   }
 });
 
@@ -619,8 +630,13 @@ test('fixture integration dependencies use the required exact pins', async () =>
     'vite-html': { '@tailwindcss/vite': '4.3.3', tailwindcss: '4.3.3', vite: '8.1.5' },
   };
   for (const [runtime, pins] of Object.entries(expected)) {
-    const fixture = JSON.parse(await readFile(new URL(`../ecosystem-ci/fixtures/controlled/${runtime}/css/package.json`, import.meta.url)));
-    for (const [name, version] of Object.entries(pins)) assert.equal(fixture.dependencies[name], version);
+    for (const style of ['css', 'scss', 'sass', 'less']) {
+      const fixture = JSON.parse(await readFile(new URL(`../ecosystem-ci/fixtures/controlled/${runtime}/${style}/package.json`, import.meta.url)));
+      for (const [name, version] of Object.entries(pins)) assert.equal(fixture.dependencies[name], version);
+      if (style === 'scss' || style === 'sass') assert.equal(fixture.dependencies.sass, '1.101.3');
+      if (style === 'less') assert.equal(fixture.dependencies.less, '4.7.0');
+      if (runtime === 'next' && style === 'less') assert.equal(fixture.dependencies['next-with-less'], '3.0.1');
+    }
   }
 });
 

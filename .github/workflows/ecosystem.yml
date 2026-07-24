@@ -66,7 +66,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [linux, macos, windows]
-        case: [react-vite-css, next-css, vite-html-css]
+        case: [react-vite-css, react-vite-scss, react-vite-sass, react-vite-less, next-css, next-scss, next-sass, next-less, vite-html-css, vite-html-scss, vite-html-sass, vite-html-less]
         include:
           - os: linux
             runner: ubuntu-latest
