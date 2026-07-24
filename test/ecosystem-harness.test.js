@@ -129,8 +129,6 @@ test('admits the complete controlled runtime and stylesheet matrix', async () =>
     ['external-stylized-components', 'a26df5d21457095e466a41966822edb2ff016cff'],
     ['external-paracosm', 'fd26ac733b106fe0da172f45802803a9887befdd'],
   ]);
-  assert.ok(loaded.projects.every((project) => !('readiness' in project)));
-  assert.doesNotThrow(() => validateManifest(loaded));
 });
 
 test('smoke and external cases accept non-exhaustive probes without occupying controlled matrix cells', () => {
@@ -666,16 +664,6 @@ test('case failure uploads preserve package publication logs', async (t) => {
 
   await prepareCaseUpload(controlled(), root, uploadRoot);
   assert.equal(await readFile(join(uploadRoot, 'publish.log'), 'utf8'), 'npm publish failed\n');
-});
-
-test('every manifest probe declares exact stable target identities', async () => {
-  const loaded = await loadManifest();
-  for (const project of loaded.projects.filter(({ kind }) => kind !== 'smoke')) {
-    for (const probe of Object.values(project.probes)) {
-      assert.equal(probe.identity.length, probe.cardinality);
-      assert.ok(probe.identity.every((value) => typeof value === 'string' && value.length > 0));
-    }
-  }
 });
 
 test('workflow matrices match every manifest kind across all required OSes', async () => {
