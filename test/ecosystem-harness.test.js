@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
@@ -12,6 +13,7 @@ import {
   currentTarget,
   packageUploadRoot,
   preparePackageUpload,
+  publisherToken,
   stageRootPackage,
   validateProvenance,
 } from '../ecosystem-ci/packages.js';
@@ -338,6 +340,21 @@ test('installed layout rejects checkout, symlink, wrong platform, and unexpected
   await mkdir(join(driverRoot, 'node_modules'), { recursive: true });
   await symlink(join(checkout, target.packageName), nativePackage);
   await assert.rejects(assertInstalledLayout({ driverRoot, checkoutRoot: checkout, expected }), /checkout|node_modules|workspace/);
+});
+
+test('publisher credential response body is bounded by the registry startup timeout', async (t) => {
+  let requested = false;
+  const server = createServer((_request, response) => {
+    requested = true;
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.write('{"token":"');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const { port } = server.address();
+  await assert.rejects(publisherToken(`http://127.0.0.1:${port}`, 250), { name: 'TimeoutError' });
+  assert.equal(requested, true);
 });
 
 test('sealed registry config proxies dependencies but never product packages or mutations', () => {

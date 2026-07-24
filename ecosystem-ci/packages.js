@@ -229,12 +229,13 @@ export async function assertInstalledLayout({ driverRoot, checkoutRoot, expected
   return { root, native, addon };
 }
 
-async function publisherToken(registryUrl) {
+export async function publisherToken(registryUrl, timeoutMs = 15_000) {
   const name = `ecosystem-${randomUUID()}`;
   const response = await fetch(`${registryUrl}/-/user/org.couchdb.user:${name}`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ name, password: randomUUID(), type: 'user', roles: [] }),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   const body = await response.json();
   if (!response.ok || typeof body.token !== 'string') throw new Error(`could not create registry publisher: ${response.status}`);
