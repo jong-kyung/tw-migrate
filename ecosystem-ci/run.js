@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
-import { pathToFileURL } from 'node:url';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { stagePackages } from './packages.js';
 
 const usage = 'Usage: node ecosystem-ci/run.js (--case <id> | --all)';
 const runtimes = new Set(['react-vite', 'next', 'vite-html']);
@@ -246,9 +250,29 @@ function executeVitest(args) {
   if (result.status !== 0) throw new Error(`Vitest exited with status ${result.status}`);
 }
 
+async function withLocalPackageArtifacts(operation) {
+  if (process.env.ECOSYSTEM_PACKAGE_ARTIFACT_ROOT) return operation();
+  const temporaryRoot = await mkdtemp(join(tmpdir(), 'tw-migrate-ecosystem-packages-'));
+  const artifactRoot = join(temporaryRoot, 'packages');
+  try {
+    await stagePackages({
+      repoRoot: resolve(dirname(fileURLToPath(import.meta.url)), '..'),
+      artifactRoot,
+    });
+    process.env.ECOSYSTEM_PACKAGE_ARTIFACT_ROOT = artifactRoot;
+    return operation();
+  } finally {
+    delete process.env.ECOSYSTEM_PACKAGE_ARTIFACT_ROOT;
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   try {
-    runHarness(process.argv.slice(2), await loadManifest());
+    const args = process.argv.slice(2);
+    const manifest = await loadManifest();
+    selectProjects(args, manifest);
+    await withLocalPackageArtifacts(() => runHarness(args, manifest));
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;

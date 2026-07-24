@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 export const captureAttemptTimeoutMs = 20_000;
 const captureOperationTimeoutMs = 18_000;
 export const maxCaptureAttempts = 4;
-export const captureRetryTimeoutMs = captureAttemptTimeoutMs * maxCaptureAttempts;
 
 export async function withTimeout(operation, timeoutMs = captureAttemptTimeoutMs) {
   let timer;
@@ -85,16 +84,16 @@ async function capturePage(browser, baseUrl, probe, artifact) {
       await page.addStyleTag({ content: '*,*::before,*::after{transition:none!important;animation:none!important}' });
       await performAction(page, probe.action);
       await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-      const elements = await locator(page, probe.selector).evaluateAll((nodes) => nodes.map((node) => {
+      const captured = await locator(page, probe.selector).evaluateAll((nodes) => nodes.map((node) => {
         const computed = getComputedStyle(node);
         const entries = [];
         for (let index = 0; index < computed.length; index++) {
           const name = computed[index];
-          if (!name.startsWith('--')) entries.push([name, computed.getPropertyValue(name)]);
+          entries.push([name, computed.getPropertyValue(name)]);
         }
-        entries.sort(([a], [b]) => a.localeCompare(b));
-        return { identity: node.getAttribute('data-identity'), styles: Object.fromEntries(entries) };
+        return { identity: node.getAttribute('data-identity'), entries };
       }));
+      const elements = captured.map(({ identity, entries }) => ({ identity, styles: normalizeStyleEntries(entries) }));
       if (artifact?.screenshot) await page.screenshot({ path: artifact.screenshot, fullPage: true });
       return { elements, consoleMessages, pageErrors };
     }, captureOperationTimeoutMs);
@@ -123,10 +122,13 @@ export async function captureProbe(browser, baseUrl, probe, artifactForAttempt) 
 }
 
 export async function captureAll(browser, baseUrl, probes, artifactFor) {
-  return Object.fromEntries(await Promise.all(Object.entries(probes).map(async ([name, probe]) => [
+  const captures = await Promise.allSettled(Object.entries(probes).map(async ([name, probe]) => [
     name,
     await captureProbe(browser, baseUrl, probe, (attempt) => artifactFor?.(name, attempt)),
-  ])));
+  ]));
+  const failure = captures.find(({ status }) => status === 'rejected');
+  if (failure) throw failure.reason;
+  return Object.fromEntries(captures.map(({ value }) => value));
 }
 
 export function assertOracle({ baseline, post, withheld, candidateTokens }) {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
@@ -331,7 +331,7 @@ test('installed layout rejects checkout, symlink, wrong platform, and unexpected
   await writeFile(join(checkout, target.packageName, 'package.json'), JSON.stringify({ name: target.packageName, version: '1.2.3' }));
   await writeFile(join(checkout, target.packageName, target.addon), 'addon');
   await mkdir(join(driverRoot, 'node_modules'), { recursive: true });
-  await import('node:fs/promises').then(({ symlink }) => symlink(join(checkout, target.packageName), nativePackage));
+  await symlink(join(checkout, target.packageName), nativePackage);
   await assert.rejects(assertInstalledLayout({ driverRoot, checkoutRoot: checkout, expected }), /checkout|node_modules|workspace/);
 });
 
@@ -458,7 +458,7 @@ test('workflow artifact allowlist rejects traversal, symlinks, directories, and 
   await assert.rejects(artifactAllowlist(root, ['../outside']), /escapes/);
   await mkdir(join(root, 'directory'));
   await assert.rejects(artifactAllowlist(root, ['directory']), /regular file/);
-  await import('node:fs/promises').then(({ symlink }) => symlink(join(root, 'phase-ledger.json'), join(root, 'link')));
+  await symlink(join(root, 'phase-ledger.json'), join(root, 'link'));
   await assert.rejects(artifactAllowlist(root, ['link']), /regular file|symlink/);
 });
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, openSync } from 'node:fs';
-import { appendFile, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { appendFile, cp, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -60,15 +60,25 @@ async function availablePort() {
 
 async function terminateTree(child) {
   if (!child || child.exitCode !== null) return;
+  const exited = new Promise((resolveExit) => child.once('exit', resolveExit));
   if (process.platform === 'win32') {
     spawnSync('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true });
   } else {
     try { process.kill(-child.pid, 'SIGTERM'); } catch {}
-    await Promise.race([
-      new Promise((resolveExit) => child.once('exit', resolveExit)),
-      new Promise((resolveWait) => setTimeout(resolveWait, 3_000)),
+  }
+  const stopped = await Promise.race([
+    exited.then(() => true),
+    new Promise((resolveWait) => setTimeout(() => resolveWait(false), 3_000)),
+  ]);
+  if (!stopped && process.platform !== 'win32') {
+    try { process.kill(-child.pid, 'SIGKILL'); } catch {}
+  }
+  if (!stopped) {
+    const forced = await Promise.race([
+      exited.then(() => true),
+      new Promise((resolveWait) => setTimeout(() => resolveWait(false), 3_000)),
     ]);
-    if (child.exitCode === null) try { process.kill(-child.pid, 'SIGKILL'); } catch {}
+    if (!forced) throw new Error(`child process ${child.pid} did not exit`);
   }
 }
 
@@ -124,19 +134,19 @@ async function run(command, args, { cwd, logPath, timeoutMs = 180_000 }) {
   if (result.code !== 0) throw new Error(`${command} ${args.join(' ')} failed (${result.signal ?? result.code}); see ${logPath}`);
 }
 
-async function hashTree(root) {
+async function hashMigrationPaths(root, paths) {
   const result = {};
-  async function visit(directory) {
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
-      const path = join(directory, entry.name);
-      const rel = relative(root, path).replaceAll('\\', '/');
-      if (entry.name === 'node_modules' || entry.name === '.next' || entry.name === 'dist' || entry.name === '.git') continue;
-      if (entry.isDirectory()) await visit(path);
-      else if (entry.isFile()) result[rel] = createHash('sha256').update(await readFile(path)).digest('hex');
-      else throw new Error(`source tree contains non-regular path: ${rel}`);
+  for (const relativePath of [...paths].sort()) {
+    const path = resolve(root, relativePath);
+    if (!inside(path, root)) throw new Error(`migration-owned path escapes project: ${relativePath}`);
+    const stat = await lstat(path).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+    if (stat === null) {
+      result[relativePath] = null;
+    } else {
+      if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`migration-owned path is not a regular file: ${relativePath}`);
+      result[relativePath] = createHash('sha256').update(await readFile(path)).digest('hex');
     }
   }
-  await visit(root);
   return result;
 }
 
@@ -155,13 +165,13 @@ async function prepareDriver(project, runRoot, packageArtifactRoot, artifactRoot
   }
 
   const registryRoot = join(runRoot, 'registry');
-  let registry = await startRegistry({ root: registryRoot, artifactRoot, allowPublish: true });
+  const bootstrapRegistry = await startRegistry({ root: registryRoot, artifactRoot, allowPublish: true });
   try {
-    await publishPackages(provenance, packageArtifactRoot, registry.url);
+    await publishPackages(provenance, packageArtifactRoot, bootstrapRegistry.url);
   } finally {
-    await registry.stop();
+    await bootstrapRegistry.stop();
   }
-  registry = await startRegistry({ root: registryRoot, artifactRoot, allowPublish: false });
+  const sealedRegistry = await startRegistry({ root: registryRoot, artifactRoot, allowPublish: false });
   const fixture = join(repoRoot, 'ecosystem-ci', 'fixtures', 'controlled', project.runtime, project.style);
   const driverRoot = join(runRoot, 'driver');
   try {
@@ -171,10 +181,10 @@ async function prepareDriver(project, runRoot, packageArtifactRoot, artifactRoot
     manifest.dependencies['tw-migrate'] = provenance.packages.root.version;
     await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
     await run(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
-      'install', '--registry', registry.url, '--ignore-scripts', '--no-audit', '--no-fund', '--fetch-retries=0',
+      'install', '--registry', sealedRegistry.url, '--ignore-scripts', '--no-audit', '--no-fund', '--fetch-retries=0',
     ], { cwd: driverRoot, logPath: join(artifactRoot, 'install.log') });
   } finally {
-    await registry.stop();
+    await sealedRegistry.stop();
   }
   const installed = await assertInstalledLayout({
     driverRoot,
@@ -306,9 +316,9 @@ export async function runLifecycle({
     await writeFile(join(artifactRoot, 'first-report.json'), `${JSON.stringify(first, null, 2)}\n`);
     await writeFile(join(artifactRoot, 'source.diff'), first.diff);
     const actualSource = await readMaybe(sourcePath);
-    const treeBeforeSecond = await hashTree(driverRoot);
+    const treeBeforeSecond = await hashMigrationPaths(driverRoot, first.changedFiles);
     const second = await module.migrate({ cwd: driverRoot, styleFile: project.source.path, write: true });
-    const treeAfterSecond = await hashTree(driverRoot);
+    const treeAfterSecond = await hashMigrationPaths(driverRoot, first.changedFiles);
     await writeFile(join(artifactRoot, 'second-report.json'), `${JSON.stringify(second, null, 2)}\n`);
     await mark('migration-output', ['first-report.json', 'second-report.json', 'source.diff']);
     assertMigrationContract({ first, expectedFirst: expected.first, actualSource, expectedSource: expected.source, second, treeBeforeSecond, treeAfterSecond });
@@ -316,11 +326,10 @@ export async function runLifecycle({
 
     await writeFile(sourcePath, '');
     await mark('utilities-only-started');
-    let utilitiesOnly;
     try {
       await Promise.all(caches.map((path) => rm(join(driverRoot, path), { recursive: true, force: true })));
       server = await startServer(project, driverRoot, artifactRoot, 'utilities-only');
-      utilitiesOnly = await captureAll(browser, server.url, project.probes, (name, attempt) => diagnostic('utilities-only', name, attempt));
+      const utilitiesOnly = await captureAll(browser, server.url, project.probes, (name, attempt) => diagnostic('utilities-only', name, attempt));
       await writeFile(join(artifactRoot, 'utilities-only-computed.json'), `${JSON.stringify(utilitiesOnly, null, 2)}\n`);
       await mark('utilities-only-captured', await existingArtifactNames(artifactRoot, captureArtifactNames(project, 'utilities-only')));
       assert.deepEqual(

@@ -44,13 +44,6 @@ export function currentTarget() {
   return targetFor(process.platform, process.arch);
 }
 
-function targetForName(platform) {
-  const entry = Object.entries(targets).find(([, target]) => target === platform);
-  if (!entry) throw new Error(`Unsupported platform artifact: ${platform}`);
-  const [os, arch] = entry[0].split(/-(?=[^-]+$)/);
-  return targetFor(os, arch);
-}
-
 function inside(path, parent) {
   const rel = relative(parent, path);
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
@@ -223,8 +216,8 @@ async function installedPackage(path, nodeModules, checkoutRoot, expectedName, v
 }
 
 export async function assertInstalledLayout({ driverRoot, checkoutRoot, expected }) {
-  const target = targetForName(expected.platform);
-  if (target.platform !== currentTarget().platform) throw new Error('installed platform does not match current OS');
+  const target = currentTarget();
+  if (expected.platform !== target.platform) throw new Error('installed platform does not match current OS');
   const driver = await realpath(driverRoot);
   const nodeModules = await realpath(join(driver, 'node_modules'));
   const checkout = await realpath(checkoutRoot);
