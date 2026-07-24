@@ -4,3 +4,4 @@ target/
 *.node
 binding.d.ts
 .DS_Store
+ecosystem-ci/tests/__screenshots__/
