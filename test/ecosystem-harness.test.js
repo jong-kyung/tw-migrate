@@ -1,8 +1,18 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
+import {
+  assertInstalledLayout,
+  currentTarget,
+  stageRootPackage,
+  validateProvenance,
+} from '../ecosystem-ci/packages.js';
+import { registryConfig } from '../ecosystem-ci/registry.js';
 import { loadManifest, runHarness, validateManifest } from '../ecosystem-ci/run.js';
 
 const selector = { type: 'role', value: 'button', name: 'Toggle details' };
@@ -189,6 +199,102 @@ test('external commands must be argv arrays rather than shell strings', () => {
 test('package script exposes the focused ecosystem harness entrypoint', () => {
   const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url)));
   assert.equal(packageJson.scripts['test:ecosystem'], 'node ecosystem-ci/run.js');
+});
+
+test('stages concrete optional dependency versions without changing the tracked manifest', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'tw-migrate-stage-test-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const repoRoot = join(root, 'repo');
+  const stageRoot = join(root, 'stage');
+  await mkdir(repoRoot);
+  const tracked = `${JSON.stringify({
+    name: 'tw-migrate',
+    version: '1.2.3',
+    files: ['index.js'],
+    optionalDependencies: {
+      'tw-migrate-darwin-arm64': 'workspace:1.2.3',
+      'tw-migrate-linux-x64-gnu': 'workspace:1.2.3',
+    },
+  }, null, 2)}\n`;
+  await Promise.all([
+    writeFile(join(repoRoot, 'package.json'), tracked),
+    writeFile(join(repoRoot, 'index.js'), 'export const migrate = () => {};\n'),
+    writeFile(join(repoRoot, 'README.md'), 'readme\n'),
+    writeFile(join(repoRoot, 'LICENSE'), 'license\n'),
+  ]);
+
+  await stageRootPackage({ repoRoot, stageRoot });
+
+  assert.equal(await readFile(join(repoRoot, 'package.json'), 'utf8'), tracked);
+  const staged = JSON.parse(await readFile(join(stageRoot, 'package.json'), 'utf8'));
+  assert.deepEqual(Object.values(staged.optionalDependencies), ['1.2.3', '1.2.3']);
+});
+
+test('provenance rejects altered tarballs, commits, platforms, and package identities', async (t) => {
+  const artifactRoot = await mkdtemp(join(tmpdir(), 'tw-migrate-provenance-test-'));
+  t.after(() => rm(artifactRoot, { recursive: true, force: true }));
+  await Promise.all([
+    writeFile(join(artifactRoot, 'root.tgz'), 'root'),
+    writeFile(join(artifactRoot, 'native.tgz'), 'native'),
+    writeFile(join(artifactRoot, currentTarget().addon), 'addon'),
+  ]);
+  const target = currentTarget();
+  const provenance = {
+    commit: '0123456789abcdef0123456789abcdef01234567',
+    platform: target.platform,
+    packages: {
+      root: { name: 'tw-migrate', version: '1.2.3', tarball: 'root.tgz', sha256: '4813494d137e1631bba301d5acab6e7bb7aa74ce1185d456565ef51d737677b2' },
+      native: { name: target.packageName, version: '1.2.3', tarball: 'native.tgz', sha256: 'bef32d2c315a289576f2a6828d27edb16bb316a4d85c271f2d794045f3ea668d' },
+    },
+    addon: { file: target.addon, sha256: '613c3abf0f077f31505d3c8cc0fed9a94a49cf025af3e604c4d38259c1cdf4c7' },
+  };
+  await assert.doesNotReject(validateProvenance(provenance, { artifactRoot, expectedCommit: provenance.commit }));
+
+  for (const invalid of [
+    { ...provenance, commit: 'f'.repeat(40) },
+    { ...provenance, platform: 'wrong-platform' },
+    { ...provenance, packages: { ...provenance.packages, native: { ...provenance.packages.native, name: 'tw-migrate-wrong' } } },
+  ]) {
+    await assert.rejects(validateProvenance(invalid, { artifactRoot, expectedCommit: provenance.commit }));
+  }
+  await writeFile(join(artifactRoot, 'native.tgz'), 'altered');
+  await assert.rejects(validateProvenance(provenance, { artifactRoot, expectedCommit: provenance.commit }), /digest/);
+});
+
+test('installed layout rejects checkout, symlink, wrong platform, and unexpected package paths', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'tw-migrate-layout-test-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const checkout = join(root, 'checkout');
+  const driverRoot = join(root, 'driver');
+  const target = currentTarget();
+  const rootPackage = join(driverRoot, 'node_modules', 'tw-migrate');
+  const nativePackage = join(driverRoot, 'node_modules', target.packageName);
+  await Promise.all([mkdir(checkout), mkdir(rootPackage, { recursive: true }), mkdir(nativePackage, { recursive: true })]);
+  await Promise.all([
+    writeFile(join(rootPackage, 'package.json'), JSON.stringify({ name: 'tw-migrate', version: '1.2.3' })),
+    writeFile(join(nativePackage, 'package.json'), JSON.stringify({ name: target.packageName, version: '1.2.3' })),
+    writeFile(join(nativePackage, target.addon), 'addon'),
+  ]);
+  const expected = { version: '1.2.3', platform: target.platform, addonSha256: '613c3abf0f077f31505d3c8cc0fed9a94a49cf025af3e604c4d38259c1cdf4c7' };
+  await assert.doesNotReject(assertInstalledLayout({ driverRoot, checkoutRoot: checkout, expected }));
+  await assert.rejects(assertInstalledLayout({ driverRoot, checkoutRoot: root, expected }), /checkout/);
+  await assert.rejects(assertInstalledLayout({ driverRoot, checkoutRoot: checkout, expected: { ...expected, platform: 'darwin-x64' } }));
+
+  await rm(nativePackage, { recursive: true });
+  await mkdir(join(checkout, target.packageName));
+  await writeFile(join(checkout, target.packageName, 'package.json'), JSON.stringify({ name: target.packageName, version: '1.2.3' }));
+  await writeFile(join(checkout, target.packageName, target.addon), 'addon');
+  await mkdir(join(driverRoot, 'node_modules'), { recursive: true });
+  await import('node:fs/promises').then(({ symlink }) => symlink(join(checkout, target.packageName), nativePackage));
+  await assert.rejects(assertInstalledLayout({ driverRoot, checkoutRoot: checkout, expected }), /checkout|node_modules|workspace/);
+});
+
+test('sealed registry config proxies dependencies but never product packages or mutations', () => {
+  const config = registryConfig({ storage: '/tmp/storage', allowPublish: false });
+  assert.match(config, /tw-migrate-\*/);
+  assert.match(config, /proxy: false/);
+  assert.match(config, /publish: nobody/);
+  assert.match(config, /'\*\*':[\s\S]*proxy: npmjs/);
 });
 
 test('--case selects exactly one project and maps it to a Vitest project filter', async () => {
