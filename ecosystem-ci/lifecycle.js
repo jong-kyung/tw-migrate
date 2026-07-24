@@ -115,6 +115,7 @@ async function startServer(project, cwd, artifactRoot, phase, mode = 'dev') {
   const child = spawn(npm, args, {
     cwd,
     detached: process.platform !== 'win32',
+    shell: npm.endsWith('.cmd'),
     windowsHide: true,
     stdio: ['ignore', log, log],
   });
@@ -174,6 +175,7 @@ async function startExternalServer(project, cwd, artifactRoot, phase) {
     cwd,
     detached: process.platform !== 'win32',
     env: externalEnvironment(),
+    shell: invocation.command.endsWith('.cmd'),
     windowsHide: true,
     stdio: ['ignore', log, log],
   });
@@ -240,6 +242,7 @@ async function run(command, args, { cwd, logPath, timeoutMs = 180_000, env }) {
     cwd,
     detached: process.platform !== 'win32',
     env,
+    shell: command.endsWith('.cmd'),
     windowsHide: true,
     stdio: ['ignore', log, log],
   });

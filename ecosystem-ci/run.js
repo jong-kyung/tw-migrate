@@ -321,7 +321,8 @@ export function runHarness(args, manifest, execute = executeVitest) {
 }
 
 function executeVitest(args) {
-  const result = spawnSync(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', ['exec', 'vitest', ...args], { stdio: 'inherit' });
+  const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+  const result = spawnSync(pnpm, ['exec', 'vitest', ...args], { shell: pnpm.endsWith('.cmd'), stdio: 'inherit' });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`Vitest exited with status ${result.status}`);
 }
