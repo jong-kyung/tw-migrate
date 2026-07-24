@@ -712,12 +712,19 @@ test('case failure uploads preserve package publication logs', async (t) => {
 test('workflow matrices match every manifest kind across all required OSes', async () => {
   const manifest = await loadManifest();
   const workflow = await readEcosystemWorkflow();
-  const matrices = [...workflow.matchAll(/^      matrix:\n        os: \[([a-z, ]+)\]\n        case: \[([a-z0-9-, ]+)\]\n        include:$/gm)];
+  const matrices = [...workflow.matchAll(/^      matrix:\n        os: \[([a-z, ]+)\]\n        case: \[([a-z0-9-, ]+)\]\n(        exclude:\n(?:          - os: (?:linux|macos|windows)\n            case: [a-z0-9-]+\n)+)?        include:$/gm)];
   assert.equal(matrices.length, 3, 'expected literal controlled, smoke, and external workflow matrices');
   for (const matrix of matrices) assert.deepEqual(matrix[1].split(', '), ['linux', 'macos', 'windows']);
   for (const [index, kind] of ['controlled', 'smoke', 'external'].entries()) {
     assert.deepEqual(matrices[index][2].split(', '), manifest.projects.filter((project) => project.kind === kind).map(({ id }) => id));
   }
+  assert.equal(matrices[0][3], undefined, 'controlled matrix must not exclude any OS');
+  assert.equal(matrices[1][3], undefined, 'smoke matrix must not exclude any OS');
+  assert.equal(
+    matrices[2][3],
+    '        exclude:\n          - os: windows\n            case: external-paracosm\n',
+    'only the documented NTFS-invalid paracosm checkout is excluded',
+  );
 });
 
 test('case jobs run after non-cancelled partial package failure while preserving label gating', async () => {

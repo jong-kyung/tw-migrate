@@ -526,7 +526,10 @@ async function executeLifecycle({ project, artifactCase = project, artifactRoot,
     };
   };
   await mark('initialized');
-  const runRoot = await temporaryDirectory(`tw-migrate-${project.id}-`);
+  // Short prefix: pnpm's peer-suffixed store directories push Windows module
+  // paths toward the 260-character limit, and the case id is already in the
+  // artifact roots and ledger.
+  const runRoot = await temporaryDirectory('twm-');
   let succeeded = false;
   let primaryError;
   try {
