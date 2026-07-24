@@ -74,6 +74,10 @@ function errorFor(projects) {
   assert.throws(() => validateManifest(manifest(...projects)));
 }
 
+async function readEcosystemWorkflow() {
+  return (await readFile(new URL('../.github/workflows/ecosystem.yml', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
+}
+
 test('admits only the initial three controlled CSS cells', async () => {
   const loaded = await loadManifest();
   assert.deepEqual(
@@ -278,7 +282,7 @@ test('package stage CLI creates the exact upload tree consumed by the workflow',
   assert.deepEqual((await readdir(join(uploadRoot, 'tarballs'))).sort(), ['native.tgz', 'root.tgz']);
   assert.deepEqual(await readdir(join(uploadRoot, 'staging')), ['native']);
   assert.deepEqual(await readdir(join(uploadRoot, 'staging', 'native')), [target.addon]);
-  const workflow = await readFile(new URL('../.github/workflows/ecosystem.yml', import.meta.url), 'utf8');
+  const workflow = await readEcosystemWorkflow();
   assert.match(workflow, /packages\.js stage --artifact-root ecosystem-ci\/package-artifacts/);
   assert.match(workflow, /path: ecosystem-ci\/package-artifacts-upload\//);
 });
@@ -331,7 +335,7 @@ test('installed layout rejects checkout, symlink, wrong platform, and unexpected
   const expected = { version: '1.2.3', platform: target.platform, addonSha256: '613c3abf0f077f31505d3c8cc0fed9a94a49cf025af3e604c4d38259c1cdf4c7' };
   await assert.doesNotReject(assertInstalledLayout({ driverRoot, checkoutRoot: checkout, expected }));
   await assert.rejects(assertInstalledLayout({ driverRoot, checkoutRoot: root, expected }), /checkout/);
-  await assert.rejects(assertInstalledLayout({ driverRoot, checkoutRoot: checkout, expected: { ...expected, platform: 'darwin-x64' } }));
+  await assert.rejects(assertInstalledLayout({ driverRoot, checkoutRoot: checkout, expected: { ...expected, platform: 'wrong-platform' } }));
 
   await rm(nativePackage, { recursive: true });
   await mkdir(join(checkout, target.packageName));
@@ -576,7 +580,7 @@ test('every manifest probe declares exact stable target identities', async () =>
 
 test('workflow case matrix matches the controlled manifest across all required OSes', async () => {
   const manifest = await loadManifest();
-  const workflow = await readFile(new URL('../.github/workflows/ecosystem.yml', import.meta.url), 'utf8');
+  const workflow = await readEcosystemWorkflow();
   const matrices = [...workflow.matchAll(/^      matrix:\n        os: \[([a-z, ]+)\]\n        case: \[([a-z0-9-, ]+)\]\n        include:$/gm)];
   assert.equal(matrices.length, 1, 'expected exactly one literal os/case workflow matrix');
   assert.deepEqual(matrices[0][1].split(', '), ['linux', 'macos', 'windows']);
@@ -584,7 +588,7 @@ test('workflow case matrix matches the controlled manifest across all required O
 });
 
 test('case jobs run after non-cancelled partial package failure while preserving label gating', async () => {
-  const workflow = await readFile(new URL('../.github/workflows/ecosystem.yml', import.meta.url), 'utf8');
+  const workflow = await readEcosystemWorkflow();
   assert.match(workflow, /^  case:\n    needs: package\n    if: \$\{\{ !cancelled\(\) && \(github\.event_name != 'pull_request' \|\| github\.event\.label\.name == 'ecosystem'\) \}\}$/m);
 });
 
