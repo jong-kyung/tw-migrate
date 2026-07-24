@@ -191,6 +191,15 @@ async function readMigrationPaths(root, paths) {
   return result;
 }
 
+export async function clearGeneratedCaches(root) {
+  await Promise.all(caches.map((path) => rm(join(root, path), {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 100,
+  })));
+}
+
 export async function snapshotMigrationSources(root) {
   root = resolve(root);
   const canonicalRoot = await realpath(root);
@@ -416,7 +425,7 @@ export async function runLifecycle({
     await writeFile(sourcePath, '');
     await mark('utilities-only-started');
     try {
-      await Promise.all(caches.map((path) => rm(join(driverRoot, path), { recursive: true, force: true })));
+      await clearGeneratedCaches(driverRoot);
       server = await startServer(project, driverRoot, artifactRoot, 'utilities-only');
       const utilitiesOnly = await captureAll(browser, server.url, project.probes, (name, attempt) => diagnostic('utilities-only', name, attempt));
       await writeFile(join(artifactRoot, 'utilities-only-computed.json'), `${JSON.stringify(utilitiesOnly, null, 2)}\n`);
@@ -433,7 +442,7 @@ export async function runLifecycle({
     await mark('utilities-only');
 
     await mark('post-started');
-    await Promise.all(caches.map((path) => rm(join(driverRoot, path), { recursive: true, force: true })));
+    await clearGeneratedCaches(driverRoot);
     server = await startServer(project, driverRoot, artifactRoot, 'post');
     const post = await captureAll(browser, server.url, project.probes, (name, attempt) => diagnostic('post', name, attempt));
     await writeFile(join(artifactRoot, 'post-computed.json'), `${JSON.stringify(post, null, 2)}\n`);
@@ -453,7 +462,7 @@ export async function runLifecycle({
     } catch (error) {
       teardownError = error;
     }
-    await rm(runRoot, { recursive: true, force: true });
+    await rm(runRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     if (succeeded && !teardownError && temporaryRoot) await rm(temporaryRoot, { recursive: true, force: true });
     if (teardownError) throw teardownError;
   }
