@@ -24,13 +24,15 @@ import {
   assertExpectedChangedFiles,
   assertMigrationContract,
   captureAttemptArtifactNames,
+  externalEnvironment,
   prepareCaseUpload,
+  runExternalLifecycle,
   snapshotMigrationSources,
   teardownLifecycleServer,
   temporaryLifecyclePaths,
   waitForChild,
 } from '../ecosystem-ci/lifecycle.js';
-import { loadManifest, runHarness, validateManifest } from '../ecosystem-ci/run.js';
+import { loadManifest, runHarness, validateManifest, vitestProjects } from '../ecosystem-ci/run.js';
 
 const selector = { type: 'role', value: 'button', name: 'Toggle details' };
 const desktop = { width: 1280, height: 720 };
@@ -63,6 +65,27 @@ function controlled(overrides = {}) {
       'responsive-below': probe({ viewport: mobile }),
       'responsive-above': probe(),
     },
+    ...overrides,
+  };
+}
+
+function external(overrides = {}) {
+  const base = controlled();
+  return {
+    id: 'external',
+    kind: 'external',
+    repository: 'https://example.test/project.git',
+    revision: '0123456789abcdef0123456789abcdef01234567',
+    packageManager: 'pnpm@10.0.0',
+    lockfile: 'pnpm-lock.yaml',
+    packageRoot: '.',
+    installs: [{ cwd: '.', args: ['install', '--frozen-lockfile', '--ignore-scripts'] }],
+    runtimeWrites: [],
+    start: ['run', 'dev'],
+    server: 'vite',
+    tailwindCss: 'src/tailwind.css',
+    source: base.source,
+    probes: { base: base.probes.base },
     ...overrides,
   };
 }
@@ -101,8 +124,25 @@ test('admits the complete controlled runtime and stylesheet matrix', async () =>
   assert.deepEqual(loaded.projects.filter(({ kind }) => kind === 'smoke'), [
     { id: 'production-react-vite-css', kind: 'smoke', fixture: 'react-vite-css' },
   ]);
+  assert.deepEqual(loaded.projects.filter(({ kind }) => kind === 'external').map(({ id, revision }) => [id, revision]), [
+    ['external-namechecker', '285e10d3627f3eac5217d69e9eaccee956d7ac70'],
+    ['external-stylized-components', 'a26df5d21457095e466a41966822edb2ff016cff'],
+    ['external-paracosm', 'fd26ac733b106fe0da172f45802803a9887befdd'],
+  ]);
   assert.ok(loaded.projects.every((project) => !('readiness' in project)));
   assert.doesNotThrow(() => validateManifest(loaded));
+});
+
+test('every external pin has one reviewed candidate ledger entry', async () => {
+  const external = (await loadManifest()).projects.filter(({ kind }) => kind === 'external');
+  const ledger = await readFile(new URL('../ecosystem-ci/candidates.md', import.meta.url), 'utf8');
+  for (const { id, revision, source } of external) {
+    const evidence = `| \`${id}\` (\`${revision}\`)`;
+    const rows = ledger.split('\n').filter((line) => line.startsWith(evidence));
+    assert.equal(rows.length, 1, `${id} candidate evidence`);
+    assert.ok(rows[0].includes(`\`${source.before}\``), `${id} source witness`);
+    assert.ok(rows[0].includes(`\`${source.after}\``), `${id} candidate witness`);
+  }
 });
 
 test('smoke and external cases accept non-exhaustive probes without occupying controlled matrix cells', () => {
@@ -119,17 +159,7 @@ test('smoke and external cases accept non-exhaustive probes without occupying co
       manifest(
         base,
         { id: 'smoke', kind: 'smoke', fixture: base.id },
-        {
-          id: 'external',
-          kind: 'external',
-          repository: 'https://example.test/project.git',
-          revision: '0123456789abcdef0123456789abcdef01234567',
-          packageManager: 'pnpm@10.0.0',
-          lockfile: 'pnpm-lock.yaml',
-          install: ['pnpm', 'install', '--frozen-lockfile'],
-          start: ['pnpm', 'dev'],
-          ...probeFields,
-        },
+        external(probeFields),
       ),
     ),
   );
@@ -178,20 +208,7 @@ test('rejects invalid manifests before execution', () => {
   errorFor([controlled(), controlled({ style: 'scss' })]);
   errorFor([controlled({ extra: true })]);
   errorFor([controlled(), controlled({ id: 'same-cell' })]);
-  errorFor([
-    {
-      id: 'external',
-      kind: 'external',
-      repository: 'https://example.test/project.git',
-      revision: 'abc123',
-      packageManager: 'npm@11.0.0',
-      lockfile: 'package-lock.json',
-      install: ['npm', 'ci'],
-      start: ['npm', 'start'],
-      source: controlled().source,
-      probes: controlled().probes,
-    },
-  ]);
+  errorFor([external({ revision: 'abc123' })]);
   errorFor([
     controlled({
       probes: {
@@ -219,22 +236,43 @@ test('migration source paths must stay relative and inside the driver', () => {
   }
 });
 
-test('external commands must be argv arrays rather than shell strings', () => {
-  const base = controlled();
-  errorFor([
-    {
-      id: 'external',
-      kind: 'external',
-      repository: 'https://example.test/project.git',
-      revision: '0123456789abcdef0123456789abcdef01234567',
-      packageManager: 'pnpm@10.0.0',
-      lockfile: 'pnpm-lock.yaml',
-      install: 'pnpm install',
-      start: ['pnpm', 'dev'],
-      source: base.source,
-      probes: { base: base.probes.base },
-    },
-  ]);
+test('external commands must be argument arrays rather than shell strings', () => {
+  errorFor([external({ installs: [{ cwd: '.', args: 'install --frozen-lockfile' }] })]);
+  errorFor([external({ start: 'run dev' })]);
+});
+
+test('external commands receive only the explicit non-secret environment', () => {
+  process.env.ECOSYSTEM_SENTINEL_SECRET = 'must-not-leak';
+  try {
+    const env = externalEnvironment();
+    assert.equal(env.ECOSYSTEM_SENTINEL_SECRET, undefined);
+    assert.equal(env.CI, 'true');
+    assert.equal(env.PATH, process.env.PATH);
+  } finally {
+    delete process.env.ECOSYSTEM_SENTINEL_SECRET;
+  }
+});
+
+test('external repositories and paths stay inside the CI checkout trust boundary', () => {
+  for (const repository of [
+    'http://example.test/project.git',
+    'ssh://git@example.test/project.git',
+    'file:///tmp/project',
+    'https://user@example.test/project.git',
+    'https://example.test/project.git?ref=main',
+  ]) errorFor([external({ repository })]);
+  for (const field of ['packageRoot', 'tailwindCss']) errorFor([external({ [field]: '../outside' })]);
+  errorFor([external({ installs: [{ cwd: '../outside', args: ['install', '--frozen-lockfile', '--ignore-scripts'] }] })]);
+  errorFor([external({ installs: Array.from({ length: 5 }, () => ({ cwd: '.', args: ['install', '--frozen-lockfile', '--ignore-scripts'] })) })]);
+  for (const args of [['exec', 'sh'], ['run', 'dev'], ['install', '--frozen-lockfile']]) {
+    errorFor([external({ installs: [{ cwd: '.', args }] })]);
+  }
+  for (const start of [['exec', 'sh'], ['run', 'dev', '--', '--host']]) errorFor([external({ start })]);
+  errorFor([external({ runtimeWrites: ['src/App.module.css'] })]);
+  errorFor([external({ runtimeWrites: ['a', 'b', 'c', 'd'] })]);
+  for (const selector of [{ type: 'tag', value: '.card' }, { type: 'css', value: '.card' }, { type: 'css', value: '#card' }]) {
+    errorFor([external({ probes: { base: probe({ selector }) } })]);
+  }
 });
 
 test('package script exposes the focused ecosystem harness entrypoint', () => {
@@ -395,6 +433,39 @@ test('--case selects exactly one project and maps it to a Vitest project filter'
   const selected = runHarness(['--case', 'react-vite-css'], loaded, (args) => calls.push(args));
   assert.deepEqual(selected.map(({ id }) => id), ['react-vite-css']);
   assert.deepEqual(calls, [['run', '--config', 'ecosystem-ci/vitest.config.js', '--project', 'react-vite-css']]);
+});
+
+test('Vitest and the lifecycle omit external projects unless the CI-only gate is active', async () => {
+  const projects = (await loadManifest()).projects;
+  assert.equal(vitestProjects(projects, {}).some(({ kind }) => kind === 'external'), false);
+  assert.equal(vitestProjects(projects, { CI: 'true', ECOSYSTEM_EXTERNAL: '1' }).filter(({ kind }) => kind === 'external').length, 3);
+  const previous = { CI: process.env.CI, external: process.env.ECOSYSTEM_EXTERNAL };
+  delete process.env.CI;
+  delete process.env.ECOSYSTEM_EXTERNAL;
+  try {
+    await assert.rejects(runExternalLifecycle({}), /require CI=true/);
+  } finally {
+    if (previous.CI === undefined) delete process.env.CI; else process.env.CI = previous.CI;
+    if (previous.external === undefined) delete process.env.ECOSYSTEM_EXTERNAL; else process.env.ECOSYSTEM_EXTERNAL = previous.external;
+  }
+});
+
+test('external cases require the explicit CI-only entrypoint', async () => {
+  const loaded = await loadManifest();
+  assert.throws(() => runHarness(['--case', 'external-stylized-components'], loaded, () => assert.fail('must not execute')), /CI-only/);
+  assert.throws(() => runHarness(['--external-case', 'external-stylized-components'], loaded, () => assert.fail('must not execute')), /CI-only/);
+  const previous = { CI: process.env.CI, external: process.env.ECOSYSTEM_EXTERNAL };
+  process.env.CI = 'true';
+  process.env.ECOSYSTEM_EXTERNAL = '1';
+  try {
+    const calls = [];
+    const selected = runHarness(['--external-case', 'external-stylized-components'], loaded, (args) => calls.push(args));
+    assert.deepEqual(selected.map(({ id }) => id), ['external-stylized-components']);
+    assert.deepEqual(calls, [['run', '--config', 'ecosystem-ci/vitest.config.js', '--project', 'external-stylized-components']]);
+  } finally {
+    if (previous.CI === undefined) delete process.env.CI; else process.env.CI = previous.CI;
+    if (previous.external === undefined) delete process.env.ECOSYSTEM_EXTERNAL; else process.env.ECOSYSTEM_EXTERNAL = previous.external;
+  }
 });
 
 test('unknown case prints the available ids without executing Vitest', async () => {
@@ -619,14 +690,15 @@ test('every manifest probe declares exact stable target identities', async () =>
   }
 });
 
-test('workflow matrices match the controlled and smoke manifests across all required OSes', async () => {
+test('workflow matrices match every manifest kind across all required OSes', async () => {
   const manifest = await loadManifest();
   const workflow = await readEcosystemWorkflow();
   const matrices = [...workflow.matchAll(/^      matrix:\n        os: \[([a-z, ]+)\]\n        case: \[([a-z0-9-, ]+)\]\n        include:$/gm)];
-  assert.equal(matrices.length, 2, 'expected literal controlled and smoke workflow matrices');
+  assert.equal(matrices.length, 3, 'expected literal controlled, smoke, and external workflow matrices');
   for (const matrix of matrices) assert.deepEqual(matrix[1].split(', '), ['linux', 'macos', 'windows']);
-  assert.deepEqual(matrices[0][2].split(', '), manifest.projects.filter(({ kind }) => kind === 'controlled').map(({ id }) => id));
-  assert.deepEqual(matrices[1][2].split(', '), manifest.projects.filter(({ kind }) => kind === 'smoke').map(({ id }) => id));
+  for (const [index, kind] of ['controlled', 'smoke', 'external'].entries()) {
+    assert.deepEqual(matrices[index][2].split(', '), manifest.projects.filter((project) => project.kind === kind).map(({ id }) => id));
+  }
 });
 
 test('case jobs run after non-cancelled partial package failure while preserving label gating', async () => {

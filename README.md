@@ -78,3 +78,20 @@ See the [core RFC](./rfcs/css-to-tailwind-migration-cli.md) and [preprocessor/HT
 ## Testing the packaged CLI
 
 Run `pnpm test:snapshots` to build, pack, install, and test the published CLI shape against the cross-platform snapshot corpus. The command uses the npm registry and performs one shared install per test process. See [`crates/snapshots/README.md`](./crates/snapshots/README.md) for targeted runs and snapshot review commands.
+
+## Testing browser ecosystem compatibility
+
+Build the current-platform package and install Chromium before a focused browser run:
+
+```bash
+pnpm build
+pnpm artifacts
+pnpm exec playwright install chromium
+pnpm test:ecosystem --case react-vite-css
+```
+
+Use `--case production-react-vite-css` for the installed CLI production-build smoke, or `--all` for all twelve controlled runtime/stylesheet cells. The default `pnpm test` and packaged snapshots remain browser-free.
+
+Pinned external projects run only in the **Ecosystem browser** GitHub Actions workflow on `main`, manual dispatch, or a pull request carrying the `ecosystem` label. The workflow checks them out under the runner's temporary directory without credentials or secrets; there is intentionally no contributor-facing local external command.
+
+On failure, each OS/case job uploads only its bounded phase ledger, computed-style captures, screenshots, migration output, source diff, and registry/install/build/server logs. See the [candidate ledger](./ecosystem-ci/candidates.md) for immutable external evidence and the [browser ecosystem RFC](./rfcs/browser-ecosystem-e2e.md) for the manifest, isolation, and oracle contracts.

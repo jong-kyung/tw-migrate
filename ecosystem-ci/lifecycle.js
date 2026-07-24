@@ -92,6 +92,16 @@ async function terminateTree(child) {
   }
 }
 
+function packageManagerInvocation(project, args) {
+  const separator = project.packageManager.indexOf('@');
+  const manager = project.packageManager.slice(0, separator);
+  const version = project.packageManager.slice(separator + 1);
+  if (manager === 'npm') {
+    return { command: process.platform === 'win32' ? 'npx.cmd' : 'npx', args: ['--yes', `npm@${version}`, ...args] };
+  }
+  return { command: process.platform === 'win32' ? 'corepack.cmd' : 'corepack', args: [`${manager}@${version}`, ...args] };
+}
+
 async function startServer(project, cwd, artifactRoot, phase, mode = 'dev') {
   const port = await availablePort();
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -123,6 +133,68 @@ async function startServer(project, cwd, artifactRoot, phase, mode = 'dev') {
       await new Promise((resolveWait) => setTimeout(resolveWait, 200));
     }
     throw new Error(`${phase} server readiness timed out`);
+  } catch (error) {
+    await terminateTree(child);
+    closeSync(log);
+    throw error;
+  }
+}
+
+export function externalEnvironment() {
+  const env = { CI: 'true' };
+  for (const key of [
+    'PATH',
+    'HOME',
+    'USERPROFILE',
+    'TMPDIR',
+    'TMP',
+    'TEMP',
+    'SystemRoot',
+    'WINDIR',
+    'COMSPEC',
+    'PATHEXT',
+    'LOCALAPPDATA',
+    'APPDATA',
+  ]) {
+    if (process.env[key] !== undefined) env[key] = process.env[key];
+  }
+  return env;
+}
+
+async function startExternalServer(project, cwd, artifactRoot, phase) {
+  const port = await availablePort();
+  const serverArgs = project.server === 'next'
+    ? ['--hostname', '127.0.0.1', '--port', String(port)]
+    : ['--host', '127.0.0.1', '--port', String(port), '--strictPort'];
+  const separator = project.packageManager.startsWith('npm@') ? ['--'] : [];
+  const invocation = packageManagerInvocation(project, [...project.start, ...separator, ...serverArgs]);
+  const logPath = join(artifactRoot, `${phase}-server.log`);
+  const log = openSync(logPath, 'a');
+  const child = spawn(invocation.command, invocation.args, {
+    cwd,
+    detached: process.platform !== 'win32',
+    env: externalEnvironment(),
+    windowsHide: true,
+    stdio: ['ignore', log, log],
+  });
+  let launchError;
+  child.once('error', (error) => { launchError = error; });
+  const url = `http://127.0.0.1:${port}`;
+  const deadline = Date.now() + 90_000;
+  try {
+    while (Date.now() < deadline) {
+      if (launchError) throw launchError;
+      if (child.exitCode !== null) throw new Error(`${phase} external server exited with ${child.exitCode}`);
+      try {
+        const response = await fetch(url, { signal: AbortSignal.timeout(1_000) });
+        if (response.ok) return {
+          url,
+          async stop() { await terminateTree(child); closeSync(log); },
+        };
+      } catch {}
+      await new Promise((resolveWait) => setTimeout(resolveWait, 200));
+    }
+    throw new Error(`${phase} external server readiness timed out`);
   } catch (error) {
     await terminateTree(child);
     closeSync(log);
@@ -162,16 +234,82 @@ export async function waitForChild(child, { timeoutMs, teardownTimeoutMs = 7_000
   }
 }
 
-async function run(command, args, { cwd, logPath, timeoutMs = 180_000 }) {
+async function run(command, args, { cwd, logPath, timeoutMs = 180_000, env }) {
   const log = openSync(logPath, 'a');
   const child = spawn(command, args, {
     cwd,
     detached: process.platform !== 'win32',
+    env,
     windowsHide: true,
     stdio: ['ignore', log, log],
   });
   const result = await waitForChild(child, { timeoutMs }).finally(() => closeSync(log));
   if (result.code !== 0) throw new Error(`${command} ${args.join(' ')} failed (${result.signal ?? result.code}); see ${logPath}`);
+}
+
+async function checkoutExternalProject(project, runRoot, artifactRoot) {
+  const projectRoot = join(runRoot, 'external');
+  await mkdir(projectRoot, { recursive: true });
+  const logPath = join(artifactRoot, 'checkout.log');
+  const env = externalEnvironment();
+  await run('git', ['init'], { cwd: projectRoot, logPath, env });
+  await run('git', ['remote', 'add', 'origin', project.repository], { cwd: projectRoot, logPath, env });
+  await run('git', ['fetch', '--depth=1', 'origin', project.revision], { cwd: projectRoot, logPath, timeoutMs: 300_000, env });
+  await run('git', ['checkout', '--detach', 'FETCH_HEAD'], { cwd: projectRoot, logPath, env });
+  const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: projectRoot, encoding: 'utf8', env, windowsHide: true });
+  if (head.status !== 0 || head.stdout.trim() !== project.revision) {
+    throw new Error(`external checkout HEAD did not match ${project.revision}`);
+  }
+  return projectRoot;
+}
+
+function trackedCheckoutChanges(root) {
+  const status = spawnSync('git', ['status', '--porcelain=v1', '-z', '--untracked-files=no'], {
+    cwd: root,
+    encoding: 'utf8',
+    env: externalEnvironment(),
+    windowsHide: true,
+  });
+  if (status.status !== 0) throw new Error(`could not verify external checkout: ${status.stderr.trim()}`);
+  return status.stdout.split('\0').filter(Boolean).map((entry) => ({ status: entry.slice(0, 2), path: entry.slice(3) }));
+}
+
+function assertTrackedCheckoutClean(root, phase) {
+  const changes = trackedCheckoutChanges(root);
+  if (changes.length > 0) {
+    throw new Error(`external checkout changed tracked files during ${phase}: ${changes.map(({ status, path }) => `${status} ${path}`).join(', ')}`);
+  }
+}
+
+async function snapshotRuntimeWrites(root, paths) {
+  const canonicalRoot = await realpath(root);
+  return Object.fromEntries(await Promise.all(paths.map(async (path) => [
+    path,
+    await readFile(await checkedMigrationPath(root, canonicalRoot, path)),
+  ])));
+}
+
+async function restoreRuntimeWrites(root, originals, phase) {
+  const allowed = new Set(Object.keys(originals));
+  const changes = trackedCheckoutChanges(root);
+  const unexpected = changes.filter(({ status, path }) => status !== ' M' || !allowed.has(path));
+  if (unexpected.length > 0) {
+    throw new Error(`external checkout changed unreviewed tracked files during ${phase}: ${unexpected.map(({ status, path }) => `${status} ${path}`).join(', ')}`);
+  }
+  const canonicalRoot = await realpath(root);
+  for (const [path, contents] of Object.entries(originals)) {
+    await writeFile(await checkedMigrationPath(root, canonicalRoot, path), contents);
+  }
+  assertTrackedCheckoutClean(root, phase);
+}
+
+async function checkedProjectDirectory(root, relativePath) {
+  const path = resolve(root, relativePath);
+  if (!inside(path, root)) throw new Error(`project directory escapes checkout: ${relativePath}`);
+  const stat = await lstat(path);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`project path is not a regular directory: ${relativePath}`);
+  if (!inside(await realpath(path), await realpath(root))) throw new Error(`project directory escapes checkout through a symlink: ${relativePath}`);
+  return path;
 }
 
 async function checkedMigrationPath(root, canonicalRoot, relativePath) {
@@ -310,7 +448,8 @@ async function existingArtifactNames(artifactRoot, names) {
 function caseArtifactNames(project) {
   return ['phase-ledger.json', 'failure.log', 'install.log', 'publish.log', 'registry-bootstrap.log', 'registry-install.log',
     'first-report.json', 'second-report.json', 'source.diff',
-    'baseline-build.log', 'post-build.log', 'first-cli.log', 'second-cli.log',
+    'baseline-build.log', 'post-build.log', 'first-cli.log', 'second-cli.log', 'checkout.log',
+    'external-install-1.log', 'external-install-2.log', 'external-install-3.log', 'external-install-4.log',
     ...['baseline', 'withheld', 'utilities-only', 'post'].flatMap((phase) => captureArtifactNames(project, phase))];
 }
 
@@ -561,6 +700,166 @@ export async function runProductionSmoke({
     await mark('complete');
     succeeded = true;
     return { baseline, post, ledger };
+  } catch (error) {
+    primaryError = error;
+    await recordFailure(error);
+    throw error;
+  } finally {
+    let teardownError;
+    try {
+      await teardownLifecycleServer(server, primaryError, recordFailure);
+    } catch (error) {
+      teardownError = error;
+    }
+    await rm(runRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    if (succeeded && !teardownError && temporaryRoot) await rm(temporaryRoot, { recursive: true, force: true });
+    if (teardownError) throw teardownError;
+  }
+}
+
+export async function runExternalLifecycle({ browser, project, packageFixture, artifactRoot, packageArtifactRoot = process.env.ECOSYSTEM_PACKAGE_ARTIFACT_ROOT }) {
+  if (process.env.CI !== 'true' || process.env.ECOSYSTEM_EXTERNAL !== '1') {
+    throw new Error('external ecosystem cases require CI=true and ECOSYSTEM_EXTERNAL=1');
+  }
+  let temporaryRoot;
+  if (!artifactRoot) {
+    temporaryRoot = await mkdtemp(join(tmpdir(), `tw-migrate-${project.id}-artifacts-`));
+    artifactRoot = join(temporaryRoot, 'artifacts', project.id);
+  }
+  artifactRoot = resolve(artifactRoot);
+  packageArtifactRoot = resolve(packageArtifactRoot);
+  await rm(artifactRoot, { recursive: true, force: true });
+  await mkdir(artifactRoot, { recursive: true });
+  const ledger = { case: project.id, phases: [] };
+  const ledgerPath = join(artifactRoot, 'phase-ledger.json');
+  const mark = async (phase, files = []) => {
+    ledger.phases.push({ phase, files });
+    await writeFile(ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`);
+  };
+  await mark('initialized');
+  const runRoot = await mkdtemp(join(tmpdir(), `tw-migrate-${project.id}-`));
+  let server;
+  let primaryError;
+  let succeeded = false;
+  const recordFailure = async (error) => {
+    await appendFile(join(artifactRoot, 'failure.log'), `${error.stack ?? error}\n`).catch(() => {});
+    ledger.failure = error.message;
+    ledger.failureFiles = [];
+    for (const name of caseArtifactNames(project)) {
+      if ((await lstat(join(artifactRoot, name)).catch(() => null))?.isFile()) ledger.failureFiles.push(name);
+    }
+    await writeFile(ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`).catch(() => {});
+  };
+  const diagnostic = (phase, name, attempt) => {
+    const [browserJson, screenshot] = captureAttemptArtifactNames(phase, name, attempt);
+    return {
+      screenshot: join(artifactRoot, screenshot),
+      writeDiagnostics: (value) => writeFile(join(artifactRoot, browserJson), `${JSON.stringify(value, null, 2)}\n`),
+    };
+  };
+  try {
+    const { installed } = await prepareDriver(packageFixture, runRoot, packageArtifactRoot, artifactRoot);
+    const { migrate } = await import(`${pathToFileURL(join(installed.root, 'index.js')).href}?case=${Date.now()}`);
+    await mark('package-installed', ['install.log', 'publish.log', 'registry-bootstrap.log', 'registry-install.log']);
+    const checkoutRoot = await checkoutExternalProject(project, runRoot, artifactRoot);
+    await checkedMigrationPath(checkoutRoot, await realpath(checkoutRoot), project.lockfile);
+    const runtimeWriteOriginals = await snapshotRuntimeWrites(checkoutRoot, project.runtimeWrites);
+    await mark('checked-out', ['checkout.log']);
+
+    for (const [index, install] of project.installs.entries()) {
+      const cwd = await checkedProjectDirectory(checkoutRoot, install.cwd);
+      const invocation = packageManagerInvocation(project, install.args);
+      await run(invocation.command, invocation.args, {
+        cwd,
+        env: externalEnvironment(),
+        logPath: join(artifactRoot, `external-install-${index + 1}.log`),
+        timeoutMs: 600_000,
+      });
+    }
+    assertTrackedCheckoutClean(checkoutRoot, 'installation');
+    await mark('external-installed', project.installs.map((_, index) => `external-install-${index + 1}.log`));
+
+    const packageRoot = await checkedProjectDirectory(checkoutRoot, project.packageRoot);
+    const canonicalPackageRoot = await realpath(packageRoot);
+    const sourcePath = await checkedMigrationPath(packageRoot, canonicalPackageRoot, project.source.path);
+    await checkedMigrationPath(packageRoot, canonicalPackageRoot, project.tailwindCss);
+    const authored = await readFile(sourcePath, 'utf8');
+    assert.ok(authored.includes(project.source.before), 'external source token before migration');
+
+    await mark('baseline-started');
+    server = await startExternalServer(project, packageRoot, artifactRoot, 'baseline');
+    const baseline = await captureAll(browser, server.url, project.probes, (name, attempt) => diagnostic('baseline', name, attempt));
+    await writeFile(join(artifactRoot, 'baseline-computed.json'), `${JSON.stringify(baseline, null, 2)}\n`);
+    await mark('baseline', await existingArtifactNames(artifactRoot, captureArtifactNames(project, 'baseline')));
+    await server.stop(); server = undefined;
+    await restoreRuntimeWrites(checkoutRoot, runtimeWriteOriginals, 'baseline');
+
+    await writeFile(await checkedMigrationPath(packageRoot, canonicalPackageRoot, project.source.path), '');
+    await mark('causal-witness-started');
+    server = await startExternalServer(project, packageRoot, artifactRoot, 'withheld');
+    const withheld = await captureAll(browser, server.url, project.probes, (name, attempt) => diagnostic('withheld', name, attempt));
+    await writeFile(join(artifactRoot, 'withheld-computed.json'), `${JSON.stringify(withheld, null, 2)}\n`);
+    await server.stop(); server = undefined;
+    await writeFile(await checkedMigrationPath(packageRoot, canonicalPackageRoot, project.source.path), authored);
+    await restoreRuntimeWrites(checkoutRoot, runtimeWriteOriginals, 'causal witness');
+    await mark('causal-witness', await existingArtifactNames(artifactRoot, captureArtifactNames(project, 'withheld')));
+
+    await mark('migration-started');
+    const first = await migrate({ cwd: packageRoot, styleFile: project.source.path, tailwindCss: project.tailwindCss, write: true });
+    await writeFile(join(artifactRoot, 'first-report.json'), `${JSON.stringify(first, null, 2)}\n`);
+    await writeFile(join(artifactRoot, 'source.diff'), first.diff);
+    assert.ok(first.changedFiles.length > 0, 'external first migration changes source');
+    assert.ok(first.candidates.includes(project.source.after), 'external migration emits expected witness candidate');
+    const migratedSource = await readMaybe(sourcePath);
+    assert.ok(!migratedSource?.includes(project.source.before), 'external migration rewrites target source');
+    const treeBeforeSecond = await snapshotMigrationSources(packageRoot);
+    const second = await migrate(migratedSource === null
+      ? { cwd: packageRoot, tailwindCss: project.tailwindCss, write: true }
+      : { cwd: packageRoot, styleFile: project.source.path, tailwindCss: project.tailwindCss, write: true });
+    await writeFile(join(artifactRoot, 'second-report.json'), `${JSON.stringify(second, null, 2)}\n`);
+    assert.deepEqual(second.changedFiles, [], 'external second migration changedFiles');
+    assert.equal(second.diff, '', 'external second migration diff');
+    assert.deepEqual(await snapshotMigrationSources(packageRoot), treeBeforeSecond, 'external source tree after second migration');
+    await mark('migration', ['first-report.json', 'second-report.json', 'source.diff']);
+
+    if (migratedSource !== null) {
+      await writeFile(await checkedMigrationPath(packageRoot, canonicalPackageRoot, project.source.path), '');
+    }
+    await mark('utilities-only-started');
+    try {
+      await clearGeneratedCaches(packageRoot);
+      server = await startExternalServer(project, packageRoot, artifactRoot, 'utilities-only');
+      const utilitiesOnly = await captureAll(browser, server.url, project.probes, (name, attempt) => diagnostic('utilities-only', name, attempt));
+      await writeFile(join(artifactRoot, 'utilities-only-computed.json'), `${JSON.stringify(utilitiesOnly, null, 2)}\n`);
+      assert.deepEqual(
+        Object.fromEntries(Object.entries(utilitiesOnly).map(([name, value]) => [name, value.elements])),
+        Object.fromEntries(Object.entries(baseline).map(([name, value]) => [name, value.elements])),
+        'external utilities-only computed capture exactly equals baseline',
+      );
+      await mark('utilities-only', await existingArtifactNames(artifactRoot, captureArtifactNames(project, 'utilities-only')));
+    } finally {
+      await server?.stop(); server = undefined;
+      if (migratedSource === null) {
+        const recreated = await lstat(sourcePath).catch(() => null);
+        if (recreated?.isSymbolicLink() || (recreated && !recreated.isFile())) {
+          throw new Error(`external server recreated an unsafe migration path: ${project.source.path}`);
+        }
+        await rm(sourcePath, { force: true });
+      } else {
+        await writeFile(await checkedMigrationPath(packageRoot, canonicalPackageRoot, project.source.path), migratedSource);
+      }
+    }
+
+    await clearGeneratedCaches(packageRoot);
+    await mark('post-started');
+    server = await startExternalServer(project, packageRoot, artifactRoot, 'post');
+    const post = await captureAll(browser, server.url, project.probes, (name, attempt) => diagnostic('post', name, attempt));
+    await writeFile(join(artifactRoot, 'post-computed.json'), `${JSON.stringify(post, null, 2)}\n`);
+    await mark('post', await existingArtifactNames(artifactRoot, captureArtifactNames(project, 'post')));
+    assertOracle({ baseline, post, withheld, candidateTokens: first.candidates });
+    await mark('complete');
+    succeeded = true;
+    return { first, second, baseline, post, ledger };
   } catch (error) {
     primaryError = error;
     await recordFailure(error);

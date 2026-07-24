@@ -11,7 +11,7 @@ import { stagePackages } from './packages.js';
 const usage = 'Usage: node ecosystem-ci/run.js (--case <id> | --all)';
 const runtimes = new Set(['react-vite', 'next', 'vite-html']);
 const styles = new Set(['css', 'scss', 'sass', 'less']);
-const selectorTypes = new Set(['role', 'name', 'text', 'data', 'id']);
+const selectorTypes = new Set(['role', 'name', 'text', 'data', 'id', 'tag', 'css']);
 
 function object(value, label) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -37,9 +37,15 @@ function nonempty(value, label) {
 function validateSelector(selector, label) {
   exactKeys(selector, ['type', 'value', 'name'], ['type', 'value'], label);
   if (!selectorTypes.has(selector.type)) {
-    throw new Error(`${label}.type must be role, name, text, data, or id (CSS class selectors are forbidden)`);
+    throw new Error(`${label}.type must be role, name, text, data, id, tag, or css (CSS class selectors are forbidden)`);
   }
   nonempty(selector.value, `${label}.value`);
+  if (selector.type === 'tag' && !/^[a-z][a-z0-9-]*$/.test(selector.value)) {
+    throw new Error(`${label}.value must be one lowercase HTML tag`);
+  }
+  if (selector.type === 'css' && /[.#]/.test(selector.value)) {
+    throw new Error(`${label}.value must not contain class or id selectors`);
+  }
   if ('name' in selector) {
     if (selector.type !== 'role') throw new Error(`${label}.name is only valid for role selectors`);
     nonempty(selector.name, `${label}.name`);
@@ -97,12 +103,16 @@ function validateProbe(probe, label) {
   if ('action' in probe) validateAction(probe.action, `${label}.action`);
 }
 
+function validateRelativePath(path, label) {
+  nonempty(path, label);
+  if (posix.isAbsolute(path) || win32.isAbsolute(path) || path.split(/[\\/]/).includes('..')) {
+    throw new Error(`${label} must be a relative path without traversal`);
+  }
+}
+
 function validateSource(source, label) {
   exactKeys(source, ['path', 'before', 'after'], ['path', 'before', 'after'], label);
-  nonempty(source.path, `${label}.path`);
-  if (posix.isAbsolute(source.path) || win32.isAbsolute(source.path) || source.path.split(/[\\/]/).includes('..')) {
-    throw new Error(`${label}.path must be a relative path without traversal`);
-  }
+  validateRelativePath(source.path, `${label}.path`);
   nonempty(source.before, `${label}.before`);
   nonempty(source.after, `${label}.after`);
 }
@@ -134,10 +144,31 @@ function validateProbes(probes, label, controlled) {
 
 function validateCommand(command, label) {
   if (!Array.isArray(command) || command.length === 0 || command.some((part) => typeof part !== 'string' || part.length === 0)) {
-    throw new Error(`${label} must be a non-empty argv array, not a shell command string`);
+    throw new Error(`${label} must be a non-empty argument array, not a shell command string`);
   }
-  if (['sh', 'bash', 'zsh', 'cmd', 'powershell', 'pwsh'].includes(command[0])) {
-    throw new Error(`${label} must not invoke a shell`);
+}
+
+function validateExternalInstall(manager, args, label) {
+  validateCommand(args, label);
+  const exact = (expected) => args.length === expected.length && args.every((part, index) => part === expected[index]);
+  const lockedInstall = manager === 'npm'
+    ? exact(['ci', '--ignore-scripts', '--no-audit', '--no-fund'])
+    : exact(['install', '--frozen-lockfile', '--ignore-scripts']);
+  const reviewedBuild = manager === 'pnpm'
+    && args.length === 4
+    && args[0] === '--filter'
+    && /^@?[a-z0-9][a-z0-9@/._-]*$/.test(args[1])
+    && args[2] === 'run'
+    && /^[a-z0-9:_-]+$/.test(args[3]);
+  if (!lockedInstall && !reviewedBuild) {
+    throw new Error(`${label} must be a locked script-free install or a reviewed pnpm workspace build`);
+  }
+}
+
+function validateExternalStart(args, label) {
+  validateCommand(args, label);
+  if (args.length !== 2 || args[0] !== 'run' || !/^[a-z0-9:_-]+$/.test(args[1])) {
+    throw new Error(`${label} must name one reviewed package script`);
   }
 }
 
@@ -165,32 +196,61 @@ function validateProject(project, index) {
   } else if (project.kind === 'external') {
     exactKeys(
       project,
-      ['id', 'kind', 'repository', 'revision', 'packageManager', 'lockfile', 'install', 'start', 'source', 'probes'],
-      ['id', 'kind', 'repository', 'revision', 'packageManager', 'lockfile', 'install', 'start', 'source', 'probes'],
+      ['id', 'kind', 'repository', 'revision', 'packageManager', 'lockfile', 'packageRoot', 'installs', 'runtimeWrites', 'start', 'server', 'tailwindCss', 'source', 'probes'],
+      ['id', 'kind', 'repository', 'revision', 'packageManager', 'lockfile', 'packageRoot', 'installs', 'runtimeWrites', 'start', 'server', 'tailwindCss', 'source', 'probes'],
       label,
     );
     nonempty(project.repository, `${label}.repository`);
-    if (!/^[0-9a-f]{40}$/.test(project.revision)) throw new Error(`${label}.revision must be a full 40-character SHA`);
-    if (!/^(npm|pnpm|yarn|bun)@[^\s]+$/.test(project.packageManager)) {
-      throw new Error(`${label}.packageManager must preserve an exact package-manager version`);
+    let repository;
+    try { repository = new URL(project.repository); } catch { throw new Error(`${label}.repository must be an HTTPS URL`); }
+    if (repository.protocol !== 'https:' || repository.username || repository.password || repository.search || repository.hash) {
+      throw new Error(`${label}.repository must be an HTTPS URL without credentials, query, or fragment`);
     }
-    nonempty(project.lockfile, `${label}.lockfile`);
+    if (!/^[0-9a-f]{40}$/.test(project.revision)) throw new Error(`${label}.revision must be a full 40-character SHA`);
+    if (!/^(npm|pnpm)@\d+\.\d+\.\d+$/.test(project.packageManager)) {
+      throw new Error(`${label}.packageManager must preserve an exact numeric npm or pnpm version`);
+    }
+    validateRelativePath(project.lockfile, `${label}.lockfile`);
+    validateRelativePath(project.packageRoot, `${label}.packageRoot`);
+    validateRelativePath(project.tailwindCss, `${label}.tailwindCss`);
     const manager = project.packageManager.slice(0, project.packageManager.indexOf('@'));
     const lockfiles = {
       npm: new Set(['package-lock.json', 'npm-shrinkwrap.json']),
       pnpm: new Set(['pnpm-lock.yaml']),
-      yarn: new Set(['yarn.lock']),
-      bun: new Set(['bun.lock', 'bun.lockb']),
     };
-    if (!lockfiles[manager].has(project.lockfile)) {
+    if (!lockfiles[manager].has(posix.basename(project.lockfile))) {
       throw new Error(`${label}.lockfile does not match ${manager}`);
     }
-    validateCommand(project.install, `${label}.install`);
-    validateCommand(project.start, `${label}.start`);
+    if (!Array.isArray(project.installs) || project.installs.length === 0 || project.installs.length > 4) {
+      throw new Error(`${label}.installs must contain one to four reviewed package-manager invocations`);
+    }
+    project.installs.forEach((install, installIndex) => {
+      const installLabel = `${label}.installs[${installIndex}]`;
+      exactKeys(install, ['cwd', 'args'], ['cwd', 'args'], installLabel);
+      validateRelativePath(install.cwd, `${installLabel}.cwd`);
+      validateExternalInstall(manager, install.args, `${installLabel}.args`);
+    });
+    if (!Array.isArray(project.runtimeWrites) || project.runtimeWrites.length > 3) {
+      throw new Error(`${label}.runtimeWrites must be an array of at most three reviewed paths`);
+    }
+    project.runtimeWrites.forEach((path, pathIndex) => validateRelativePath(path, `${label}.runtimeWrites[${pathIndex}]`));
+    if (new Set(project.runtimeWrites).size !== project.runtimeWrites.length) throw new Error(`${label}.runtimeWrites must be unique`);
+    validateExternalStart(project.start, `${label}.start`);
+    if (!['vite', 'next'].includes(project.server)) throw new Error(`${label}.server must be vite or next`);
   } else {
     throw new Error(`${label}.kind must be controlled, smoke, or external`);
   }
   if (project.kind !== 'smoke') validateCommon(project, label);
+  if (project.kind === 'external') {
+    const protectedPaths = new Set([
+      posix.normalize(project.lockfile),
+      posix.normalize(posix.join(project.packageRoot, project.tailwindCss)),
+      posix.normalize(posix.join(project.packageRoot, project.source.path)),
+    ]);
+    if (project.runtimeWrites.some((path) => protectedPaths.has(posix.normalize(path)))) {
+      throw new Error(`${label}.runtimeWrites must not include migration or lockfile paths`);
+    }
+  }
 }
 
 export function validateManifest(manifest) {
@@ -223,8 +283,21 @@ export async function loadManifest(url = new URL('./projects.json', import.meta.
   return validateManifest(JSON.parse(await readFile(url, 'utf8')));
 }
 
+export function vitestProjects(projects, env = process.env) {
+  const externalEnabled = env.CI === 'true' && env.ECOSYSTEM_EXTERNAL === '1';
+  return projects.filter((project) => project.kind !== 'external' || externalEnabled);
+}
+
 function selectProjects(args, manifest) {
   if (args.length === 1 && args[0] === '--all') return manifest.projects.filter(({ kind }) => kind === 'controlled');
+  if (args.length === 2 && args[0] === '--external-case') {
+    if (process.env.CI !== 'true' || process.env.ECOSYSTEM_EXTERNAL !== '1') {
+      throw new Error('External cases are CI-only');
+    }
+    const project = manifest.projects.find(({ id, kind }) => id === args[1] && kind === 'external');
+    if (project) return [project];
+    throw new Error(`Unknown external case ${JSON.stringify(args[1])}`);
+  }
   if (args.length === 2 && args[0] === '--case') {
     const project = manifest.projects.find(({ id }) => id === args[1]);
     if (project?.kind === 'external') throw new Error(`External case ${JSON.stringify(project.id)} is CI-only`);

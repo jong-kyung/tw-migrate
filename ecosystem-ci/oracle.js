@@ -39,6 +39,7 @@ function locator(page, selector) {
   if (selector.type === 'name') return page.locator(`[name=${JSON.stringify(selector.value)}]`);
   if (selector.type === 'text') return page.getByText(selector.value, { exact: true });
   if (selector.type === 'data') return page.locator(`[data-probe=${JSON.stringify(selector.value)}]`);
+  if (selector.type === 'tag' || selector.type === 'css') return page.locator(selector.value);
   return page.locator(`[id=${JSON.stringify(selector.value)}]`);
 }
 
@@ -76,7 +77,7 @@ async function capturePage(browser, baseUrl, probe, artifact) {
       }
       page.on('console', (message) => consoleMessages.push(`${message.type()}: ${message.text()}`));
       page.on('pageerror', (error) => pageErrors.push(error.stack ?? error.message));
-      await page.goto(new URL(probe.route, baseUrl).href, { waitUntil: 'networkidle', timeout: captureAttemptTimeoutMs });
+      await page.goto(new URL(probe.route, baseUrl).href, { waitUntil: 'domcontentloaded', timeout: captureAttemptTimeoutMs });
       await Promise.all([
         page.evaluate(() => document.fonts.ready),
         waitForCardinality(locator(page, probe.readiness.selector), probe.readiness.cardinality, captureAttemptTimeoutMs),
@@ -91,7 +92,12 @@ async function capturePage(browser, baseUrl, probe, artifact) {
           const name = computed[index];
           entries.push([name, computed.getPropertyValue(name)]);
         }
-        return { identity: node.getAttribute('data-identity'), entries };
+        const identity = node.getAttribute('data-identity')
+          || node.id
+          || node.getAttribute('aria-label')
+          || node.localName
+          || node.textContent?.trim();
+        return { identity, entries };
       }));
       const elements = captured.map(({ identity, entries }) => ({ identity, styles: normalizeStyleEntries(entries) }));
       if (artifact?.screenshot) await page.screenshot({ path: artifact.screenshot, fullPage: true });

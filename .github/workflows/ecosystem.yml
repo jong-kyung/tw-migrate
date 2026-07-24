@@ -182,3 +182,66 @@ jobs:
           path: ecosystem-ci/case-artifacts/${{ matrix.case }}-upload/
           if-no-files-found: error
           retention-days: 7
+
+  external:
+    needs: package
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.label.name == 'ecosystem') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [linux, macos, windows]
+        case: [external-namechecker, external-stylized-components, external-paracosm]
+        include:
+          - os: linux
+            runner: ubuntu-latest
+          - os: macos
+            runner: macos-latest
+          - os: windows
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    env:
+      CI: true
+      ECOSYSTEM_EXTERNAL: 1
+      ECOSYSTEM_ARTIFACT_ROOT: ecosystem-ci/case-artifacts/${{ matrix.case }}
+      ECOSYSTEM_PACKAGE_ARTIFACT_ROOT: ecosystem-ci/package-artifacts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Initialize always-present phase ledger
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+          const ledger = JSON.stringify({ case: process.env.CASE_ID, phases: [] }, null, 2) + '\n'
+          for (const root of [process.env.ECOSYSTEM_ARTIFACT_ROOT, `${process.env.ECOSYSTEM_ARTIFACT_ROOT}-upload`]) {
+            fs.mkdirSync(root, { recursive: true })
+            fs.writeFileSync(`${root}/phase-ledger.json`, ledger)
+          }
+          NODE
+        env:
+          CASE_ID: ${{ matrix.case }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install chromium
+      - uses: actions/download-artifact@v4
+        with:
+          name: ecosystem-package-${{ matrix.os }}
+          path: ecosystem-ci/package-artifacts
+      - run: pnpm test:ecosystem --external-case ${{ matrix.case }}
+      - name: Validate reached-phase artifact allowlist
+        if: always()
+        run: node -e "import('./ecosystem-ci/run.js').then(async({loadManifest})=>{const {prepareCaseUpload}=await import('./ecosystem-ci/lifecycle.js');const m=await loadManifest();const p=m.projects.find(x=>x.id===process.env.CASE_ID);await prepareCaseUpload(p,process.env.ECOSYSTEM_ARTIFACT_ROOT,process.env.ECOSYSTEM_ARTIFACT_ROOT+'-upload')})"
+        env:
+          CASE_ID: ${{ matrix.case }}
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ecosystem-${{ matrix.os }}-${{ matrix.case }}
+          path: ecosystem-ci/case-artifacts/${{ matrix.case }}-upload/
+          if-no-files-found: error
+          retention-days: 7

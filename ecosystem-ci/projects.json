@@ -2068,6 +2068,184 @@
       "id": "production-react-vite-css",
       "kind": "smoke",
       "fixture": "react-vite-css"
+    },
+    {
+      "id": "external-namechecker",
+      "kind": "external",
+      "repository": "https://github.com/toddcooke/namechecker.git",
+      "revision": "285e10d3627f3eac5217d69e9eaccee956d7ac70",
+      "packageManager": "npm@11.16.0",
+      "lockfile": "package-lock.json",
+      "packageRoot": ".",
+      "installs": [
+        {
+          "cwd": ".",
+          "args": [
+            "ci",
+            "--ignore-scripts",
+            "--no-audit",
+            "--no-fund"
+          ]
+        }
+      ],
+      "start": [
+        "run",
+        "dev"
+      ],
+      "tailwindCss": "app/globals.css",
+      "source": {
+        "path": "app/page.module.css",
+        "before": ".main",
+        "after": "p-4"
+      },
+      "probes": {
+        "search": {
+          "route": "/",
+          "viewport": {
+            "width": 1280,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "id",
+              "value": "name-search"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "tag",
+            "value": "main"
+          },
+          "cardinality": 1,
+          "identity": [
+            "main"
+          ]
+        }
+      },
+      "server": "next",
+      "runtimeWrites": [
+        "tsconfig.json"
+      ]
+    },
+    {
+      "id": "external-stylized-components",
+      "kind": "external",
+      "repository": "https://github.com/cortiz2894/stylized-components.git",
+      "revision": "a26df5d21457095e466a41966822edb2ff016cff",
+      "packageManager": "pnpm@8.15.0",
+      "lockfile": "pnpm-lock.yaml",
+      "packageRoot": ".",
+      "installs": [
+        {
+          "cwd": ".",
+          "args": [
+            "install",
+            "--frozen-lockfile",
+            "--ignore-scripts"
+          ]
+        }
+      ],
+      "start": [
+        "run",
+        "dev"
+      ],
+      "server": "next",
+      "tailwindCss": "src/app/globals.css",
+      "source": {
+        "path": "src/app/landing.module.css",
+        "before": ".page",
+        "after": "h-[calc(100vh_-_53px)]"
+      },
+      "probes": {
+        "import": {
+          "route": "/",
+          "viewport": {
+            "width": 1280,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "text",
+              "value": "Import GLB"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "css",
+            "value": "body > div:not([hidden])"
+          },
+          "cardinality": 1,
+          "identity": [
+            "div"
+          ]
+        }
+      },
+      "runtimeWrites": []
+    },
+    {
+      "id": "external-paracosm",
+      "kind": "external",
+      "repository": "https://github.com/framerslab/paracosm.git",
+      "revision": "fd26ac733b106fe0da172f45802803a9887befdd",
+      "packageManager": "npm@11.16.0",
+      "lockfile": "package-lock.json",
+      "packageRoot": "src/dashboard",
+      "installs": [
+        {
+          "cwd": ".",
+          "args": [
+            "ci",
+            "--ignore-scripts",
+            "--no-audit",
+            "--no-fund"
+          ]
+        },
+        {
+          "cwd": "src/dashboard",
+          "args": [
+            "ci",
+            "--ignore-scripts",
+            "--no-audit",
+            "--no-fund"
+          ]
+        }
+      ],
+      "start": [
+        "run",
+        "dev"
+      ],
+      "tailwindCss": "src/theme/tokens.css",
+      "source": {
+        "path": "src/App.module.scss",
+        "before": ".shell",
+        "after": "h-[100dvh]"
+      },
+      "probes": {
+        "dashboard": {
+          "route": "/",
+          "viewport": {
+            "width": 1280,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "css",
+              "value": "main[aria-label=\"quickstart view\"]"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "css",
+            "value": "main[aria-label=\"quickstart view\"]"
+          },
+          "cardinality": 1,
+          "identity": [
+            "main-content"
+          ]
+        }
+      },
+      "server": "vite",
+      "runtimeWrites": []
     }
   ]
 }

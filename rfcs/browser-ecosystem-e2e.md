@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Implemented
 
 ## Summary
 
@@ -199,7 +199,9 @@ Validation rejects:
 - absolute paths, traversal, and symlinks escaping the case root;
 - package-manager and lockfile mismatches.
 
-External commands come from reviewed identifiers and argument arrays. Manifest values never become shell programs, runner labels, action names, artifact roots, or workflow expressions.
+External commands come from reviewed identifiers and argument arrays. Package managers use exact numeric npm or pnpm versions. Install steps are limited to script-free locked installs and named pnpm workspace build scripts; servers are limited to `run <script>`. Manifest values never become shell programs, runner labels, action names, artifact roots, or workflow expressions.
+
+An external entry may declare up to three reviewed `runtimeWrites` paths for framework startup behavior. The harness snapshots those tracked files at the pinned SHA, rejects every undeclared tracked write, and restores exact bytes before migration. Runtime writes cannot overlap the lockfile, migration source, or Tailwind entry. All other external projects must keep the tracked checkout clean.
 
 ## CI and Contributor Workflow
 
@@ -211,7 +213,7 @@ The browser suite runs in a separate GitHub Actions workflow on:
 
 It does not run on a cron schedule. The workflow uses GitHub-hosted Ubuntu, macOS, and Windows runners with Chromium. Package jobs run once per OS; case jobs run independently for each OS and case with `fail-fast: false`.
 
-The workflow uses `pull_request`, never `pull_request_target`. Permissions are limited to `contents: read`, checkout credentials are not persisted, and external child processes receive no secrets, OIDC credentials, cloud credentials, or repository tokens.
+The workflow uses `pull_request`, never `pull_request_target`. Repository permissions are limited to `contents: read`, checkout credentials are not persisted, and external child processes receive an explicit environment containing only path, home, temporary-directory, required Windows system variables, and `CI=true`. They receive no GitHub, Actions, OIDC, cloud, registry, or repository credentials. The verified installed migration module is loaded before any external command runs.
 
 Contributors can run one controlled case with:
 
