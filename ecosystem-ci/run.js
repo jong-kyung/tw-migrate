@@ -75,8 +75,8 @@ function validateAction(action, label) {
 function validateProbe(probe, label) {
   exactKeys(
     probe,
-    ['route', 'viewport', 'readiness', 'selector', 'cardinality', 'action'],
-    ['route', 'viewport', 'readiness', 'selector', 'cardinality'],
+    ['route', 'viewport', 'readiness', 'selector', 'cardinality', 'identity', 'action'],
+    ['route', 'viewport', 'readiness', 'selector', 'cardinality', 'identity'],
     label,
   );
   nonempty(probe.route, `${label}.route`);
@@ -86,6 +86,10 @@ function validateProbe(probe, label) {
   if (!Number.isInteger(probe.cardinality) || probe.cardinality < 1) {
     throw new Error(`${label}.cardinality must be a positive integer`);
   }
+  if (!Array.isArray(probe.identity) || probe.identity.length !== probe.cardinality) {
+    throw new Error(`${label}.identity must contain one stable identity per target`);
+  }
+  probe.identity.forEach((identity, index) => nonempty(identity, `${label}.identity[${index}]`));
   if ('action' in probe) validateAction(probe.action, `${label}.action`);
 }
 
@@ -211,6 +215,12 @@ export async function loadManifest(url = new URL('./projects.json', import.meta.
   return validateManifest(JSON.parse(await readFile(url, 'utf8')));
 }
 
+export function ecosystemMatrix(manifest) {
+  validateManifest(manifest);
+  const runners = { linux: 'ubuntu-latest', macos: 'macos-latest', windows: 'windows-latest' };
+  return Object.entries(runners).flatMap(([os, runner]) => manifest.projects.map((project) => ({ os, runner, case: project.id })));
+}
+
 function selectProjects(args, manifest) {
   if (args.length === 1 && args[0] === '--all') return manifest.projects;
   if (args.length === 2 && args[0] === '--case') {
@@ -224,12 +234,14 @@ function selectProjects(args, manifest) {
 export function runHarness(args, manifest, execute = executeVitest) {
   validateManifest(manifest);
   const selected = selectProjects(args, manifest);
-  execute(args[0] === '--all' ? ['run'] : ['run', '--project', selected[0].id]);
+  execute(args[0] === '--all'
+    ? ['run', '--config', 'ecosystem-ci/vitest.config.js']
+    : ['run', '--config', 'ecosystem-ci/vitest.config.js', '--project', selected[0].id]);
   return selected;
 }
 
 function executeVitest(args) {
-  const result = spawnSync('pnpm', ['exec', 'vitest', ...args], { stdio: 'inherit' });
+  const result = spawnSync(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', ['exec', 'vitest', ...args], { stdio: 'inherit' });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`Vitest exited with status ${result.status}`);
 }

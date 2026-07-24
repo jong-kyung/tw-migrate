@@ -6,7 +6,6 @@ import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const verdaccioBin = join(dirname(require.resolve('verdaccio/package.json')), 'bin', 'verdaccio');
 
 export function registryConfig({ storage, allowPublish }) {
   const publish = allowPublish ? '$all' : 'nobody';
@@ -83,6 +82,7 @@ async function terminate(child, timeoutMs = 5_000) {
 }
 
 export async function startRegistry({ root, artifactRoot, allowPublish, timeoutMs = 15_000 }) {
+  const verdaccioBin = join(dirname(require.resolve('verdaccio/package.json')), 'bin', 'verdaccio');
   await Promise.all([mkdir(root, { recursive: true }), mkdir(artifactRoot, { recursive: true })]);
   const storage = join(root, 'storage');
   const configPath = join(root, allowPublish ? 'bootstrap.yaml' : 'sealed.yaml');

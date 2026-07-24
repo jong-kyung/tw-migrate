@@ -1,0 +1,146 @@
+{
+  "first": {
+    "changedFiles": [
+      "app/page.jsx",
+      "app/page.module.css"
+    ],
+    "diff": "--- a/app/page.jsx\n+++ b/app/page.jsx\n@@ -1,10 +1,10 @@\n-import styles from './page.module.css';\n-\n-export default function Page() {\n-  return <main>\n-    <article className={styles.card} data-probe=\"card\" data-identity=\"card\">Card</article>\n-    <button className={styles.action} data-identity=\"action\">Toggle details</button>\n-    <section className={styles.responsive} data-probe=\"responsive-layout\" data-identity=\"responsive\">Responsive</section>\n-  </main>;\n-}\n \n+import styles from './page.module.css';\n+\n+export default function Page() {\n+  return <main>\n+    <article className=\"hover:bg-[rgb(210,_220,_230)] p-[13px] text-[rgb(20,_30,_40)]\" data-probe=\"card\" data-identity=\"card\">Card</article>\n+    <button className=\"focus-visible:[outline-offset:3px] focus:[outline:2px_solid_rgb(30,_90,_150)]\" data-identity=\"action\">Toggle details</button>\n+    <section className=\"[@media_(min-width:700px)]:w-[200px] w-[100px]\" data-probe=\"responsive-layout\" data-identity=\"responsive\">Responsive</section>\n+  </main>;\n+}\n \n--- a/app/page.module.css\n+++ b/app/page.module.css\n@@ -1,25 +1,10 @@\n-.card {\n-  padding: 13px;\n-  color: rgb(20, 30, 40);\n-}\n-.card:hover {\n-  background-color: rgb(210, 220, 230);\n-}\n-.action:focus {\n-  outline: 2px solid rgb(30, 90, 150);\n-}\n-.action:focus-visible {\n-  outline-offset: 3px;\n-}\n-.responsive {\n-  width: 100px;\n-}\n-@media (min-width: 700px) {\n-  .responsive {\n-    width: 200px;\n-  }\n-}\n-.retained {\n-  display: block;\n-}\n \n+\n+\n+\n+\n+\n+\n+.retained {\n+  display: block;\n+}\n \n",
+    "convertedRules": 6,
+    "retainedRules": 1,
+    "rules": [
+      {
+        "selector": ".card",
+        "status": "converted",
+        "candidates": [
+          "p-[13px]",
+          "text-[rgb(20,_30,_40)]"
+        ],
+        "file": "app/page.module.css",
+        "ruleId": {
+          "start": 0,
+          "end": 52
+        },
+        "authoredSpan": {
+          "start": 0,
+          "end": 52
+        }
+      },
+      {
+        "selector": ".card:hover",
+        "status": "converted",
+        "candidates": [
+          "hover:bg-[rgb(210,_220,_230)]"
+        ],
+        "file": "app/page.module.css",
+        "ruleId": {
+          "start": 53,
+          "end": 108
+        },
+        "authoredSpan": {
+          "start": 53,
+          "end": 108
+        }
+      },
+      {
+        "selector": ".action:focus",
+        "status": "converted",
+        "candidates": [
+          "focus:[outline:2px_solid_rgb(30,_90,_150)]"
+        ],
+        "file": "app/page.module.css",
+        "ruleId": {
+          "start": 109,
+          "end": 165
+        },
+        "authoredSpan": {
+          "start": 109,
+          "end": 165
+        }
+      },
+      {
+        "selector": ".action:focus-visible",
+        "status": "converted",
+        "candidates": [
+          "focus-visible:[outline-offset:3px]"
+        ],
+        "file": "app/page.module.css",
+        "ruleId": {
+          "start": 166,
+          "end": 214
+        },
+        "authoredSpan": {
+          "start": 166,
+          "end": 214
+        }
+      },
+      {
+        "selector": ".responsive",
+        "status": "converted",
+        "candidates": [
+          "w-[100px]"
+        ],
+        "file": "app/page.module.css",
+        "ruleId": {
+          "start": 215,
+          "end": 246
+        },
+        "authoredSpan": {
+          "start": 215,
+          "end": 246
+        }
+      },
+      {
+        "selector": ".responsive",
+        "status": "converted",
+        "candidates": [
+          "[@media_(min-width:700px)]:w-[200px]"
+        ],
+        "file": "app/page.module.css",
+        "ruleId": {
+          "start": 277,
+          "end": 312
+        },
+        "authoredSpan": {
+          "start": 277,
+          "end": 312
+        }
+      },
+      {
+        "selector": ".retained",
+        "status": "retained",
+        "candidates": [
+          "[display:block]"
+        ],
+        "file": "app/page.module.css",
+        "ruleId": {
+          "start": 315,
+          "end": 346
+        },
+        "authoredSpan": {
+          "start": 315,
+          "end": 346
+        }
+      }
+    ],
+    "candidates": [
+      "[@media_(min-width:700px)]:w-[200px]",
+      "focus-visible:[outline-offset:3px]",
+      "focus:[outline:2px_solid_rgb(30,_90,_150)]",
+      "hover:bg-[rgb(210,_220,_230)]",
+      "p-[13px]",
+      "text-[rgb(20,_30,_40)]",
+      "w-[100px]"
+    ],
+    "warnings": [
+      {
+        "code": "unresolved-selector-target",
+        "file": "app/page.module.css",
+        "start": 315,
+        "end": 346,
+        "message": "No exclusively supported className references were found."
+      }
+    ],
+    "failures": []
+  },
+  "source": "\n\n\n\n\n\n.retained {\n  display: block;\n}\n"
+}

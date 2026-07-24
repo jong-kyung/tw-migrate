@@ -248,7 +248,7 @@ async function publisherToken(registryUrl) {
   return body.token;
 }
 
-async function publishPackages(provenance, artifactRoot, registryUrl) {
+export async function publishPackages(provenance, artifactRoot, registryUrl) {
   const logPath = join(artifactRoot, 'publish.log');
   const token = await publisherToken(registryUrl);
   const auth = `--//${new URL(registryUrl).host}/:_authToken=${token}`;
@@ -260,6 +260,28 @@ async function publishPackages(provenance, artifactRoot, registryUrl) {
       auth,
     ], { cwd: artifactRoot, logPath });
   }
+}
+
+export function packageUploadRoot(artifactRoot) {
+  return `${resolve(artifactRoot)}-upload`;
+}
+
+export async function preparePackageUpload(provenance, artifactRoot, uploadRoot) {
+  await rm(uploadRoot, { recursive: true, force: true });
+  await mkdir(uploadRoot, { recursive: true });
+  const entries = ['provenance.json', provenance.packages.root.tarball, provenance.packages.native.tarball, provenance.addon.file];
+  let bytes = 0;
+  for (const entry of entries) {
+    const source = artifactPath(artifactRoot, entry, entry);
+    const stat = await lstat(source);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`package upload is not a regular file: ${entry}`);
+    bytes += stat.size;
+    if (bytes > 100 * 1024 * 1024) throw new Error('package upload exceeds 100 MiB');
+    const destination = join(uploadRoot, entry);
+    await mkdir(dirname(destination), { recursive: true });
+    await cp(source, destination);
+  }
+  return entries;
 }
 
 export async function runPackageSmoke({ repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..'), artifactRoot }) {
@@ -313,11 +335,18 @@ export async function runPackageSmoke({ repoRoot = resolve(dirname(fileURLToPath
 
 async function main() {
   const [mode, flag, artifactRoot, ...rest] = process.argv.slice(2);
-  if (mode !== 'smoke' || flag !== '--artifact-root' || !artifactRoot || rest.length > 0) {
-    throw new Error('Usage: node ecosystem-ci/packages.js smoke --artifact-root <path>');
+  if (!['smoke', 'stage'].includes(mode) || flag !== '--artifact-root' || !artifactRoot || rest.length > 0) {
+    throw new Error('Usage: node ecosystem-ci/packages.js (smoke|stage) --artifact-root <path>');
   }
-  await runPackageSmoke({ artifactRoot });
-  console.log(`Package smoke passed; artifacts: ${resolve(artifactRoot)}`);
+  if (mode === 'smoke') {
+    await runPackageSmoke({ artifactRoot });
+    console.log(`Package smoke passed; artifacts: ${resolve(artifactRoot)}`);
+  } else {
+    const provenance = await stagePackages({ repoRoot: resolve(dirname(fileURLToPath(import.meta.url)), '..'), artifactRoot });
+    const uploadRoot = packageUploadRoot(artifactRoot);
+    await preparePackageUpload(provenance, artifactRoot, uploadRoot);
+    console.log(`Packages staged: ${uploadRoot}`);
+  }
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {

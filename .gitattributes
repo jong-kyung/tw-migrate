@@ -1,2 +1,3 @@
 crates/snapshots/fixtures/** text eol=lf
+ecosystem-ci/fixtures/** text eol=lf
 crates/snapshots/snapshots/*.snap text eol=lf
