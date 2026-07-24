@@ -23,6 +23,12 @@ function inside(path, root) {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
+// Windows runners expose TEMP as an 8.3 short path, which crashes libuv
+// fs-event watchers (dev servers) with a prefix assertion; watch long paths.
+export async function temporaryDirectory(prefix) {
+  return mkdtemp(join(await realpath(tmpdir()), prefix));
+}
+
 export async function artifactAllowlist(root, entries, maxBytes = 100 * 1024 * 1024) {
   root = resolve(root);
   const canonicalRoot = await realpath(root);
@@ -519,7 +525,7 @@ async function executeLifecycle({ project, artifactCase = project, artifactRoot,
     };
   };
   await mark('initialized');
-  const runRoot = await mkdtemp(join(tmpdir(), `tw-migrate-${project.id}-`));
+  const runRoot = await temporaryDirectory(`tw-migrate-${project.id}-`);
   let succeeded = false;
   let primaryError;
   try {
@@ -551,7 +557,7 @@ export async function runLifecycle({
 }) {
   let temporaryRoot;
   if (!artifactRoot) {
-    temporaryRoot = await mkdtemp(join(tmpdir(), `tw-migrate-${project.id}-artifacts-`));
+    temporaryRoot = await temporaryDirectory(`tw-migrate-${project.id}-artifacts-`);
     ({ artifactRoot, packageArtifactRoot } = temporaryLifecyclePaths(project.id, temporaryRoot));
   }
   artifactRoot = resolve(artifactRoot);
@@ -640,7 +646,7 @@ export async function runProductionSmoke({
 }) {
   let temporaryRoot;
   if (!artifactRoot) {
-    temporaryRoot = await mkdtemp(join(tmpdir(), `tw-migrate-${project.id}-artifacts-`));
+    temporaryRoot = await temporaryDirectory(`tw-migrate-${project.id}-artifacts-`);
     ({ artifactRoot, packageArtifactRoot } = temporaryLifecyclePaths(project.id, temporaryRoot));
   }
   artifactRoot = resolve(artifactRoot);
@@ -703,7 +709,7 @@ export async function runExternalLifecycle({ browser, project, packageFixture, a
   }
   let temporaryRoot;
   if (!artifactRoot) {
-    temporaryRoot = await mkdtemp(join(tmpdir(), `tw-migrate-${project.id}-artifacts-`));
+    temporaryRoot = await temporaryDirectory(`tw-migrate-${project.id}-artifacts-`);
     artifactRoot = join(temporaryRoot, 'artifacts', project.id);
   }
   artifactRoot = resolve(artifactRoot);
