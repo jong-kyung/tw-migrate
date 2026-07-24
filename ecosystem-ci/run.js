@@ -3,7 +3,7 @@
 import { spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, posix, resolve, win32 } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { stagePackages } from './packages.js';
@@ -100,6 +100,9 @@ function validateProbe(probe, label) {
 function validateSource(source, label) {
   exactKeys(source, ['path', 'before', 'after'], ['path', 'before', 'after'], label);
   nonempty(source.path, `${label}.path`);
+  if (posix.isAbsolute(source.path) || win32.isAbsolute(source.path) || source.path.split(/[\\/]/).includes('..')) {
+    throw new Error(`${label}.path must be a relative path without traversal`);
+  }
   nonempty(source.before, `${label}.before`);
   nonempty(source.after, `${label}.after`);
 }

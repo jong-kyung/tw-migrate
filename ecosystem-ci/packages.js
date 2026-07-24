@@ -242,8 +242,7 @@ export async function publisherToken(registryUrl, timeoutMs = 15_000) {
   return body.token;
 }
 
-export async function publishPackages(provenance, artifactRoot, registryUrl) {
-  const logPath = join(artifactRoot, 'publish.log');
+export async function publishPackages(provenance, artifactRoot, registryUrl, logPath = join(artifactRoot, 'publish.log')) {
   const token = await publisherToken(registryUrl);
   const auth = `--//${new URL(registryUrl).host}/:_authToken=${token}`;
   for (const entry of [provenance.packages.native, provenance.packages.root]) {

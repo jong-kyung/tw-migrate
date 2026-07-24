@@ -234,7 +234,7 @@ async function prepareDriver(project, runRoot, packageArtifactRoot, artifactRoot
   const registryRoot = join(runRoot, 'registry');
   const bootstrapRegistry = await startRegistry({ root: registryRoot, artifactRoot, allowPublish: true });
   try {
-    await publishPackages(provenance, packageArtifactRoot, bootstrapRegistry.url);
+    await publishPackages(provenance, packageArtifactRoot, bootstrapRegistry.url, join(artifactRoot, 'publish.log'));
   } finally {
     await bootstrapRegistry.stop();
   }
@@ -297,7 +297,7 @@ async function existingArtifactNames(artifactRoot, names) {
 }
 
 function caseArtifactNames(project) {
-  return ['phase-ledger.json', 'failure.log', 'install.log', 'registry-bootstrap.log', 'registry-install.log',
+  return ['phase-ledger.json', 'failure.log', 'install.log', 'publish.log', 'registry-bootstrap.log', 'registry-install.log',
     'first-report.json', 'second-report.json', 'source.diff',
     ...['baseline', 'withheld', 'utilities-only', 'post'].flatMap((phase) => captureArtifactNames(project, phase))];
 }
@@ -367,7 +367,7 @@ export async function runLifecycle({
   };
   try {
     const { driverRoot, installed } = await prepareDriver(project, runRoot, packageArtifactRoot, artifactRoot);
-    await mark('installed', ['install.log', 'registry-bootstrap.log', 'registry-install.log']);
+    await mark('installed', ['install.log', 'publish.log', 'registry-bootstrap.log', 'registry-install.log']);
     const diagnostic = (phase, name, attempt) => {
       const [browserJson, screenshot] = captureAttemptArtifactNames(phase, name, attempt);
       return {
@@ -383,7 +383,7 @@ export async function runLifecycle({
     await mark('baseline', await existingArtifactNames(artifactRoot, captureArtifactNames(project, 'baseline')));
     await server.stop(); server = undefined;
 
-    const sourcePath = join(driverRoot, project.source.path);
+    const sourcePath = await checkedMigrationPath(driverRoot, await realpath(driverRoot), project.source.path);
     const authored = await readFile(sourcePath, 'utf8');
     assert.ok(authored.includes(project.source.before), 'causal witness source token');
     const expected = JSON.parse(await readFile(join(driverRoot, 'expected.json'), 'utf8'));

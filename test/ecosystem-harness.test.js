@@ -24,6 +24,7 @@ import {
   assertExpectedChangedFiles,
   assertMigrationContract,
   captureAttemptArtifactNames,
+  prepareCaseUpload,
   snapshotMigrationSources,
   teardownLifecycleServer,
   temporaryLifecyclePaths,
@@ -197,6 +198,12 @@ test('rejects invalid manifests before execution', () => {
   const missingSource = controlled();
   delete missingSource.source;
   errorFor([missingSource]);
+});
+
+test('migration source paths must stay relative and inside the driver', () => {
+  for (const path of ['../outside.css', 'src/../../outside.css', '/outside.css', 'C:\\outside.css']) {
+    errorFor([controlled({ source: { ...controlled().source, path } })]);
+  }
 });
 
 test('external commands must be argv arrays rather than shell strings', () => {
@@ -566,6 +573,19 @@ test('workflow artifact allowlist rejects traversal, symlinks, directories, and 
   await assert.rejects(artifactAllowlist(root, ['directory']), /regular file/);
   await symlink(join(root, 'phase-ledger.json'), join(root, 'link'));
   await assert.rejects(artifactAllowlist(root, ['link']), /regular file|symlink/);
+});
+
+test('case failure uploads preserve package publication logs', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'tw-migrate-publish-log-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const uploadRoot = `${root}-upload`;
+  await Promise.all([
+    writeFile(join(root, 'phase-ledger.json'), `${JSON.stringify({ case: 'react-vite-css', phases: [], failure: 'publish failed', failureFiles: ['publish.log'] })}\n`),
+    writeFile(join(root, 'publish.log'), 'npm publish failed\n'),
+  ]);
+
+  await prepareCaseUpload(controlled(), root, uploadRoot);
+  assert.equal(await readFile(join(uploadRoot, 'publish.log'), 'utf8'), 'npm publish failed\n');
 });
 
 test('every manifest probe declares exact stable target identities', async () => {
