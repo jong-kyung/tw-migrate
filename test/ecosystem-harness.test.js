@@ -16,7 +16,7 @@ import {
   validateProvenance,
 } from '../ecosystem-ci/packages.js';
 import { registryConfig } from '../ecosystem-ci/registry.js';
-import { captureProbe, normalizeStyleEntries, retryCapture, withTimeout } from '../ecosystem-ci/oracle.js';
+import { assertOracle, captureProbe, normalizeStyleEntries, retryCapture, withTimeout } from '../ecosystem-ci/oracle.js';
 import {
   artifactAllowlist,
   assertExpectedChangedFiles,
@@ -388,6 +388,17 @@ test('the browser oracle sorts every standard computed property and excludes onl
     color: 'rgb(1, 2, 3)',
     'z-index': 'auto',
   });
+});
+
+test('the causal witness requires a standard computed-property change for every probe', () => {
+  const capture = (color, token) => ({ elements: [{ identity: 'card', styles: { color, '--fixture-token': token } }] });
+  const baseline = { base: capture('red', 'one'), hover: capture('red', 'one') };
+  assert.throws(() => assertOracle({
+    baseline,
+    post: structuredClone(baseline),
+    withheld: { base: capture('black', 'two'), hover: capture('red', 'two') },
+    candidateTokens: ['text-red'],
+  }), /standard computed property for probe "hover"/);
 });
 
 test('capture retry permits initial plus three retries and creates fresh attempts', async () => {

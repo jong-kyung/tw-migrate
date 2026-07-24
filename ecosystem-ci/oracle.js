@@ -137,16 +137,22 @@ export function assertOracle({ baseline, post, withheld, candidateTokens }) {
     Object.fromEntries(Object.entries(baseline).map(([name, value]) => [name, value.elements])),
     'pre/post computed styles, identity, count, and order',
   );
-  const changedProperties = [];
+  assert.ok(candidateTokens.length > 0, 'causal witness requires expected candidate tokens');
+  const witnesses = {};
   for (const [probeName, capture] of Object.entries(baseline)) {
+    witnesses[probeName] = [];
     capture.elements.forEach((element, index) => {
       const absent = withheld[probeName].elements[index];
       for (const [property, value] of Object.entries(element.styles)) {
-        if (absent.styles[property] !== value) changedProperties.push(`${probeName}:${property}`);
+        if (!property.startsWith('--') && absent.styles[property] !== value) {
+          witnesses[probeName].push({ identity: element.identity, property, baseline: value, withheld: absent.styles[property] });
+        }
       }
     });
+    assert.ok(
+      witnesses[probeName].length > 0,
+      `authored stylesheet withholding must change a standard computed property for probe ${JSON.stringify(probeName)}`,
+    );
   }
-  assert.ok(candidateTokens.length > 0, 'causal witness requires expected candidate tokens');
-  assert.ok(changedProperties.length > 0, 'authored stylesheet withholding must change a standard computed property');
-  return changedProperties;
+  return witnesses;
 }
