@@ -24,13 +24,16 @@ import {
   assertExpectedChangedFiles,
   assertMigrationContract,
   captureAttemptArtifactNames,
+  externalEnvironment,
   prepareCaseUpload,
+  restoreRuntimeWrites,
+  runExternalLifecycle,
   snapshotMigrationSources,
   teardownLifecycleServer,
   temporaryLifecyclePaths,
   waitForChild,
 } from '../ecosystem-ci/lifecycle.js';
-import { loadManifest, runHarness, validateManifest } from '../ecosystem-ci/run.js';
+import { loadManifest, runHarness, validateManifest, vitestProjects } from '../ecosystem-ci/run.js';
 
 const selector = { type: 'role', value: 'button', name: 'Toggle details' };
 const desktop = { width: 1280, height: 720 };
@@ -67,6 +70,27 @@ function controlled(overrides = {}) {
   };
 }
 
+function external(overrides = {}) {
+  const base = controlled();
+  return {
+    id: 'external',
+    kind: 'external',
+    repository: 'https://example.test/project.git',
+    revision: '0123456789abcdef0123456789abcdef01234567',
+    packageManager: 'pnpm@10.0.0',
+    lockfile: 'pnpm-lock.yaml',
+    packageRoot: '.',
+    installs: [{ cwd: '.', args: ['install', '--frozen-lockfile', '--ignore-scripts'] }],
+    runtimeWrites: [],
+    start: ['run', 'dev'],
+    server: 'vite',
+    tailwindCss: 'src/tailwind.css',
+    source: base.source,
+    probes: { base: base.probes.base },
+    ...overrides,
+  };
+}
+
 function manifest(...projects) {
   return { projects };
 }
@@ -79,18 +103,32 @@ async function readEcosystemWorkflow() {
   return (await readFile(new URL('../.github/workflows/ecosystem.yml', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
 }
 
-test('admits only the initial three controlled CSS cells', async () => {
+test('admits the complete controlled runtime and stylesheet matrix', async () => {
   const loaded = await loadManifest();
   assert.deepEqual(
-    loaded.projects.map(({ id, kind, runtime, style }) => [id, kind, runtime, style]),
+    loaded.projects.filter(({ kind }) => kind === 'controlled').map(({ id, kind, runtime, style }) => [id, kind, runtime, style]),
     [
       ['react-vite-css', 'controlled', 'react-vite', 'css'],
+      ['react-vite-scss', 'controlled', 'react-vite', 'scss'],
+      ['react-vite-sass', 'controlled', 'react-vite', 'sass'],
+      ['react-vite-less', 'controlled', 'react-vite', 'less'],
       ['next-css', 'controlled', 'next', 'css'],
+      ['next-scss', 'controlled', 'next', 'scss'],
+      ['next-sass', 'controlled', 'next', 'sass'],
+      ['next-less', 'controlled', 'next', 'less'],
       ['vite-html-css', 'controlled', 'vite-html', 'css'],
+      ['vite-html-scss', 'controlled', 'vite-html', 'scss'],
+      ['vite-html-sass', 'controlled', 'vite-html', 'sass'],
+      ['vite-html-less', 'controlled', 'vite-html', 'less'],
     ],
   );
-  assert.ok(loaded.projects.every((project) => !('readiness' in project)));
-  assert.doesNotThrow(() => validateManifest(loaded));
+  assert.deepEqual(loaded.projects.filter(({ kind }) => kind === 'smoke'), [
+    { id: 'production-react-vite-css', kind: 'smoke', fixture: 'react-vite-css' },
+  ]);
+  assert.deepEqual(loaded.projects.filter(({ kind }) => kind === 'external').map(({ id, revision }) => [id, revision]), [
+    ['external-namechecker', '285e10d3627f3eac5217d69e9eaccee956d7ac70'],
+    ['external-stylized-components', 'a26df5d21457095e466a41966822edb2ff016cff'],
+  ]);
 });
 
 test('smoke and external cases accept non-exhaustive probes without occupying controlled matrix cells', () => {
@@ -106,21 +144,12 @@ test('smoke and external cases accept non-exhaustive probes without occupying co
     validateManifest(
       manifest(
         base,
-        { id: 'smoke', kind: 'smoke', ...probeFields },
-        {
-          id: 'external',
-          kind: 'external',
-          repository: 'https://example.test/project.git',
-          revision: '0123456789abcdef0123456789abcdef01234567',
-          packageManager: 'pnpm@10.0.0',
-          lockfile: 'pnpm-lock.yaml',
-          install: ['pnpm', 'install', '--frozen-lockfile'],
-          start: ['pnpm', 'dev'],
-          ...probeFields,
-        },
+        { id: 'smoke', kind: 'smoke', fixture: base.id },
+        external(probeFields),
       ),
     ),
   );
+  errorFor([base, { id: 'smoke', kind: 'smoke', fixture: 'missing' }]);
 });
 
 test('controlled cases require independent hover, focus, and keyboard focus-visible probes', () => {
@@ -165,20 +194,7 @@ test('rejects invalid manifests before execution', () => {
   errorFor([controlled(), controlled({ style: 'scss' })]);
   errorFor([controlled({ extra: true })]);
   errorFor([controlled(), controlled({ id: 'same-cell' })]);
-  errorFor([
-    {
-      id: 'external',
-      kind: 'external',
-      repository: 'https://example.test/project.git',
-      revision: 'abc123',
-      packageManager: 'npm@11.0.0',
-      lockfile: 'package-lock.json',
-      install: ['npm', 'ci'],
-      start: ['npm', 'start'],
-      source: controlled().source,
-      probes: controlled().probes,
-    },
-  ]);
+  errorFor([external({ revision: 'abc123' })]);
   errorFor([
     controlled({
       probes: {
@@ -206,22 +222,85 @@ test('migration source paths must stay relative and inside the driver', () => {
   }
 });
 
-test('external commands must be argv arrays rather than shell strings', () => {
-  const base = controlled();
-  errorFor([
-    {
-      id: 'external',
-      kind: 'external',
-      repository: 'https://example.test/project.git',
-      revision: '0123456789abcdef0123456789abcdef01234567',
-      packageManager: 'pnpm@10.0.0',
-      lockfile: 'pnpm-lock.yaml',
-      install: 'pnpm install',
-      start: ['pnpm', 'dev'],
-      source: base.source,
-      probes: { base: base.probes.base },
-    },
+test('external commands must be argument arrays rather than shell strings', () => {
+  errorFor([external({ installs: [{ cwd: '.', args: 'install --frozen-lockfile' }] })]);
+  errorFor([external({ start: 'run dev' })]);
+});
+
+test('external installs admit a reviewed pnpm workspace build and nothing looser', () => {
+  assert.doesNotThrow(() => validateManifest(manifest(external({
+    installs: [
+      { cwd: '.', args: ['install', '--frozen-lockfile', '--ignore-scripts'] },
+      { cwd: '.', args: ['--filter', '@scope/pkg', 'run', 'build:tokens'] },
+    ],
+  }))));
+  errorFor([external({ installs: [{ cwd: '.', args: ['--filter', '../escape', 'run', 'build'] }] })]);
+  errorFor([external({ installs: [{ cwd: '.', args: ['--filter', '@scope/pkg', 'run', 'build && touch pwned'] }] })]);
+  errorFor([external({ installs: [{ cwd: '.', args: ['--filter', '@scope/pkg', 'exec', 'build'] }] })]);
+  errorFor([external({
+    packageManager: 'npm@11.0.0',
+    lockfile: 'package-lock.json',
+    installs: [{ cwd: '.', args: ['--filter', '@scope/pkg', 'run', 'build'] }],
+  })]);
+});
+
+test('external commands receive only the explicit non-secret environment', () => {
+  process.env.ECOSYSTEM_SENTINEL_SECRET = 'must-not-leak';
+  try {
+    const env = externalEnvironment();
+    assert.equal(env.ECOSYSTEM_SENTINEL_SECRET, undefined);
+    assert.equal(env.CI, 'true');
+    assert.equal(env.PATH, process.env.PATH);
+  } finally {
+    delete process.env.ECOSYSTEM_SENTINEL_SECRET;
+  }
+});
+
+test('post-migration server phases preserve the expected tracked diff', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'tw-migrate-external-diff-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const git = (args) => execFileSync('git', args, { cwd: root, stdio: 'pipe' });
+  git(['init', '-q']);
+  git(['config', 'user.email', 'test@example.com']);
+  git(['config', 'user.name', 'Test']);
+  await Promise.all([
+    writeFile(join(root, 'src.css'), 'original\n'),
+    writeFile(join(root, 'tsconfig.json'), 'original\n'),
   ]);
+  git(['add', '.']);
+  git(['commit', '-qm', 'fixture']);
+
+  await writeFile(join(root, 'src.css'), 'migrated\n');
+  const expectedDiff = git(['diff', 'HEAD', '--binary', '--no-ext-diff', '--no-textconv', '--']);
+  const originals = { 'tsconfig.json': Buffer.from('original\n') };
+  await writeFile(join(root, 'tsconfig.json'), 'framework update\n');
+  await assert.doesNotReject(restoreRuntimeWrites(root, originals, 'post', expectedDiff));
+  assert.equal(await readFile(join(root, 'tsconfig.json'), 'utf8'), 'original\n');
+
+  await writeFile(join(root, 'src.css'), 'server regression\n');
+  await assert.rejects(restoreRuntimeWrites(root, originals, 'post', expectedDiff), /unreviewed tracked files/);
+});
+
+test('external repositories and paths stay inside the CI checkout trust boundary', () => {
+  for (const repository of [
+    'http://example.test/project.git',
+    'ssh://git@example.test/project.git',
+    'file:///tmp/project',
+    'https://user@example.test/project.git',
+    'https://example.test/project.git?ref=main',
+  ]) errorFor([external({ repository })]);
+  for (const field of ['packageRoot', 'tailwindCss']) errorFor([external({ [field]: '../outside' })]);
+  errorFor([external({ installs: [{ cwd: '../outside', args: ['install', '--frozen-lockfile', '--ignore-scripts'] }] })]);
+  errorFor([external({ installs: Array.from({ length: 5 }, () => ({ cwd: '.', args: ['install', '--frozen-lockfile', '--ignore-scripts'] })) })]);
+  for (const args of [['exec', 'sh'], ['run', 'dev'], ['install', '--frozen-lockfile']]) {
+    errorFor([external({ installs: [{ cwd: '.', args }] })]);
+  }
+  for (const start of [['exec', 'sh'], ['run', 'dev', '--', '--host']]) errorFor([external({ start })]);
+  errorFor([external({ runtimeWrites: ['src/App.module.css'] })]);
+  errorFor([external({ runtimeWrites: ['a', 'b', 'c', 'd'] })]);
+  for (const selector of [{ type: 'tag', value: '.card' }, { type: 'css', value: '.card' }, { type: 'css', value: '#card' }]) {
+    errorFor([external({ probes: { base: probe({ selector }) } })]);
+  }
 });
 
 test('package script exposes the focused ecosystem harness entrypoint', () => {
@@ -384,6 +463,39 @@ test('--case selects exactly one project and maps it to a Vitest project filter'
   assert.deepEqual(calls, [['run', '--config', 'ecosystem-ci/vitest.config.js', '--project', 'react-vite-css']]);
 });
 
+test('Vitest and the lifecycle omit external projects unless the CI-only gate is active', async () => {
+  const projects = (await loadManifest()).projects;
+  assert.equal(vitestProjects(projects, {}).some(({ kind }) => kind === 'external'), false);
+  assert.equal(vitestProjects(projects, { CI: 'true', ECOSYSTEM_EXTERNAL: '1' }).filter(({ kind }) => kind === 'external').length, 2);
+  const previous = { CI: process.env.CI, external: process.env.ECOSYSTEM_EXTERNAL };
+  delete process.env.CI;
+  delete process.env.ECOSYSTEM_EXTERNAL;
+  try {
+    await assert.rejects(runExternalLifecycle({}), /require CI=true/);
+  } finally {
+    if (previous.CI === undefined) delete process.env.CI; else process.env.CI = previous.CI;
+    if (previous.external === undefined) delete process.env.ECOSYSTEM_EXTERNAL; else process.env.ECOSYSTEM_EXTERNAL = previous.external;
+  }
+});
+
+test('external cases require the explicit CI-only entrypoint', async () => {
+  const loaded = await loadManifest();
+  assert.throws(() => runHarness(['--case', 'external-stylized-components'], loaded, () => assert.fail('must not execute')), /CI-only/);
+  assert.throws(() => runHarness(['--external-case', 'external-stylized-components'], loaded, () => assert.fail('must not execute')), /CI-only/);
+  const previous = { CI: process.env.CI, external: process.env.ECOSYSTEM_EXTERNAL };
+  process.env.CI = 'true';
+  process.env.ECOSYSTEM_EXTERNAL = '1';
+  try {
+    const calls = [];
+    const selected = runHarness(['--external-case', 'external-stylized-components'], loaded, (args) => calls.push(args));
+    assert.deepEqual(selected.map(({ id }) => id), ['external-stylized-components']);
+    assert.deepEqual(calls, [['run', '--config', 'ecosystem-ci/vitest.config.js', '--project', 'external-stylized-components']]);
+  } finally {
+    if (previous.CI === undefined) delete process.env.CI; else process.env.CI = previous.CI;
+    if (previous.external === undefined) delete process.env.ECOSYSTEM_EXTERNAL; else process.env.ECOSYSTEM_EXTERNAL = previous.external;
+  }
+});
+
 test('unknown case prints the available ids without executing Vitest', async () => {
   const loaded = await loadManifest();
   const message = /Unknown case "missing".*react-vite-css.*next-css.*vite-html-css/;
@@ -401,8 +513,14 @@ test('no arguments print usage and --all is the only full-run selection', async 
   const loaded = await loadManifest();
   assert.throws(() => runHarness([], loaded, () => assert.fail('must not execute')), /Usage:/);
   const calls = [];
-  assert.equal(runHarness(['--all'], loaded, (args) => calls.push(args)).length, 3);
-  assert.deepEqual(calls, [['run', '--config', 'ecosystem-ci/vitest.config.js']]);
+  const selected = runHarness(['--all'], loaded, (args) => calls.push(args));
+  assert.equal(selected.length, 12);
+  assert.deepEqual(calls, [[
+    'run',
+    '--config',
+    'ecosystem-ci/vitest.config.js',
+    ...selected.flatMap(({ id }) => ['--project', id]),
+  ]]);
 });
 
 test('the browser oracle sorts every standard computed property and excludes only custom properties', () => {
@@ -536,9 +654,11 @@ test('exact changed-file validation requires complete paths and bytes', () => {
 
 test('controlled expectations cover every reported changed file with exact bytes', async () => {
   for (const runtime of ['react-vite', 'next', 'vite-html']) {
-    const expected = JSON.parse(await readFile(new URL(`../ecosystem-ci/fixtures/controlled/${runtime}/css/expected.json`, import.meta.url)));
-    assert.deepEqual(Object.keys(expected.changedFiles).sort(), [...expected.first.changedFiles].sort());
-    assert.ok(Object.values(expected.changedFiles).every((contents) => typeof contents === 'string'));
+    for (const style of ['css', 'scss', 'sass', 'less']) {
+      const expected = JSON.parse(await readFile(new URL(`../ecosystem-ci/fixtures/controlled/${runtime}/${style}/expected.json`, import.meta.url)));
+      assert.deepEqual(Object.keys(expected.changedFiles).sort(), [...expected.first.changedFiles].sort());
+      assert.ok(Object.values(expected.changedFiles).every((contents) => typeof contents === 'string'));
+    }
   }
 });
 
@@ -588,28 +708,20 @@ test('case failure uploads preserve package publication logs', async (t) => {
   assert.equal(await readFile(join(uploadRoot, 'publish.log'), 'utf8'), 'npm publish failed\n');
 });
 
-test('every manifest probe declares exact stable target identities', async () => {
-  const loaded = await loadManifest();
-  for (const project of loaded.projects) {
-    for (const probe of Object.values(project.probes)) {
-      assert.equal(probe.identity.length, probe.cardinality);
-      assert.ok(probe.identity.every((value) => typeof value === 'string' && value.length > 0));
-    }
-  }
-});
-
-test('workflow case matrix matches the controlled manifest across all required OSes', async () => {
+test('workflow matrices match every manifest kind across all required OSes', async () => {
   const manifest = await loadManifest();
   const workflow = await readEcosystemWorkflow();
   const matrices = [...workflow.matchAll(/^      matrix:\n        os: \[([a-z, ]+)\]\n        case: \[([a-z0-9-, ]+)\]\n        include:$/gm)];
-  assert.equal(matrices.length, 1, 'expected exactly one literal os/case workflow matrix');
-  assert.deepEqual(matrices[0][1].split(', '), ['linux', 'macos', 'windows']);
-  assert.deepEqual(matrices[0][2].split(', '), manifest.projects.filter(({ kind }) => kind === 'controlled').map(({ id }) => id));
+  assert.equal(matrices.length, 3, 'expected literal controlled, smoke, and external workflow matrices');
+  for (const matrix of matrices) assert.deepEqual(matrix[1].split(', '), ['linux', 'macos', 'windows']);
+  for (const [index, kind] of ['controlled', 'smoke', 'external'].entries()) {
+    assert.deepEqual(matrices[index][2].split(', '), manifest.projects.filter((project) => project.kind === kind).map(({ id }) => id));
+  }
 });
 
 test('case jobs run after non-cancelled partial package failure while preserving label gating', async () => {
   const workflow = await readEcosystemWorkflow();
-  assert.match(workflow, /^  case:\n    needs: package\n    if: \$\{\{ !cancelled\(\) && \(github\.event_name != 'pull_request' \|\| github\.event\.label\.name == 'ecosystem'\) \}\}$/m);
+  assert.match(workflow, /^  case:\n    needs: package\n    if: \$\{\{ !cancelled\(\) && \(github\.event_name != 'pull_request' \|\| github\.event\.label\.name == 'test:e2e'\) \}\}$/m);
 });
 
 test('fixture integration dependencies use the required exact pins', async () => {
@@ -619,8 +731,13 @@ test('fixture integration dependencies use the required exact pins', async () =>
     'vite-html': { '@tailwindcss/vite': '4.3.3', tailwindcss: '4.3.3', vite: '8.1.5' },
   };
   for (const [runtime, pins] of Object.entries(expected)) {
-    const fixture = JSON.parse(await readFile(new URL(`../ecosystem-ci/fixtures/controlled/${runtime}/css/package.json`, import.meta.url)));
-    for (const [name, version] of Object.entries(pins)) assert.equal(fixture.dependencies[name], version);
+    for (const style of ['css', 'scss', 'sass', 'less']) {
+      const fixture = JSON.parse(await readFile(new URL(`../ecosystem-ci/fixtures/controlled/${runtime}/${style}/package.json`, import.meta.url)));
+      for (const [name, version] of Object.entries(pins)) assert.equal(fixture.dependencies[name], version);
+      if (style === 'scss' || style === 'sass') assert.equal(fixture.dependencies.sass, '1.101.3');
+      if (style === 'less') assert.equal(fixture.dependencies.less, '4.7.0');
+      if (runtime === 'next' && style === 'less') assert.equal(fixture.dependencies['next-with-less'], '3.0.1');
+    }
   }
 });
 

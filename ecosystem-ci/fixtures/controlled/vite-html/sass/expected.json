@@ -1,0 +1,190 @@
+{
+  "first": {
+    "changedFiles": [
+      "index.html"
+    ],
+    "diff": "--- a/index.html\n+++ b/index.html\n@@ -1,8 +1,8 @@\n-<!doctype html>\n-<html lang=\"en\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><link rel=\"stylesheet\" href=\"/src/tailwind.css\"><link rel=\"stylesheet\" href=\"/src/style.sass\"><title>Ecosystem fixture</title></head>\n-<body><main>\n-  <article class=\"card\" data-probe=\"card\" data-identity=\"card\">Card</article>\n-  <button class=\"action\" data-identity=\"action\">Toggle details</button>\n-  <section class=\"responsive\" data-probe=\"responsive-layout\" data-identity=\"responsive\">Responsive</section>\n-</main></body></html>\n \n+<!doctype html>\n+<html lang=\"en\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><link rel=\"stylesheet\" href=\"/src/tailwind.css\"><link rel=\"stylesheet\" href=\"/src/style.sass\"><title>Ecosystem fixture</title></head>\n+<body><main>\n+  <article class=\"card hover:bg-[rgb(210,_220,_230)] p-[13px] text-[rgb(20,_30,_40)]\" data-probe=\"card\" data-identity=\"card\">Card</article>\n+  <button class=\"action focus-visible:[outline-offset:3px] focus:[outline:2px_solid_rgb(30,_90,_150)]\" data-identity=\"action\">Toggle details</button>\n+  <section class=\"responsive [@media_(min-width:700px)]:w-[200px] w-[100px]\" data-probe=\"responsive-layout\" data-identity=\"responsive\">Responsive</section>\n+</main></body></html>\n \n",
+    "convertedRules": 0,
+    "retainedRules": 7,
+    "rules": [
+      {
+        "selector": ".card",
+        "status": "retained",
+        "candidates": [
+          "p-[13px]",
+          "text-[rgb(20,_30,_40)]"
+        ],
+        "file": "src/style.sass",
+        "ruleId": {
+          "start": 0,
+          "end": 52
+        },
+        "authoredSpan": {
+          "start": 0,
+          "end": 46
+        }
+      },
+      {
+        "selector": ".card:hover",
+        "status": "retained",
+        "candidates": [
+          "hover:bg-[rgb(210,_220,_230)]"
+        ],
+        "file": "src/style.sass",
+        "ruleId": {
+          "start": 54,
+          "end": 109
+        },
+        "authoredSpan": {
+          "start": 47,
+          "end": 97
+        }
+      },
+      {
+        "selector": ".action:focus",
+        "status": "retained",
+        "candidates": [
+          "focus:[outline:2px_solid_rgb(30,_90,_150)]"
+        ],
+        "file": "src/style.sass",
+        "ruleId": {
+          "start": 111,
+          "end": 167
+        },
+        "authoredSpan": {
+          "start": 98,
+          "end": 149
+        }
+      },
+      {
+        "selector": ".action:focus-visible",
+        "status": "retained",
+        "candidates": [
+          "focus-visible:[outline-offset:3px]"
+        ],
+        "file": "src/style.sass",
+        "ruleId": {
+          "start": 169,
+          "end": 217
+        },
+        "authoredSpan": {
+          "start": 150,
+          "end": 193
+        }
+      },
+      {
+        "selector": ".responsive",
+        "status": "retained",
+        "candidates": [
+          "w-[100px]"
+        ],
+        "file": "src/style.sass",
+        "ruleId": {
+          "start": 219,
+          "end": 250
+        },
+        "authoredSpan": {
+          "start": 194,
+          "end": 220
+        }
+      },
+      {
+        "selector": ".responsive",
+        "status": "retained",
+        "candidates": [
+          "[@media_(min-width:700px)]:w-[200px]"
+        ],
+        "file": "src/style.sass",
+        "ruleId": {
+          "start": 282,
+          "end": 317
+        },
+        "authoredSpan": {
+          "start": 249,
+          "end": 277
+        }
+      },
+      {
+        "selector": ".retained",
+        "status": "retained",
+        "candidates": [
+          "[display:block]"
+        ],
+        "file": "src/style.sass",
+        "ruleId": {
+          "start": 320,
+          "end": 351
+        },
+        "authoredSpan": {
+          "start": 278,
+          "end": 304
+        }
+      }
+    ],
+    "candidates": [
+      "[@media_(min-width:700px)]:w-[200px]",
+      "focus-visible:[outline-offset:3px]",
+      "focus:[outline:2px_solid_rgb(30,_90,_150)]",
+      "hover:bg-[rgb(210,_220,_230)]",
+      "p-[13px]",
+      "text-[rgb(20,_30,_40)]",
+      "w-[100px]"
+    ],
+    "warnings": [
+      {
+        "code": "retained-global-rule",
+        "file": "src/style.sass",
+        "start": 0,
+        "end": 46,
+        "message": "Global CSS is never deleted automatically."
+      },
+      {
+        "code": "retained-global-rule",
+        "file": "src/style.sass",
+        "start": 47,
+        "end": 97,
+        "message": "Global CSS is never deleted automatically."
+      },
+      {
+        "code": "retained-global-rule",
+        "file": "src/style.sass",
+        "start": 98,
+        "end": 149,
+        "message": "Global CSS is never deleted automatically."
+      },
+      {
+        "code": "retained-global-rule",
+        "file": "src/style.sass",
+        "start": 150,
+        "end": 193,
+        "message": "Global CSS is never deleted automatically."
+      },
+      {
+        "code": "retained-global-rule",
+        "file": "src/style.sass",
+        "start": 194,
+        "end": 220,
+        "message": "Global CSS is never deleted automatically."
+      },
+      {
+        "code": "retained-global-rule",
+        "file": "src/style.sass",
+        "start": 249,
+        "end": 277,
+        "message": "Global CSS is never deleted automatically."
+      },
+      {
+        "code": "retained-global-rule",
+        "file": "src/style.sass",
+        "start": 278,
+        "end": 304,
+        "message": "Global CSS is never deleted automatically."
+      }
+    ],
+    "failures": []
+  },
+  "source": ".card\n  padding: 13px\n  color: rgb(20, 30, 40)\n.card:hover\n  background-color: rgb(210, 220, 230)\n.action:focus\n  outline: 2px solid rgb(30, 90, 150)\n.action:focus-visible\n  outline-offset: 3px\n.responsive\n  width: 100px\n@media (min-width: 700px)\n  .responsive\n    width: 200px\n.retained\n  display: block\n",
+  "changedFiles": {
+    "index.html": "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><link rel=\"stylesheet\" href=\"/src/tailwind.css\"><link rel=\"stylesheet\" href=\"/src/style.sass\"><title>Ecosystem fixture</title></head>\n<body><main>\n  <article class=\"card hover:bg-[rgb(210,_220,_230)] p-[13px] text-[rgb(20,_30,_40)]\" data-probe=\"card\" data-identity=\"card\">Card</article>\n  <button class=\"action focus-visible:[outline-offset:3px] focus:[outline:2px_solid_rgb(30,_90,_150)]\" data-identity=\"action\">Toggle details</button>\n  <section class=\"responsive [@media_(min-width:700px)]:w-[200px] w-[100px]\" data-probe=\"responsive-layout\" data-identity=\"responsive\">Responsive</section>\n</main></body></html>\n"
+  }
+}

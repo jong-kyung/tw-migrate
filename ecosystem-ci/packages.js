@@ -56,7 +56,7 @@ async function sha256(path) {
 async function run(command, args, { cwd, logPath, timeoutMs = 120_000 }) {
   await mkdir(dirname(logPath), { recursive: true });
   const log = openSync(logPath, 'a');
-  const child = spawn(command, args, { cwd, stdio: ['ignore', log, log], windowsHide: true });
+  const child = spawn(command, args, { cwd, shell: command.endsWith('.cmd'), stdio: ['ignore', log, log], windowsHide: true });
   const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
   const result = await new Promise((resolveRun, reject) => {
     child.once('error', reject);
