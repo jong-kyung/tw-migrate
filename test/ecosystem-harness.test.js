@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,9 +19,13 @@ import { registryConfig } from '../ecosystem-ci/registry.js';
 import { captureProbe, normalizeStyleEntries, retryCapture, withTimeout } from '../ecosystem-ci/oracle.js';
 import {
   artifactAllowlist,
+  assertExpectedChangedFiles,
   assertMigrationContract,
   captureAttemptArtifactNames,
+  snapshotMigrationSources,
+  teardownLifecycleServer,
   temporaryLifecyclePaths,
+  waitForChild,
 } from '../ecosystem-ci/lifecycle.js';
 import { ecosystemMatrix, loadManifest, runHarness, validateManifest } from '../ecosystem-ci/run.js';
 
@@ -448,6 +453,75 @@ test('migration contract checks the exact report/source and no-op second run wit
     treeBeforeSecond: {},
     treeAfterSecond: {},
   }), /source/);
+});
+
+test('source-wide idempotency catches an unreported extra source mutation', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'tw-migrate-source-tree-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, 'src'));
+  await Promise.all([
+    writeFile(join(root, 'src', 'reported.css'), 'reported\n'),
+    writeFile(join(root, 'src', 'unreported.tsx'), 'before\n'),
+  ]);
+  const before = await snapshotMigrationSources(root);
+  await writeFile(join(root, 'src', 'unreported.tsx'), 'after\n');
+  const after = await snapshotMigrationSources(root);
+  assert.throws(() => assertMigrationContract({
+    first: { changedFiles: ['src/reported.css'] },
+    expectedFirst: { changedFiles: ['src/reported.css'] },
+    actualSource: 'reported\n',
+    expectedSource: 'reported\n',
+    second: { changedFiles: [], diff: '' },
+    treeBeforeSecond: before,
+    treeAfterSecond: after,
+  }), /source-scoped tree/);
+});
+
+test('source snapshots exclude generated trees and reject non-regular paths', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'tw-migrate-source-safety-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, 'node_modules'));
+  await writeFile(join(root, 'node_modules', 'generated.js'), 'ignored\n');
+  assert.deepEqual(await snapshotMigrationSources(root), {});
+  await symlink(join(root, 'node_modules', 'generated.js'), join(root, 'linked.js'));
+  await assert.rejects(snapshotMigrationSources(root), /not regular/);
+});
+
+test('exact changed-file validation requires complete paths and bytes', () => {
+  const changedFiles = ['src/App.jsx', 'src/App.css'];
+  const files = { 'src/App.jsx': 'consumer\n', 'src/App.css': 'style\n' };
+  assert.doesNotThrow(() => assertExpectedChangedFiles(changedFiles, files, files));
+  assert.throws(() => assertExpectedChangedFiles(changedFiles, { 'src/App.css': 'style\n' }, files), /cover changedFiles/);
+  assert.throws(() => assertExpectedChangedFiles(changedFiles, files, { ...files, 'src/App.jsx': 'wrong\n' }), /exact post-migration bytes/);
+});
+
+test('controlled expectations cover every reported changed file with exact bytes', async () => {
+  for (const runtime of ['react-vite', 'next', 'vite-html']) {
+    const expected = JSON.parse(await readFile(new URL(`../ecosystem-ci/fixtures/controlled/${runtime}/css/expected.json`, import.meta.url)));
+    assert.deepEqual(Object.keys(expected.changedFiles).sort(), [...expected.first.changedFiles].sort());
+    assert.ok(Object.values(expected.changedFiles).every((contents) => typeof contents === 'string'));
+  }
+});
+
+test('command timeout awaits and bounds teardown failures', async () => {
+  await assert.rejects(waitForChild(new EventEmitter(), {
+    timeoutMs: 1,
+    terminate: async () => { throw new Error('kill failed'); },
+  }), /timed out.*teardown failed: kill failed/);
+  await assert.rejects(waitForChild(new EventEmitter(), {
+    timeoutMs: 1,
+    teardownTimeoutMs: 5,
+    terminate: () => new Promise(() => {}),
+  }), /teardown timed out after 5ms/);
+});
+
+test('final server teardown records and propagates only when lifecycle otherwise succeeded', async () => {
+  const failure = new Error('stop failed');
+  const recorded = [];
+  const server = { stop: async () => { throw failure; } };
+  await assert.rejects(teardownLifecycleServer(server, undefined, async (error) => recorded.push(error)), failure);
+  assert.deepEqual(recorded, [failure]);
+  await assert.doesNotReject(teardownLifecycleServer(server, new Error('primary'), async () => assert.fail('must preserve primary')));
 });
 
 test('workflow artifact allowlist rejects traversal, symlinks, directories, and undeclared files', async (t) => {

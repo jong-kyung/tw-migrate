@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, openSync } from 'node:fs';
-import { appendFile, cp, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { appendFile, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { assertInstalledLayout, publishPackages, stagePackages, validateProvenance } from './packages.js';
@@ -14,6 +14,8 @@ import { assertOracle, captureAll, maxCaptureAttempts } from './oracle.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const caches = ['.next', 'dist', 'node_modules/.vite'];
+const migrationSourceExtensions = new Set(['.js', '.jsx', '.ts', '.tsx', '.html', '.css', '.scss', '.sass', '.less']);
+const generatedDirectories = new Set(['node_modules', '.next', 'dist', 'build', 'out', 'coverage', '.cache', '.vite']);
 export const lifecycleTimeoutMs = 30 * 60_000;
 
 function inside(path, root) {
@@ -37,6 +39,14 @@ export async function artifactAllowlist(root, entries, maxBytes = 100 * 1024 * 1
     paths.push(path);
   }
   return paths;
+}
+
+export function assertExpectedChangedFiles(changedFiles, expectedFiles, actualFiles) {
+  assert.deepEqual(Object.keys(expectedFiles).sort(), [...changedFiles].sort(), 'exact-file expectations cover changedFiles');
+  assert.deepEqual(Object.keys(actualFiles).sort(), [...changedFiles].sort(), 'exact changedFiles were read');
+  for (const path of changedFiles) {
+    assert.deepEqual(Buffer.from(actualFiles[path]), Buffer.from(expectedFiles[path]), `exact post-migration bytes: ${path}`);
+  }
 }
 
 export function assertMigrationContract({ first, expectedFirst, actualSource, expectedSource, second, treeBeforeSecond, treeAfterSecond }) {
@@ -118,6 +128,38 @@ async function startServer(project, cwd, artifactRoot, phase) {
   }
 }
 
+export async function waitForChild(child, { timeoutMs, teardownTimeoutMs = 7_000, terminate = terminateTree }) {
+  const timedOut = Symbol('timed out');
+  let timer;
+  const outcome = new Promise((resolveRun) => {
+    child.once('error', (error) => resolveRun({ error }));
+    child.once('exit', (code, signal) => resolveRun({ code, signal }));
+  });
+  const result = await Promise.race([
+    outcome,
+    new Promise((resolveTimeout) => { timer = setTimeout(() => resolveTimeout(timedOut), timeoutMs); }),
+  ]);
+  clearTimeout(timer);
+  if (result !== timedOut) {
+    if (result.error) throw result.error;
+    return result;
+  }
+
+  let teardownTimer;
+  try {
+    const teardown = await Promise.race([
+      Promise.resolve().then(() => terminate(child)).then(() => null, (error) => error),
+      new Promise((resolveTimeout) => {
+        teardownTimer = setTimeout(() => resolveTimeout(new Error(`process teardown timed out after ${teardownTimeoutMs}ms`)), teardownTimeoutMs);
+      }),
+    ]);
+    if (teardown) throw new Error(`command timed out after ${timeoutMs}ms and teardown failed: ${teardown.message}`, { cause: teardown });
+    throw new Error(`command timed out after ${timeoutMs}ms`);
+  } finally {
+    clearTimeout(teardownTimer);
+  }
+}
+
 async function run(command, args, { cwd, logPath, timeoutMs = 180_000 }) {
   const log = openSync(logPath, 'a');
   const child = spawn(command, args, {
@@ -126,28 +168,53 @@ async function run(command, args, { cwd, logPath, timeoutMs = 180_000 }) {
     windowsHide: true,
     stdio: ['ignore', log, log],
   });
-  const timer = setTimeout(() => terminateTree(child), timeoutMs);
-  const result = await new Promise((resolveRun, reject) => {
-    child.once('error', reject);
-    child.once('exit', (code, signal) => resolveRun({ code, signal }));
-  }).finally(() => { clearTimeout(timer); closeSync(log); });
+  const result = await waitForChild(child, { timeoutMs }).finally(() => closeSync(log));
   if (result.code !== 0) throw new Error(`${command} ${args.join(' ')} failed (${result.signal ?? result.code}); see ${logPath}`);
 }
 
-async function hashMigrationPaths(root, paths) {
+async function checkedMigrationPath(root, canonicalRoot, relativePath) {
+  const path = resolve(root, relativePath);
+  if (!inside(path, root)) throw new Error(`migration-owned path escapes project: ${relativePath}`);
+  const stat = await lstat(path);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`migration-owned path is not a regular file: ${relativePath}`);
+  if (!inside(await realpath(path), canonicalRoot)) throw new Error(`migration-owned path escapes project through a symlink: ${relativePath}`);
+  return path;
+}
+
+async function readMigrationPaths(root, paths) {
+  root = resolve(root);
+  const canonicalRoot = await realpath(root);
   const result = {};
   for (const relativePath of [...paths].sort()) {
-    const path = resolve(root, relativePath);
-    if (!inside(path, root)) throw new Error(`migration-owned path escapes project: ${relativePath}`);
-    const stat = await lstat(path).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
-    if (stat === null) {
-      result[relativePath] = null;
-    } else {
-      if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`migration-owned path is not a regular file: ${relativePath}`);
-      result[relativePath] = createHash('sha256').update(await readFile(path)).digest('hex');
-    }
+    result[relativePath] = await readFile(await checkedMigrationPath(root, canonicalRoot, relativePath), 'utf8');
   }
   return result;
+}
+
+export async function snapshotMigrationSources(root) {
+  root = resolve(root);
+  const canonicalRoot = await realpath(root);
+  const result = {};
+  const walk = async (directory) => {
+    const stat = await lstat(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`migration source path is not a regular directory: ${relative(root, directory)}`);
+    if (!inside(await realpath(directory), canonicalRoot)) throw new Error(`migration source path escapes project through a symlink: ${relative(root, directory)}`);
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (generatedDirectories.has(entry.name)) continue;
+      const path = resolve(directory, entry.name);
+      if (!inside(path, root)) throw new Error(`migration source path escapes project: ${path}`);
+      if (entry.isSymbolicLink()) throw new Error(`migration source path is not regular: ${relative(root, path)}`);
+      if (entry.isDirectory()) {
+        await walk(path);
+      } else if (migrationSourceExtensions.has(extname(entry.name).toLowerCase())) {
+        const relativePath = relative(root, path);
+        const checked = await checkedMigrationPath(root, canonicalRoot, relativePath);
+        result[relativePath] = createHash('sha256').update(await readFile(checked)).digest('hex');
+      }
+    }
+  };
+  await walk(root);
+  return Object.fromEntries(Object.entries(result).sort(([left], [right]) => left.localeCompare(right)));
 }
 
 async function prepareDriver(project, runRoot, packageArtifactRoot, artifactRoot) {
@@ -196,6 +263,16 @@ async function prepareDriver(project, runRoot, packageArtifactRoot, artifactRoot
 
 async function readMaybe(path) {
   return readFile(path, 'utf8').catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+}
+
+export async function teardownLifecycleServer(server, primaryError, recordFailure) {
+  try {
+    await server?.stop();
+  } catch (error) {
+    if (primaryError) return;
+    await recordFailure(error);
+    throw error;
+  }
 }
 
 export function captureAttemptArtifactNames(phase, probe, attempt) {
@@ -278,6 +355,16 @@ export async function runLifecycle({
   const runRoot = await mkdtemp(join(tmpdir(), `tw-migrate-${project.id}-`));
   let server;
   let succeeded = false;
+  let primaryError;
+  const recordFailure = async (error) => {
+    await appendFile(join(artifactRoot, 'failure.log'), `${error.stack ?? error}\n`).catch(() => {});
+    ledger.failure = error.message;
+    ledger.failureFiles = [];
+    for (const name of caseArtifactNames(project)) {
+      if ((await lstat(join(artifactRoot, name)).catch(() => null))?.isFile()) ledger.failureFiles.push(name);
+    }
+    await writeFile(ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`).catch(() => {});
+  };
   try {
     const { driverRoot, installed } = await prepareDriver(project, runRoot, packageArtifactRoot, artifactRoot);
     await mark('installed', ['install.log', 'registry-bootstrap.log', 'registry-install.log']);
@@ -316,9 +403,11 @@ export async function runLifecycle({
     await writeFile(join(artifactRoot, 'first-report.json'), `${JSON.stringify(first, null, 2)}\n`);
     await writeFile(join(artifactRoot, 'source.diff'), first.diff);
     const actualSource = await readMaybe(sourcePath);
-    const treeBeforeSecond = await hashMigrationPaths(driverRoot, first.changedFiles);
+    const actualChangedFiles = await readMigrationPaths(driverRoot, first.changedFiles);
+    assertExpectedChangedFiles(first.changedFiles, expected.changedFiles, actualChangedFiles);
+    const treeBeforeSecond = await snapshotMigrationSources(driverRoot);
     const second = await module.migrate({ cwd: driverRoot, styleFile: project.source.path, write: true });
-    const treeAfterSecond = await hashMigrationPaths(driverRoot, first.changedFiles);
+    const treeAfterSecond = await snapshotMigrationSources(driverRoot);
     await writeFile(join(artifactRoot, 'second-report.json'), `${JSON.stringify(second, null, 2)}\n`);
     await mark('migration-output', ['first-report.json', 'second-report.json', 'source.diff']);
     assertMigrationContract({ first, expectedFirst: expected.first, actualSource, expectedSource: expected.source, second, treeBeforeSecond, treeAfterSecond });
@@ -354,17 +443,18 @@ export async function runLifecycle({
     succeeded = true;
     return { baseline, first, second, post, ledger };
   } catch (error) {
-    await appendFile(join(artifactRoot, 'failure.log'), `${error.stack ?? error}\n`).catch(() => {});
-    ledger.failure = error.message;
-    ledger.failureFiles = [];
-    for (const name of caseArtifactNames(project)) {
-      if ((await lstat(join(artifactRoot, name)).catch(() => null))?.isFile()) ledger.failureFiles.push(name);
-    }
-    await writeFile(ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`).catch(() => {});
+    primaryError = error;
+    await recordFailure(error);
     throw error;
   } finally {
-    await server?.stop().catch(() => {});
+    let teardownError;
+    try {
+      await teardownLifecycleServer(server, primaryError, recordFailure);
+    } catch (error) {
+      teardownError = error;
+    }
     await rm(runRoot, { recursive: true, force: true });
-    if (succeeded && temporaryRoot) await rm(temporaryRoot, { recursive: true, force: true });
+    if (succeeded && !teardownError && temporaryRoot) await rm(temporaryRoot, { recursive: true, force: true });
+    if (teardownError) throw teardownError;
   }
 }

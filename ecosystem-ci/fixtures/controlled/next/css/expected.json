@@ -142,5 +142,9 @@
     ],
     "failures": []
   },
-  "source": "\n\n\n\n\n\n.retained {\n  display: block;\n}\n"
+  "source": "\n\n\n\n\n\n.retained {\n  display: block;\n}\n",
+  "changedFiles": {
+    "app/page.jsx": "import styles from './page.module.css';\n\nexport default function Page() {\n  return <main>\n    <article className=\"hover:bg-[rgb(210,_220,_230)] p-[13px] text-[rgb(20,_30,_40)]\" data-probe=\"card\" data-identity=\"card\">Card</article>\n    <button className=\"focus-visible:[outline-offset:3px] focus:[outline:2px_solid_rgb(30,_90,_150)]\" data-identity=\"action\">Toggle details</button>\n    <section className=\"[@media_(min-width:700px)]:w-[200px] w-[100px]\" data-probe=\"responsive-layout\" data-identity=\"responsive\">Responsive</section>\n  </main>;\n}\n",
+    "app/page.module.css": "\n\n\n\n\n\n.retained {\n  display: block;\n}\n"
+  }
 }
