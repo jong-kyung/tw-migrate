@@ -92,6 +92,6 @@ pnpm test:ecosystem --case react-vite-css
 
 Use `--case production-react-vite-css` for the installed CLI production-build smoke, or `--all` for all twelve controlled runtime/stylesheet cells. The default `pnpm test` and packaged snapshots remain browser-free.
 
-Pinned external projects run only in the **Ecosystem browser** GitHub Actions workflow on `main`, manual dispatch, or a pull request carrying the `test:e2e` label. The workflow checks them out under the runner's temporary directory without credentials or secrets; there is intentionally no contributor-facing local external command.
+Pinned external projects run only in the **Ecosystem browser** GitHub Actions workflow on `main`, manual dispatch, or a pull request carrying the `ecosystem` label. The workflow checks them out under the runner's temporary directory without credentials or secrets; there is intentionally no contributor-facing local external command.
 
 On failure, each OS/case job uploads only its bounded phase ledger, computed-style captures, screenshots, migration output, source diff, and registry/install/build/server logs. See the [browser ecosystem RFC](./rfcs/browser-ecosystem-e2e.md) for immutable external evidence and the manifest, isolation, and oracle contracts.
