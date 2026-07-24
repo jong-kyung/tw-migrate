@@ -1,0 +1,17 @@
+---
+source: crates/snapshots/tests/cli_snapshots/styles.rs
+expression: document
+---
+case: style_sass_shared_entry
+
+--- step: automatic ---
+status: 0
+stdout: "--- a/Button.module.scss\n+++ b/Button.module.scss\n@@ -1,3 +1,3 @@\n-@use 'Shared.module';\n-.button { padding: 13px; }\n \n+@use 'Shared.module';\n+\n \n--- a/Button.tsx\n+++ b/Button.tsx\n@@ -1,4 +1,4 @@\n-import button from './Button.module.scss';\n-import shared from './Shared.module.scss';\n-export const Button = () => <><button className={button.button} /><span className={shared.shared} /></>;\n \n+import button from './Button.module.scss';\n+import shared from './Shared.module.scss';\n+export const Button = () => <><button className=\"p-[13px]\" /><span className={shared.shared} /></>;\n \nApplied 2 file(s); 1 rule(s) converted, 2 retained.\n"
+stderr: "warning[rebuild-required] Button.module.scss:0-0 Rebuild this preprocessor entry to refresh its generated CSS.\nwarning[unproven-source-map] Button.module.scss:0-0 The generated rule does not map uniquely to one authored source rule, so it is retained.\nwarning[unsupported-css-module-reference] Button.module.scss:0-0 Another stylesheet references the CSS Module, so it is retained.\nwarning[shared-preprocessor-source] Shared.module.scss:0-23 A Sass partial must be analyzed through every consuming entry, so it is retained.\n"
+workspace delta:
+  modified Button.module.scss
+    before: "@use 'Shared.module';\n.button { padding: 13px; }\n"
+    after: "@use 'Shared.module';\n\n"
+  modified Button.tsx
+    before: "import button from './Button.module.scss';\nimport shared from './Shared.module.scss';\nexport const Button = () => <><button className={button.button} /><span className={shared.shared} /></>;\n"
+    after: "import button from './Button.module.scss';\nimport shared from './Shared.module.scss';\nexport const Button = () => <><button className=\"p-[13px]\" /><span className={shared.shared} /></>;\n"

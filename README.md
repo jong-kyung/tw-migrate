@@ -74,3 +74,7 @@ Everything outside this subset is retained and reported with one of the warning 
 | `unsupported-value` | A declaration value cannot be represented as a Tailwind utility. |
 
 See the [core RFC](./rfcs/css-to-tailwind-migration-cli.md) and [preprocessor/HTML RFC](./rfcs/preprocessor-and-html-migration.md) for the complete design and remaining scope.
+
+## Testing the packaged CLI
+
+Run `pnpm test:snapshots` to build, pack, install, and test the published CLI shape against the cross-platform snapshot corpus. The command uses the npm registry and performs one shared install per test process. See [`crates/snapshots/README.md`](./crates/snapshots/README.md) for targeted runs and snapshot review commands.

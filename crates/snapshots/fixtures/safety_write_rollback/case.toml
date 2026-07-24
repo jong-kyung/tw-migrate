@@ -1,0 +1,4 @@
+[[steps]]
+name = "write failure rolls back"
+args = ["Button.module.css", "--tailwind-css", "globals.css", "--write"]
+status = 1

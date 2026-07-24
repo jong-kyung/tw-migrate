@@ -1,0 +1,136 @@
+# CLI-observable setup, integrity, workspace, and filesystem contracts.
+
+[[cases]]
+source = "reports a missing project Sass compiler as a recoverable package failure"
+disposition = "e2e"
+target = "safety_missing_sass"
+
+[[cases]]
+source = "post-edit Sass recompilation remains fatal under force"
+disposition = "e2e"
+target = "safety_post_edit_sass"
+
+[[cases]]
+source = "rejects malformed CSS returned by post-edit Sass compilation"
+disposition = "e2e"
+target = "safety_post_edit_sass"
+
+[[cases]]
+source = "reports a missing project Less compiler as a recoverable package failure"
+disposition = "e2e"
+target = "safety_missing_less"
+
+[[cases]]
+source = "post-edit Less rendering remains fatal under force"
+disposition = "e2e"
+target = "safety_post_edit_less"
+
+[[cases]]
+source = "rejects malformed CSS returned by post-edit Less rendering"
+disposition = "e2e"
+target = "safety_post_edit_less"
+
+[[cases]]
+source = "preserves source file permissions when writing changes"
+disposition = "platform-limited"
+target = "safety_permissions"
+
+[[cases]]
+source = "fails fast when leftover files from an interrupted run exist"
+disposition = "e2e"
+target = "safety_interrupted_leftovers"
+
+[[cases]]
+source = "restores originals when a write fails partway"
+disposition = "platform-limited"
+target = "safety_write_rollback"
+
+[[cases]]
+source = "completes both workspace packages retaining the compile-failing rule"
+disposition = "e2e"
+target = "safety_workspace_candidate_failure"
+
+[[cases]]
+source = "--force skips a broken workspace package and applies successful groups"
+disposition = "e2e"
+target = "safety_force_workspace_skip"
+
+[[cases]]
+source = "retains a CSS Module linked with an entity from gitignored HTML"
+disposition = "e2e"
+target = "safety_gitignored_html_entity"
+
+[[cases]]
+source = "rejects stylesheet targets reached through symlinks"
+disposition = "e2e"
+target = "safety_symlink_rejection"
+
+[[cases]]
+source = "explicit CSS paths bypass Git ignore filtering"
+disposition = "e2e"
+target = "safety_explicit_gitignored_target"
+
+[[cases]]
+source = "reference-only workspace consumers prevent CSS Module deletion"
+disposition = "e2e"
+target = "safety_reference_only_workspace"
+
+[[cases]]
+source = "workspace mode updates a selected cross-package consumer"
+disposition = "e2e"
+target = "safety_workspace_consumer"
+
+[[cases]]
+source = "workspace mode migrates a cross-package HTML consumer"
+disposition = "e2e"
+target = "safety_workspace_html_consumer"
+
+[[cases]]
+source = "detects source changes between planning reads"
+disposition = "e2e"
+target = "safety_planning_mutation"
+
+[[cases]]
+source = "detects leftover files stranded outside the selected package"
+disposition = "e2e"
+target = "safety_interrupted_leftovers"
+
+[[cases]]
+source = "ignores unparseable gitignored files without module references"
+disposition = "e2e"
+target = "safety_gitignored_unparseable"
+
+[[cases]]
+source = "retains a module named by an unparseable gitignored file"
+disposition = "e2e"
+target = "safety_gitignored_named_module"
+
+[[cases]]
+source = "retains a module referenced only from a gitignored consumer"
+disposition = "e2e"
+target = "safety_gitignored_consumer"
+
+[[cases]]
+source = "retains a relationship disproven by a gitignored render site"
+disposition = "e2e"
+target = "safety_gitignored_relationship"
+
+[[cases]]
+source = "retains a module composed by a gitignored stylesheet"
+disposition = "e2e"
+target = "safety_gitignored_composes"
+
+[[cases]]
+source = "verifies reference-only source snapshots before writing"
+disposition = "e2e"
+target = "safety_reference_mutation"
+
+[[cases]]
+source = "--force never swallows cross-group plan collisions"
+disposition = "e2e"
+target = "safety_force_collision"
+
+[[cases]]
+source = "--force skips a package with malformed input CSS"
+disposition = "e2e"
+target = "safety_force_malformed"

@@ -1,0 +1,12 @@
+---
+source: crates/snapshots/tests/cli_snapshots/safety.rs
+expression: document
+---
+case: safety_force_malformed
+
+--- step: force skips malformed package ---
+status: 0
+stdout: "Applied 0 file(s); 0 rule(s) converted, 0 retained.\n"
+stderr: "skipped[.] Failed to parse [WORKSPACE]/Button.module.css: Error { kind: Unexpected(\"<eof>\", \"}\"), span: Span { start: 0, end: 1 } }\n"
+workspace delta:
+  unchanged

@@ -1,0 +1,12 @@
+---
+source: crates/snapshots/tests/cli_snapshots/styles.rs
+expression: document
+---
+case: style_less_interpolation
+
+--- step: migrate ---
+status: 0
+stdout: "Applied 0 file(s); 0 rule(s) converted, 1 retained.\n"
+stderr: "warning[unproven-source-map] Button.module.less:0-0 The generated rule does not map uniquely to one authored source rule, so it is retained.\n"
+workspace delta:
+  unchanged

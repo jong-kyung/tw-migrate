@@ -1,0 +1,19 @@
+---
+source: crates/snapshots/tests/cli_snapshots/styles.rs
+expression: document
+---
+case: style_less_compile_error
+
+--- step: without force ---
+status: 1
+stdout: ""
+stderr: "tw-migrate: Unrecognised input. Possibly missing something\n"
+workspace delta:
+  unchanged
+
+--- step: with force ---
+status: 0
+stdout: "Previewed 0 file(s); 0 rule(s) converted, 0 retained.\n"
+stderr: "skipped[.] Unrecognised input. Possibly missing something\n"
+workspace delta:
+  unchanged

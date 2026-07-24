@@ -1,0 +1,14 @@
+---
+source: crates/snapshots/tests/cli_snapshots/safety.rs
+expression: document
+---
+case: safety_planning_mutation
+
+--- step: mutated planning source ---
+status: 1
+stdout: ""
+stderr: "tw-migrate: Source changed during planning: [WORKSPACE]/bbb/globals.css\n"
+workspace delta:
+  modified bbb/globals.css
+    before: "@import \"tailwindcss\";\n"
+    after: "@import \"tailwindcss\";\n/* mutated */\n"

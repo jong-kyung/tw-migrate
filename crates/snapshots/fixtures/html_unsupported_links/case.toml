@@ -1,0 +1,4 @@
+[[steps]]
+name = "preview"
+args = ["legacy.css", "--tailwind-css", "globals.css"]
+status = 0

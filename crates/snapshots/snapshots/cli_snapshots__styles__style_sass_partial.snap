@@ -1,0 +1,12 @@
+---
+source: crates/snapshots/tests/cli_snapshots/styles.rs
+expression: document
+---
+case: style_sass_partial
+
+--- step: migrate ---
+status: 0
+stdout: "Previewed 0 file(s); 0 rule(s) converted, 1 retained.\n"
+stderr: "warning[shared-preprocessor-source] _shared.scss:0-24 A Sass partial must be analyzed through every consuming entry, so it is retained.\n"
+workspace delta:
+  unchanged

@@ -1,0 +1,12 @@
+---
+source: crates/snapshots/tests/cli_snapshots/styles.rs
+expression: document
+---
+case: style_less_functions
+
+--- step: migrate ---
+status: 0
+stdout: "--- a/Card.tsx\n+++ b/Card.tsx\n@@ -1,2 +1,2 @@\n-export const Card = () => <div className=\"child\" />;\n \n+export const Card = () => <div className=\"child [.card_&]:p-[13px]\" />;\n \nPreviewed 1 file(s); 0 rule(s) converted, 1 retained.\n"
+stderr: "warning[retained-global-rule] legacy.less:0-44 Global CSS is never deleted automatically.\n"
+workspace delta:
+  unchanged

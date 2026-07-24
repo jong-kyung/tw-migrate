@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { chmod, lstat, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, lstat, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
@@ -137,7 +137,7 @@ export async function migrate(options = {}) {
 }
 
 async function resolveScope(options) {
-  const cwd = resolve(options.cwd ?? process.cwd());
+  const cwd = await realpath(resolve(options.cwd ?? process.cwd()));
   const currentPackage = await findPackageRoot(cwd);
   const gitRoot = await findGitRoot(currentPackage);
   const workspaceRoot = gitRoot && !(await isIgnoredByGit(gitRoot, currentPackage))

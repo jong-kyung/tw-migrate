@@ -1,0 +1,26 @@
+---
+source: crates/snapshots/tests/cli_snapshots/html_workspaces.rs
+assertion_line: 3
+expression: document
+---
+case: multi_module_merged
+
+--- step: write ---
+status: 0
+stdout: "--- a/accent.module.css\n+++ b/accent.module.css\n@@ -1,2 +1,1 @@\n-.accent { color: red; }\n \n \n--- a/Card.tsx\n+++ b/Card.tsx\n@@ -1,4 +1,2 @@\n-import title from './title.module.css';\n-import accent from './accent.module.css';\n-export const Card = () => <div className={`${title.title} ${accent.accent}`} />;\n \n+export const Card = () => <div className=\"p-[13px] text-[red]\" />;\n \n--- a/title.module.css\n+++ b/title.module.css\n@@ -1,2 +1,1 @@\n-.title { padding: 13px; }\n \n \nApplied 3 file(s); 2 rule(s) converted, 0 retained.\n"
+stderr: ""
+workspace delta:
+  modified Card.tsx
+    before: "import title from './title.module.css';\nimport accent from './accent.module.css';\nexport const Card = () => <div className={`${title.title} ${accent.accent}`} />;\n"
+    after: "export const Card = () => <div className=\"p-[13px] text-[red]\" />;\n"
+  deleted accent.module.css
+    before: ".accent { color: red; }\n"
+  deleted title.module.css
+    before: ".title { padding: 13px; }\n"
+
+--- step: second run ---
+status: 0
+stdout: "Applied 0 file(s); 0 rule(s) converted, 0 retained.\n"
+stderr: ""
+workspace delta:
+  unchanged

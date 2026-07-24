@@ -1,0 +1,19 @@
+---
+source: crates/snapshots/tests/cli_snapshots/styles.rs
+expression: document
+---
+case: style_sass_compile_error
+
+--- step: without force ---
+status: 1
+stdout: ""
+stderr: "tw-migrate: Expected expression.\n  ╷\n1 │ .button { padding: ;\n  │                    ^\n  ╵\n  Button.module.scss 1:20  root stylesheet\n"
+workspace delta:
+  unchanged
+
+--- step: with force ---
+status: 0
+stdout: "Previewed 0 file(s); 0 rule(s) converted, 0 retained.\n"
+stderr: "skipped[.] Expected expression.\n  ╷\n1 │ .button { padding: ;\n  │                    ^\n  ╵\n  Button.module.scss 1:20  root stylesheet\n"
+workspace delta:
+  unchanged

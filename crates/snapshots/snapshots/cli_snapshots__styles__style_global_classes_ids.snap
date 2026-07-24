@@ -1,0 +1,21 @@
+---
+source: crates/snapshots/tests/cli_snapshots/styles.rs
+expression: document
+---
+case: style_global_classes_ids
+
+--- step: migrate ---
+status: 0
+stdout: "--- a/Card.tsx\n+++ b/Card.tsx\n@@ -1,2 +1,2 @@\n-export const Card = () => <main id=\"hero\" className=\"card\" />;\n \n+export const Card = () => <main id=\"hero\" className=\"card p-[13px] h-[100vh]\" />;\n \nApplied 1 file(s); 0 rule(s) converted, 2 retained.\n"
+stderr: "warning[retained-global-rule] legacy.css:0-24 Global CSS is never deleted automatically.\nwarning[retained-global-rule] legacy.css:25-49 Global CSS is never deleted automatically.\n"
+workspace delta:
+  modified Card.tsx
+    before: "export const Card = () => <main id=\"hero\" className=\"card\" />;\n"
+    after: "export const Card = () => <main id=\"hero\" className=\"card p-[13px] h-[100vh]\" />;\n"
+
+--- step: second run ---
+status: 0
+stdout: "Applied 0 file(s); 0 rule(s) converted, 2 retained.\n"
+stderr: "warning[retained-global-rule] legacy.css:0-24 Global CSS is never deleted automatically.\nwarning[retained-global-rule] legacy.css:25-49 Global CSS is never deleted automatically.\n"
+workspace delta:
+  unchanged

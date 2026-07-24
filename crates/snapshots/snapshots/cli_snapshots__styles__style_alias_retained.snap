@@ -1,0 +1,12 @@
+---
+source: crates/snapshots/tests/cli_snapshots/styles.rs
+expression: document
+---
+case: style_alias_retained
+
+--- step: migrate ---
+status: 0
+stdout: "Previewed 0 file(s); 0 rule(s) converted, 1 retained.\n"
+stderr: "warning[unresolved-selector-target] Button.module.css:0-26 No exclusively supported className references were found.\nwarning[aliased-css-module-reference] Button.tsx:48-75 A CSS Module class is aliased to a binding, so the module is retained.\nwarning[dynamic-class-name] Button.tsx:123-136 Only static className values are supported.\n"
+workspace delta:
+  unchanged

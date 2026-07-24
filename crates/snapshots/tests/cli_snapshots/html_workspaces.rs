@@ -1,0 +1,28 @@
+use tw_migrate_snapshots::{default_setup, run_case};
+
+snapshot_cases! {
+    html_static_literals => default_setup,
+    html_static_module_link => default_setup,
+    html_dynamic_attribute => default_setup,
+    html_inline_script_reference => default_setup,
+    html_irrelevant_inline_script => default_setup,
+    html_unsupported_links => default_setup,
+    html_attribute_edges => default_setup,
+    html_import_graphs => default_setup,
+    html_late_import => default_setup,
+    html_base_resolution => default_setup,
+    html_linked_stylesheets => default_setup,
+    html_linked_conflict => default_setup,
+    html_invalid_force => default_setup,
+    inferred_preprocessor_source => default_setup,
+    ambiguous_preprocessor_source => default_setup,
+    generated_css_same_stem => default_setup,
+    link_discovered_module_import => default_setup,
+    nested_package_ownership => default_setup,
+    nested_html_reference => default_setup,
+    nested_target_errors => default_setup,
+    multi_module_single_source => default_setup,
+    multi_module_merged => default_setup,
+    multi_module_conflict => default_setup,
+    tailwind_override_discovery => default_setup,
+}

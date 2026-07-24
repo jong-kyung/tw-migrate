@@ -1,0 +1,4 @@
+[[steps]]
+name = "migrate"
+args = ["Button.module.less", "--tailwind-css", "globals.css", "--write"]
+status = 0

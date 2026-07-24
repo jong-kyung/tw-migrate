@@ -1,0 +1,13 @@
+isolated = true
+[[steps]]
+name = "compiler throws after edit"
+args = ["Button.module.less", "--tailwind-css", "globals.css", "--force", "--write"]
+status = 1
+[steps.env]
+FAKE_RESULT = "throw"
+[[steps]]
+name = "compiler returns malformed CSS after edit"
+args = ["Button.module.less", "--tailwind-css", "globals.css", "--force", "--write"]
+status = 1
+[steps.env]
+FAKE_RESULT = "malformed"

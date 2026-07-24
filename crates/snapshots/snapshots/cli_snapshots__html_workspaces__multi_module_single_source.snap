@@ -1,0 +1,32 @@
+---
+source: crates/snapshots/tests/cli_snapshots/html_workspaces.rs
+expression: document
+---
+case: multi_module_single_source
+
+--- step: preview ---
+status: 0
+stdout: "--- a/A.module.css\n+++ b/A.module.css\n@@ -1,2 +1,1 @@\n-.a { padding: 13px; }\n \n \n--- a/App.tsx\n+++ b/App.tsx\n@@ -1,4 +1,2 @@\n-import a from './A.module.css';\n-import b from './B.module.css';\n-export const App = () => <><div className={a.a} /><div className={b.b} /></>;\n \n+export const App = () => <><div className=\"p-[13px]\" /><div className=\"text-[red]\" /></>;\n \n--- a/B.module.css\n+++ b/B.module.css\n@@ -1,2 +1,1 @@\n-.b { color: red; }\n \n \nPreviewed 3 file(s); 2 rule(s) converted, 0 retained.\n"
+stderr: ""
+workspace delta:
+  unchanged
+
+--- step: write ---
+status: 0
+stdout: "--- a/A.module.css\n+++ b/A.module.css\n@@ -1,2 +1,1 @@\n-.a { padding: 13px; }\n \n \n--- a/App.tsx\n+++ b/App.tsx\n@@ -1,4 +1,2 @@\n-import a from './A.module.css';\n-import b from './B.module.css';\n-export const App = () => <><div className={a.a} /><div className={b.b} /></>;\n \n+export const App = () => <><div className=\"p-[13px]\" /><div className=\"text-[red]\" /></>;\n \n--- a/B.module.css\n+++ b/B.module.css\n@@ -1,2 +1,1 @@\n-.b { color: red; }\n \n \nApplied 3 file(s); 2 rule(s) converted, 0 retained.\n"
+stderr: ""
+workspace delta:
+  deleted A.module.css
+    before: ".a { padding: 13px; }\n"
+  modified App.tsx
+    before: "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = () => <><div className={a.a} /><div className={b.b} /></>;\n"
+    after: "export const App = () => <><div className=\"p-[13px]\" /><div className=\"text-[red]\" /></>;\n"
+  deleted B.module.css
+    before: ".b { color: red; }\n"
+
+--- step: second run ---
+status: 0
+stdout: "Applied 0 file(s); 0 rule(s) converted, 0 retained.\n"
+stderr: ""
+workspace delta:
+  unchanged

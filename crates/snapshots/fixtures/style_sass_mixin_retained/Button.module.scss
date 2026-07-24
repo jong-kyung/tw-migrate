@@ -1,0 +1,2 @@
+@mixin pad { padding: 13px; }
+.button { @include pad; }

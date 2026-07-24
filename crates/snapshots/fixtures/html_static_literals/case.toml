@@ -1,0 +1,14 @@
+[[steps]]
+name = "preview"
+args = ["legacy.css", "--tailwind-css", "globals.css"]
+status = 0
+
+[[steps]]
+name = "write"
+args = ["legacy.css", "--tailwind-css", "globals.css", "--write"]
+status = 0
+
+[[steps]]
+name = "second run"
+args = ["legacy.css", "--tailwind-css", "globals.css", "--write"]
+status = 0

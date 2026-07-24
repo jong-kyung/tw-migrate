@@ -1,0 +1,12 @@
+---
+source: crates/snapshots/tests/cli_snapshots/styles.rs
+expression: document
+---
+case: style_dynamic_global_warning
+
+--- step: automatic ---
+status: 0
+stdout: "Previewed 0 file(s); 0 rule(s) converted, 2 retained.\n"
+stderr: "warning[retained-global-rule] a.css:0-20 Global CSS is never deleted automatically.\nwarning[retained-global-rule] b.css:0-20 Global CSS is never deleted automatically.\nwarning[dynamic-class-name] Button.tsx:57-66 Only static className values are supported.\n"
+workspace delta:
+  unchanged

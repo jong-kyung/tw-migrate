@@ -1,0 +1,12 @@
+---
+source: crates/snapshots/tests/cli_snapshots/safety.rs
+expression: document
+---
+case: safety_interrupted_leftovers
+
+--- step: leftover outside selected package ---
+status: 1
+stdout: ""
+stderr: "tw-migrate: Found leftover tw-migrate files from an interrupted run:\n  ../b/.B.tsx.tw-migrate-backup-[TOKEN]\nRestore each \".<name>.tw-migrate-backup-*\" file by renaming it back to \"<name>\", delete any remaining \".<name>.tw-migrate-*\" staging files, then re-run.\n"
+workspace delta:
+  unchanged

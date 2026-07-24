@@ -1,0 +1,19 @@
+---
+source: crates/snapshots/tests/cli_snapshots/html_workspaces.rs
+expression: document
+---
+case: nested_target_errors
+
+--- step: nested positional ---
+status: 1
+stdout: ""
+stderr: "tw-migrate: The selected stylesheet must belong to the current package\n"
+workspace delta:
+  unchanged
+
+--- step: nested tailwind ---
+status: 1
+stdout: ""
+stderr: "tw-migrate: The Tailwind CSS entry must belong to the current package\n"
+workspace delta:
+  unchanged

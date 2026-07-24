@@ -1,0 +1,5 @@
+[[steps]]
+name = "selected package only"
+cwd = "shared"
+args = ["--tailwind-css", "globals.css", "--write"]
+status = 0

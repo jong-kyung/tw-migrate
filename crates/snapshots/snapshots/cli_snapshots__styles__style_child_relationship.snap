@@ -1,0 +1,23 @@
+---
+source: crates/snapshots/tests/cli_snapshots/styles.rs
+expression: document
+---
+case: style_child_relationship
+
+--- step: migrate ---
+status: 0
+stdout: "--- a/Button.module.css\n+++ b/Button.module.css\n@@ -1,3 +1,1 @@\n-.button { display: flex; }\n-.button > .label { padding: 13px; }\n \n \n--- a/Button.tsx\n+++ b/Button.tsx\n@@ -1,3 +1,2 @@\n-import styles from './Button.module.css';\n-export const Button = () => <button className={styles.button}><span className={styles.label}>Save</span></button>;\n \n+export const Button = () => <button className=\"flex\"><span className=\"p-[13px]\">Save</span></button>;\n \nApplied 2 file(s); 2 rule(s) converted, 0 retained.\n"
+stderr: ""
+workspace delta:
+  deleted Button.module.css
+    before: ".button { display: flex; }\n.button > .label { padding: 13px; }\n"
+  modified Button.tsx
+    before: "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}><span className={styles.label}>Save</span></button>;\n"
+    after: "export const Button = () => <button className=\"flex\"><span className=\"p-[13px]\">Save</span></button>;\n"
+
+--- step: second run ---
+status: 0
+stdout: "Applied 0 file(s); 0 rule(s) converted, 0 retained.\n"
+stderr: ""
+workspace delta:
+  unchanged

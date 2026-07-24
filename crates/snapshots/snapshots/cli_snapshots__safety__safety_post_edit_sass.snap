@@ -1,0 +1,19 @@
+---
+source: crates/snapshots/tests/cli_snapshots/safety.rs
+expression: document
+---
+case: safety_post_edit_sass
+
+--- step: compiler throws after edit ---
+status: 1
+stdout: ""
+stderr: "tw-migrate: post-edit compile failed\n"
+workspace delta:
+  unchanged
+
+--- step: compiler returns malformed CSS after edit ---
+status: 1
+stdout: ""
+stderr: "tw-migrate: Edited stylesheet no longer parses: Error { kind: Unexpected(\"<eof>\", \"}\"), span: Span { start: 0, end: 1 } }\n"
+workspace delta:
+  unchanged

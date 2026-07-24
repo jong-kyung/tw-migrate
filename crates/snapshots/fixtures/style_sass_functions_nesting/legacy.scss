@@ -1,0 +1,2 @@
+@function gap() { @return 13px; }
+.card { .child { padding: gap(); } }

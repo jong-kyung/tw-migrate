@@ -1,0 +1,2 @@
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+.button { animation: fade 1s; }

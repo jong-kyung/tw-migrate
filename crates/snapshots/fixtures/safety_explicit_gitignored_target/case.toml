@@ -1,0 +1,8 @@
+[[steps]]
+name = "automatic discovery"
+args = ["--tailwind-css", "globals.css"]
+status = 0
+[[steps]]
+name = "explicit ignored target"
+args = ["Ignored.module.css", "--tailwind-css", "globals.css"]
+status = 0

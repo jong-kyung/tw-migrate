@@ -1,0 +1,14 @@
+---
+source: crates/snapshots/tests/cli_snapshots/styles.rs
+expression: document
+---
+case: style_pseudo_argument
+
+--- step: migrate ---
+status: 0
+stdout: "--- a/Card.tsx\n+++ b/Card.tsx\n@@ -1,2 +1,2 @@\n-export const Card = () => <div className=\"a\" />;\n \n+export const Card = () => <div className=\"a [&:not(.abc)]:p-[13px]\" />;\n \nApplied 1 file(s); 0 rule(s) converted, 1 retained.\n"
+stderr: "warning[retained-global-rule] legacy.css:0-31 Global CSS is never deleted automatically.\n"
+workspace delta:
+  modified Card.tsx
+    before: "export const Card = () => <div className=\"a\" />;\n"
+    after: "export const Card = () => <div className=\"a [&:not(.abc)]:p-[13px]\" />;\n"

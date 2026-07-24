@@ -1,0 +1,12 @@
+---
+source: crates/snapshots/tests/cli_snapshots/styles.rs
+expression: document
+---
+case: style_candidate_keyframes
+
+--- step: migrate ---
+status: 0
+stdout: "Applied 0 file(s); 0 rule(s) converted, 1 retained.\n"
+stderr: "warning[candidate-compilation-failure] Button.module.css:57-103 Tailwind did not generate CSS for `[COLOR:red]`, so the rule is retained.\n"
+workspace delta:
+  unchanged

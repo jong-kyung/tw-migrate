@@ -1,0 +1,3 @@
+.fancy {
+  composes: button from './Button.module.css';
+}

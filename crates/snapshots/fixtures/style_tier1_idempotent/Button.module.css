@@ -1,0 +1,22 @@
+.button {
+  position: absolute;
+  inset: 0;
+  left: 2rem;
+  overflow: hidden;
+  overflow-x: auto;
+  z-index: 30;
+  opacity: 50%;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: 0.025em;
+  text-align: center;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  border-width: 2px;
+  border-style: dashed;
+  border-color: #123456;
+  min-width: 24rem;
+  max-height: 2rem;
+}

@@ -1,0 +1,14 @@
+---
+source: crates/snapshots/tests/cli_snapshots/html_workspaces.rs
+expression: document
+---
+case: html_inline_script_reference
+
+--- step: write ---
+status: 0
+stdout: "--- a/index.html\n+++ b/index.html\n@@ -1,3 +1,3 @@\n-<link rel=\"stylesheet\" href=\"./Button.module.css\"><button class=\"button\">HTML</button>\n-<script>document.body.insertAdjacentHTML(\"beforeend\", '<button class=\"button\">More</button>');</script>\n \n+<link rel=\"stylesheet\" href=\"./Button.module.css\"><button class=\"button p-[13px]\">HTML</button>\n+<script>document.body.insertAdjacentHTML(\"beforeend\", '<button class=\"button\">More</button>');</script>\n \nApplied 1 file(s); 0 rule(s) converted, 1 retained.\n"
+stderr: "warning[unresolved-selector-target] Button.module.css:0-26 No exclusively supported className references were found.\nwarning[unproven-script-reference] index.html:0-0 An inline script names a CSS Module class, so the module is retained.\n"
+workspace delta:
+  modified index.html
+    before: "<link rel=\"stylesheet\" href=\"./Button.module.css\"><button class=\"button\">HTML</button>\n<script>document.body.insertAdjacentHTML(\"beforeend\", '<button class=\"button\">More</button>');</script>\n"
+    after: "<link rel=\"stylesheet\" href=\"./Button.module.css\"><button class=\"button p-[13px]\">HTML</button>\n<script>document.body.insertAdjacentHTML(\"beforeend\", '<button class=\"button\">More</button>');</script>\n"
