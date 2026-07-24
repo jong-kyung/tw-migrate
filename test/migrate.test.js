@@ -46,6 +46,26 @@ test('canonicalizes aliased cwd paths before Git discovery', async () => {
   }
 });
 
+test('returns structured migration report fields', async () => {
+  const cwd = await fixture();
+  try {
+    const report = await migrate({ cwd });
+    assert.deepEqual(report.candidates, ['p-[13px]']);
+    assert.deepEqual(report.rules, [
+      {
+        selector: '.button',
+        status: 'converted',
+        candidates: ['p-[13px]'],
+        file: 'Button.module.css',
+        ruleId: { start: 0, end: 26 },
+        authoredSpan: { start: 0, end: 26 },
+      },
+    ]);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test('validates API-only migration options', async () => {
   const cwd = await fixture();
   try {
