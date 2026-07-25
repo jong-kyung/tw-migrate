@@ -50,7 +50,7 @@
     "playwright": "1.61.1",
     "sass": "1.101.3",
     "tailwindcss": "4.3.3",
-    "typescript": "5.9.3",
+    "typescript": "7.0.2",
     "verdaccio": "6.8.0",
     "vitest": "4.1.10"
   },
