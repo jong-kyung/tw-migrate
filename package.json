@@ -2,10 +2,6 @@
   "name": "tw-migrate",
   "version": "0.0.0",
   "description": "Preview and migrate React CSS to Tailwind utilities",
-  "type": "module",
-  "packageManager": "pnpm@11.15.1",
-  "main": "index.js",
-  "types": "index.d.ts",
   "bin": {
     "tw-migrate": "bin/tw-migrate.js"
   },
@@ -18,9 +14,9 @@
     "rfcs",
     "style-compiler.js"
   ],
-  "engines": {
-    "node": ">=22.18.0"
-  },
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
   "scripts": {
     "build": "napi build --manifest-path crates/tw_migrate/Cargo.toml --package-json-path package.json --output-dir . --platform --release --no-js --dts binding.d.ts",
     "build:debug": "napi build --manifest-path crates/tw_migrate/Cargo.toml --package-json-path package.json --output-dir . --platform --no-js --dts binding.d.ts",
@@ -30,7 +26,32 @@
     "test:rust": "cargo test",
     "typecheck": "tsc --noEmit",
     "snapshots:prepare": "node -e \"const fs=require('node:fs'); for(const dir of fs.readdirSync('npm')) for(const file of fs.readdirSync('npm/'+dir)) if(file.endsWith('.node')) fs.rmSync('npm/'+dir+'/'+file)\" && pnpm build && pnpm artifacts",
-    "test:snapshots": "pnpm snapshots:prepare && cargo test -p tw-migrate-snapshots"
+    "test:snapshots": "pnpm snapshots:prepare && cargo test -p tw-migrate-snapshots",
+    "prepare": "vp config"
+  },
+  "dependencies": {
+    "parse5": "7.3.0"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "3.7.3",
+    "@types/node": "22.20.1",
+    "@vitest/browser-playwright": "catalog:",
+    "less": "4.7.0",
+    "playwright": "1.61.1",
+    "sass": "1.101.3",
+    "tailwindcss": "4.3.3",
+    "typescript": "7.0.2",
+    "verdaccio": "6.8.0",
+    "vite": "catalog:",
+    "vite-plus": "catalog:",
+    "vitest": "catalog:"
+  },
+  "optionalDependencies": {
+    "tw-migrate-darwin-arm64": "workspace:0.0.0",
+    "tw-migrate-darwin-x64": "workspace:0.0.0",
+    "tw-migrate-linux-arm64-gnu": "workspace:0.0.0",
+    "tw-migrate-linux-x64-gnu": "workspace:0.0.0",
+    "tw-migrate-win32-x64-msvc": "workspace:0.0.0"
   },
   "napi": {
     "binaryName": "tw-migrate",
@@ -42,26 +63,8 @@
       "x86_64-pc-windows-msvc"
     ]
   },
-  "devDependencies": {
-    "@napi-rs/cli": "3.7.3",
-    "@types/node": "22.20.1",
-    "@vitest/browser-playwright": "4.1.10",
-    "less": "4.7.0",
-    "playwright": "1.61.1",
-    "sass": "1.101.3",
-    "tailwindcss": "4.3.3",
-    "typescript": "7.0.2",
-    "verdaccio": "6.8.0",
-    "vitest": "4.1.10"
+  "engines": {
+    "node": ">=22.18.0"
   },
-  "optionalDependencies": {
-    "tw-migrate-darwin-arm64": "workspace:0.0.0",
-    "tw-migrate-darwin-x64": "workspace:0.0.0",
-    "tw-migrate-linux-arm64-gnu": "workspace:0.0.0",
-    "tw-migrate-linux-x64-gnu": "workspace:0.0.0",
-    "tw-migrate-win32-x64-msvc": "workspace:0.0.0"
-  },
-  "dependencies": {
-    "parse5": "7.3.0"
-  }
+  "packageManager": "pnpm@11.15.1"
 }

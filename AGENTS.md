@@ -119,14 +119,14 @@ Preview is the default. Use `--write` only when a task explicitly requires files
 
 Choose checks by change type:
 
-| Change type | Useful validation |
-| --- | --- |
-| Docs or agent guidance | `git diff --check -- <files>` and verify referenced paths/commands |
-| Rust planner behavior | `cargo test` or a focused `cargo test <filter>` |
-| JavaScript API/orchestration | `pnpm build:debug` followed by `node --test` or a focused Node test |
-| CLI output or filesystem behavior | `pnpm test:snapshots` or a focused packaged snapshot case |
-| Packaging/native loading | `pnpm build && pnpm artifacts` |
-| Full local validation | `pnpm test && pnpm test:snapshots && git status --short` |
+| Change type                       | Useful validation                                                   |
+| --------------------------------- | ------------------------------------------------------------------- |
+| Docs or agent guidance            | `git diff --check -- <files>` and verify referenced paths/commands  |
+| Rust planner behavior             | `cargo test` or a focused `cargo test <filter>`                     |
+| JavaScript API/orchestration      | `pnpm build:debug` followed by `node --test` or a focused Node test |
+| CLI output or filesystem behavior | `pnpm test:snapshots` or a focused packaged snapshot case           |
+| Packaging/native loading          | `pnpm build && pnpm artifacts`                                      |
+| Full local validation             | `pnpm test && pnpm test:snapshots && git status --short`            |
 
 `pnpm test` runs the default Rust package, builds the debug addon, and runs the retained Node tests.
 
@@ -209,3 +209,20 @@ The workspace `default-members` excludes `crates/snapshots`, so plain `cargo tes
 - Preprocessor and HTML RFC: `rfcs/preprocessor-and-html-migration.md`
 - Packaged snapshot workflow: `crates/snapshots/README.md`
 - CI contract: `.github/workflows/ci.yml`
+
+<!--VITE PLUS START-->
+
+# Using Vite+, the Unified Toolchain for the Web
+
+This project is using Vite+, a unified toolchain built on top of Vite, Rolldown, Vitest, tsdown, Oxlint, Oxfmt, and Vite Task. Vite+ wraps runtime management, package management, and frontend tooling in a single global CLI called `vp`. Vite+ is distinct from Vite, and it invokes Vite through `vp dev` and `vp build`. Run `vp help` to print a list of commands and `vp <command> --help` for information about a specific command.
+
+Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.dev/guide/.
+
+## Review Checklist
+
+- [ ] Run `vp install` after pulling remote changes and before getting started.
+- [ ] Run `vp check` and `vp test` to format, lint, type check and test changes.
+- [ ] Check if there are `vite.config.ts` tasks or `package.json` scripts necessary for validation, run via `vp run <script>`.
+- [ ] If setup, runtime, or package-manager behavior looks wrong, run `vp env doctor` and include its output when asking for help.
+
+<!--VITE PLUS END-->
