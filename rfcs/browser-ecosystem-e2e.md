@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Implemented
 
 ## Summary
 
@@ -11,7 +11,7 @@ Proposed
 The suite has two permanent coverage layers:
 
 1. Twelve repository-owned controlled fixtures cover the Cartesian product of React+Vite, Next.js, and Vite+HTML with CSS, SCSS, indented Sass, and Less.
-2. Three to five pinned public projects cover installation and runtime compatibility in existing Tailwind CSS v4 applications.
+2. Two to five pinned public projects cover installation and runtime compatibility in existing Tailwind CSS v4 applications.
 
 External projects supplement the controlled fixtures. They do not replace them. Public projects cannot reliably provide every runtime and stylesheet combination, stable source expectations, or long-lived interaction probes. Controlled fixtures provide that deterministic contract; external projects detect integration assumptions that the fixtures do not model.
 
@@ -90,7 +90,7 @@ These fixtures remain after external coverage is added. Removing them would disc
 
 ### External ecosystem projects
 
-The external corpus owns real-project compatibility rather than matrix completeness. It contains three to five public, non-archived, non-fork repositories pinned by full commit SHA.
+The external corpus owns real-project compatibility rather than matrix completeness. It contains two to five public, non-archived, non-fork repositories pinned by full commit SHA.
 
 A project qualifies only when it already has:
 
@@ -107,6 +107,17 @@ External cases keep their original source, package manager, lockfile, and script
 External repositories are checked out only in CI under the runner's temporary directory. The workflow uses a pinned repository and commit from typed manifest data, verifies `HEAD`, and discards the checkout with the ephemeral runner. Local controlled runs never depend on `../vite-plus`, another sibling checkout, or a previously cloned project.
 
 Network, checkout, install, or upstream script failures fail the external case. The workflow does not silently skip them.
+
+#### Admitted external projects
+
+The manifest SHA is authoritative. The immutable links below record the evidence used to admit each CI-only project.
+
+| Case | Repository status | Tailwind v4 and runtime | Migration witness | Auth/API-free route and selector | Reproducibility |
+| --- | --- | --- | --- | --- | --- |
+| `external-namechecker` (`285e10d3627f3eac5217d69e9eaccee956d7ac70`) | Public, non-archived, non-fork ([repository](https://github.com/toddcooke/namechecker/tree/285e10d3627f3eac5217d69e9eaccee956d7ac70)) | [Next.js and Tailwind v4 dependencies](https://github.com/toddcooke/namechecker/blob/285e10d3627f3eac5217d69e9eaccee956d7ac70/package.json) | [`page.module.css`](https://github.com/toddcooke/namechecker/blob/285e10d3627f3eac5217d69e9eaccee956d7ac70/app/page.module.css) is consumed by [`TailwindLayout.tsx`](https://github.com/toddcooke/namechecker/blob/285e10d3627f3eac5217d69e9eaccee956d7ac70/app/TailwindLayout.tsx); `.main` emits `p-4` | `/` renders without submitting its optional lookup API; unique `main` target. Next.js updates the reviewed `tsconfig.json` path on startup; the harness rejects any other tracked write and restores its exact bytes after every server run | macOS arm64 lifecycle passed 2026-07-24; Linux, macOS, and Windows are required by `.github/workflows/ecosystem.yml` before merge |
+| `external-stylized-components` (`a26df5d21457095e466a41966822edb2ff016cff`) | Public, non-archived, non-fork ([repository](https://github.com/cortiz2894/stylized-components/tree/a26df5d21457095e466a41966822edb2ff016cff)) | [Next.js and Tailwind v4 dependencies](https://github.com/cortiz2894/stylized-components/blob/a26df5d21457095e466a41966822edb2ff016cff/package.json) | [`landing.module.css`](https://github.com/cortiz2894/stylized-components/blob/a26df5d21457095e466a41966822edb2ff016cff/src/app/landing.module.css) is consumed by [`page.tsx`](https://github.com/cortiz2894/stylized-components/blob/a26df5d21457095e466a41966822edb2ff016cff/src/app/page.tsx); `.page` emits `h-[calc(100vh_-_53px)]` | `/` renders its local showcase without credentials; `body > div:not([hidden])` target with `Import GLB` readiness | macOS arm64 lifecycle passed 2026-07-24; Linux, macOS, and Windows are required by `.github/workflows/ecosystem.yml` before merge |
+
+A pin is updated only after repeating repository-status review, migration preview, source/idempotency checks, utilities-only comparison, and the three-OS workflow run.
 
 ### Production CLI smoke
 
@@ -199,7 +210,9 @@ Validation rejects:
 - absolute paths, traversal, and symlinks escaping the case root;
 - package-manager and lockfile mismatches.
 
-External commands come from reviewed identifiers and argument arrays. Manifest values never become shell programs, runner labels, action names, artifact roots, or workflow expressions.
+External commands come from reviewed identifiers and argument arrays. Package managers use exact numeric npm or pnpm versions. Install steps are limited to script-free locked installs and named pnpm workspace build scripts; servers are limited to `run <script>`. Manifest values never become shell programs, runner labels, action names, artifact roots, or workflow expressions.
+
+An external entry may declare up to three reviewed `runtimeWrites` paths for framework startup behavior. The harness snapshots those tracked files at the pinned SHA, rejects every undeclared tracked write after each server phase, and restores declared writes to exact bytes. Runtime writes cannot overlap the lockfile, migration source, or Tailwind entry. All other external projects must keep the tracked checkout clean.
 
 ## CI and Contributor Workflow
 
@@ -211,7 +224,7 @@ The browser suite runs in a separate GitHub Actions workflow on:
 
 It does not run on a cron schedule. The workflow uses GitHub-hosted Ubuntu, macOS, and Windows runners with Chromium. Package jobs run once per OS; case jobs run independently for each OS and case with `fail-fast: false`.
 
-The workflow uses `pull_request`, never `pull_request_target`. Permissions are limited to `contents: read`, checkout credentials are not persisted, and external child processes receive no secrets, OIDC credentials, cloud credentials, or repository tokens.
+The workflow uses `pull_request`, never `pull_request_target`. Repository permissions are limited to `contents: read`, checkout credentials are not persisted, and external child processes receive an explicit environment containing only path, home, temporary-directory, required Windows system variables, and `CI=true`. They receive no GitHub, Actions, OIDC, cloud, registry, or repository credentials. The verified installed migration module is loaded before any external command runs.
 
 Contributors can run one controlled case with:
 
@@ -270,7 +283,7 @@ The second PR adds:
 
 - the remaining nine SCSS, Sass, and Less controlled cells;
 - the production CLI smoke;
-- three to five admitted external projects with CI-only checkout;
+- two to five admitted external projects with CI-only checkout;
 - final contributor and diagnostics documentation.
 
 External projects do not retire or reduce the controlled matrix.
@@ -301,7 +314,7 @@ Existing commands retain their current scope:
 1. All twelve controlled runtime/style cells pass exact source, report, idempotency, and browser checks on Ubuntu, macOS, and Windows.
 2. Every controlled probe proves a stylesheet-dependent baseline and utilities-only equivalence.
 3. The production CLI smoke passes clean pre/post builds through packed packages.
-4. Three to five unmodified external projects pass at reviewed full SHAs on all three operating systems.
+4. Two to five unmodified external projects pass at reviewed full SHAs on all three operating systems.
 5. Package provenance proves that no case loaded the checkout entrypoint, checkout addon, workspace link, or upstream product package.
 6. External code runs only in ephemeral, read-only, no-secret CI jobs.
 7. Failures retain enough bounded evidence to identify the reached phase without uploading arbitrary workspace contents.

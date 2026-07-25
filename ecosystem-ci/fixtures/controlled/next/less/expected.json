@@ -1,0 +1,157 @@
+{
+  "first": {
+    "changedFiles": [
+      "pages/index.jsx",
+      "pages/index.module.less"
+    ],
+    "diff": "--- a/pages/index.jsx\n+++ b/pages/index.jsx\n@@ -1,10 +1,10 @@\n-import styles from './index.module.less';\n-\n-export default function Page() {\n-  return <main>\n-    <article className={styles.card} data-probe=\"card\" data-identity=\"card\">Card</article>\n-    <button className={styles.action} data-identity=\"action\">Toggle details</button>\n-    <section className={styles.responsive} data-probe=\"responsive-layout\" data-identity=\"responsive\">Responsive</section>\n-  </main>;\n-}\n \n+import styles from './index.module.less';\n+\n+export default function Page() {\n+  return <main>\n+    <article className=\"hover:bg-[#d2dce6] p-[13px] text-[#141e28]\" data-probe=\"card\" data-identity=\"card\">Card</article>\n+    <button className=\"focus-visible:[outline-offset:3px] focus:[outline:2px_solid_#1e5a96]\" data-identity=\"action\">Toggle details</button>\n+    <section className=\"[@media_(min-width:700px)]:w-[200px] w-[100px]\" data-probe=\"responsive-layout\" data-identity=\"responsive\">Responsive</section>\n+  </main>;\n+}\n \n--- a/pages/index.module.less\n+++ b/pages/index.module.less\n@@ -1,25 +1,10 @@\n-.card {\n-  padding: 13px;\n-  color: rgb(20, 30, 40);\n-}\n-.card:hover {\n-  background-color: rgb(210, 220, 230);\n-}\n-.action:focus {\n-  outline: 2px solid rgb(30, 90, 150);\n-}\n-.action:focus-visible {\n-  outline-offset: 3px;\n-}\n-.responsive {\n-  width: 100px;\n-}\n-@media (min-width: 700px) {\n-  .responsive {\n-    width: 200px;\n-  }\n-}\n-.retained {\n-  display: block;\n-}\n \n+\n+\n+\n+\n+\n+\n+.retained {\n+  display: block;\n+}\n \n",
+    "convertedRules": 6,
+    "retainedRules": 1,
+    "rules": [
+      {
+        "selector": ".card",
+        "status": "converted",
+        "candidates": [
+          "p-[13px]",
+          "text-[#141e28]"
+        ],
+        "file": "pages/index.module.less",
+        "ruleId": {
+          "start": 0,
+          "end": 44
+        },
+        "authoredSpan": {
+          "start": 0,
+          "end": 52
+        }
+      },
+      {
+        "selector": ".card:hover",
+        "status": "converted",
+        "candidates": [
+          "hover:bg-[#d2dce6]"
+        ],
+        "file": "pages/index.module.less",
+        "ruleId": {
+          "start": 45,
+          "end": 89
+        },
+        "authoredSpan": {
+          "start": 53,
+          "end": 108
+        }
+      },
+      {
+        "selector": ".action:focus",
+        "status": "converted",
+        "candidates": [
+          "focus:[outline:2px_solid_#1e5a96]"
+        ],
+        "file": "pages/index.module.less",
+        "ruleId": {
+          "start": 90,
+          "end": 137
+        },
+        "authoredSpan": {
+          "start": 109,
+          "end": 165
+        }
+      },
+      {
+        "selector": ".action:focus-visible",
+        "status": "converted",
+        "candidates": [
+          "focus-visible:[outline-offset:3px]"
+        ],
+        "file": "pages/index.module.less",
+        "ruleId": {
+          "start": 138,
+          "end": 186
+        },
+        "authoredSpan": {
+          "start": 166,
+          "end": 214
+        }
+      },
+      {
+        "selector": ".responsive",
+        "status": "converted",
+        "candidates": [
+          "w-[100px]"
+        ],
+        "file": "pages/index.module.less",
+        "ruleId": {
+          "start": 187,
+          "end": 218
+        },
+        "authoredSpan": {
+          "start": 215,
+          "end": 246
+        }
+      },
+      {
+        "selector": ".responsive",
+        "status": "converted",
+        "candidates": [
+          "[@media_(min-width:700px)]:w-[200px]"
+        ],
+        "file": "pages/index.module.less",
+        "ruleId": {
+          "start": 249,
+          "end": 284
+        },
+        "authoredSpan": {
+          "start": 277,
+          "end": 312
+        }
+      },
+      {
+        "selector": ".retained",
+        "status": "retained",
+        "candidates": [
+          "[display:block]"
+        ],
+        "file": "pages/index.module.less",
+        "ruleId": {
+          "start": 287,
+          "end": 318
+        },
+        "authoredSpan": {
+          "start": 315,
+          "end": 346
+        }
+      }
+    ],
+    "candidates": [
+      "[@media_(min-width:700px)]:w-[200px]",
+      "focus-visible:[outline-offset:3px]",
+      "focus:[outline:2px_solid_#1e5a96]",
+      "hover:bg-[#d2dce6]",
+      "p-[13px]",
+      "text-[#141e28]",
+      "w-[100px]"
+    ],
+    "warnings": [
+      {
+        "code": "rebuild-required",
+        "file": "pages/index.module.less",
+        "start": 0,
+        "end": 0,
+        "message": "Rebuild this preprocessor entry to refresh its generated CSS."
+      },
+      {
+        "code": "unresolved-selector-target",
+        "file": "pages/index.module.less",
+        "start": 315,
+        "end": 346,
+        "message": "No exclusively supported className references were found."
+      }
+    ],
+    "failures": []
+  },
+  "source": "\n\n\n\n\n\n.retained {\n  display: block;\n}\n",
+  "changedFiles": {
+    "pages/index.jsx": "import styles from './index.module.less';\n\nexport default function Page() {\n  return <main>\n    <article className=\"hover:bg-[#d2dce6] p-[13px] text-[#141e28]\" data-probe=\"card\" data-identity=\"card\">Card</article>\n    <button className=\"focus-visible:[outline-offset:3px] focus:[outline:2px_solid_#1e5a96]\" data-identity=\"action\">Toggle details</button>\n    <section className=\"[@media_(min-width:700px)]:w-[200px] w-[100px]\" data-probe=\"responsive-layout\" data-identity=\"responsive\">Responsive</section>\n  </main>;\n}\n",
+    "pages/index.module.less": "\n\n\n\n\n\n.retained {\n  display: block;\n}\n"
+  }
+}
