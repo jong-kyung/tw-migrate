@@ -10,8 +10,11 @@ on:
 
 permissions: {}
 
+# Keyed on the commit, not the workflow: GitHub keeps only one pending run per
+# group, so a constant group would let a third release cancel a second one that
+# is still queued behind an approval, and that version would never be built.
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.workflow }}-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -40,6 +43,32 @@ jobs:
             echo "tw-migrate@$version is already published; stopping."
             echo 'changed=false' >> "$GITHUB_OUTPUT"
           else
+            # Publishing a stable version moves the latest tag, so a version
+            # below the current latest would make plain `npm install` start
+            # handing users an older release. Re-tagging afterwards does not
+            # reach anyone who already installed, so this fails the run before
+            # anything is built. Prereleases publish under next and never move
+            # latest, so they are exempt.
+            case "$version" in
+              *-*) ;;
+              *)
+                latest="$(npm view tw-migrate@latest version 2>/dev/null || true)"
+                if [ -n "$latest" ] && ! node -e '
+                  const parse = (v) => ({ core: v.split("-")[0].split(".").map(Number), pre: v.includes("-") });
+                  const [next, current] = process.argv.slice(1).map(parse);
+                  for (let i = 0; i < 3; i++) {
+                    if (!Number.isInteger(next.core[i]) || !Number.isInteger(current.core[i])) process.exit(1);
+                    if (next.core[i] !== current.core[i]) process.exit(next.core[i] > current.core[i] ? 0 : 1);
+                  }
+                  // Same core version: a stable release still supersedes a
+                  // prerelease that latest somehow points at.
+                  process.exit(current.pre && !next.pre ? 0 : 1);
+                ' "$version" "$latest"; then
+                  echo "::error::$version is not newer than the current latest ($latest); publishing it would downgrade everyone who installs tw-migrate without a version"
+                  exit 1
+                fi
+                ;;
+            esac
             echo "tw-migrate@$version is not on npm; releasing it."
             echo 'changed=true' >> "$GITHUB_OUTPUT"
           fi
@@ -152,7 +181,12 @@ jobs:
             *) tag=latest ;;
           esac
           echo "Publishing tw-migrate@$VERSION under the $tag tag"
-          npm publish --access public --tag "$tag"
+          # --ignore-scripts because npm runs `prepare` on publish, and this
+          # package's prepare is `vp config` -- a developer-machine hook setup
+          # that is not installed here and has no bearing on the tarball. The
+          # packed contents are byte-identical either way; without this the
+          # root publish exits 127 after the platform packages are already up.
+          npm publish --access public --tag "$tag" --ignore-scripts
 
       - name: Create GitHub Release
         run: gh release create "v$VERSION" --title "v$VERSION" --generate-notes --target "$GITHUB_SHA"
