@@ -1,16 +1,15 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { closeSync, openSync } from 'node:fs';
 import { appendFile, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
-import net from 'node:net';
 import { tmpdir } from 'node:os';
-import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, extname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { assertInstalledLayout, publishPackages, stagePackages, validateProvenance } from './packages.js';
 import { startRegistry } from './registry.js';
 import { assertOracle, captureAll, maxCaptureAttempts } from './oracle.js';
+import { availablePort, inside, platformCommand, sha256 } from './shared.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const caches = ['.next', 'dist', 'node_modules/.vite'];
@@ -18,11 +17,6 @@ const migrationSourceExtensions = new Set(['.js', '.jsx', '.ts', '.tsx', '.html'
 const generatedDirectories = new Set(['node_modules', '.next', 'dist', 'build', 'out', 'coverage', '.cache', '.vite']);
 export const lifecycleTimeoutMs = 4 * 60_000;
 export const externalLifecycleTimeoutMs = 10 * 60_000;
-
-function inside(path, root) {
-  const rel = relative(root, path);
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
-}
 
 // Windows runners expose TEMP as an 8.3 short path, which crashes libuv
 // fs-event watchers (dev servers) with a prefix assertion; watch long paths.
@@ -64,17 +58,6 @@ export function assertMigrationContract({ first, expectedFirst, actualSource, ex
   assert.deepEqual(treeAfterSecond, treeBeforeSecond, 'source-scoped tree after second migration');
 }
 
-async function availablePort() {
-  return new Promise((resolvePort, reject) => {
-    const server = net.createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address();
-      server.close((error) => error ? reject(error) : resolvePort(port));
-    });
-  });
-}
-
 async function terminateTree(child) {
   if (!child || child.exitCode !== null) return;
   const exited = new Promise((resolveExit) => child.once('exit', resolveExit));
@@ -104,14 +87,14 @@ function packageManagerInvocation(project, args) {
   const manager = project.packageManager.slice(0, separator);
   const version = project.packageManager.slice(separator + 1);
   if (manager === 'npm') {
-    return { command: process.platform === 'win32' ? 'npx.cmd' : 'npx', args: ['--yes', `npm@${version}`, ...args] };
+    return { command: platformCommand('npx'), args: ['--yes', `npm@${version}`, ...args] };
   }
-  return { command: process.platform === 'win32' ? 'corepack.cmd' : 'corepack', args: [`${manager}@${version}`, ...args] };
+  return { command: platformCommand('corepack'), args: [`${manager}@${version}`, ...args] };
 }
 
 async function startServer(project, cwd, artifactRoot, phase, mode = 'dev') {
   const port = await availablePort();
-  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const npm = platformCommand('npm');
   const args = mode === 'preview'
     ? ['run', 'preview', '--', '--host', '127.0.0.1', '--port', String(port), '--strictPort']
     : project.runtime === 'next'
@@ -379,7 +362,7 @@ export async function snapshotMigrationSources(root) {
       } else if (migrationSourceExtensions.has(extname(entry.name).toLowerCase())) {
         const relativePath = relative(root, path);
         const checked = await checkedMigrationPath(root, canonicalRoot, relativePath);
-        result[relativePath] = createHash('sha256').update(await readFile(checked)).digest('hex');
+        result[relativePath] = await sha256(checked);
       }
     }
   };
@@ -417,7 +400,7 @@ async function prepareDriver(project, runRoot, packageArtifactRoot, artifactRoot
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
     manifest.dependencies['tw-migrate'] = provenance.packages.root.version;
     await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-    await run(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
+    await run(platformCommand('npm'), [
       'install', '--registry', sealedRegistry.url, '--ignore-scripts', '--no-audit', '--no-fund', '--fetch-retries=0',
     ], { cwd: driverRoot, logPath: join(artifactRoot, 'install.log') });
   } finally {
@@ -675,7 +658,7 @@ export async function runProductionSmoke({
   return executeLifecycle({ project, artifactCase: fixture, artifactRoot, temporaryRoot, activeServer: () => server }, async ({ ledger, mark, diagnostic, runRoot }) => {
     const { driverRoot, installed } = await prepareDriver(fixture, runRoot, packageArtifactRoot, artifactRoot);
     await mark('installed', ['install.log', 'publish.log', 'registry-bootstrap.log', 'registry-install.log']);
-    const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+    const npm = platformCommand('npm');
 
     await mark('baseline-build-started');
     await run(npm, ['run', 'build'], { cwd: driverRoot, logPath: join(artifactRoot, 'baseline-build.log') });

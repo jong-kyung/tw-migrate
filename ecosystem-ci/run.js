@@ -7,6 +7,7 @@ import { dirname, join, posix, resolve, win32 } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { stagePackages } from './packages.js';
+import { platformCommand } from './shared.js';
 
 const usage = 'Usage: node ecosystem-ci/run.js (--case <id> | --all)';
 const runtimes = new Set(['react-vite', 'next', 'vite-html']);
@@ -321,7 +322,7 @@ export function runHarness(args, manifest, execute = executeVitest) {
 }
 
 function executeVitest(args) {
-  const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+  const pnpm = platformCommand('pnpm');
   const result = spawnSync(pnpm, ['exec', 'vitest', ...args], { shell: pnpm.endsWith('.cmd'), stdio: 'inherit' });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`Vitest exited with status ${result.status}`);

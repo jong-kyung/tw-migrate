@@ -1,26 +1,13 @@
 #!/usr/bin/env node
 
-import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { closeSync, openSync } from 'node:fs';
-import {
-  appendFile,
-  cp,
-  lstat,
-  mkdir,
-  mkdtemp,
-  readFile,
-  readdir,
-  realpath,
-  rm,
-  writeFile,
-} from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { cp, lstat, mkdir, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { startRegistry } from './registry.js';
+import { inside, platformCommand, sha256 } from './shared.js';
 
 const targets = {
   'darwin-arm64': 'darwin-arm64',
@@ -44,15 +31,6 @@ export function currentTarget() {
   return targetFor(process.platform, process.arch);
 }
 
-function inside(path, parent) {
-  const rel = relative(parent, path);
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
-}
-
-async function sha256(path) {
-  return createHash('sha256').update(await readFile(path)).digest('hex');
-}
-
 async function run(command, args, { cwd, logPath, timeoutMs = 120_000 }) {
   await mkdir(dirname(logPath), { recursive: true });
   const log = openSync(logPath, 'a');
@@ -72,7 +50,7 @@ async function run(command, args, { cwd, logPath, timeoutMs = 120_000 }) {
 
 async function npmPack(packageDir, destination, logPath) {
   const before = new Set((await readdir(destination)).filter((file) => file.endsWith('.tgz')));
-  await run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['pack', '--pack-destination', destination], {
+  await run(platformCommand('npm'), ['pack', '--pack-destination', destination], {
     cwd: packageDir,
     logPath,
   });
@@ -246,7 +224,7 @@ export async function publishPackages(provenance, artifactRoot, registryUrl, log
   const token = await publisherToken(registryUrl);
   const auth = `--//${new URL(registryUrl).host}/:_authToken=${token}`;
   for (const entry of [provenance.packages.native, provenance.packages.root]) {
-    await run(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
+    await run(platformCommand('npm'), [
       'publish', artifactPath(artifactRoot, entry.tarball, `${entry.name} tarball`),
       '--registry', registryUrl,
       '--ignore-scripts',
@@ -277,69 +255,15 @@ export async function preparePackageUpload(provenance, artifactRoot, uploadRoot)
   return entries;
 }
 
-export async function runPackageSmoke({ repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..'), artifactRoot }) {
-  if (!artifactRoot) throw new Error('package smoke requires an explicit artifact root');
-  artifactRoot = resolve(artifactRoot);
-  await mkdir(artifactRoot, { recursive: true });
-  const runRoot = await mkdtemp(join(tmpdir(), 'tw-migrate-package-smoke-'));
-  let registry;
-  try {
-    const provenance = await stagePackages({ repoRoot, artifactRoot });
-    const registryRoot = join(runRoot, 'registry');
-    registry = await startRegistry({ root: registryRoot, artifactRoot, allowPublish: true });
-    await publishPackages(provenance, artifactRoot, registry.url);
-    await registry.stop();
-    registry = await startRegistry({ root: registryRoot, artifactRoot, allowPublish: false });
-
-    const driverRoot = join(runRoot, 'driver');
-    await mkdir(driverRoot);
-    await writeFile(join(driverRoot, 'package.json'), '{"private":true}\n');
-    await run(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
-      'install', `${provenance.packages.root.name}@${provenance.packages.root.version}`,
-      '--registry', registry.url,
-      '--ignore-scripts',
-      '--no-audit',
-      '--no-fund',
-      '--fetch-retries=0',
-    ], { cwd: driverRoot, logPath: join(artifactRoot, 'install.log') });
-    await registry.stop();
-    registry = undefined;
-
-    const installed = await assertInstalledLayout({
-      driverRoot,
-      checkoutRoot: repoRoot,
-      expected: {
-        version: provenance.packages.root.version,
-        platform: provenance.platform,
-        addonSha256: provenance.addon.sha256,
-      },
-    });
-    const module = await import(`${pathToFileURL(join(installed.root, 'index.js')).href}?smoke=${Date.now()}`);
-    assert.equal(typeof module.migrate, 'function', 'installed package must export migrate()');
-    return { provenance, installed };
-  } catch (error) {
-    await appendFile(join(artifactRoot, 'smoke-error.log'), `${error.stack ?? error}\n`).catch(() => {});
-    throw error;
-  } finally {
-    await registry?.stop().catch(() => {});
-    await rm(runRoot, { recursive: true, force: true });
-  }
-}
-
 async function main() {
   const [mode, flag, artifactRoot, ...rest] = process.argv.slice(2);
-  if (!['smoke', 'stage'].includes(mode) || flag !== '--artifact-root' || !artifactRoot || rest.length > 0) {
-    throw new Error('Usage: node ecosystem-ci/packages.js (smoke|stage) --artifact-root <path>');
+  if (mode !== 'stage' || flag !== '--artifact-root' || !artifactRoot || rest.length > 0) {
+    throw new Error('Usage: node ecosystem-ci/packages.js stage --artifact-root <path>');
   }
-  if (mode === 'smoke') {
-    await runPackageSmoke({ artifactRoot });
-    console.log(`Package smoke passed; artifacts: ${resolve(artifactRoot)}`);
-  } else {
-    const provenance = await stagePackages({ repoRoot: resolve(dirname(fileURLToPath(import.meta.url)), '..'), artifactRoot });
-    const uploadRoot = packageUploadRoot(artifactRoot);
-    await preparePackageUpload(provenance, artifactRoot, uploadRoot);
-    console.log(`Packages staged: ${uploadRoot}`);
-  }
+  const provenance = await stagePackages({ repoRoot: resolve(dirname(fileURLToPath(import.meta.url)), '..'), artifactRoot });
+  const uploadRoot = packageUploadRoot(artifactRoot);
+  await preparePackageUpload(provenance, artifactRoot, uploadRoot);
+  console.log(`Packages staged: ${uploadRoot}`);
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {

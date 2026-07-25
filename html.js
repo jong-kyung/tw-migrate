@@ -63,7 +63,7 @@ export function parseHtmlSource(path, source) {
           : undefined;
         const dynamic = unparsedClass
           ?? [classAttribute, idAttribute].find((attribute) =>
-            attribute && (!attribute.writable || isTemplateValue(attribute.value)),
+            attribute && (!attribute.writable || TEMPLATE_MARKERS.test(attribute.value)),
           ) ?? (classAttribute && !classAttribute.quoted ? classAttribute : undefined);
         if (dynamic) {
           dynamicAttributes.push({ start: dynamic.start, end: dynamic.end });
@@ -150,8 +150,4 @@ function locatedAttribute(source, location, parsedValue) {
     start: location.startOffset + start,
     end: location.startOffset + end,
   };
-}
-
-function isTemplateValue(value) {
-  return TEMPLATE_MARKERS.test(value);
 }

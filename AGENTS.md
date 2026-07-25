@@ -174,7 +174,6 @@ The workspace `default-members` excludes `crates/snapshots`, so plain `cargo tes
 - Keep structured public API, source-map, and byte-exact assertions in `test/migrate.test.js`.
 - Put status/output/workspace behavior in packaged CLI snapshots.
 - When changing public CLI behavior, update the fixture and snapshot together.
-- Keep `crates/snapshots/coverage/*.toml` aligned with migrated legacy cases; `crates/snapshots/tests/inventory.rs` enforces the reconciliation.
 - Use the smallest focused test while iterating, then run the owning suite before committing.
 
 ## Packaging Notes

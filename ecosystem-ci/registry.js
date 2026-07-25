@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process';
 import { closeSync, openSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import net from 'node:net';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
+
+import { availablePort } from './shared.js';
 
 const require = createRequire(import.meta.url);
 
@@ -40,18 +41,6 @@ packages:
     proxy: npmjs
 log: { type: stdout, format: pretty, level: http }
 `;
-}
-
-async function availablePort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.unref();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address();
-      server.close((error) => error ? reject(error) : resolve(port));
-    });
-  });
 }
 
 async function waitForRegistry(url, child, timeoutMs) {

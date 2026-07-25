@@ -272,6 +272,10 @@ pub(crate) struct Edit {
     pub(crate) replacement: String,
 }
 
+/// Single-stylesheet planning. Production always routes through
+/// [`plan_batch_json`]; this remains as the unit-test entrypoint for the
+/// non-batch pass.
+#[cfg(test)]
 pub fn plan_json(request: &str) -> Result<String, String> {
     let request: PlanRequest = serde_json::from_str(request).map_err(|error| error.to_string())?;
     serde_json::to_string(&plan_request(
