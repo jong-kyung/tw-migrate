@@ -33,6 +33,18 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       changed: ${{ steps.version.outputs.changed }}
     steps:
+      # A dispatch can name any branch or tag, and every job here checks out the
+      # selected ref. Releasing from anywhere but main would publish artifacts
+      # that never went through a release PR. Guarded rather than pinned to
+      # main, because a push has to build the commit that triggered it.
+      - name: Refuse to release from another ref
+        if: github.ref != 'refs/heads/main'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "::error::Release only runs from main (got $REF)"
+          exit 1
+
       - uses: actions/checkout@v7
 
       - name: Is this a new version to release?
