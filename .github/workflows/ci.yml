@@ -60,7 +60,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.runner }}
-          path: "npm/**/*.node"
+          path: 'npm/**/*.node'
 
   packaged-cli-snapshots:
     strategy:
