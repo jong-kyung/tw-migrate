@@ -33,18 +33,18 @@ jobs:
         run: |
           mkdir -p ecosystem-ci/package-artifacts-upload
           printf '{"case":"package-%s","phases":[]}\n' '${{ matrix.os }}' > ecosystem-ci/package-artifacts-upload/phase-ledger.json
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: .node-version
-          cache: pnpm
+          cache: true
+          run-install: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.95.0
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      - run: pnpm artifacts
-      - run: node ecosystem-ci/packages.ts stage --artifact-root ecosystem-ci/package-artifacts
+      - run: vp install --frozen-lockfile
+      - run: vp run build
+      - run: vp run artifacts
+      - run: vp node ecosystem-ci/packages.ts stage --artifact-root ecosystem-ci/package-artifacts
       - uses: actions/upload-artifact@v7
         with:
           name: ecosystem-package-${{ matrix.os }}
@@ -96,21 +96,21 @@ jobs:
           NODE
         env:
           CASE_ID: ${{ matrix.case }}
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: .node-version
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install chromium
+          cache: true
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - run: vp exec playwright install chromium
       - uses: actions/download-artifact@v8
         with:
           name: ecosystem-package-${{ matrix.os }}
           path: ecosystem-ci/package-artifacts
-      - run: pnpm test:ecosystem --case ${{ matrix.case }}
+      - run: vp run test:ecosystem --case ${{ matrix.case }}
       - name: Validate reached-phase artifact allowlist
         if: always()
-        run: node -e "import('./ecosystem-ci/run.ts').then(async({loadManifest})=>{const {prepareCaseUpload}=await import('./ecosystem-ci/lifecycle.ts');const m=await loadManifest();const p=m.projects.find(x=>x.id===process.env.CASE_ID);await prepareCaseUpload(p,process.env.ECOSYSTEM_ARTIFACT_ROOT,process.env.ECOSYSTEM_ARTIFACT_ROOT+'-upload')})"
+        run: vp node -e "import('./ecosystem-ci/run.ts').then(async({loadManifest})=>{const {prepareCaseUpload}=await import('./ecosystem-ci/lifecycle.ts');const m=await loadManifest();const p=m.projects.find(x=>x.id===process.env.CASE_ID);await prepareCaseUpload(p,process.env.ECOSYSTEM_ARTIFACT_ROOT,process.env.ECOSYSTEM_ARTIFACT_ROOT+'-upload')})"
         env:
           CASE_ID: ${{ matrix.case }}
       - uses: actions/upload-artifact@v7
@@ -158,21 +158,21 @@ jobs:
           NODE
         env:
           CASE_ID: ${{ matrix.case }}
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: .node-version
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install chromium
+          cache: true
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - run: vp exec playwright install chromium
       - uses: actions/download-artifact@v8
         with:
           name: ecosystem-package-${{ matrix.os }}
           path: ecosystem-ci/package-artifacts
-      - run: pnpm test:ecosystem --case ${{ matrix.case }}
+      - run: vp run test:ecosystem --case ${{ matrix.case }}
       - name: Validate reached-phase artifact allowlist
         if: always()
-        run: node -e "import('./ecosystem-ci/run.ts').then(async({loadManifest,resolveFixture})=>{const {prepareCaseUpload}=await import('./ecosystem-ci/lifecycle.ts');const m=await loadManifest();const p=m.projects.find(x=>x.id===process.env.CASE_ID);await prepareCaseUpload(resolveFixture(m,p),process.env.ECOSYSTEM_ARTIFACT_ROOT,process.env.ECOSYSTEM_ARTIFACT_ROOT+'-upload')})"
+        run: vp node -e "import('./ecosystem-ci/run.ts').then(async({loadManifest,resolveFixture})=>{const {prepareCaseUpload}=await import('./ecosystem-ci/lifecycle.ts');const m=await loadManifest();const p=m.projects.find(x=>x.id===process.env.CASE_ID);await prepareCaseUpload(resolveFixture(m,p),process.env.ECOSYSTEM_ARTIFACT_ROOT,process.env.ECOSYSTEM_ARTIFACT_ROOT+'-upload')})"
         env:
           CASE_ID: ${{ matrix.case }}
       - uses: actions/upload-artifact@v7
@@ -221,21 +221,21 @@ jobs:
           NODE
         env:
           CASE_ID: ${{ matrix.case }}
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: .node-version
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install chromium
+          cache: true
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - run: vp exec playwright install chromium
       - uses: actions/download-artifact@v8
         with:
           name: ecosystem-package-${{ matrix.os }}
           path: ecosystem-ci/package-artifacts
-      - run: pnpm test:ecosystem --external-case ${{ matrix.case }}
+      - run: vp run test:ecosystem --external-case ${{ matrix.case }}
       - name: Validate reached-phase artifact allowlist
         if: always()
-        run: node -e "import('./ecosystem-ci/run.ts').then(async({loadManifest})=>{const {prepareCaseUpload}=await import('./ecosystem-ci/lifecycle.ts');const m=await loadManifest();const p=m.projects.find(x=>x.id===process.env.CASE_ID);await prepareCaseUpload(p,process.env.ECOSYSTEM_ARTIFACT_ROOT,process.env.ECOSYSTEM_ARTIFACT_ROOT+'-upload')})"
+        run: vp node -e "import('./ecosystem-ci/run.ts').then(async({loadManifest})=>{const {prepareCaseUpload}=await import('./ecosystem-ci/lifecycle.ts');const m=await loadManifest();const p=m.projects.find(x=>x.id===process.env.CASE_ID);await prepareCaseUpload(p,process.env.ECOSYSTEM_ARTIFACT_ROOT,process.env.ECOSYSTEM_ARTIFACT_ROOT+'-upload')})"
         env:
           CASE_ID: ${{ matrix.case }}
       - uses: actions/upload-artifact@v7
