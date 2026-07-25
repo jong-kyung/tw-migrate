@@ -116,7 +116,14 @@ jobs:
           git switch -c "$branch"
           git add package.json npm/*/package.json crates/tw_migrate/Cargo.toml Cargo.lock
           git commit -m "release: v$VERSION"
-          git push origin "$branch"
+          # Force-with-lease so a rerun can recover: if PR creation failed last
+          # time, the branch is already on the remote and a rerun builds a
+          # different commit from main, which a plain push would reject as a
+          # non-fast-forward and leave stuck until someone deleted the branch by
+          # hand. Fetching first is what gives the lease something to compare
+          # against on a branch this run has never seen.
+          git fetch origin "$branch:refs/remotes/origin/$branch" 2>/dev/null || true
+          git push --force-with-lease origin "$branch"
 
           body_file="$(mktemp)"
           cat > "$body_file" <<EOF
@@ -127,8 +134,27 @@ jobs:
           CI does not run on this PR because it was authored by GITHUB_TOKEN. Confirm CI is green on the merge commit before approving the release run.
           EOF
 
-          gh pr create \
-            --base main \
-            --head "$branch" \
-            --title "release: v$VERSION" \
-            --body-file "$body_file"
+          # npm renders the root README on the package page, so a warning that
+          # the package is not published yet has to go before the first release
+          # ships -- and only then. The check is against the file rather than a
+          # version, so this reminder disappears by itself once it is done.
+          if grep -q 'Not on npm yet' README.md; then
+            cat >> "$body_file" <<'EOF'
+
+          **Before merging:** remove the "Not on npm yet" warning from `README.md` -- npm publishes that README onto the package page, where it would tell users the CLI they just installed does not exist.
+          EOF
+          fi
+
+          # Reuse the PR if one is already open for this branch, so a rerun
+          # after a partial failure updates it instead of erroring out.
+          existing="$(gh pr list --head "$branch" --base main --state open --json number --jq '.[0].number' || true)"
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --title "release: v$VERSION" --body-file "$body_file"
+            echo "Updated existing PR #$existing"
+          else
+            gh pr create \
+              --base main \
+              --head "$branch" \
+              --title "release: v$VERSION" \
+              --body-file "$body_file"
+          fi
