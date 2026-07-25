@@ -209,19 +209,48 @@ jobs:
           fi
           echo "$VERSION comes after the current $tag ($current)."
 
-      # Publishes the five platform packages and rewrites the root
-      # optionalDependencies from workspace:* to concrete versions, so the root
-      # package below can only ever point at packages that already exist.
-      # --no-gh-release matters: it defaults to true, and the GitHub Release is
-      # created explicitly at the end of this job instead.
-      # NPM_CONFIG_TAG because pre-publish shells out to `npm publish` with no
-      # --tag of its own. npm refuses outright to publish a prerelease without
-      # an explicit tag ("You must specify a tag using --tag when publishing a
-      # prerelease version"), so without this a prerelease release dies on the
-      # first platform package; for a stable release it keeps the platform
+      # Prepare only. This syncs the five platform manifests to the root version
+      # and rewrites the root optionalDependencies from workspace:* to concrete
+      # versions, so the root package can only ever point at packages that
+      # exist. --no-gh-release matters: it defaults to true, and the GitHub
+      # Release is created explicitly at the end of this job instead.
+      - name: Prepare platform packages
+        run: npx --yes @napi-rs/cli@3.7.3 pre-publish -p npm -t npm --no-gh-release --skip-optional-publish
+
+      # Published one at a time rather than by pre-publish's own loop, because
+      # npm cannot republish a version: a single call that dies partway through
+      # leaves a rerun with no way to finish the release, since it would stop on
+      # the first package that already succeeded. Skipping versions that are
+      # already up makes a rerun pick up exactly where it left off.
+      #
+      # The tag is passed explicitly: npm refuses to publish a prerelease
+      # without one ("You must specify a tag using --tag when publishing a
+      # prerelease version"), and for a stable release it keeps the platform
       # packages on the same tag as the root instead of defaulting to latest.
       - name: Publish platform packages
-        run: NPM_CONFIG_TAG="$tag" npx --yes @napi-rs/cli@3.7.3 pre-publish -p npm -t npm --no-gh-release
+        run: |
+          set -euo pipefail
+          for dir in npm/*/; do
+            name="$(node -p "require('./${dir}package.json').name")"
+
+            if published="$(npm view "$name@$VERSION" version 2>"$RUNNER_TEMP/npm-view.err")"; then
+              :
+            elif grep -q 'E404' "$RUNNER_TEMP/npm-view.err"; then
+              published=''
+            else
+              cat "$RUNNER_TEMP/npm-view.err"
+              echo "::error::Could not reach the npm registry to check $name@$VERSION"
+              exit 1
+            fi
+
+            if [ -n "$published" ]; then
+              echo "$name@$VERSION is already published; skipping."
+              continue
+            fi
+
+            echo "Publishing $name@$VERSION under the $tag tag"
+            (cd "$dir" && npm publish --access public --tag "$tag")
+          done
 
       - name: Publish tw-migrate
         run: |
