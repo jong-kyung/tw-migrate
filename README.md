@@ -16,7 +16,7 @@ npx tw-migrate --workspaces --write               # Migrate every package
 
 `pnpm dlx tw-migrate` and `yarn dlx tw-migrate` take the same arguments.
 
-To work on the migrator itself rather than run it, build it from a clone — see [Run from a clone](#run-from-a-clone).
+> **Not on npm yet.** Until the first release the commands above will 404 — build it from a clone instead (see [Run from a clone](#run-from-a-clone)).
 
 The CLI previews changes by default. Pass `--tailwind-css path/to/globals.css` when the current package has multiple Tailwind entries. `--force` skips package groups that fail discovery or input parsing; plan-integrity and write failures always stop the run.
 

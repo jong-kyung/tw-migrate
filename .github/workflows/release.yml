@@ -214,8 +214,14 @@ jobs:
       # package below can only ever point at packages that already exist.
       # --no-gh-release matters: it defaults to true, and the GitHub Release is
       # created explicitly at the end of this job instead.
+      # NPM_CONFIG_TAG because pre-publish shells out to `npm publish` with no
+      # --tag of its own. npm refuses outright to publish a prerelease without
+      # an explicit tag ("You must specify a tag using --tag when publishing a
+      # prerelease version"), so without this a prerelease release dies on the
+      # first platform package; for a stable release it keeps the platform
+      # packages on the same tag as the root instead of defaulting to latest.
       - name: Publish platform packages
-        run: npx --yes @napi-rs/cli@3.7.3 pre-publish -p npm -t npm --no-gh-release
+        run: NPM_CONFIG_TAG="$tag" npx --yes @napi-rs/cli@3.7.3 pre-publish -p npm -t npm --no-gh-release
 
       - name: Publish tw-migrate
         run: |
