@@ -41,7 +41,18 @@ tw-migrate/
 │       ├── animations.rs      # Animation/keyframe migration
 │       └── theme.rs           # Tailwind theme matching
 ├── crates/snapshots/          # Packaged CLI E2E runner, fixtures, and snapshots
+├── ecosystem-ci/              # Browser E2E harness (TypeScript, run by Vitest)
+│   ├── run.ts                 # Manifest validation and case selection CLI
+│   ├── lifecycle.ts           # Per-case install, server, capture, and migration phases
+│   ├── packages.ts            # Package staging, provenance, and installed-layout checks
+│   ├── registry.ts            # Sealed local registry used by the harness
+│   ├── oracle.ts              # Browser capture and computed-style comparison
+│   ├── types.ts               # Manifest, provenance, and capture shapes
+│   └── projects.json          # Controlled, smoke, and external case manifest
 ├── test/migrate.test.ts       # Public API, internal, and byte-exact Node tests
+├── test/ecosystem-harness.test.ts  # Harness contracts, incl. asserted workflow content
+├── vite.config.ts             # Vite+ fmt/lint/staged config and ignore scope
+├── tsconfig.json              # Type-stripping-safe options for the .ts harness
 ├── npm/*                      # Platform-specific published native packages
 └── rfcs/                      # Design and supported-scope documents
 ```
@@ -75,7 +86,8 @@ tw-migrate/
 Use the repository-pinned tool versions when possible:
 
 - **Node.js 22.18.0** from `.node-version`; the repository targets `>=22.18.0` so Node runs the `.ts` harness sources directly through type stripping.
-- **pnpm 11.15.1** from the `packageManager` field in `package.json`.
+- **Vite+ (`vp`)** as the toolchain entrypoint; it resolves and downloads the pinned package manager itself.
+- **pnpm 11.15.1** from the `packageManager` field in `package.json`; `vp` runs it, and the `pnpm` shim stays available for scripts that call it directly.
 - **Rust 1.95.0 or newer**; CI builds with 1.95.0 and the workspace declares `rust-version = "1.95"`.
 - **Git and npm**; runtime discovery uses Git and the packaged snapshot runner calls `npm pack` and `npm install` directly.
 - **Platform native build tools** required by Rust and NAPI-RS: Xcode Command Line Tools on macOS, a C/C++ build toolchain on Linux, or Visual Studio Build Tools on Windows.
@@ -91,15 +103,15 @@ cargo install cargo-insta --version 1.48.0 --locked
 ### Initial setup
 
 ```bash
-pnpm install --frozen-lockfile
-pnpm build:debug
+vp install --frozen-lockfile
+vp run build:debug
 node bin/tw-migrate.js --help
 ```
 
-`pnpm build:debug` compiles the native addon for the current platform. Run it before invoking the CLI or Node tests directly. A complete setup check is:
+`vp run build:debug` compiles the native addon for the current platform. Run it before invoking the CLI or Node tests directly. A complete setup check is:
 
 ```bash
-pnpm test
+vp run test
 ```
 
 No `.env` file or local service is required.
@@ -107,7 +119,7 @@ No `.env` file or local service is required.
 ### Local build and CLI
 
 ```bash
-pnpm build:debug
+vp run build:debug
 node bin/tw-migrate.js --help
 node bin/tw-migrate.js path/to/Button.module.css
 node bin/tw-migrate.js --workspaces --write
@@ -119,26 +131,26 @@ Preview is the default. Use `--write` only when a task explicitly requires files
 
 Choose checks by change type:
 
-| Change type                       | Useful validation                                                   |
-| --------------------------------- | ------------------------------------------------------------------- |
-| Docs or agent guidance            | `git diff --check -- <files>` and verify referenced paths/commands  |
-| Rust planner behavior             | `cargo test` or a focused `cargo test <filter>`                     |
-| JavaScript API/orchestration      | `pnpm build:debug` followed by `node --test` or a focused Node test |
-| CLI output or filesystem behavior | `pnpm test:snapshots` or a focused packaged snapshot case           |
-| Packaging/native loading          | `pnpm build && pnpm artifacts`                                      |
-| Full local validation             | `pnpm test && pnpm test:snapshots && git status --short`            |
+| Change type                       | Useful validation                                                     |
+| --------------------------------- | --------------------------------------------------------------------- |
+| Docs or agent guidance            | `git diff --check -- <files>` and verify referenced paths/commands    |
+| Rust planner behavior             | `cargo test` or a focused `cargo test <filter>`                       |
+| JavaScript API/orchestration      | `vp run build:debug` followed by `node --test` or a focused Node test |
+| CLI output or filesystem behavior | `vp run test:snapshots` or a focused packaged snapshot case           |
+| Packaging/native loading          | `vp run build && vp run artifacts`                                    |
+| Full local validation             | `vp check && vp run test && vp run test:snapshots`                    |
 
-`pnpm test` runs the default Rust package, builds the debug addon, and runs the retained Node tests.
+`vp run test` runs the default Rust package, builds the debug addon, and runs the retained Node tests. `vp check` covers formatting, linting, and type checking.
 
 ## Packaged CLI Snapshots
 
 CLI-observable behavior belongs in `crates/snapshots/`. Read `crates/snapshots/README.md` before changing the runner or fixtures.
 
 ```bash
-pnpm test:snapshots
+vp run test:snapshots
 
 # Focus one case after preparing release artifacts
-pnpm snapshots:prepare
+vp run snapshots:prepare
 cargo test -p tw-migrate-snapshots safety_missing_sass
 
 # Review and check snapshot hygiene
@@ -178,15 +190,16 @@ The workspace `default-members` excludes `crates/snapshots`, so plain `cargo tes
 
 ## Packaging Notes
 
-- `pnpm build:debug` writes the local development addon used by Node tests.
-- `pnpm build` creates the release addon; `pnpm artifacts` copies it into the matching `npm/<platform>/` package.
+- `vp run build:debug` writes the local development addon used by Node tests.
+- `vp run build` creates the release addon; `vp run artifacts` copies it into the matching `npm/<platform>/` package.
 - `native.js` first checks for a local addon, then falls back to the installed platform package.
 - Native `.node` files are generated and ignored. Do not commit them.
-- Use `pnpm snapshots:prepare` before snapshot tests; it removes stale platform addons before rebuilding artifacts.
+- Use `vp run snapshots:prepare` before snapshot tests; it removes stale platform addons before rebuilding artifacts.
 
 ## Common Pitfalls
 
 - Running `node --test` before building the debug addon.
+- Passing `--help` through `vp node <script>`; `vp` consumes it and prints its own help. Other arguments pass through, so run `node <script> --help` when you want the script's usage.
 - Treating compiled preprocessor offsets as authored-file offsets without source-map validation.
 - Adding broad output normalization that hides product-visible differences such as escaped Tailwind candidates.
 - Moving snapshot workspaces under the repository, where root dependencies can invalidate missing-compiler tests.
@@ -208,7 +221,7 @@ The workspace `default-members` excludes `crates/snapshots`, so plain `cargo tes
 - Batch migration RFC: `rfcs/batch-css-migration.md`
 - Preprocessor and HTML RFC: `rfcs/preprocessor-and-html-migration.md`
 - Packaged snapshot workflow: `crates/snapshots/README.md`
-- CI contract: `.github/workflows/ci.yml`
+- CI contract: `.github/workflows/ci.yml` (unit, typecheck, packaged snapshots) and `.github/workflows/ecosystem.yml` (label-gated browser E2E)
 
 <!--VITE PLUS START-->
 
