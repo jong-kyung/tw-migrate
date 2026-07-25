@@ -156,3 +156,57 @@ jobs:
 
       - name: Create GitHub Release
         run: gh release create "v$VERSION" --title "v$VERSION" --generate-notes --target "$GITHUB_SHA"
+
+  # Installs what users install. CI's packed check proves the tarballs are
+  # well-formed, but it installs local files with optional resolution off, so
+  # it never exercises the optionalDependencies path that picks the right
+  # platform package out of the registry. A failure here is a real defect
+  # report; it does not and cannot undo the publish above.
+  smoke:
+    name: Smoke ${{ matrix.runner }}
+    needs: [check, publish]
+    if: needs.check.outputs.changed == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - macos-14
+          - macos-15-intel
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+          - windows-latest
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7 # for .node-version only
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+      - run: npm install --global pnpm@11.15.1
+
+      - name: Install the published version and run the CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Publishing to npm is not the same as being visible everywhere, so
+          # give the registry a few seconds before calling this a failure.
+          for attempt in 1 2 3 4 5; do
+            if [ -n "$(npm view "tw-migrate@$VERSION" version 2>/dev/null || true)" ]; then
+              break
+            fi
+            echo "tw-migrate@$VERSION not visible yet (attempt $attempt); waiting"
+            sleep 20
+          done
+
+          install_dir="$(mktemp -d)"
+          cd "$install_dir"
+          npm init -y >/dev/null
+          npm install "tw-migrate@$VERSION"
+          npx --no-install tw-migrate --help
+
+          npx --yes "tw-migrate@$VERSION" --help
+          pnpm dlx "tw-migrate@$VERSION" --help
