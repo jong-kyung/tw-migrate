@@ -41,7 +41,7 @@ tw-migrate/
 │       ├── animations.rs      # Animation/keyframe migration
 │       └── theme.rs           # Tailwind theme matching
 ├── crates/snapshots/          # Packaged CLI E2E runner, fixtures, and snapshots
-├── test/migrate.test.js       # Public API, internal, and byte-exact Node tests
+├── test/migrate.test.ts       # Public API, internal, and byte-exact Node tests
 ├── npm/*                      # Platform-specific published native packages
 └── rfcs/                      # Design and supported-scope documents
 ```
@@ -74,7 +74,7 @@ tw-migrate/
 
 Use the repository-pinned tool versions when possible:
 
-- **Node.js 24.18.0** from `.node-version`.
+- **Node.js 22.18.0** from `.node-version`; the repository targets `>=22.18.0` so Node runs the `.ts` harness sources directly through type stripping.
 - **pnpm 11.15.1** from the `packageManager` field in `package.json`.
 - **Rust 1.95.0 or newer**; CI builds with 1.95.0 and the workspace declares `rust-version = "1.95"`.
 - **Git and npm**; runtime discovery uses Git and the packaged snapshot runner calls `npm pack` and `npm install` directly.
@@ -171,7 +171,7 @@ The workspace `default-members` excludes `crates/snapshots`, so plain `cargo tes
 ## Testing Strategy
 
 - Put parser, planner, selector, and utility logic tests next to the Rust implementation.
-- Keep structured public API, source-map, and byte-exact assertions in `test/migrate.test.js`.
+- Keep structured public API, source-map, and byte-exact assertions in `test/migrate.test.ts`.
 - Put status/output/workspace behavior in packaged CLI snapshots.
 - When changing public CLI behavior, update the fixture and snapshot together.
 - Use the smallest focused test while iterating, then run the owning suite before committing.

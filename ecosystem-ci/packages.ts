@@ -7,9 +7,23 @@ import { cp, lstat, mkdir, readFile, readdir, realpath, rm, writeFile } from 'no
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { inside, platformCommand, sha256 } from './shared.js';
+import { inside, platformCommand, sha256 } from './shared.ts';
+import type { InstalledLayout, PackageEntry, Provenance } from './types.ts';
 
-const targets = {
+interface Target {
+  platform: string;
+  packageName: string;
+  addon: string;
+}
+
+interface RootManifest {
+  name: string;
+  version: string;
+  files: string[];
+  optionalDependencies: Record<string, string>;
+}
+
+const targets: Record<string, string> = {
   'darwin-arm64': 'darwin-arm64',
   'darwin-x64': 'darwin-x64',
   'linux-arm64': 'linux-arm64-gnu',
@@ -17,7 +31,7 @@ const targets = {
   'win32-x64': 'win32-x64-msvc',
 };
 
-function targetFor(platform, arch) {
+function targetFor(platform: string, arch: string): Target {
   const target = targets[`${platform}-${arch}`];
   if (!target) throw new Error(`Unsupported platform: ${platform}-${arch}`);
   return {
@@ -27,16 +41,20 @@ function targetFor(platform, arch) {
   };
 }
 
-export function currentTarget() {
+export function currentTarget(): Target {
   return targetFor(process.platform, process.arch);
 }
 
-async function run(command, args, { cwd, logPath, timeoutMs = 120_000 }) {
+async function run(
+  command: string,
+  args: string[],
+  { cwd, logPath, timeoutMs = 120_000 }: { cwd: string; logPath: string; timeoutMs?: number },
+): Promise<void> {
   await mkdir(dirname(logPath), { recursive: true });
   const log = openSync(logPath, 'a');
   const child = spawn(command, args, { cwd, shell: command.endsWith('.cmd'), stdio: ['ignore', log, log], windowsHide: true });
   const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
-  const result = await new Promise((resolveRun, reject) => {
+  const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolveRun, reject) => {
     child.once('error', reject);
     child.once('exit', (code, signal) => resolveRun({ code, signal }));
   }).finally(() => {
@@ -48,21 +66,26 @@ async function run(command, args, { cwd, logPath, timeoutMs = 120_000 }) {
   }
 }
 
-async function npmPack(packageDir, destination, logPath) {
+async function npmPack(packageDir: string, destination: string, logPath: string): Promise<string> {
   const before = new Set((await readdir(destination)).filter((file) => file.endsWith('.tgz')));
   await run(platformCommand('npm'), ['pack', '--pack-destination', destination], {
     cwd: packageDir,
     logPath,
   });
   const created = (await readdir(destination)).filter((file) => file.endsWith('.tgz') && !before.has(file));
-  if (created.length !== 1) throw new Error(`npm pack in ${packageDir} created ${created.length} tarballs, expected one`);
-  return join(destination, created[0]);
+  const [tarball] = created;
+  if (created.length !== 1 || !tarball) {
+    throw new Error(`npm pack in ${packageDir} created ${created.length} tarballs, expected one`);
+  }
+  return join(destination, tarball);
 }
 
-export async function stageRootPackage({ repoRoot, stageRoot }) {
+export async function stageRootPackage(
+  { repoRoot, stageRoot }: { repoRoot: string; stageRoot: string },
+): Promise<RootManifest> {
   const manifestPath = join(repoRoot, 'package.json');
   const tracked = await readFile(manifestPath);
-  const manifest = JSON.parse(tracked);
+  const manifest = JSON.parse(tracked.toString()) as RootManifest;
   if (typeof manifest.version !== 'string') throw new Error('tracked package.json has no string version');
   if (!manifest.optionalDependencies || Array.isArray(manifest.optionalDependencies)) {
     throw new Error('tracked package.json has no optionalDependencies object');
@@ -89,7 +112,9 @@ export async function stageRootPackage({ repoRoot, stageRoot }) {
   return manifest;
 }
 
-export async function stagePackages({ repoRoot, artifactRoot }) {
+export async function stagePackages(
+  { repoRoot, artifactRoot }: { repoRoot: string; artifactRoot: string },
+): Promise<Provenance> {
   repoRoot = await realpath(repoRoot);
   artifactRoot = resolve(artifactRoot);
   const staging = join(artifactRoot, 'staging');
@@ -108,7 +133,7 @@ export async function stagePackages({ repoRoot, artifactRoot }) {
     throw new Error(`native release artifact is missing at ${join(nativeSource, target.addon)}; run \`pnpm build && pnpm artifacts\` first`);
   }
 
-  const nativeManifest = JSON.parse(await readFile(join(nativeStage, 'package.json'), 'utf8'));
+  const nativeManifest = JSON.parse(await readFile(join(nativeStage, 'package.json'), 'utf8')) as RootManifest;
   if (nativeManifest.name !== target.packageName) throw new Error(`native package name must be ${target.packageName}`);
   const nativeTarball = await npmPack(nativeStage, tarballs, logPath);
 
@@ -119,9 +144,10 @@ export async function stagePackages({ repoRoot, artifactRoot }) {
   const rootTarball = await npmPack(rootStage, tarballs, logPath);
   const commitLog = join(artifactRoot, 'git.log');
   await run('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, logPath: commitLog });
-  const commit = (await readFile(commitLog, 'utf8')).trim().split(/\r?\n/).at(-1);
+  // `run` already threw unless `git rev-parse` exited zero, so the log has a line.
+  const commit = (await readFile(commitLog, 'utf8')).trim().split(/\r?\n/).at(-1) as string;
 
-  const provenance = {
+  const provenance: Provenance = {
     commit,
     platform: target.platform,
     packages: {
@@ -148,14 +174,17 @@ export async function stagePackages({ repoRoot, artifactRoot }) {
   return provenance;
 }
 
-function artifactPath(artifactRoot, path, label) {
+function artifactPath(artifactRoot: string, path: string | undefined, label: string): string {
   if (typeof path !== 'string' || path.length === 0) throw new Error(`${label} path is missing`);
   const resolved = resolve(artifactRoot, path);
   if (!inside(resolved, resolve(artifactRoot))) throw new Error(`${label} path escapes artifact root`);
   return resolved;
 }
 
-export async function validateProvenance(provenance, { artifactRoot, expectedCommit }) {
+export async function validateProvenance(
+  provenance: Provenance,
+  { artifactRoot, expectedCommit }: { artifactRoot: string; expectedCommit: string },
+): Promise<Provenance> {
   if (!/^[0-9a-f]{40}$/.test(provenance?.commit) || provenance.commit !== expectedCommit) {
     throw new Error('provenance commit does not match');
   }
@@ -167,7 +196,7 @@ export async function validateProvenance(provenance, { artifactRoot, expectedCom
   if (typeof root.version !== 'string' || root.version.length === 0 || native.version !== root.version) {
     throw new Error('provenance package versions do not match');
   }
-  for (const [label, entry] of [['root tarball', root], ['native tarball', native]]) {
+  for (const [label, entry] of [['root tarball', root], ['native tarball', native]] as [string, PackageEntry][]) {
     const path = artifactPath(artifactRoot, entry.tarball, label);
     if (!/^[0-9a-f]{64}$/.test(entry.sha256) || await sha256(path) !== entry.sha256) {
       throw new Error(`${label} digest does not match provenance`);
@@ -181,19 +210,33 @@ export async function validateProvenance(provenance, { artifactRoot, expectedCom
   return provenance;
 }
 
-async function installedPackage(path, nodeModules, checkoutRoot, expectedName, version) {
+async function installedPackage(
+  path: string,
+  nodeModules: string,
+  checkoutRoot: string,
+  expectedName: string,
+  version: string,
+): Promise<string> {
   if ((await lstat(path)).isSymbolicLink()) throw new Error(`${expectedName} must not be a workspace symlink`);
   const resolved = await realpath(path);
   if (!inside(resolved, nodeModules)) throw new Error(`${expectedName} resolved outside driver node_modules`);
   if (inside(resolved, checkoutRoot)) throw new Error(`${expectedName} resolved inside checkout`);
-  const manifest = JSON.parse(await readFile(join(resolved, 'package.json'), 'utf8'));
+  const manifest = JSON.parse(await readFile(join(resolved, 'package.json'), 'utf8')) as RootManifest;
   if (manifest.name !== expectedName || manifest.version !== version) {
     throw new Error(`${expectedName} installed identity does not match provenance`);
   }
   return resolved;
 }
 
-export async function assertInstalledLayout({ driverRoot, checkoutRoot, expected }) {
+export async function assertInstalledLayout({
+  driverRoot,
+  checkoutRoot,
+  expected,
+}: {
+  driverRoot: string;
+  checkoutRoot: string;
+  expected: { version: string; platform: string; addonSha256: string };
+}): Promise<InstalledLayout> {
   const target = currentTarget();
   if (expected.platform !== target.platform) throw new Error('installed platform does not match current OS');
   const driver = await realpath(driverRoot);
@@ -207,7 +250,7 @@ export async function assertInstalledLayout({ driverRoot, checkoutRoot, expected
   return { root, native, addon };
 }
 
-export async function publisherToken(registryUrl, timeoutMs = 15_000) {
+export async function publisherToken(registryUrl: string, timeoutMs = 15_000): Promise<string> {
   const name = `ecosystem-${randomUUID()}`;
   const response = await fetch(`${registryUrl}/-/user/org.couchdb.user:${name}`, {
     method: 'PUT',
@@ -215,12 +258,17 @@ export async function publisherToken(registryUrl, timeoutMs = 15_000) {
     body: JSON.stringify({ name, password: randomUUID(), type: 'user', roles: [] }),
     signal: AbortSignal.timeout(timeoutMs),
   });
-  const body = await response.json();
+  const body = await response.json() as { token?: unknown };
   if (!response.ok || typeof body.token !== 'string') throw new Error(`could not create registry publisher: ${response.status}`);
   return body.token;
 }
 
-export async function publishPackages(provenance, artifactRoot, registryUrl, logPath = join(artifactRoot, 'publish.log')) {
+export async function publishPackages(
+  provenance: Provenance,
+  artifactRoot: string,
+  registryUrl: string,
+  logPath: string = join(artifactRoot, 'publish.log'),
+): Promise<void> {
   const token = await publisherToken(registryUrl);
   const auth = `--//${new URL(registryUrl).host}/:_authToken=${token}`;
   for (const entry of [provenance.packages.native, provenance.packages.root]) {
@@ -233,11 +281,15 @@ export async function publishPackages(provenance, artifactRoot, registryUrl, log
   }
 }
 
-export function packageUploadRoot(artifactRoot) {
+export function packageUploadRoot(artifactRoot: string): string {
   return `${resolve(artifactRoot)}-upload`;
 }
 
-export async function preparePackageUpload(provenance, artifactRoot, uploadRoot) {
+export async function preparePackageUpload(
+  provenance: Provenance,
+  artifactRoot: string,
+  uploadRoot: string,
+): Promise<string[]> {
   await rm(uploadRoot, { recursive: true, force: true });
   await mkdir(uploadRoot, { recursive: true });
   const entries = ['provenance.json', provenance.packages.root.tarball, provenance.packages.native.tarball, provenance.addon.file];
@@ -258,7 +310,7 @@ export async function preparePackageUpload(provenance, artifactRoot, uploadRoot)
 async function main() {
   const [mode, flag, artifactRoot, ...rest] = process.argv.slice(2);
   if (mode !== 'stage' || flag !== '--artifact-root' || !artifactRoot || rest.length > 0) {
-    throw new Error('Usage: node ecosystem-ci/packages.js stage --artifact-root <path>');
+    throw new Error('Usage: node ecosystem-ci/packages.ts stage --artifact-root <path>');
   }
   const provenance = await stagePackages({ repoRoot: resolve(dirname(fileURLToPath(import.meta.url)), '..'), artifactRoot });
   const uploadRoot = packageUploadRoot(artifactRoot);
@@ -267,8 +319,8 @@ async function main() {
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
-  main().catch((error) => {
-    console.error(error.message);
+  main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   });
 }

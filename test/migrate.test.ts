@@ -9,6 +9,7 @@ import test from 'node:test';
 import { __unstable__loadDesignSystem as loadDesignSystem } from 'tailwindcss';
 
 import { migrate } from '../index.js';
+import type { MigrateOptions } from '../index.d.ts';
 import { sourceMappings } from '../style-compiler.js';
 
 const initialCss = '.button { padding: 13px; }\n';
@@ -26,7 +27,7 @@ async function fixture({ css = initialCss, tsx = initialTsx } = {}) {
   return cwd;
 }
 
-async function cleanup(cwd) {
+async function cleanup(cwd: string): Promise<void> {
   await rm(cwd, { recursive: true, force: true });
 }
 
@@ -70,7 +71,8 @@ test('validates API-only migration options', async () => {
   const cwd = await fixture();
   try {
     await assert.rejects(
-      migrate({ cwd, cssFile: 'Button.module.css' }),
+      // The removed option is intentionally invalid input for this assertion.
+      migrate({ cwd, cssFile: 'Button.module.css' } as MigrateOptions),
       /cssFile has been replaced by styleFile/,
     );
     await assert.rejects(
@@ -140,7 +142,7 @@ test('retains a disproven SCSS descendant relationship with authored offsets', a
       ),
     ]);
     const report = await migrate({ cwd, styleFile: 'Card.module.scss' });
-    const warning = report.warnings.find((entry) => entry.code === 'unproven-css-module-relationship');
+    const warning = report.warnings.find((entry) => entry.code === 'unproven-css-module-relationship')!;
     const start = source.indexOf('.parent .child');
     assert.deepEqual(
       [warning.file, warning.start, warning.end],
@@ -167,7 +169,7 @@ test('only follows real top-level CSS imports and preserves media warning offset
     const report = await migrate({ cwd });
     const warning = report.warnings.find(
       (entry) => entry.code === 'unsupported-link-media' && entry.file === 'base.css',
-    );
+    )!;
     assert.equal(
       warning.start,
       Buffer.byteLength(source.slice(0, source.indexOf('@import "./speech.css"'))),
@@ -190,7 +192,7 @@ test('anchors Sass compile-failure warnings to authored offsets', async () => {
       ),
     ]);
     const report = await migrate({ cwd, styleFile: 'Button.module.scss' });
-    const warning = report.warnings.find((entry) => entry.code === 'candidate-compilation-failure');
+    const warning = report.warnings.find((entry) => entry.code === 'candidate-compilation-failure')!;
     const start = source.indexOf('.button');
     const end = source.indexOf('}', start) + 1;
     assert.equal(warning.file, 'Button.module.scss');

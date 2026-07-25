@@ -1,15 +1,53 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { closeSync, openSync } from 'node:fs';
 import { appendFile, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { assertInstalledLayout, publishPackages, stagePackages, validateProvenance } from './packages.js';
-import { startRegistry } from './registry.js';
-import { assertOracle, captureAll, maxCaptureAttempts } from './oracle.js';
-import { availablePort, inside, platformCommand, sha256 } from './shared.js';
+import { assertInstalledLayout, publishPackages, stagePackages, validateProvenance } from './packages.ts';
+import { startRegistry } from './registry.ts';
+import { assertOracle, captureAll, maxCaptureAttempts } from './oracle.ts';
+import { availablePort, inside, platformCommand, sha256 } from './shared.ts';
+import type {
+  CaptureArtifact,
+  CaptureSet,
+  ControlledProject,
+  ExternalProject,
+  InstalledLayout,
+  MigrationReport,
+  PhaseLedger,
+  ProbedProject,
+  Provenance,
+  RunningServer,
+} from './types.ts';
+
+type Browser = import('playwright').Browser;
+
+export interface LifecycleResult {
+  baseline: CaptureSet;
+  post: CaptureSet;
+  ledger: PhaseLedger;
+  first?: MigrationReport;
+  second?: MigrationReport;
+}
+
+type FileDigests = Record<string, string>;
+
+interface LifecycleContext {
+  ledger: PhaseLedger;
+  mark: (phase: string, files?: string[]) => Promise<void>;
+  diagnostic: (phase: string, name: string, attempt: number) => CaptureArtifact;
+  runRoot: string;
+}
+
+interface ExpectedCase {
+  first: MigrationReport;
+  changedFiles: Record<string, string>;
+  source: string;
+}
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const caches = ['.next', 'dist', 'node_modules/.vite'];
@@ -20,14 +58,14 @@ export const externalLifecycleTimeoutMs = 10 * 60_000;
 
 // Windows runners expose TEMP as an 8.3 short path, which crashes libuv
 // fs-event watchers (dev servers) with a prefix assertion; watch long paths.
-export async function temporaryDirectory(prefix) {
+export async function temporaryDirectory(prefix: string): Promise<string> {
   return mkdtemp(join(await realpath(tmpdir()), prefix));
 }
 
-export async function artifactAllowlist(root, entries, maxBytes = 100 * 1024 * 1024) {
+export async function artifactAllowlist(root: string, entries: string[], maxBytes = 100 * 1024 * 1024): Promise<string[]> {
   root = resolve(root);
   const canonicalRoot = await realpath(root);
-  const paths = [];
+  const paths: string[] = [];
   let bytes = 0;
   for (const entry of entries) {
     const path = resolve(root, entry);
@@ -42,15 +80,35 @@ export async function artifactAllowlist(root, entries, maxBytes = 100 * 1024 * 1
   return paths;
 }
 
-export function assertExpectedChangedFiles(changedFiles, expectedFiles, actualFiles) {
+export function assertExpectedChangedFiles(
+  changedFiles: string[],
+  expectedFiles: Record<string, string>,
+  actualFiles: Record<string, string>,
+): void {
   assert.deepEqual(Object.keys(expectedFiles).sort(), [...changedFiles].sort(), 'exact-file expectations cover changedFiles');
   assert.deepEqual(Object.keys(actualFiles).sort(), [...changedFiles].sort(), 'exact changedFiles were read');
   for (const path of changedFiles) {
-    assert.deepEqual(Buffer.from(actualFiles[path]), Buffer.from(expectedFiles[path]), `exact post-migration bytes: ${path}`);
+    assert.deepEqual(Buffer.from(actualFiles[path] ?? ''), Buffer.from(expectedFiles[path] ?? ''), `exact post-migration bytes: ${path}`);
   }
 }
 
-export function assertMigrationContract({ first, expectedFirst, actualSource, expectedSource, second, treeBeforeSecond, treeAfterSecond }) {
+export function assertMigrationContract({
+  first,
+  expectedFirst,
+  actualSource,
+  expectedSource,
+  second,
+  treeBeforeSecond,
+  treeAfterSecond,
+}: {
+  first: MigrationReport;
+  expectedFirst: MigrationReport;
+  actualSource: string | null;
+  expectedSource: string;
+  second: MigrationReport;
+  treeBeforeSecond: FileDigests;
+  treeAfterSecond: FileDigests;
+}): void {
   assert.deepEqual(first, expectedFirst, 'exact first MigrationReport');
   assert.equal(actualSource, expectedSource, 'exact migration-owned source');
   assert.deepEqual(second.changedFiles, [], 'second migration changedFiles');
@@ -58,31 +116,35 @@ export function assertMigrationContract({ first, expectedFirst, actualSource, ex
   assert.deepEqual(treeAfterSecond, treeBeforeSecond, 'source-scoped tree after second migration');
 }
 
-async function terminateTree(child) {
+async function terminateTree(child: ChildProcess): Promise<void> {
   if (!child || child.exitCode !== null) return;
-  const exited = new Promise((resolveExit) => child.once('exit', resolveExit));
+  const exited = new Promise<void>((resolveExit) => child.once('exit', () => resolveExit()));
+  const pid = child.pid as number;
   if (process.platform === 'win32') {
-    spawnSync('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true });
+    spawnSync('taskkill.exe', ['/pid', String(pid), '/t', '/f'], { windowsHide: true });
   } else {
-    try { process.kill(-child.pid, 'SIGTERM'); } catch {}
+    try { process.kill(-pid, 'SIGTERM'); } catch {}
   }
   const stopped = await Promise.race([
     exited.then(() => true),
-    new Promise((resolveWait) => setTimeout(() => resolveWait(false), 3_000)),
+    new Promise<boolean>((resolveWait) => setTimeout(() => resolveWait(false), 3_000)),
   ]);
   if (!stopped && process.platform !== 'win32') {
-    try { process.kill(-child.pid, 'SIGKILL'); } catch {}
+    try { process.kill(-pid, 'SIGKILL'); } catch {}
   }
   if (!stopped) {
-    const forced = await Promise.race([
+    const forced: boolean = await Promise.race([
       exited.then(() => true),
-      new Promise((resolveWait) => setTimeout(() => resolveWait(false), 3_000)),
+      new Promise<boolean>((resolveWait) => setTimeout(() => resolveWait(false), 3_000)),
     ]);
-    if (!forced) throw new Error(`child process ${child.pid} did not exit`);
+    if (!forced) throw new Error(`child process ${pid} did not exit`);
   }
 }
 
-function packageManagerInvocation(project, args) {
+function packageManagerInvocation(
+  project: ExternalProject,
+  args: string[],
+): { command: string; args: string[] } {
   const separator = project.packageManager.indexOf('@');
   const manager = project.packageManager.slice(0, separator);
   const version = project.packageManager.slice(separator + 1);
@@ -92,12 +154,18 @@ function packageManagerInvocation(project, args) {
   return { command: platformCommand('corepack'), args: [`${manager}@${version}`, ...args] };
 }
 
-async function startServer(project, cwd, artifactRoot, phase, mode = 'dev') {
+async function startServer(
+  project: ProbedProject,
+  cwd: string,
+  artifactRoot: string,
+  phase: string,
+  mode: 'dev' | 'preview' = 'dev',
+): Promise<RunningServer> {
   const port = await availablePort();
   const npm = platformCommand('npm');
   const args = mode === 'preview'
     ? ['run', 'preview', '--', '--host', '127.0.0.1', '--port', String(port), '--strictPort']
-    : project.runtime === 'next'
+    : 'runtime' in project && project.runtime === 'next'
       ? ['run', 'dev', '--', '--hostname', '127.0.0.1', '--port', String(port)]
       : ['run', 'dev', '--', '--host', '127.0.0.1', '--port', String(port), '--strictPort'];
   const logPath = join(artifactRoot, `${phase}-server.log`);
@@ -109,7 +177,7 @@ async function startServer(project, cwd, artifactRoot, phase, mode = 'dev') {
     windowsHide: true,
     stdio: ['ignore', log, log],
   });
-  let launchError;
+  let launchError: Error | undefined;
   child.once('error', (error) => { launchError = error; });
   const url = `http://127.0.0.1:${port}`;
   const deadline = Date.now() + 60_000;
@@ -134,8 +202,8 @@ async function startServer(project, cwd, artifactRoot, phase, mode = 'dev') {
   }
 }
 
-export function externalEnvironment() {
-  const env = { CI: 'true' };
+export function externalEnvironment(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { CI: 'true' };
   for (const key of [
     'PATH',
     'HOME',
@@ -155,7 +223,12 @@ export function externalEnvironment() {
   return env;
 }
 
-async function startExternalServer(project, cwd, artifactRoot, phase) {
+async function startExternalServer(
+  project: ExternalProject,
+  cwd: string,
+  artifactRoot: string,
+  phase: string,
+): Promise<RunningServer> {
   const port = await availablePort();
   const serverArgs = project.server === 'next'
     ? ['--hostname', '127.0.0.1', '--port', String(port)]
@@ -172,7 +245,7 @@ async function startExternalServer(project, cwd, artifactRoot, phase) {
     windowsHide: true,
     stdio: ['ignore', log, log],
   });
-  let launchError;
+  let launchError: Error | undefined;
   child.once('error', (error) => { launchError = error; });
   const url = `http://127.0.0.1:${port}`;
   const deadline = Date.now() + 90_000;
@@ -197,28 +270,35 @@ async function startExternalServer(project, cwd, artifactRoot, phase) {
   }
 }
 
-export async function waitForChild(child, { timeoutMs, teardownTimeoutMs = 7_000, terminate = terminateTree }) {
+export async function waitForChild(
+  child: ChildProcess,
+  {
+    timeoutMs,
+    teardownTimeoutMs = 7_000,
+    terminate = terminateTree,
+  }: { timeoutMs: number; teardownTimeoutMs?: number; terminate?: (child: ChildProcess) => Promise<void> },
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
   const timedOut = Symbol('timed out');
-  let timer;
-  const outcome = new Promise((resolveRun) => {
+  let timer: NodeJS.Timeout | undefined;
+  const outcome = new Promise<{ error?: Error; code?: number | null; signal?: NodeJS.Signals | null }>((resolveRun) => {
     child.once('error', (error) => resolveRun({ error }));
     child.once('exit', (code, signal) => resolveRun({ code, signal }));
   });
   const result = await Promise.race([
     outcome,
-    new Promise((resolveTimeout) => { timer = setTimeout(() => resolveTimeout(timedOut), timeoutMs); }),
+    new Promise<typeof timedOut>((resolveTimeout) => { timer = setTimeout(() => resolveTimeout(timedOut), timeoutMs); }),
   ]);
   clearTimeout(timer);
   if (result !== timedOut) {
     if (result.error) throw result.error;
-    return result;
+    return { code: result.code ?? null, signal: result.signal ?? null };
   }
 
-  let teardownTimer;
+  let teardownTimer: NodeJS.Timeout | undefined;
   try {
     const teardown = await Promise.race([
       Promise.resolve().then(() => terminate(child)).then(() => null, (error) => error),
-      new Promise((resolveTimeout) => {
+      new Promise<Error>((resolveTimeout) => {
         teardownTimer = setTimeout(() => resolveTimeout(new Error(`process teardown timed out after ${teardownTimeoutMs}ms`)), teardownTimeoutMs);
       }),
     ]);
@@ -229,7 +309,11 @@ export async function waitForChild(child, { timeoutMs, teardownTimeoutMs = 7_000
   }
 }
 
-async function run(command, args, { cwd, logPath, timeoutMs = 180_000, env }) {
+async function run(
+  command: string,
+  args: string[],
+  { cwd, logPath, timeoutMs = 180_000, env }: { cwd: string; logPath: string; timeoutMs?: number; env?: NodeJS.ProcessEnv },
+): Promise<void> {
   const log = openSync(logPath, 'a');
   const child = spawn(command, args, {
     cwd,
@@ -243,7 +327,7 @@ async function run(command, args, { cwd, logPath, timeoutMs = 180_000, env }) {
   if (result.code !== 0) throw new Error(`${command} ${args.join(' ')} failed (${result.signal ?? result.code}); see ${logPath}`);
 }
 
-async function checkoutExternalProject(project, runRoot, artifactRoot) {
+async function checkoutExternalProject(project: ExternalProject, runRoot: string, artifactRoot: string): Promise<string> {
   const projectRoot = join(runRoot, 'external');
   await mkdir(projectRoot, { recursive: true });
   const logPath = join(artifactRoot, 'checkout.log');
@@ -259,7 +343,7 @@ async function checkoutExternalProject(project, runRoot, artifactRoot) {
   return projectRoot;
 }
 
-function trackedCheckoutChanges(root) {
+function trackedCheckoutChanges(root: string): { status: string; path: string }[] {
   const status = spawnSync('git', ['status', '--porcelain=v1', '-z', '--untracked-files=no'], {
     cwd: root,
     encoding: 'utf8',
@@ -270,14 +354,14 @@ function trackedCheckoutChanges(root) {
   return status.stdout.split('\0').filter(Boolean).map((entry) => ({ status: entry.slice(0, 2), path: entry.slice(3) }));
 }
 
-function assertTrackedCheckoutClean(root, phase) {
+function assertTrackedCheckoutClean(root: string, phase: string): void {
   const changes = trackedCheckoutChanges(root);
   if (changes.length > 0) {
     throw new Error(`external checkout changed tracked files during ${phase}: ${changes.map(({ status, path }) => `${status} ${path}`).join(', ')}`);
   }
 }
 
-function trackedCheckoutDiff(root) {
+function trackedCheckoutDiff(root: string): Buffer {
   const diff = spawnSync('git', ['diff', 'HEAD', '--binary', '--no-ext-diff', '--no-textconv', '--'], {
     cwd: root,
     env: externalEnvironment(),
@@ -288,7 +372,7 @@ function trackedCheckoutDiff(root) {
   return diff.stdout;
 }
 
-async function snapshotRuntimeWrites(root, paths) {
+async function snapshotRuntimeWrites(root: string, paths: string[]): Promise<Record<string, Buffer>> {
   const canonicalRoot = await realpath(root);
   return Object.fromEntries(await Promise.all(paths.map(async (path) => [
     path,
@@ -296,7 +380,12 @@ async function snapshotRuntimeWrites(root, paths) {
   ])));
 }
 
-export async function restoreRuntimeWrites(root, originals, phase, expectedDiff = Buffer.alloc(0)) {
+export async function restoreRuntimeWrites(
+  root: string,
+  originals: Record<string, Buffer>,
+  phase: string,
+  expectedDiff: Buffer = Buffer.alloc(0),
+): Promise<void> {
   const canonicalRoot = await realpath(root);
   for (const [path, contents] of Object.entries(originals)) {
     await writeFile(await checkedMigrationPath(root, canonicalRoot, path), contents);
@@ -307,7 +396,7 @@ export async function restoreRuntimeWrites(root, originals, phase, expectedDiff 
   }
 }
 
-async function checkedProjectDirectory(root, relativePath) {
+async function checkedProjectDirectory(root: string, relativePath: string): Promise<string> {
   const path = resolve(root, relativePath);
   if (!inside(path, root)) throw new Error(`project directory escapes checkout: ${relativePath}`);
   const stat = await lstat(path);
@@ -316,7 +405,7 @@ async function checkedProjectDirectory(root, relativePath) {
   return path;
 }
 
-async function checkedMigrationPath(root, canonicalRoot, relativePath) {
+async function checkedMigrationPath(root: string, canonicalRoot: string, relativePath: string): Promise<string> {
   const path = resolve(root, relativePath);
   if (!inside(path, root)) throw new Error(`migration-owned path escapes project: ${relativePath}`);
   const stat = await lstat(path);
@@ -325,17 +414,17 @@ async function checkedMigrationPath(root, canonicalRoot, relativePath) {
   return path;
 }
 
-async function readMigrationPaths(root, paths) {
+async function readMigrationPaths(root: string, paths: string[]): Promise<Record<string, string>> {
   root = resolve(root);
   const canonicalRoot = await realpath(root);
-  const result = {};
+  const result: Record<string, string> = {};
   for (const relativePath of [...paths].sort()) {
     result[relativePath] = await readFile(await checkedMigrationPath(root, canonicalRoot, relativePath), 'utf8');
   }
   return result;
 }
 
-export async function clearGeneratedCaches(root) {
+export async function clearGeneratedCaches(root: string): Promise<void> {
   await Promise.all(caches.map((path) => rm(join(root, path), {
     recursive: true,
     force: true,
@@ -344,11 +433,11 @@ export async function clearGeneratedCaches(root) {
   })));
 }
 
-export async function snapshotMigrationSources(root) {
+export async function snapshotMigrationSources(root: string): Promise<FileDigests> {
   root = resolve(root);
   const canonicalRoot = await realpath(root);
-  const result = {};
-  const walk = async (directory) => {
+  const result: FileDigests = {};
+  const walk = async (directory: string): Promise<void> => {
     const stat = await lstat(directory);
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`migration source path is not a regular directory: ${relative(root, directory)}`);
     if (!inside(await realpath(directory), canonicalRoot)) throw new Error(`migration source path escapes project through a symlink: ${relative(root, directory)}`);
@@ -370,17 +459,22 @@ export async function snapshotMigrationSources(root) {
   return Object.fromEntries(Object.entries(result).sort(([left], [right]) => left.localeCompare(right)));
 }
 
-async function prepareDriver(project, runRoot, packageArtifactRoot, artifactRoot) {
+async function prepareDriver(
+  project: ControlledProject,
+  runRoot: string,
+  packageArtifactRoot: string,
+  artifactRoot: string,
+): Promise<{ driverRoot: string; installed: InstalledLayout }> {
   await mkdir(packageArtifactRoot, { recursive: true });
   const provenancePath = join(packageArtifactRoot, 'provenance.json');
-  let provenance;
+  let provenance: Provenance;
   try {
-    provenance = JSON.parse(await readFile(provenancePath, 'utf8'));
+    provenance = JSON.parse(await readFile(provenancePath, 'utf8')) as Provenance;
     const git = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' });
     if (git.status !== 0) throw new Error('could not verify package provenance commit');
     await validateProvenance(provenance, { artifactRoot: packageArtifactRoot, expectedCommit: git.stdout.trim() });
   } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     provenance = await stagePackages({ repoRoot, artifactRoot: packageArtifactRoot });
   }
 
@@ -397,7 +491,7 @@ async function prepareDriver(project, runRoot, packageArtifactRoot, artifactRoot
   try {
     await cp(fixture, driverRoot, { recursive: true });
     const manifestPath = join(driverRoot, 'package.json');
-    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { dependencies: Record<string, string> };
     manifest.dependencies['tw-migrate'] = provenance.packages.root.version;
     await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
     await run(platformCommand('npm'), [
@@ -414,11 +508,15 @@ async function prepareDriver(project, runRoot, packageArtifactRoot, artifactRoot
   return { driverRoot, installed };
 }
 
-async function readMaybe(path) {
-  return readFile(path, 'utf8').catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+async function readMaybe(path: string): Promise<string | null> {
+  return readFile(path, 'utf8').catch((error: NodeJS.ErrnoException) => error.code === 'ENOENT' ? null : Promise.reject(error));
 }
 
-export async function teardownLifecycleServer(server, primaryError, recordFailure) {
+export async function teardownLifecycleServer(
+  server: RunningServer | undefined,
+  primaryError: unknown,
+  recordFailure: (error: unknown) => Promise<void>,
+): Promise<void> {
   try {
     await server?.stop();
   } catch (error) {
@@ -428,11 +526,11 @@ export async function teardownLifecycleServer(server, primaryError, recordFailur
   }
 }
 
-export function captureAttemptArtifactNames(phase, probe, attempt) {
+export function captureAttemptArtifactNames(phase: string, probe: string, attempt: number): [string, string] {
   return [`${phase}-${probe}-attempt-${attempt}-browser.json`, `${phase}-${probe}-attempt-${attempt}.png`];
 }
 
-function captureArtifactNames(project, phase) {
+function captureArtifactNames(project: ProbedProject, phase: string): string[] {
   return [
     `${phase}-computed.json`,
     `${phase}-server.log`,
@@ -441,15 +539,15 @@ function captureArtifactNames(project, phase) {
   ];
 }
 
-async function existingArtifactNames(artifactRoot, names) {
-  const existing = [];
+async function existingArtifactNames(artifactRoot: string, names: string[]): Promise<string[]> {
+  const existing: string[] = [];
   for (const name of names) {
     if ((await lstat(join(artifactRoot, name)).catch(() => null))?.isFile()) existing.push(name);
   }
   return existing;
 }
 
-function caseArtifactNames(project) {
+function caseArtifactNames(project: ProbedProject): string[] {
   return ['phase-ledger.json', 'failure.log', 'install.log', 'publish.log', 'registry-bootstrap.log', 'registry-install.log',
     'first-report.json', 'second-report.json', 'source.diff',
     'baseline-build.log', 'post-build.log', 'first-cli.log', 'second-cli.log', 'checkout.log',
@@ -457,13 +555,17 @@ function caseArtifactNames(project) {
     ...['baseline', 'withheld', 'utilities-only', 'post'].flatMap((phase) => captureArtifactNames(project, phase))];
 }
 
-export async function prepareCaseUpload(project, artifactRoot, uploadRoot) {
+export async function prepareCaseUpload(
+  project: ProbedProject,
+  artifactRoot: string,
+  uploadRoot: string,
+): Promise<string[]> {
   const allowed = new Set(caseArtifactNames(project));
-  const ledger = JSON.parse(await readFile(join(artifactRoot, 'phase-ledger.json'), 'utf8'));
+  const ledger = JSON.parse(await readFile(join(artifactRoot, 'phase-ledger.json'), 'utf8')) as PhaseLedger;
   const declared = new Set(['phase-ledger.json', ...(ledger.failureFiles ?? [])]);
   for (const phase of ledger.phases) for (const file of phase.files) declared.add(file);
   if (ledger.failure) declared.add('failure.log');
-  const existing = [];
+  const existing: string[] = [];
   for (const name of declared) {
     if (!allowed.has(name)) throw new Error(`phase ledger declared forbidden artifact: ${name}`);
     if ((await lstat(join(artifactRoot, name)).catch(() => null))?.isFile()) existing.push(name);
@@ -478,34 +580,52 @@ export async function prepareCaseUpload(project, artifactRoot, uploadRoot) {
   return existing;
 }
 
-export function temporaryLifecyclePaths(projectId, temporaryRoot) {
+export function temporaryLifecyclePaths(
+  projectId: string,
+  temporaryRoot: string,
+): { artifactRoot: string; packageArtifactRoot: string } {
   return {
     artifactRoot: join(temporaryRoot, 'artifacts', projectId),
     packageArtifactRoot: join(temporaryRoot, 'packages'),
   };
 }
 
-async function executeLifecycle({ project, artifactCase = project, artifactRoot, temporaryRoot, activeServer }, body) {
-  const ledger = { case: project.id, phases: [] };
+async function executeLifecycle<T>(
+  {
+    project,
+    artifactCase = project as ProbedProject,
+    artifactRoot,
+    temporaryRoot,
+    activeServer,
+  }: {
+    project: ControlledProject | ExternalProject | { id: string; kind: 'smoke' };
+    artifactCase?: ProbedProject;
+    artifactRoot: string;
+    temporaryRoot?: string;
+    activeServer: () => RunningServer | undefined;
+  },
+  body: (context: LifecycleContext) => Promise<T>,
+): Promise<T> {
+  const ledger: PhaseLedger = { case: project.id, phases: [] };
   const ledgerPath = join(artifactRoot, 'phase-ledger.json');
-  const mark = async (phase, files = []) => {
+  const mark = async (phase: string, files: string[] = []) => {
     ledger.phases.push({ phase, files });
     await writeFile(ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`);
   };
-  const recordFailure = async (error) => {
-    await appendFile(join(artifactRoot, 'failure.log'), `${error.stack ?? error}\n`).catch(() => {});
-    ledger.failure = error.message;
+  const recordFailure = async (error: unknown) => {
+    await appendFile(join(artifactRoot, 'failure.log'), `${error instanceof Error ? error.stack ?? error.message : String(error)}\n`).catch(() => {});
+    ledger.failure = error instanceof Error ? error.message : String(error);
     ledger.failureFiles = [];
     for (const name of caseArtifactNames(artifactCase)) {
       if ((await lstat(join(artifactRoot, name)).catch(() => null))?.isFile()) ledger.failureFiles.push(name);
     }
     await writeFile(ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`).catch(() => {});
   };
-  const diagnostic = (phase, name, attempt) => {
+  const diagnostic = (phase: string, name: string, attempt: number): CaptureArtifact => {
     const [browserJson, screenshot] = captureAttemptArtifactNames(phase, name, attempt);
     return {
       screenshot: join(artifactRoot, screenshot),
-      writeDiagnostics: (value) => writeFile(join(artifactRoot, browserJson), `${JSON.stringify(value, null, 2)}\n`),
+      writeDiagnostics: (value: unknown) => writeFile(join(artifactRoot, browserJson), `${JSON.stringify(value, null, 2)}\n`),
     };
   };
   await mark('initialized');
@@ -514,7 +634,7 @@ async function executeLifecycle({ project, artifactCase = project, artifactRoot,
   // artifact roots and ledger.
   const runRoot = await temporaryDirectory('twm-');
   let succeeded = false;
-  let primaryError;
+  let primaryError: unknown;
   try {
     const result = await body({ ledger, mark, diagnostic, runRoot });
     succeeded = true;
@@ -525,11 +645,11 @@ async function executeLifecycle({ project, artifactCase = project, artifactRoot,
     throw error;
   } finally {
     // Teardown steps land in the ledger so a post-completion hang is attributable from artifacts.
-    const teardownMark = async (step) => {
+    const teardownMark = async (step: string) => {
       ledger.teardown = [...(ledger.teardown ?? []), { step, at: new Date().toISOString() }];
       await writeFile(ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`).catch(() => {});
     };
-    let teardownError;
+    let teardownError: unknown;
     await teardownMark('server-stop-started');
     try {
       await teardownLifecycleServer(activeServer(), primaryError, recordFailure);
@@ -542,7 +662,7 @@ async function executeLifecycle({ project, artifactCase = project, artifactRoot,
     // directory behind rather than hanging the merge gate on cleanup.
     const removed = await Promise.race([
       rm(runRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).then(() => true, () => false),
-      new Promise((resolveWait) => setTimeout(resolveWait, 30_000, false)),
+      new Promise<boolean>((resolveWait) => setTimeout(resolveWait, 30_000, false)),
     ]);
     await teardownMark(removed ? 'run-root-removed' : 'run-root-left-behind');
     if (succeeded && !teardownError && temporaryRoot) await rm(temporaryRoot, { recursive: true, force: true });
@@ -555,8 +675,13 @@ export async function runLifecycle({
   project,
   artifactRoot,
   packageArtifactRoot = process.env.ECOSYSTEM_PACKAGE_ARTIFACT_ROOT,
-}) {
-  let temporaryRoot;
+}: {
+  browser: Browser;
+  project: ControlledProject;
+  artifactRoot?: string;
+  packageArtifactRoot?: string;
+}): Promise<LifecycleResult> {
+  let temporaryRoot: string | undefined;
   if (!artifactRoot) {
     temporaryRoot = await temporaryDirectory(`tw-migrate-${project.id}-artifacts-`);
     ({ artifactRoot, packageArtifactRoot } = temporaryLifecyclePaths(project.id, temporaryRoot));
@@ -565,7 +690,7 @@ export async function runLifecycle({
   packageArtifactRoot = packageArtifactRoot ? resolve(packageArtifactRoot) : artifactRoot;
   await rm(artifactRoot, { recursive: true, force: true });
   await mkdir(artifactRoot, { recursive: true });
-  let server;
+  let server: RunningServer | undefined;
   return executeLifecycle({ project, artifactRoot, temporaryRoot, activeServer: () => server }, async ({ ledger, mark, diagnostic, runRoot }) => {
     const { driverRoot, installed } = await prepareDriver(project, runRoot, packageArtifactRoot, artifactRoot);
     await mark('installed', ['install.log', 'publish.log', 'registry-bootstrap.log', 'registry-install.log']);
@@ -580,7 +705,7 @@ export async function runLifecycle({
     const sourcePath = await checkedMigrationPath(driverRoot, await realpath(driverRoot), project.source.path);
     const authored = await readFile(sourcePath, 'utf8');
     assert.ok(authored.includes(project.source.before), 'causal witness source token');
-    const expected = JSON.parse(await readFile(join(driverRoot, 'expected.json'), 'utf8'));
+    const expected = JSON.parse(await readFile(join(driverRoot, 'expected.json'), 'utf8')) as ExpectedCase;
     assert.ok(expected.first.candidates.includes(project.source.after), 'causal witness candidate token');
     await writeFile(sourcePath, '');
     await mark('causal-witness-started');
@@ -622,7 +747,9 @@ export async function runLifecycle({
       );
     } finally {
       await server?.stop(); server = undefined;
-      await writeFile(sourcePath, actualSource);
+      // Controlled fixtures are always rewritten, never deleted, so the
+      // migrated source read back above is a string.
+      await writeFile(sourcePath, actualSource as string);
     }
     await mark('utilities-only');
 
@@ -644,8 +771,14 @@ export async function runProductionSmoke({
   fixture,
   artifactRoot,
   packageArtifactRoot = process.env.ECOSYSTEM_PACKAGE_ARTIFACT_ROOT,
-}) {
-  let temporaryRoot;
+}: {
+  browser: Browser;
+  project: { id: string; kind: 'smoke' };
+  fixture: ControlledProject;
+  artifactRoot?: string;
+  packageArtifactRoot?: string;
+}): Promise<LifecycleResult> {
+  let temporaryRoot: string | undefined;
   if (!artifactRoot) {
     temporaryRoot = await temporaryDirectory(`tw-migrate-${project.id}-artifacts-`);
     ({ artifactRoot, packageArtifactRoot } = temporaryLifecyclePaths(project.id, temporaryRoot));
@@ -654,7 +787,7 @@ export async function runProductionSmoke({
   packageArtifactRoot = packageArtifactRoot ? resolve(packageArtifactRoot) : artifactRoot;
   await rm(artifactRoot, { recursive: true, force: true });
   await mkdir(artifactRoot, { recursive: true });
-  let server;
+  let server: RunningServer | undefined;
   return executeLifecycle({ project, artifactCase: fixture, artifactRoot, temporaryRoot, activeServer: () => server }, async ({ ledger, mark, diagnostic, runRoot }) => {
     const { driverRoot, installed } = await prepareDriver(fixture, runRoot, packageArtifactRoot, artifactRoot);
     await mark('installed', ['install.log', 'publish.log', 'registry-bootstrap.log', 'registry-install.log']);
@@ -704,22 +837,34 @@ export async function runProductionSmoke({
   });
 }
 
-export async function runExternalLifecycle({ browser, project, packageFixture, artifactRoot, packageArtifactRoot = process.env.ECOSYSTEM_PACKAGE_ARTIFACT_ROOT }) {
+export async function runExternalLifecycle({
+  browser,
+  project,
+  packageFixture,
+  artifactRoot,
+  packageArtifactRoot = process.env.ECOSYSTEM_PACKAGE_ARTIFACT_ROOT,
+}: {
+  browser: Browser;
+  project: ExternalProject;
+  packageFixture: ControlledProject;
+  artifactRoot?: string;
+  packageArtifactRoot?: string;
+}): Promise<LifecycleResult> {
   if (process.env.CI !== 'true' || process.env.ECOSYSTEM_EXTERNAL !== '1') {
     throw new Error('external ecosystem cases require CI=true and ECOSYSTEM_EXTERNAL=1');
   }
-  let temporaryRoot;
+  let temporaryRoot: string | undefined;
   if (!artifactRoot) {
     temporaryRoot = await temporaryDirectory(`tw-migrate-${project.id}-artifacts-`);
     artifactRoot = join(temporaryRoot, 'artifacts', project.id);
   }
   artifactRoot = resolve(artifactRoot);
-  packageArtifactRoot = resolve(packageArtifactRoot);
+  packageArtifactRoot = resolve(packageArtifactRoot as string);
   await rm(artifactRoot, { recursive: true, force: true });
   await mkdir(artifactRoot, { recursive: true });
-  let server;
+  let server: RunningServer | undefined;
   return executeLifecycle({ project, artifactRoot, temporaryRoot, activeServer: () => server }, async ({ ledger, mark, diagnostic, runRoot }) => {
-    const { installed } = await prepareDriver(packageFixture, runRoot, packageArtifactRoot, artifactRoot);
+    const { installed } = await prepareDriver(packageFixture, runRoot, packageArtifactRoot as string, artifactRoot as string);
     const { migrate } = await import(`${pathToFileURL(join(installed.root, 'index.js')).href}?case=${Date.now()}`);
     await mark('package-installed', ['install.log', 'publish.log', 'registry-bootstrap.log', 'registry-install.log']);
     const checkoutRoot = await checkoutExternalProject(project, runRoot, artifactRoot);
@@ -786,7 +931,7 @@ export async function runExternalLifecycle({ browser, project, packageFixture, a
     if (migratedSource !== null) {
       await writeFile(await checkedMigrationPath(packageRoot, canonicalPackageRoot, project.source.path), '');
     }
-    let utilitiesExpectedDiff;
+    let utilitiesExpectedDiff: Buffer | undefined;
     await mark('utilities-only-started');
     try {
       await clearGeneratedCaches(packageRoot);
