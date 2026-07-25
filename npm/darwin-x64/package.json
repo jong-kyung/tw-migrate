@@ -1,18 +1,23 @@
 {
   "name": "tw-migrate-darwin-x64",
   "version": "0.0.0",
+  "description": "Preview and migrate React CSS to Tailwind utilities",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jong-kyung/tw-migrate.git"
+  },
+  "files": [
+    "tw-migrate.darwin-x64.node"
+  ],
+  "os": [
+    "darwin"
+  ],
   "cpu": [
     "x64"
   ],
   "main": "tw-migrate.darwin-x64.node",
-  "files": [
-    "tw-migrate.darwin-x64.node"
-  ],
-  "description": "Preview and migrate React CSS to Tailwind utilities",
   "engines": {
     "node": ">=22.18.0"
-  },
-  "os": [
-    "darwin"
-  ]
+  }
 }

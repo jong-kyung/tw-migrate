@@ -1,0 +1,348 @@
+# Stage two: a version bump landing on main releases that version. Start a
+# release with the Prepare Release workflow rather than by editing package.json
+# by hand.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: ['package.json']
+
+permissions: {}
+
+# Keyed on the commit, not the workflow: GitHub keeps only one pending run per
+# group, so a constant group would let a third release cancel a second one that
+# is still queued behind an approval, and that version would never be built.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check version
+    if: github.repository == 'jong-kyung/tw-migrate'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      changed: ${{ steps.version.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Is this a new version to release?
+        id: version
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          # The trigger is a version bump, not any package.json edit. The
+          # comparison is against what main pointed at before this push, not
+          # HEAD^: a push can carry more than one commit -- the first release
+          # PR also drops the README's pre-release warning -- and then HEAD^
+          # already holds the new version, which would read as "no change" and
+          # silently skip the only release run for that version. This is also
+          # what stops the commit that first adds this workflow from offering
+          # its own placeholder version for release.
+          previous=''
+          if [ -n "$BEFORE" ] && [ "$BEFORE" != '0000000000000000000000000000000000000000' ] \
+            && git fetch --no-tags --depth=1 origin "$BEFORE" 2>/dev/null; then
+            previous="$(git show "$BEFORE:package.json" | node -pe 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).version')"
+          fi
+
+          if [ -z "$previous" ]; then
+            # Only reachable if main was force-pushed or freshly created. Fall
+            # through to the registry check rather than blocking a real release.
+            echo "::warning::Could not read the version main held before this push; relying on the registry check alone"
+          elif [ "$version" = "$previous" ]; then
+            echo "package.json changed but the version is still $version; nothing to release."
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # An absent package or version answers with E404, and npm can also
+          # exit 0 with empty output for a version that does not exist; both
+          # mean "not published". Anything else is an outage rather than an
+          # answer -- reading it as "not published" would wave a release
+          # through, so it stops the run instead.
+          if published="$(npm view "tw-migrate@$version" version 2>"$RUNNER_TEMP/npm-view.err")"; then
+            :
+          elif grep -q 'E404' "$RUNNER_TEMP/npm-view.err"; then
+            published=''
+          else
+            cat "$RUNNER_TEMP/npm-view.err"
+            echo "::error::Could not reach the npm registry to check tw-migrate@$version"
+            exit 1
+          fi
+
+          if [ -n "$published" ]; then
+            echo "tw-migrate@$version is already published; stopping."
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+          else
+            echo "tw-migrate@$version is not on npm; releasing it."
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          fi
+
+  # Built from the release commit rather than reused from the CI run, so the
+  # provenance of the published binaries does not depend on artifact retention.
+  # Tests are not repeated here -- CI runs them on this same commit, and the
+  # publish job below waits for a human who can see that result.
+  build:
+    name: Build ${{ matrix.runner }}
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - macos-14
+          - macos-15-intel
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+          - windows-latest
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: .node-version
+          cache: true
+          run-install: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.95.0
+      - run: vp install --frozen-lockfile
+      - run: vp run build
+      - run: vp run artifacts
+      # The whole npm/ directory, not a glob over the addon: upload-artifact
+      # roots an artifact at the common ancestor of the matched files, so a
+      # single-file glob would drop the npm/<platform>/ prefix the publish job
+      # needs to put each addon back where napi expects it.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-${{ matrix.runner }}
+          path: npm
+          if-no-files-found: error
+
+  # Nothing reaches npm until a reviewer approves this job in the release
+  # environment: npm cannot republish a version, unpublish expires after 72
+  # hours, and one pre-publish call pushes all five platform packages.
+  publish:
+    name: Publish
+    needs: [check, build]
+    if: needs.check.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    environment: release
+    # Serializes publishing across releases. The workflow-level group is keyed
+    # per commit so no queued release is dropped, which on its own would let two
+    # approved publishes interleave: both read the same dist-tag, both pass the
+    # check below, and whichever finishes last owns the tag. This group is the
+    # shared lock that makes check-then-publish atomic between releases.
+    # Residual: GitHub keeps one pending member per group, so a third publish
+    # queued behind two others would still be dropped -- visible as a missing
+    # release rather than a silent tag move, and re-runnable.
+    concurrency:
+      group: publish-tw-migrate
+      cancel-in-progress: false
+    permissions:
+      contents: write # create the GitHub Release
+      id-token: write # npm provenance
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      NPM_CONFIG_PROVENANCE: 'true'
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # Only for the authenticated .npmrc; the publish path needs no workspace
+      # install, no pnpm, and no Rust toolchain.
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download native addons
+        uses: actions/download-artifact@v8
+        with:
+          pattern: native-*
+          merge-multiple: true
+          path: npm
+
+      - name: Verify every target is present
+        run: |
+          set -euo pipefail
+          found="$(find npm -name '*.node' | sort)"
+          count="$(printf '%s\n' "$found" | grep -c '\.node$' || true)"
+          printf '%s\n' "$found"
+          if [ "$count" -ne 5 ]; then
+            echo "::error::Expected 5 native addons, found $count"
+            exit 1
+          fi
+
+      # Checked here rather than in the check job, and before anything is
+      # published: two releases can clear an earlier check against the same tag
+      # and then be approved out of order, which would walk the tag backward.
+      # This runs after approval, so the comparison is the last word.
+      - name: Verify this version moves its dist-tag forward
+        run: |
+          set -euo pipefail
+          # A prerelease moves next, a stable release moves latest. Derived once
+          # here and reused by the publish and GitHub Release steps.
+          case "$VERSION" in
+            *-*) tag=next ;;
+            *) tag=latest ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_ENV"
+
+          if current="$(npm view "tw-migrate@$tag" version 2>"$RUNNER_TEMP/npm-view.err")"; then
+            :
+          elif grep -q 'E404' "$RUNNER_TEMP/npm-view.err"; then
+            current=''
+          else
+            cat "$RUNNER_TEMP/npm-view.err"
+            echo "::error::Could not reach the npm registry to read the $tag tag"
+            exit 1
+          fi
+
+          if [ -z "$current" ]; then
+            echo "No $tag tag yet; $VERSION will create it."
+            exit 0
+          fi
+
+          newest="$(npx --yes -p semver@7.7.2 semver "$VERSION" "$current" | tail -1)"
+          if [ "$VERSION" = "$current" ] || [ "$newest" != "$VERSION" ]; then
+            echo "::error::$VERSION does not come after the current $tag ($current); publishing it would move the $tag tag backward"
+            exit 1
+          fi
+          echo "$VERSION comes after the current $tag ($current)."
+
+      # Prepare only. This syncs the five platform manifests to the root version
+      # and rewrites the root optionalDependencies from workspace:* to concrete
+      # versions, so the root package can only ever point at packages that
+      # exist. --no-gh-release matters: it defaults to true, and the GitHub
+      # Release is created explicitly at the end of this job instead.
+      - name: Prepare platform packages
+        run: npx --yes @napi-rs/cli@3.7.3 pre-publish -p npm -t npm --no-gh-release --skip-optional-publish
+
+      # Published one at a time rather than by pre-publish's own loop, because
+      # npm cannot republish a version: a single call that dies partway through
+      # leaves a rerun with no way to finish the release, since it would stop on
+      # the first package that already succeeded. Skipping versions that are
+      # already up makes a rerun pick up exactly where it left off.
+      #
+      # The tag is passed explicitly: npm refuses to publish a prerelease
+      # without one ("You must specify a tag using --tag when publishing a
+      # prerelease version"), and for a stable release it keeps the platform
+      # packages on the same tag as the root instead of defaulting to latest.
+      - name: Publish platform packages
+        run: |
+          set -euo pipefail
+          for dir in npm/*/; do
+            name="$(node -p "require('./${dir}package.json').name")"
+
+            if published="$(npm view "$name@$VERSION" version 2>"$RUNNER_TEMP/npm-view.err")"; then
+              :
+            elif grep -q 'E404' "$RUNNER_TEMP/npm-view.err"; then
+              published=''
+            else
+              cat "$RUNNER_TEMP/npm-view.err"
+              echo "::error::Could not reach the npm registry to check $name@$VERSION"
+              exit 1
+            fi
+
+            if [ -n "$published" ]; then
+              echo "$name@$VERSION is already published; skipping."
+              continue
+            fi
+
+            echo "Publishing $name@$VERSION under the $tag tag"
+            (cd "$dir" && npm publish --access public --tag "$tag")
+          done
+
+      - name: Publish tw-migrate
+        run: |
+          set -euo pipefail
+          echo "Publishing tw-migrate@$VERSION under the $tag tag"
+          # --ignore-scripts because npm runs `prepare` on publish, and this
+          # package's prepare is `vp config` -- a developer-machine hook setup
+          # that is not installed here and has no bearing on the tarball. The
+          # packed contents are byte-identical either way; without this the
+          # root publish exits 127 after the platform packages are already up.
+          npm publish --access public --tag "$tag" --ignore-scripts
+
+      # If this fails after a successful publish, rerunning the workflow will
+      # not retry it -- the version is on npm, so the check job stops the run.
+      # Recover by hand:
+      #   gh release create "v<version>" --generate-notes --target <sha>
+      - name: Create GitHub Release
+        run: |
+          set -euo pipefail
+          flags=(--title "v$VERSION" --generate-notes --target "$GITHUB_SHA")
+          # A version published under next is a prerelease on GitHub too,
+          # otherwise an alpha would be advertised as the current release.
+          if [ "$tag" = 'next' ]; then flags+=(--prerelease); fi
+          gh release create "v$VERSION" "${flags[@]}"
+
+  # Installs what users install. CI's packed check proves the tarballs are
+  # well-formed, but it installs local files with optional resolution off, so
+  # it never exercises the optionalDependencies path that picks the right
+  # platform package out of the registry. A failure here is a real defect
+  # report; it does not and cannot undo the publish above.
+  smoke:
+    name: Smoke ${{ matrix.runner }}
+    needs: [check, publish]
+    if: needs.check.outputs.changed == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - macos-14
+          - macos-15-intel
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+          - windows-latest
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7 # for .node-version only
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+      - run: npm install --global pnpm@11.15.1
+
+      - name: Install the published version and run the CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # The whole check retries, not just the root package's visibility:
+          # the platform packages are published separately and a replica can
+          # serve the root before the addon it needs, which shows up as an
+          # install that silently skips the optional dependency.
+          attempt=1
+          until [ "$attempt" -gt 5 ]; do
+            install_dir="$(mktemp -d)"
+            if cd "$install_dir" \
+              && npm init -y >/dev/null \
+              && npm install "tw-migrate@$VERSION" \
+              && npx --no-install tw-migrate --help \
+              && npx --yes "tw-migrate@$VERSION" --help \
+              && pnpm dlx "tw-migrate@$VERSION" --help; then
+              echo "Installed and ran tw-migrate@$VERSION on attempt $attempt"
+              exit 0
+            fi
+            echo "Attempt $attempt failed; the registry may still be propagating"
+            attempt=$((attempt + 1))
+            sleep 20
+          done
+          echo "::error::tw-migrate@$VERSION did not install and run after 5 attempts"
+          exit 1

@@ -2,6 +2,26 @@
   "name": "tw-migrate",
   "version": "0.0.0",
   "description": "Preview and migrate React CSS to Tailwind utilities",
+  "keywords": [
+    "codemod",
+    "css",
+    "css-modules",
+    "migration",
+    "napi-rs",
+    "react",
+    "tailwind",
+    "tailwindcss"
+  ],
+  "homepage": "https://github.com/jong-kyung/tw-migrate#readme",
+  "bugs": {
+    "url": "https://github.com/jong-kyung/tw-migrate/issues"
+  },
+  "license": "MIT",
+  "author": "JongKyung Lee",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jong-kyung/tw-migrate.git"
+  },
   "bin": {
     "tw-migrate": "bin/tw-migrate.js"
   },
@@ -47,11 +67,11 @@
     "vitest": "catalog:"
   },
   "optionalDependencies": {
-    "tw-migrate-darwin-arm64": "workspace:0.0.0",
-    "tw-migrate-darwin-x64": "workspace:0.0.0",
-    "tw-migrate-linux-arm64-gnu": "workspace:0.0.0",
-    "tw-migrate-linux-x64-gnu": "workspace:0.0.0",
-    "tw-migrate-win32-x64-msvc": "workspace:0.0.0"
+    "tw-migrate-darwin-arm64": "workspace:*",
+    "tw-migrate-darwin-x64": "workspace:*",
+    "tw-migrate-linux-arm64-gnu": "workspace:*",
+    "tw-migrate-linux-x64-gnu": "workspace:*",
+    "tw-migrate-win32-x64-msvc": "workspace:*"
   },
   "napi": {
     "binaryName": "tw-migrate",
