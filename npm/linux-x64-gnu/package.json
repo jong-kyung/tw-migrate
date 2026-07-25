@@ -1,6 +1,6 @@
 {
   "name": "tw-migrate-linux-x64-gnu",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0",
   "description": "Preview and migrate React CSS to Tailwind utilities",
   "license": "MIT",
   "repository": {
