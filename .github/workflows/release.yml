@@ -1,0 +1,85 @@
+# Stage two: a version bump landing on main releases that version. Start a
+# release with the Prepare Release workflow rather than by editing package.json
+# by hand.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: ['package.json']
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check version
+    if: github.repository == 'jong-kyung/tw-migrate'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      changed: ${{ steps.version.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Is this version already on npm?
+        id: version
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          # `npm view <pkg>@<absent-version> version` exits 0 with empty output
+          # once the package exists, and only errors while the package itself is
+          # missing -- so this has to read the output, not the exit code.
+          published="$(npm view "tw-migrate@$version" version 2>/dev/null || true)"
+          if [ -n "$published" ]; then
+            echo "tw-migrate@$version is already published; stopping."
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+          else
+            echo "tw-migrate@$version is not on npm; releasing it."
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  # Built from the release commit rather than reused from the CI run, so the
+  # provenance of the published binaries does not depend on artifact retention.
+  # Tests are not repeated here -- CI runs them on this same commit, and the
+  # publish job below waits for a human who can see that result.
+  build:
+    name: Build ${{ matrix.runner }}
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - macos-14
+          - macos-15-intel
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+          - windows-latest
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: .node-version
+          cache: true
+          run-install: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.95.0
+      - run: vp install --frozen-lockfile
+      - run: vp run build
+      - run: vp run artifacts
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-${{ matrix.runner }}
+          path: 'npm/**/*.node'
+          if-no-files-found: error
