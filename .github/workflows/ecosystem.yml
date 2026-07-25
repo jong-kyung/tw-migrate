@@ -44,7 +44,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm artifacts
-      - run: node ecosystem-ci/packages.js stage --artifact-root ecosystem-ci/package-artifacts
+      - run: node ecosystem-ci/packages.ts stage --artifact-root ecosystem-ci/package-artifacts
       - uses: actions/upload-artifact@v7
         with:
           name: ecosystem-package-${{ matrix.os }}
