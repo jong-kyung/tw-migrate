@@ -7,6 +7,11 @@ on:
   push:
     branches: [main]
     paths: ['package.json']
+  # Retry path for a release that failed after the version already landed on
+  # main: a fix to this workflow does not touch package.json, so nothing would
+  # re-trigger the push event. The registry check below still decides whether
+  # there is anything to publish, and the approval gate still applies.
+  workflow_dispatch:
 
 permissions: {}
 
@@ -28,6 +33,18 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       changed: ${{ steps.version.outputs.changed }}
     steps:
+      # A dispatch can name any branch or tag, and every job here checks out the
+      # selected ref. Releasing from anywhere but main would publish artifacts
+      # that never went through a release PR. Guarded rather than pinned to
+      # main, because a push has to build the commit that triggered it.
+      - name: Refuse to release from another ref
+        if: github.ref != 'refs/heads/main'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "::error::Release only runs from main (got $REF)"
+          exit 1
+
       - uses: actions/checkout@v7
 
       - name: Is this a new version to release?
@@ -48,12 +65,15 @@ jobs:
           # what stops the commit that first adds this workflow from offering
           # its own placeholder version for release.
           previous=''
-          if [ -n "$BEFORE" ] && [ "$BEFORE" != '0000000000000000000000000000000000000000' ] \
+          if [ "$GITHUB_EVENT_NAME" = 'push' ] && [ -n "$BEFORE" ] \
+            && [ "$BEFORE" != '0000000000000000000000000000000000000000' ] \
             && git fetch --no-tags --depth=1 origin "$BEFORE" 2>/dev/null; then
             previous="$(git show "$BEFORE:package.json" | node -pe 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).version')"
           fi
 
-          if [ -z "$previous" ]; then
+          if [ "$GITHUB_EVENT_NAME" != 'push' ]; then
+            echo "Started manually; there is no previous version to compare against, so the registry check below decides."
+          elif [ -z "$previous" ]; then
             # Only reachable if main was force-pushed or freshly created. Fall
             # through to the registry check rather than blocking a real release.
             echo "::warning::Could not read the version main held before this push; relying on the registry check alone"
@@ -227,8 +247,11 @@ jobs:
       # versions, so the root package can only ever point at packages that
       # exist. --no-gh-release matters: it defaults to true, and the GitHub
       # Release is created explicitly at the end of this job instead.
+      # --package plus the binary name: the package is @napi-rs/cli but the
+      # executable is napi, and npx cannot work that out on its own
+      # ("could not determine executable to run").
       - name: Prepare platform packages
-        run: npx --yes @napi-rs/cli@3.7.3 pre-publish -p npm -t npm --no-gh-release --skip-optional-publish
+        run: npx --yes --package @napi-rs/cli@3.7.3 napi pre-publish -p npm -t npm --no-gh-release --skip-optional-publish
 
       # Published one at a time rather than by pre-publish's own loop, because
       # npm cannot republish a version: a single call that dies partway through
