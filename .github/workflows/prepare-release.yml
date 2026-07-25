@@ -13,8 +13,11 @@ on:
 
 permissions: {}
 
+# Keyed on the requested version: GitHub keeps only one pending run per group,
+# so a constant group would let a third dispatch drop a second one still queued,
+# and that version would never get a PR.
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.workflow }}-${{ inputs.version }}
   cancel-in-progress: false
 
 jobs:
@@ -37,12 +40,18 @@ jobs:
         with:
           ref: main
 
-      # A leading v would produce a vv<version> tag at release time, and a
-      # partial version would silently publish something nobody asked for.
+      # Round-tripped through a real parser rather than matched with a character
+      # class, which would accept forms Cargo rejects (empty prerelease
+      # identifiers like 1.2.3-alpha..1, leading zeroes). Requiring the output to
+      # equal the input also rejects a leading v, which the parser would happily
+      # normalise away and which would produce a vv<version> tag at release time.
+      # This PR skips CI by design, so an unparseable version would otherwise
+      # reach main before anything noticed.
       - name: Validate version
         run: |
           set -euo pipefail
-          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+          normalised="$(npx --yes -p semver@7.7.2 semver "$VERSION" || true)"
+          if [ "$normalised" != "$VERSION" ]; then
             echo "::error::Version must be bare semver without a leading v (got '$VERSION')"
             exit 1
           fi

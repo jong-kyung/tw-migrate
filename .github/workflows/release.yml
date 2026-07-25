@@ -29,50 +29,49 @@ jobs:
       changed: ${{ steps.version.outputs.changed }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2 # to diff package.json against the parent commit
 
-      - name: Is this version already on npm?
+      - name: Is this a new version to release?
         id: version
         run: |
           set -euo pipefail
           version="$(node -p "require('./package.json').version")"
-          # `npm view <pkg>@<absent-version> version` exits 0 with empty output
-          # once the package exists, and only errors while the package itself is
-          # missing -- so this has to read the output, not the exit code.
-          published="$(npm view "tw-migrate@$version" version 2>/dev/null || true)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          # The trigger is a version bump, not any package.json edit. Reading
+          # the parent commit is what makes that precise -- it also stops the
+          # commit that first adds this workflow from offering its own
+          # placeholder version for release.
+          previous="$(git show 'HEAD^:package.json' | node -pe 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).version')"
+          if [ "$version" = "$previous" ]; then
+            echo "package.json changed but the version is still $version; nothing to release."
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # An absent package or version answers with E404, and npm can also
+          # exit 0 with empty output for a version that does not exist; both
+          # mean "not published". Anything else is an outage rather than an
+          # answer -- reading it as "not published" would wave a release
+          # through, so it stops the run instead.
+          if published="$(npm view "tw-migrate@$version" version 2>"$RUNNER_TEMP/npm-view.err")"; then
+            :
+          elif grep -q 'E404' "$RUNNER_TEMP/npm-view.err"; then
+            published=''
+          else
+            cat "$RUNNER_TEMP/npm-view.err"
+            echo "::error::Could not reach the npm registry to check tw-migrate@$version"
+            exit 1
+          fi
+
           if [ -n "$published" ]; then
             echo "tw-migrate@$version is already published; stopping."
             echo 'changed=false' >> "$GITHUB_OUTPUT"
           else
-            # Publishing a stable version moves the latest tag, so a version
-            # below the current latest would make plain `npm install` start
-            # handing users an older release. Re-tagging afterwards does not
-            # reach anyone who already installed, so this fails the run before
-            # anything is built. Prereleases publish under next and never move
-            # latest, so they are exempt.
-            case "$version" in
-              *-*) ;;
-              *)
-                latest="$(npm view tw-migrate@latest version 2>/dev/null || true)"
-                if [ -n "$latest" ] && ! node -e '
-                  const parse = (v) => ({ core: v.split("-")[0].split(".").map(Number), pre: v.includes("-") });
-                  const [next, current] = process.argv.slice(1).map(parse);
-                  for (let i = 0; i < 3; i++) {
-                    if (!Number.isInteger(next.core[i]) || !Number.isInteger(current.core[i])) process.exit(1);
-                    if (next.core[i] !== current.core[i]) process.exit(next.core[i] > current.core[i] ? 0 : 1);
-                  }
-                  // Same core version: a stable release still supersedes a
-                  // prerelease that latest somehow points at.
-                  process.exit(current.pre && !next.pre ? 0 : 1);
-                ' "$version" "$latest"; then
-                  echo "::error::$version is not newer than the current latest ($latest); publishing it would downgrade everyone who installs tw-migrate without a version"
-                  exit 1
-                fi
-                ;;
-            esac
             echo "tw-migrate@$version is not on npm; releasing it."
             echo 'changed=true' >> "$GITHUB_OUTPUT"
           fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
 
   # Built from the release commit rather than reused from the CI run, so the
   # provenance of the published binaries does not depend on artifact retention.
@@ -162,6 +161,43 @@ jobs:
             exit 1
           fi
 
+      # Checked here rather than in the check job, and before anything is
+      # published: two releases can clear an earlier check against the same tag
+      # and then be approved out of order, which would walk the tag backward.
+      # This runs after approval, so the comparison is the last word.
+      - name: Verify this version moves its dist-tag forward
+        run: |
+          set -euo pipefail
+          # A prerelease moves next, a stable release moves latest. Derived once
+          # here and reused by the publish and GitHub Release steps.
+          case "$VERSION" in
+            *-*) tag=next ;;
+            *) tag=latest ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_ENV"
+
+          if current="$(npm view "tw-migrate@$tag" version 2>"$RUNNER_TEMP/npm-view.err")"; then
+            :
+          elif grep -q 'E404' "$RUNNER_TEMP/npm-view.err"; then
+            current=''
+          else
+            cat "$RUNNER_TEMP/npm-view.err"
+            echo "::error::Could not reach the npm registry to read the $tag tag"
+            exit 1
+          fi
+
+          if [ -z "$current" ]; then
+            echo "No $tag tag yet; $VERSION will create it."
+            exit 0
+          fi
+
+          newest="$(npx --yes -p semver@7.7.2 semver "$VERSION" "$current" | tail -1)"
+          if [ "$VERSION" = "$current" ] || [ "$newest" != "$VERSION" ]; then
+            echo "::error::$VERSION does not come after the current $tag ($current); publishing it would move the $tag tag backward"
+            exit 1
+          fi
+          echo "$VERSION comes after the current $tag ($current)."
+
       # Publishes the five platform packages and rewrites the root
       # optionalDependencies from workspace:* to concrete versions, so the root
       # package below can only ever point at packages that already exist.
@@ -173,13 +209,6 @@ jobs:
       - name: Publish tw-migrate
         run: |
           set -euo pipefail
-          # A prerelease must never land on the latest tag: plain `npm install`
-          # would pick it up, and re-tagging does not reach anyone who already
-          # installed it.
-          case "$VERSION" in
-            *-*) tag=next ;;
-            *) tag=latest ;;
-          esac
           echo "Publishing tw-migrate@$VERSION under the $tag tag"
           # --ignore-scripts because npm runs `prepare` on publish, and this
           # package's prepare is `vp config` -- a developer-machine hook setup
@@ -188,8 +217,18 @@ jobs:
           # root publish exits 127 after the platform packages are already up.
           npm publish --access public --tag "$tag" --ignore-scripts
 
+      # If this fails after a successful publish, rerunning the workflow will
+      # not retry it -- the version is on npm, so the check job stops the run.
+      # Recover by hand:
+      #   gh release create "v<version>" --generate-notes --target <sha>
       - name: Create GitHub Release
-        run: gh release create "v$VERSION" --title "v$VERSION" --generate-notes --target "$GITHUB_SHA"
+        run: |
+          set -euo pipefail
+          flags=(--title "v$VERSION" --generate-notes --target "$GITHUB_SHA")
+          # A version published under next is a prerelease on GitHub too,
+          # otherwise an alpha would be advertised as the current release.
+          if [ "$tag" = 'next' ]; then flags+=(--prerelease); fi
+          gh release create "v$VERSION" "${flags[@]}"
 
   # Installs what users install. CI's packed check proves the tarballs are
   # well-formed, but it installs local files with optional resolution off, so
@@ -226,21 +265,25 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Publishing to npm is not the same as being visible everywhere, so
-          # give the registry a few seconds before calling this a failure.
-          for attempt in 1 2 3 4 5; do
-            if [ -n "$(npm view "tw-migrate@$VERSION" version 2>/dev/null || true)" ]; then
-              break
+          # The whole check retries, not just the root package's visibility:
+          # the platform packages are published separately and a replica can
+          # serve the root before the addon it needs, which shows up as an
+          # install that silently skips the optional dependency.
+          attempt=1
+          until [ "$attempt" -gt 5 ]; do
+            install_dir="$(mktemp -d)"
+            if cd "$install_dir" \
+              && npm init -y >/dev/null \
+              && npm install "tw-migrate@$VERSION" \
+              && npx --no-install tw-migrate --help \
+              && npx --yes "tw-migrate@$VERSION" --help \
+              && pnpm dlx "tw-migrate@$VERSION" --help; then
+              echo "Installed and ran tw-migrate@$VERSION on attempt $attempt"
+              exit 0
             fi
-            echo "tw-migrate@$VERSION not visible yet (attempt $attempt); waiting"
+            echo "Attempt $attempt failed; the registry may still be propagating"
+            attempt=$((attempt + 1))
             sleep 20
           done
-
-          install_dir="$(mktemp -d)"
-          cd "$install_dir"
-          npm init -y >/dev/null
-          npm install "tw-migrate@$VERSION"
-          npx --no-install tw-migrate --help
-
-          npx --yes "tw-migrate@$VERSION" --help
-          pnpm dlx "tw-migrate@$VERSION" --help
+          echo "::error::tw-migrate@$VERSION did not install and run after 5 attempts"
+          exit 1
