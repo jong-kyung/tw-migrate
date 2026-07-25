@@ -78,8 +78,81 @@ jobs:
       - run: vp install --frozen-lockfile
       - run: vp run build
       - run: vp run artifacts
+      # The whole npm/ directory, not a glob over the addon: upload-artifact
+      # roots an artifact at the common ancestor of the matched files, so a
+      # single-file glob would drop the npm/<platform>/ prefix the publish job
+      # needs to put each addon back where napi expects it.
       - uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.runner }}
-          path: 'npm/**/*.node'
+          path: npm
           if-no-files-found: error
+
+  # Nothing reaches npm until a reviewer approves this job in the release
+  # environment: npm cannot republish a version, unpublish expires after 72
+  # hours, and one pre-publish call pushes all five platform packages.
+  publish:
+    name: Publish
+    needs: [check, build]
+    if: needs.check.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write # create the GitHub Release
+      id-token: write # npm provenance
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      NPM_CONFIG_PROVENANCE: 'true'
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # Only for the authenticated .npmrc; the publish path needs no workspace
+      # install, no pnpm, and no Rust toolchain.
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download native addons
+        uses: actions/download-artifact@v6
+        with:
+          pattern: native-*
+          merge-multiple: true
+          path: npm
+
+      - name: Verify every target is present
+        run: |
+          set -euo pipefail
+          found="$(find npm -name '*.node' | sort)"
+          count="$(printf '%s\n' "$found" | grep -c '\.node$' || true)"
+          printf '%s\n' "$found"
+          if [ "$count" -ne 5 ]; then
+            echo "::error::Expected 5 native addons, found $count"
+            exit 1
+          fi
+
+      # Publishes the five platform packages and rewrites the root
+      # optionalDependencies from workspace:* to concrete versions, so the root
+      # package below can only ever point at packages that already exist.
+      # --no-gh-release matters: it defaults to true, and the GitHub Release is
+      # created explicitly at the end of this job instead.
+      - name: Publish platform packages
+        run: npx --yes @napi-rs/cli@3.7.3 pre-publish -p npm -t npm --no-gh-release
+
+      - name: Publish tw-migrate
+        run: |
+          set -euo pipefail
+          # A prerelease must never land on the latest tag: plain `npm install`
+          # would pick it up, and re-tagging does not reach anyone who already
+          # installed it.
+          case "$VERSION" in
+            *-*) tag=next ;;
+            *) tag=latest ;;
+          esac
+          echo "Publishing tw-migrate@$VERSION under the $tag tag"
+          npm publish --access public --tag "$tag"
+
+      - name: Create GitHub Release
+        run: gh release create "v$VERSION" --title "v$VERSION" --generate-notes --target "$GITHUB_SHA"
