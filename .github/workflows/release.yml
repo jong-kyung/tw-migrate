@@ -125,6 +125,17 @@ jobs:
     if: needs.check.outputs.changed == 'true'
     runs-on: ubuntu-latest
     environment: release
+    # Serializes publishing across releases. The workflow-level group is keyed
+    # per commit so no queued release is dropped, which on its own would let two
+    # approved publishes interleave: both read the same dist-tag, both pass the
+    # check below, and whichever finishes last owns the tag. This group is the
+    # shared lock that makes check-then-publish atomic between releases.
+    # Residual: GitHub keeps one pending member per group, so a third publish
+    # queued behind two others would still be dropped -- visible as a missing
+    # release rather than a silent tag move, and re-runnable.
+    concurrency:
+      group: publish-tw-migrate
+      cancel-in-progress: false
     permissions:
       contents: write # create the GitHub Release
       id-token: write # npm provenance
