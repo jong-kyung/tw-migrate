@@ -7,10 +7,11 @@ Preview and migrate static React/Next.js stylesheet references to Tailwind v4 ut
 Run it in the package you want to migrate — no install step:
 
 ```bash
-npx tw-migrate                                # Preview the current package
-npx tw-migrate --write                        # Migrate the current package
-npx tw-migrate path/to/Button.module.scss     # Migrate one stylesheet
-npx tw-migrate --workspaces --write           # Migrate every package
+npx tw-migrate                                    # Preview the current package
+npx tw-migrate --write                            # Migrate the current package
+npx tw-migrate path/to/Button.module.scss         # Preview one stylesheet
+npx tw-migrate path/to/Button.module.scss --write # Migrate one stylesheet
+npx tw-migrate --workspaces --write               # Migrate every package
 ```
 
 `pnpm dlx tw-migrate` and `yarn dlx tw-migrate` take the same arguments.
