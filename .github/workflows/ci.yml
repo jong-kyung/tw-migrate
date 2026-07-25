@@ -17,9 +17,9 @@ jobs:
           - windows-latest
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
           cache: pnpm
@@ -56,7 +56,7 @@ jobs:
           npm init -y >/dev/null
           npm install --omit=optional "$pack_dir"/*.tgz
           npx --no-install tw-migrate --help
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.runner }}
           path: 'npm/**/*.node'
@@ -74,9 +74,9 @@ jobs:
       CI: true
       INSTA_UPDATE: no
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
           cache: pnpm
