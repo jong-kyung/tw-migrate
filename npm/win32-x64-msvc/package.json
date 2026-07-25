@@ -1,18 +1,23 @@
 {
   "name": "tw-migrate-win32-x64-msvc",
   "version": "0.0.0",
+  "description": "Preview and migrate React CSS to Tailwind utilities",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jong-kyung/tw-migrate.git"
+  },
+  "files": [
+    "tw-migrate.win32-x64-msvc.node"
+  ],
+  "os": [
+    "win32"
+  ],
   "cpu": [
     "x64"
   ],
   "main": "tw-migrate.win32-x64-msvc.node",
-  "files": [
-    "tw-migrate.win32-x64-msvc.node"
-  ],
-  "description": "Preview and migrate React CSS to Tailwind utilities",
   "engines": {
     "node": ">=22.18.0"
-  },
-  "os": [
-    "win32"
-  ]
+  }
 }

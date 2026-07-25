@@ -1,21 +1,26 @@
 {
   "name": "tw-migrate-linux-x64-gnu",
   "version": "0.0.0",
-  "cpu": [
-    "x64"
-  ],
-  "main": "tw-migrate.linux-x64-gnu.node",
+  "description": "Preview and migrate React CSS to Tailwind utilities",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jong-kyung/tw-migrate.git"
+  },
   "files": [
     "tw-migrate.linux-x64-gnu.node"
   ],
-  "description": "Preview and migrate React CSS to Tailwind utilities",
-  "engines": {
-    "node": ">=22.18.0"
-  },
   "os": [
     "linux"
   ],
+  "cpu": [
+    "x64"
+  ],
   "libc": [
     "glibc"
-  ]
+  ],
+  "main": "tw-migrate.linux-x64-gnu.node",
+  "engines": {
+    "node": ">=22.18.0"
+  }
 }
