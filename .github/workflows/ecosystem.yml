@@ -25,7 +25,7 @@ jobs:
             os: windows
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Initialize package failure ledger
@@ -33,8 +33,8 @@ jobs:
         run: |
           mkdir -p ecosystem-ci/package-artifacts-upload
           printf '{"case":"package-%s","phases":[]}\n' '${{ matrix.os }}' > ecosystem-ci/package-artifacts-upload/phase-ledger.json
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
           cache: pnpm
@@ -44,14 +44,14 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm artifacts
-      - run: node ecosystem-ci/packages.ts stage --artifact-root ecosystem-ci/package-artifacts
-      - uses: actions/upload-artifact@v4
+      - run: node ecosystem-ci/packages.js stage --artifact-root ecosystem-ci/package-artifacts
+      - uses: actions/upload-artifact@v7
         with:
           name: ecosystem-package-${{ matrix.os }}
           path: ecosystem-ci/package-artifacts-upload/
           if-no-files-found: error
           retention-days: 3
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: ecosystem-package-${{ matrix.os }}-failure
@@ -80,7 +80,7 @@ jobs:
       ECOSYSTEM_ARTIFACT_ROOT: ecosystem-ci/case-artifacts/${{ matrix.case }}
       ECOSYSTEM_PACKAGE_ARTIFACT_ROOT: ecosystem-ci/package-artifacts
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Initialize always-present phase ledger
@@ -96,14 +96,14 @@ jobs:
           NODE
         env:
           CASE_ID: ${{ matrix.case }}
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install chromium
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ecosystem-package-${{ matrix.os }}
           path: ecosystem-ci/package-artifacts
@@ -113,7 +113,7 @@ jobs:
         run: node -e "import('./ecosystem-ci/run.ts').then(async({loadManifest})=>{const {prepareCaseUpload}=await import('./ecosystem-ci/lifecycle.ts');const m=await loadManifest();const p=m.projects.find(x=>x.id===process.env.CASE_ID);await prepareCaseUpload(p,process.env.ECOSYSTEM_ARTIFACT_ROOT,process.env.ECOSYSTEM_ARTIFACT_ROOT+'-upload')})"
         env:
           CASE_ID: ${{ matrix.case }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: ecosystem-${{ matrix.os }}-${{ matrix.case }}
@@ -142,7 +142,7 @@ jobs:
       ECOSYSTEM_ARTIFACT_ROOT: ecosystem-ci/case-artifacts/${{ matrix.case }}
       ECOSYSTEM_PACKAGE_ARTIFACT_ROOT: ecosystem-ci/package-artifacts
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Initialize always-present phase ledger
@@ -158,14 +158,14 @@ jobs:
           NODE
         env:
           CASE_ID: ${{ matrix.case }}
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install chromium
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ecosystem-package-${{ matrix.os }}
           path: ecosystem-ci/package-artifacts
@@ -175,7 +175,7 @@ jobs:
         run: node -e "import('./ecosystem-ci/run.ts').then(async({loadManifest,resolveFixture})=>{const {prepareCaseUpload}=await import('./ecosystem-ci/lifecycle.ts');const m=await loadManifest();const p=m.projects.find(x=>x.id===process.env.CASE_ID);await prepareCaseUpload(resolveFixture(m,p),process.env.ECOSYSTEM_ARTIFACT_ROOT,process.env.ECOSYSTEM_ARTIFACT_ROOT+'-upload')})"
         env:
           CASE_ID: ${{ matrix.case }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: ecosystem-${{ matrix.os }}-${{ matrix.case }}
@@ -205,7 +205,7 @@ jobs:
       ECOSYSTEM_ARTIFACT_ROOT: ecosystem-ci/case-artifacts/${{ matrix.case }}
       ECOSYSTEM_PACKAGE_ARTIFACT_ROOT: ecosystem-ci/package-artifacts
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Initialize always-present phase ledger
@@ -221,14 +221,14 @@ jobs:
           NODE
         env:
           CASE_ID: ${{ matrix.case }}
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install chromium
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ecosystem-package-${{ matrix.os }}
           path: ecosystem-ci/package-artifacts
@@ -238,7 +238,7 @@ jobs:
         run: node -e "import('./ecosystem-ci/run.ts').then(async({loadManifest})=>{const {prepareCaseUpload}=await import('./ecosystem-ci/lifecycle.ts');const m=await loadManifest();const p=m.projects.find(x=>x.id===process.env.CASE_ID);await prepareCaseUpload(p,process.env.ECOSYSTEM_ARTIFACT_ROOT,process.env.ECOSYSTEM_ARTIFACT_ROOT+'-upload')})"
         env:
           CASE_ID: ${{ matrix.case }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: ecosystem-${{ matrix.os }}-${{ matrix.case }}
