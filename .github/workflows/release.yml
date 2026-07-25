@@ -29,22 +29,35 @@ jobs:
       changed: ${{ steps.version.outputs.changed }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 2 # to diff package.json against the parent commit
 
       - name: Is this a new version to release?
         id: version
+        env:
+          BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
           version="$(node -p "require('./package.json').version")"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-          # The trigger is a version bump, not any package.json edit. Reading
-          # the parent commit is what makes that precise -- it also stops the
-          # commit that first adds this workflow from offering its own
-          # placeholder version for release.
-          previous="$(git show 'HEAD^:package.json' | node -pe 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).version')"
-          if [ "$version" = "$previous" ]; then
+          # The trigger is a version bump, not any package.json edit. The
+          # comparison is against what main pointed at before this push, not
+          # HEAD^: a push can carry more than one commit -- the first release
+          # PR also drops the README's pre-release warning -- and then HEAD^
+          # already holds the new version, which would read as "no change" and
+          # silently skip the only release run for that version. This is also
+          # what stops the commit that first adds this workflow from offering
+          # its own placeholder version for release.
+          previous=''
+          if [ -n "$BEFORE" ] && [ "$BEFORE" != '0000000000000000000000000000000000000000' ] \
+            && git fetch --no-tags --depth=1 origin "$BEFORE" 2>/dev/null; then
+            previous="$(git show "$BEFORE:package.json" | node -pe 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).version')"
+          fi
+
+          if [ -z "$previous" ]; then
+            # Only reachable if main was force-pushed or freshly created. Fall
+            # through to the registry check rather than blocking a real release.
+            echo "::warning::Could not read the version main held before this push; relying on the registry check alone"
+          elif [ "$version" = "$previous" ]; then
             echo "package.json changed but the version is still $version; nothing to release."
             echo 'changed=false' >> "$GITHUB_OUTPUT"
             exit 0
