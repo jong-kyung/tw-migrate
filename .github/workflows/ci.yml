@@ -55,6 +55,12 @@ jobs:
           platform_dir="$(for dir in npm/*/; do if ls "$dir"*.node >/dev/null 2>&1; then echo "$dir"; fi; done)"
           npm pack "./$platform_dir" --pack-destination "$pack_dir"
 
+          # setup-vp resolves the pinned pnpm for its own commands but does not
+          # put it on PATH, and this check deliberately drives pnpm the way a
+          # consumer would. Version comes from packageManager so it cannot drift.
+          pnpm_version="$(node -p "require('./package.json').packageManager.split('@')[1]")"
+          npm install --global "pnpm@$pnpm_version"
+
           # The platform package is installed explicitly because these are
           # local tarballs; optional resolution is skipped so neither client
           # tries to fetch an unpublished tw-migrate-* from the registry.
