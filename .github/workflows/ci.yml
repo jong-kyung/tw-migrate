@@ -31,8 +31,10 @@ jobs:
       - run: vp run test
       - run: vp run build
       - run: vp run artifacts
+      # Runs on every supported target, not a subset: packaging mistakes are
+      # platform-specific, and this is the last gate before the release
+      # workflow packs the same tarballs for real.
       - name: Install packed packages and run the CLI
-        if: matrix.runner == 'macos-15-intel' || matrix.runner == 'ubuntu-24.04-arm'
         shell: bash
         run: |
           set -euo pipefail
@@ -52,11 +54,21 @@ jobs:
           git checkout -- package.json
           platform_dir="$(for dir in npm/*/; do if ls "$dir"*.node >/dev/null 2>&1; then echo "$dir"; fi; done)"
           npm pack "./$platform_dir" --pack-destination "$pack_dir"
-          install_dir="$(mktemp -d)"
-          cd "$install_dir"
+
+          # The platform package is installed explicitly because these are
+          # local tarballs; optional resolution is skipped so neither client
+          # tries to fetch an unpublished tw-migrate-* from the registry.
+          npm_dir="$(mktemp -d)"
+          cd "$npm_dir"
           npm init -y >/dev/null
           npm install --omit=optional "$pack_dir"/*.tgz
           npx --no-install tw-migrate --help
+
+          pnpm_dir="$(mktemp -d)"
+          cd "$pnpm_dir"
+          npm init -y >/dev/null
+          pnpm add --no-optional "$pack_dir"/*.tgz
+          pnpm exec tw-migrate --help
       - uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.runner }}
