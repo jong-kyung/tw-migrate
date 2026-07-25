@@ -171,28 +171,31 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: write # create the GitHub Release
-      id-token: write # npm provenance
+      id-token: write # OIDC exchange with npm, and provenance
     env:
       VERSION: ${{ needs.check.outputs.version }}
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       NPM_CONFIG_PROVENANCE: 'true'
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
 
-      # Only for the authenticated .npmrc; the publish path needs no workspace
-      # install, no pnpm, and no Rust toolchain.
+      # No NODE_AUTH_TOKEN: each of the six packages names this repository,
+      # this workflow file, and the release environment as its trusted
+      # publisher on npmjs.com, and the npm CLI exchanges the OIDC token from
+      # id-token: write for a short-lived credential. There is no long-lived
+      # npm token to leak or rotate.
+      #
+      # setup-node still runs -- it is what points npm at the public registry.
       - uses: actions/setup-node@v6
         with:
           node-version-file: .node-version
           registry-url: 'https://registry.npmjs.org'
 
       # Node 22.18.0 ships npm 10.9.x, which runs the prepare lifecycle on
-      # publish even when --ignore-scripts is passed; npm 11 honours the flag.
-      # Without this the root publish dies on `vp config`, which is developer
-      # hook setup this job deliberately does not install. Also the floor for
-      # the eventual move to OIDC trusted publishing (npm >= 11.5.1).
-      - name: Use an npm that honours --ignore-scripts
+      # publish even when --ignore-scripts is passed, and which predates OIDC
+      # support entirely. npm 11 honours the flag and can exchange the OIDC
+      # token; trusted publishing requires 11.5.1 or newer.
+      - name: Use an npm that supports OIDC and honours --ignore-scripts
         run: npm install --global npm@11.13.0
 
       - name: Download native addons
