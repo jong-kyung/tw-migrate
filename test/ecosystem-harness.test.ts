@@ -16,9 +16,9 @@ import {
   publisherToken,
   stageRootPackage,
   validateProvenance,
-} from '../ecosystem-ci/packages.js';
-import { registryConfig } from '../ecosystem-ci/registry.js';
-import { assertOracle, captureProbe, normalizeStyleEntries, retryCapture, withTimeout } from '../ecosystem-ci/oracle.js';
+} from '../ecosystem-ci/packages.ts';
+import { registryConfig } from '../ecosystem-ci/registry.ts';
+import { assertOracle, captureProbe, normalizeStyleEntries, retryCapture, withTimeout } from '../ecosystem-ci/oracle.ts';
 import {
   artifactAllowlist,
   assertExpectedChangedFiles,
@@ -32,14 +32,36 @@ import {
   teardownLifecycleServer,
   temporaryLifecyclePaths,
   waitForChild,
-} from '../ecosystem-ci/lifecycle.js';
-import { loadManifest, runHarness, validateManifest, vitestProjects } from '../ecosystem-ci/run.js';
+} from '../ecosystem-ci/lifecycle.ts';
+import { loadManifest, runHarness, validateManifest, vitestProjects } from '../ecosystem-ci/run.ts';
+import type { ChildProcess } from 'node:child_process';
+import type { AddressInfo } from 'node:net';
+import type { Browser } from 'playwright';
+
+import type {
+  CaptureSet,
+  ControlledProject,
+  ExternalProject,
+  MigrationReport,
+  Probe,
+  ProbeCapture,
+  Project,
+  Provenance,
+} from '../ecosystem-ci/types.ts';
+
+// Manifest fixtures are deliberately mutated into invalid shapes to exercise
+// the validator, so the builders hand back indexable records.
+type Fixture = Record<string, any>;
+type ExecFailure = { status: number; stderr: string };
+
+const isControlled = (project: Project): project is ControlledProject => project.kind === 'controlled';
+const isExternal = (project: Project): project is ExternalProject => project.kind === 'external';
 
 const selector = { type: 'role', value: 'button', name: 'Toggle details' };
 const desktop = { width: 1280, height: 720 };
 const mobile = { width: 375, height: 667 };
 
-function probe(overrides = {}) {
+function probe(overrides: Fixture = {}): Fixture {
   return {
     route: '/',
     viewport: desktop,
@@ -51,7 +73,7 @@ function probe(overrides = {}) {
   };
 }
 
-function controlled(overrides = {}) {
+function controlled(overrides: Fixture = {}): Fixture {
   return {
     id: 'react-vite-css',
     kind: 'controlled',
@@ -70,7 +92,7 @@ function controlled(overrides = {}) {
   };
 }
 
-function external(overrides = {}) {
+function external(overrides: Fixture = {}): Fixture {
   const base = controlled();
   return {
     id: 'external',
@@ -91,11 +113,11 @@ function external(overrides = {}) {
   };
 }
 
-function manifest(...projects) {
+function manifest(...projects: unknown[]) {
   return { projects };
 }
 
-function errorFor(projects) {
+function errorFor(projects: unknown[]) {
   assert.throws(() => validateManifest(manifest(...projects)));
 }
 
@@ -106,7 +128,7 @@ async function readEcosystemWorkflow() {
 test('admits the complete controlled runtime and stylesheet matrix', async () => {
   const loaded = await loadManifest();
   assert.deepEqual(
-    loaded.projects.filter(({ kind }) => kind === 'controlled').map(({ id, kind, runtime, style }) => [id, kind, runtime, style]),
+    loaded.projects.filter(isControlled).map(({ id, kind, runtime, style }) => [id, kind, runtime, style]),
     [
       ['react-vite-css', 'controlled', 'react-vite', 'css'],
       ['react-vite-scss', 'controlled', 'react-vite', 'scss'],
@@ -125,7 +147,7 @@ test('admits the complete controlled runtime and stylesheet matrix', async () =>
   assert.deepEqual(loaded.projects.filter(({ kind }) => kind === 'smoke'), [
     { id: 'production-react-vite-css', kind: 'smoke', fixture: 'react-vite-css' },
   ]);
-  assert.deepEqual(loaded.projects.filter(({ kind }) => kind === 'external').map(({ id, revision }) => [id, revision]), [
+  assert.deepEqual(loaded.projects.filter(isExternal).map(({ id, revision }) => [id, revision]), [
     ['external-namechecker', '285e10d3627f3eac5217d69e9eaccee956d7ac70'],
     ['external-stylized-components', 'a26df5d21457095e466a41966822edb2ff016cff'],
   ]);
@@ -259,7 +281,7 @@ test('external commands receive only the explicit non-secret environment', () =>
 test('post-migration server phases preserve the expected tracked diff', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'tw-migrate-external-diff-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const git = (args) => execFileSync('git', args, { cwd: root, stdio: 'pipe' });
+  const git = (args: string[]) => execFileSync('git', args, { cwd: root, stdio: 'pipe' });
   git(['init', '-q']);
   git(['config', 'user.email', 'test@example.com']);
   git(['config', 'user.name', 'Test']);
@@ -304,8 +326,8 @@ test('external repositories and paths stay inside the CI checkout trust boundary
 });
 
 test('package script exposes the focused ecosystem harness entrypoint', () => {
-  const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url)));
-  assert.equal(packageJson.scripts['test:ecosystem'], 'node ecosystem-ci/run.js');
+  const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(packageJson.scripts['test:ecosystem'], 'node ecosystem-ci/run.ts');
 });
 
 test('stages concrete optional dependency versions without changing the tracked manifest', async (t) => {
@@ -348,7 +370,7 @@ test('package stage CLI creates the exact upload tree consumed by the workflow',
       native: { tarball: 'tarballs/native.tgz' },
     },
     addon: { file: `staging/native/${target.addon}` },
-  };
+  } as unknown as Provenance;
   await Promise.all([
     mkdir(join(artifactRoot, 'tarballs'), { recursive: true }),
     mkdir(join(artifactRoot, 'staging', 'native'), { recursive: true }),
@@ -369,7 +391,7 @@ test('package stage CLI creates the exact upload tree consumed by the workflow',
   assert.deepEqual(await readdir(join(uploadRoot, 'staging')), ['native']);
   assert.deepEqual(await readdir(join(uploadRoot, 'staging', 'native')), [target.addon]);
   const workflow = await readEcosystemWorkflow();
-  assert.match(workflow, /packages\.js stage --artifact-root ecosystem-ci\/package-artifacts/);
+  assert.match(workflow, /packages\.ts stage --artifact-root ecosystem-ci\/package-artifacts/);
   assert.match(workflow, /path: ecosystem-ci\/package-artifacts-upload\//);
 });
 
@@ -439,10 +461,10 @@ test('publisher credential response body is bounded by the registry startup time
     response.writeHead(200, { 'content-type': 'application/json' });
     response.write('{"token":"');
   });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise((resolve) => server.close(resolve)));
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
-  const { port } = server.address();
+  const { port } = server.address() as AddressInfo;
   await assert.rejects(publisherToken(`http://127.0.0.1:${port}`, 250), { name: 'TimeoutError' });
   assert.equal(requested, true);
 });
@@ -457,10 +479,10 @@ test('sealed registry config proxies dependencies but never product packages or 
 
 test('--case selects exactly one project and maps it to a Vitest project filter', async () => {
   const loaded = await loadManifest();
-  const calls = [];
+  const calls: string[][] = [];
   const selected = runHarness(['--case', 'react-vite-css'], loaded, (args) => calls.push(args));
   assert.deepEqual(selected.map(({ id }) => id), ['react-vite-css']);
-  assert.deepEqual(calls, [['run', '--config', 'ecosystem-ci/vitest.config.js', '--project', 'react-vite-css']]);
+  assert.deepEqual(calls, [['run', '--config', 'ecosystem-ci/vitest.config.ts', '--project', 'react-vite-css']]);
 });
 
 test('Vitest and the lifecycle omit external projects unless the CI-only gate is active', async () => {
@@ -471,7 +493,10 @@ test('Vitest and the lifecycle omit external projects unless the CI-only gate is
   delete process.env.CI;
   delete process.env.ECOSYSTEM_EXTERNAL;
   try {
-    await assert.rejects(runExternalLifecycle({}), /require CI=true/);
+    await assert.rejects(
+      runExternalLifecycle({} as Parameters<typeof runExternalLifecycle>[0]),
+      /require CI=true/,
+    );
   } finally {
     if (previous.CI === undefined) delete process.env.CI; else process.env.CI = previous.CI;
     if (previous.external === undefined) delete process.env.ECOSYSTEM_EXTERNAL; else process.env.ECOSYSTEM_EXTERNAL = previous.external;
@@ -486,10 +511,10 @@ test('external cases require the explicit CI-only entrypoint', async () => {
   process.env.CI = 'true';
   process.env.ECOSYSTEM_EXTERNAL = '1';
   try {
-    const calls = [];
+    const calls: string[][] = [];
     const selected = runHarness(['--external-case', 'external-stylized-components'], loaded, (args) => calls.push(args));
     assert.deepEqual(selected.map(({ id }) => id), ['external-stylized-components']);
-    assert.deepEqual(calls, [['run', '--config', 'ecosystem-ci/vitest.config.js', '--project', 'external-stylized-components']]);
+    assert.deepEqual(calls, [['run', '--config', 'ecosystem-ci/vitest.config.ts', '--project', 'external-stylized-components']]);
   } finally {
     if (previous.CI === undefined) delete process.env.CI; else process.env.CI = previous.CI;
     if (previous.external === undefined) delete process.env.ECOSYSTEM_EXTERNAL; else process.env.ECOSYSTEM_EXTERNAL = previous.external;
@@ -504,21 +529,24 @@ test('unknown case prints the available ids without executing Vitest', async () 
     message,
   );
   assert.throws(
-    () => execFileSync(process.execPath, ['ecosystem-ci/run.js', '--case', 'missing'], { encoding: 'utf8', stdio: 'pipe' }),
-    (error) => error.status === 1 && message.test(error.stderr),
+    () => execFileSync(process.execPath, ['ecosystem-ci/run.ts', '--case', 'missing'], { encoding: 'utf8', stdio: 'pipe' }),
+    (error: unknown) => {
+      const failure = error as ExecFailure;
+      return failure.status === 1 && message.test(failure.stderr);
+    },
   );
 });
 
 test('no arguments print usage and --all is the only full-run selection', async () => {
   const loaded = await loadManifest();
   assert.throws(() => runHarness([], loaded, () => assert.fail('must not execute')), /Usage:/);
-  const calls = [];
+  const calls: string[][] = [];
   const selected = runHarness(['--all'], loaded, (args) => calls.push(args));
   assert.equal(selected.length, 12);
   assert.deepEqual(calls, [[
     'run',
     '--config',
-    'ecosystem-ci/vitest.config.js',
+    'ecosystem-ci/vitest.config.ts',
     ...selected.flatMap(({ id }) => ['--project', id]),
   ]]);
 });
@@ -537,8 +565,9 @@ test('the browser oracle sorts every standard computed property and excludes onl
 });
 
 test('the causal witness requires a standard computed-property change for every probe', () => {
-  const capture = (color, token) => ({ elements: [{ identity: 'card', styles: { color, '--fixture-token': token } }] });
-  const baseline = { base: capture('red', 'one'), hover: capture('red', 'one') };
+  const capture = (color: string, token: string) =>
+    ({ elements: [{ identity: 'card', styles: { color, '--fixture-token': token } }] }) as unknown as ProbeCapture;
+  const baseline: CaptureSet = { base: capture('red', 'one'), hover: capture('red', 'one') };
   assert.throws(() => assertOracle({
     baseline,
     post: structuredClone(baseline),
@@ -548,7 +577,7 @@ test('the causal witness requires a standard computed-property change for every 
 });
 
 test('capture retry permits initial plus three retries and creates fresh attempts', async () => {
-  const attempts = [];
+  const attempts: number[] = [];
   const result = await retryCapture(async (attempt) => {
     attempts.push(attempt);
     if (attempt < 4) throw new Error('navigation failed');
@@ -568,13 +597,18 @@ test('capture attempt timeout rejects a stalled operation', async () => {
 });
 
 test('page-creation failures keep diagnostics for all four attempts', async () => {
-  const diagnostics = [];
+  const diagnostics: { attempt: number; error: string }[] = [];
   await assert.rejects(
     captureProbe(
-      { newPage: async () => { throw new Error('browser unavailable'); } },
+      { newPage: async () => { throw new Error('browser unavailable'); } } as unknown as Browser,
       'http://127.0.0.1/',
-      probe(),
-      (attempt) => ({ writeDiagnostics: (value) => diagnostics.push({ attempt, ...value }) }),
+      probe() as Probe,
+      (attempt) => ({
+        screenshot: '',
+        writeDiagnostics: async (value: unknown) => {
+          diagnostics.push({ attempt, ...(value as { error: string }) });
+        },
+      }),
     ),
     /browser unavailable/,
   );
@@ -591,13 +625,13 @@ test('contributor lifecycle defaults keep case and package artifacts under one O
 });
 
 test('migration contract checks the exact report/source and no-op second run without retries', () => {
-  const first = { changedFiles: ['src/a.css'], diff: 'diff', candidates: ['p-[13px]'], warnings: [] };
+  const first = { changedFiles: ['src/a.css'], diff: 'diff', candidates: ['p-[13px]'], warnings: [] } as unknown as MigrationReport;
   assert.doesNotThrow(() => assertMigrationContract({
     first,
     expectedFirst: first,
     actualSource: 'after\n',
     expectedSource: 'after\n',
-    second: { changedFiles: [], diff: '' },
+    second: { changedFiles: [], diff: '' } as unknown as MigrationReport,
     treeBeforeSecond: { 'src/a.css': 'abc' },
     treeAfterSecond: { 'src/a.css': 'abc' },
   }));
@@ -606,7 +640,7 @@ test('migration contract checks the exact report/source and no-op second run wit
     expectedFirst: first,
     actualSource: 'wrong',
     expectedSource: 'after\n',
-    second: { changedFiles: [], diff: '' },
+    second: { changedFiles: [], diff: '' } as unknown as MigrationReport,
     treeBeforeSecond: {},
     treeAfterSecond: {},
   }), /source/);
@@ -624,11 +658,11 @@ test('source-wide idempotency catches an unreported extra source mutation', asyn
   await writeFile(join(root, 'src', 'unreported.tsx'), 'after\n');
   const after = await snapshotMigrationSources(root);
   assert.throws(() => assertMigrationContract({
-    first: { changedFiles: ['src/reported.css'] },
-    expectedFirst: { changedFiles: ['src/reported.css'] },
+    first: { changedFiles: ['src/reported.css'] } as unknown as MigrationReport,
+    expectedFirst: { changedFiles: ['src/reported.css'] } as unknown as MigrationReport,
     actualSource: 'reported\n',
     expectedSource: 'reported\n',
-    second: { changedFiles: [], diff: '' },
+    second: { changedFiles: [], diff: '' } as unknown as MigrationReport,
     treeBeforeSecond: before,
     treeAfterSecond: after,
   }), /source-scoped tree/);
@@ -655,7 +689,7 @@ test('exact changed-file validation requires complete paths and bytes', () => {
 test('controlled expectations cover every reported changed file with exact bytes', async () => {
   for (const runtime of ['react-vite', 'next', 'vite-html']) {
     for (const style of ['css', 'scss', 'sass', 'less']) {
-      const expected = JSON.parse(await readFile(new URL(`../ecosystem-ci/fixtures/controlled/${runtime}/${style}/expected.json`, import.meta.url)));
+      const expected = JSON.parse(await readFile(new URL(`../ecosystem-ci/fixtures/controlled/${runtime}/${style}/expected.json`, import.meta.url), 'utf8'));
       assert.deepEqual(Object.keys(expected.changedFiles).sort(), [...expected.first.changedFiles].sort());
       assert.ok(Object.values(expected.changedFiles).every((contents) => typeof contents === 'string'));
     }
@@ -663,11 +697,11 @@ test('controlled expectations cover every reported changed file with exact bytes
 });
 
 test('command timeout awaits and bounds teardown failures', async () => {
-  await assert.rejects(waitForChild(new EventEmitter(), {
+  await assert.rejects(waitForChild(new EventEmitter() as ChildProcess, {
     timeoutMs: 1,
     terminate: async () => { throw new Error('kill failed'); },
   }), /timed out.*teardown failed: kill failed/);
-  await assert.rejects(waitForChild(new EventEmitter(), {
+  await assert.rejects(waitForChild(new EventEmitter() as ChildProcess, {
     timeoutMs: 1,
     teardownTimeoutMs: 5,
     terminate: () => new Promise(() => {}),
@@ -676,9 +710,9 @@ test('command timeout awaits and bounds teardown failures', async () => {
 
 test('final server teardown records and propagates only when lifecycle otherwise succeeded', async () => {
   const failure = new Error('stop failed');
-  const recorded = [];
-  const server = { stop: async () => { throw failure; } };
-  await assert.rejects(teardownLifecycleServer(server, undefined, async (error) => recorded.push(error)), failure);
+  const recorded: unknown[] = [];
+  const server = { url: '', stop: async () => { throw failure; } };
+  await assert.rejects(teardownLifecycleServer(server, undefined, async (error) => { recorded.push(error); }), failure);
   assert.deepEqual(recorded, [failure]);
   await assert.doesNotReject(teardownLifecycleServer(server, new Error('primary'), async () => assert.fail('must preserve primary')));
 });
@@ -704,7 +738,7 @@ test('case failure uploads preserve package publication logs', async (t) => {
     writeFile(join(root, 'publish.log'), 'npm publish failed\n'),
   ]);
 
-  await prepareCaseUpload(controlled(), root, uploadRoot);
+  await prepareCaseUpload(controlled() as ControlledProject, root, uploadRoot);
   assert.equal(await readFile(join(uploadRoot, 'publish.log'), 'utf8'), 'npm publish failed\n');
 });
 
@@ -732,7 +766,7 @@ test('fixture integration dependencies use the required exact pins', async () =>
   };
   for (const [runtime, pins] of Object.entries(expected)) {
     for (const style of ['css', 'scss', 'sass', 'less']) {
-      const fixture = JSON.parse(await readFile(new URL(`../ecosystem-ci/fixtures/controlled/${runtime}/${style}/package.json`, import.meta.url)));
+      const fixture = JSON.parse(await readFile(new URL(`../ecosystem-ci/fixtures/controlled/${runtime}/${style}/package.json`, import.meta.url), 'utf8'));
       for (const [name, version] of Object.entries(pins)) assert.equal(fixture.dependencies[name], version);
       if (style === 'scss' || style === 'sass') assert.equal(fixture.dependencies.sass, '1.101.3');
       if (style === 'less') assert.equal(fixture.dependencies.less, '4.7.0');
@@ -743,7 +777,10 @@ test('fixture integration dependencies use the required exact pins', async () =>
 
 test('the no-argument CLI stays browser-free and returns usage', () => {
   assert.throws(
-    () => execFileSync(process.execPath, ['ecosystem-ci/run.js'], { encoding: 'utf8', stdio: 'pipe' }),
-    (error) => error.status === 1 && /Usage:/.test(error.stderr),
+    () => execFileSync(process.execPath, ['ecosystem-ci/run.ts'], { encoding: 'utf8', stdio: 'pipe' }),
+    (error: unknown) => {
+      const failure = error as ExecFailure;
+      return failure.status === 1 && /Usage:/.test(failure.stderr);
+    },
   );
 });

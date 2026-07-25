@@ -1048,10 +1048,6 @@ function maskCssComments(source) {
   return source.replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\r\n]/g, ' '));
 }
 
-function stripCssComments(source) {
-  return maskCssComments(source);
-}
-
 function utf8Offset(source, index) {
   return Buffer.byteLength(source.slice(0, index));
 }
@@ -1059,7 +1055,7 @@ function utf8Offset(source, index) {
 function indexStylesheetDependents(styleSources) {
   const dependents = new Map();
   for (const [path, rawSource] of styleSources) {
-    const source = stripCssComments(rawSource);
+    const source = maskCssComments(rawSource);
     const references = [
       ...[...source.matchAll(/composes\s*:[^;{}]*?\bfrom\s+["']([^"']+)["']/g)]
         .map((match) => match[1]),
@@ -1108,7 +1104,7 @@ function stylesheetReferenceTargets(importer, reference, styleSources) {
 function resolveTailwindEntry(stylePaths, styleSources, configuredPath) {
   const entries = stylePaths.filter((path) => {
     if (extension(path) !== '.css') return false;
-    const source = stripCssComments(styleSources.get(path));
+    const source = maskCssComments(styleSources.get(path));
     return /@import\s+["']tailwindcss(?:\/[^"']*)?["']/.test(source);
   });
   if (configuredPath) return { path: configuredPath, entries };

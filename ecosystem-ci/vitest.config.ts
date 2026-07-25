@@ -1,12 +1,13 @@
 import { playwright } from '@vitest/browser-playwright';
 import { defineConfig } from 'vitest/config';
 
-import { commands } from './commands.js';
-import { externalLifecycleTimeoutMs, lifecycleTimeoutMs } from './lifecycle.js';
-import { loadManifest, vitestProjects } from './run.js';
+import { commands } from './commands.ts';
+import { externalLifecycleTimeoutMs, lifecycleTimeoutMs } from './lifecycle.ts';
+import { loadManifest, vitestProjects } from './run.ts';
+import type { Project } from './types.ts';
 
 const manifest = await loadManifest();
-const outerTimeoutMs = (project) =>
+const outerTimeoutMs = (project: Project) =>
   (project.kind === 'external' ? externalLifecycleTimeoutMs : lifecycleTimeoutMs) + 60_000;
 
 export default defineConfig({
@@ -14,7 +15,7 @@ export default defineConfig({
     projects: vitestProjects(manifest.projects).map((project) => ({
       test: {
         name: project.id,
-        include: ['ecosystem-ci/tests/ecosystem.browser.js'],
+        include: ['ecosystem-ci/tests/ecosystem.browser.ts'],
         testTimeout: outerTimeoutMs(project),
         hookTimeout: outerTimeoutMs(project),
         provide: { ecosystemProject: project },

@@ -1,13 +1,15 @@
 import { spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { closeSync, openSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import net from 'node:net';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 
+import { availablePort } from './shared.ts';
+
 const require = createRequire(import.meta.url);
 
-export function registryConfig({ storage, allowPublish }) {
+export function registryConfig({ storage, allowPublish }: { storage: string; allowPublish: boolean }): string {
   const publish = allowPublish ? '$all' : 'nobody';
   return `storage: ${JSON.stringify(storage)}
 auth:
@@ -42,19 +44,7 @@ log: { type: stdout, format: pretty, level: http }
 `;
 }
 
-async function availablePort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.unref();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address();
-      server.close((error) => error ? reject(error) : resolve(port));
-    });
-  });
-}
-
-async function waitForRegistry(url, child, timeoutMs) {
+async function waitForRegistry(url: string, child: ChildProcess, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) throw new Error(`registry exited with status ${child.exitCode}`);
@@ -67,13 +57,13 @@ async function waitForRegistry(url, child, timeoutMs) {
   throw new Error(`registry did not start within ${timeoutMs}ms`);
 }
 
-async function terminate(child, timeoutMs = 5_000) {
+async function terminate(child: ChildProcess, timeoutMs = 5_000): Promise<void> {
   if (child.exitCode !== null) return;
   child.kill('SIGTERM');
-  const exited = new Promise((resolve) => child.once('exit', resolve));
+  const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
   const timedOut = await Promise.race([
     exited.then(() => false),
-    new Promise((resolve) => setTimeout(() => resolve(true), timeoutMs)),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(true), timeoutMs)),
   ]);
   if (timedOut && child.exitCode === null) {
     child.kill('SIGKILL');
@@ -81,7 +71,23 @@ async function terminate(child, timeoutMs = 5_000) {
   }
 }
 
-export async function startRegistry({ root, artifactRoot, allowPublish, timeoutMs = 15_000 }) {
+export interface Registry {
+  url: string;
+  logPath: string;
+  stop: () => Promise<void>;
+}
+
+export async function startRegistry({
+  root,
+  artifactRoot,
+  allowPublish,
+  timeoutMs = 15_000,
+}: {
+  root: string;
+  artifactRoot: string;
+  allowPublish: boolean;
+  timeoutMs?: number;
+}): Promise<Registry> {
   const verdaccioBin = join(dirname(require.resolve('verdaccio/package.json')), 'bin', 'verdaccio');
   await Promise.all([mkdir(root, { recursive: true }), mkdir(artifactRoot, { recursive: true })]);
   const storage = join(root, 'storage');
@@ -103,7 +109,8 @@ export async function startRegistry({ root, artifactRoot, allowPublish, timeoutM
     await terminate(child);
     closeSync(log);
     const output = await readFile(logPath, 'utf8').catch(() => '');
-    throw new Error(`${error.message}\nregistry log: ${logPath}\n${output}`);
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${message}\nregistry log: ${logPath}\n${output}`);
   }
 
   let stopped = false;

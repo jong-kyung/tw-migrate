@@ -10,7 +10,7 @@
   ],
   "description": "Preview and migrate React CSS to Tailwind utilities",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.18.0"
   },
   "os": [
     "darwin"

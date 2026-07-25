@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    // "dom" types the callbacks Playwright evaluates inside the page.
+    "target": "es2023",
+    "lib": ["es2023", "dom"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+
+    // Node runs these files directly through type stripping, so the source
+    // must stay erasable and imports must name the real file on disk.
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+
+    // The published runtime stays JavaScript (Node refuses to strip types
+    // under node_modules), so the harness infers its types from those files
+    // without type-checking them.
+    "allowJs": true,
+    "checkJs": false,
+
+    "strict": true,
+    "noUncheckedIndexedAccess": false,
+    "skipLibCheck": true
+  },
+  "include": ["ecosystem-ci/**/*.ts", "test/**/*.ts"],
+  "exclude": ["ecosystem-ci/fixtures", "node_modules", "target"]
+}
