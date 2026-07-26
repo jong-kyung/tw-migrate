@@ -154,6 +154,38 @@ function packageManagerInvocation(
   return { command: platformCommand('corepack'), args: [`${manager}@${version}`, ...args] };
 }
 
+async function waitForServer(
+  child: ChildProcess,
+  log: number,
+  port: number,
+  description: string,
+  timeoutMs: number,
+): Promise<RunningServer> {
+  let launchError: Error | undefined;
+  child.once('error', (error) => { launchError = error; });
+  const url = `http://127.0.0.1:${port}`;
+  const deadline = Date.now() + timeoutMs;
+  try {
+    while (Date.now() < deadline) {
+      if (launchError) throw launchError;
+      if (child.exitCode !== null) throw new Error(`${description} exited with ${child.exitCode}`);
+      try {
+        const response = await fetch(url, { signal: AbortSignal.timeout(1_000) });
+        if (response.ok) return {
+          url,
+          async stop() { await terminateTree(child); closeSync(log); },
+        };
+      } catch {}
+      await new Promise((resolveWait) => setTimeout(resolveWait, 200));
+    }
+    throw new Error(`${description} readiness timed out`);
+  } catch (error) {
+    await terminateTree(child);
+    closeSync(log);
+    throw error;
+  }
+}
+
 async function startServer(
   project: ProbedProject,
   cwd: string,
@@ -177,29 +209,7 @@ async function startServer(
     windowsHide: true,
     stdio: ['ignore', log, log],
   });
-  let launchError: Error | undefined;
-  child.once('error', (error) => { launchError = error; });
-  const url = `http://127.0.0.1:${port}`;
-  const deadline = Date.now() + 60_000;
-  try {
-    while (Date.now() < deadline) {
-      if (launchError) throw launchError;
-      if (child.exitCode !== null) throw new Error(`${phase} server exited with ${child.exitCode}`);
-      try {
-        const response = await fetch(url, { signal: AbortSignal.timeout(1_000) });
-        if (response.ok) return {
-          url,
-          async stop() { await terminateTree(child); closeSync(log); },
-        };
-      } catch {}
-      await new Promise((resolveWait) => setTimeout(resolveWait, 200));
-    }
-    throw new Error(`${phase} server readiness timed out`);
-  } catch (error) {
-    await terminateTree(child);
-    closeSync(log);
-    throw error;
-  }
+  return waitForServer(child, log, port, `${phase} server`, 60_000);
 }
 
 export function externalEnvironment(): NodeJS.ProcessEnv {
@@ -245,29 +255,7 @@ async function startExternalServer(
     windowsHide: true,
     stdio: ['ignore', log, log],
   });
-  let launchError: Error | undefined;
-  child.once('error', (error) => { launchError = error; });
-  const url = `http://127.0.0.1:${port}`;
-  const deadline = Date.now() + 90_000;
-  try {
-    while (Date.now() < deadline) {
-      if (launchError) throw launchError;
-      if (child.exitCode !== null) throw new Error(`${phase} external server exited with ${child.exitCode}`);
-      try {
-        const response = await fetch(url, { signal: AbortSignal.timeout(1_000) });
-        if (response.ok) return {
-          url,
-          async stop() { await terminateTree(child); closeSync(log); },
-        };
-      } catch {}
-      await new Promise((resolveWait) => setTimeout(resolveWait, 200));
-    }
-    throw new Error(`${phase} external server readiness timed out`);
-  } catch (error) {
-    await terminateTree(child);
-    closeSync(log);
-    throw error;
-  }
+  return waitForServer(child, log, port, `${phase} external server`, 90_000);
 }
 
 export async function waitForChild(
