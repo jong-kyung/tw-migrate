@@ -164,6 +164,11 @@ struct PlanRequest {
     /// deleting it would hand the cascade to the unlayered competitor.
     #[serde(default)]
     vue_shadow_text: Option<String>,
+    /// True when the shadow corpus contains selectors that cannot be proven
+    /// textually (e.g. preprocessor interpolation); every closed rule is
+    /// then retained as shadowed.
+    #[serde(default)]
+    vue_shadow_unverifiable: bool,
     files: Vec<SourceFile>,
 }
 
@@ -207,6 +212,8 @@ struct BatchStylesheet {
     vue_retention: Option<String>,
     #[serde(default)]
     vue_shadow_text: Option<String>,
+    #[serde(default)]
+    vue_shadow_unverifiable: bool,
     /// Rules whose candidates failed Tailwind compilation in a previous
     /// planning pass; they are retained without converting anything.
     #[serde(default)]
@@ -800,6 +807,7 @@ fn batch_stylesheet_request(
         vue_blocks: stylesheet.vue_blocks.clone(),
         vue_retention: stylesheet.vue_retention.clone(),
         vue_shadow_text: stylesheet.vue_shadow_text.clone(),
+        vue_shadow_unverifiable: stylesheet.vue_shadow_unverifiable,
         files,
     }
 }
@@ -882,16 +890,15 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
     // `[data-v-*]` specificity (and its unlayered position) let it outrank
     // non-scoped CSS that a layered Tailwind utility would lose to. Retain
     // any rule whose class the package's non-scoped corpus also targets.
-    if vue_masked.is_some()
-        && is_module
-        && let Some(shadow) = request.vue_shadow_text.as_deref()
-    {
+    if vue_masked.is_some() && is_module {
+        let shadow = request.vue_shadow_text.as_deref().unwrap_or("");
         for rule in &mut parsed.rules {
             if rule.warning.is_none()
-                && rule
-                    .related_classes
-                    .iter()
-                    .any(|class| mentions_class_selector(shadow, class))
+                && (request.vue_shadow_unverifiable
+                    || rule
+                        .related_classes
+                        .iter()
+                        .any(|class| mentions_class_selector(shadow, class)))
             {
                 rule.warning = Some("shadowed-scoped-rule");
             }
@@ -1669,6 +1676,22 @@ fn finish_vue_stylesheet(
         block.content_start = shift_offset(&edits, block.content_start);
         block.content_end = shift_offset(&edits, block.content_end);
     }
+    // Conditionals that were already empty in the authored source are
+    // untouched user bytes (often comment-only) and must survive; only
+    // conditionals the migration itself empties may be removed.
+    let mut preexisting_empty = {
+        let allocator = oxc_css_parser::Allocator::default();
+        let mut parser = CssParser::new(&allocator, masked, Syntax::Css);
+        let stylesheet = parser
+            .parse::<Stylesheet>()
+            .map_err(|error| format!("Failed to parse edited CSS: {error:?}"))?;
+        let mut already_empty = Vec::new();
+        collect_empty_conditionals(&stylesheet.statements, &mut already_empty);
+        already_empty
+            .into_iter()
+            .map(|edit| (shift_offset(&edits, edit.start), shift_offset(&edits, edit.end)))
+            .collect::<Vec<_>>()
+    };
     let mut source = apply_edits(&request.css_source, edits)?;
     let mut masked = apply_edits(masked, masked_edits)?;
 
@@ -1680,6 +1703,8 @@ fn finish_vue_stylesheet(
             .map_err(|error| format!("Failed to parse edited CSS: {error:?}"))?;
         let mut conditional_edits = Vec::new();
         collect_empty_conditionals(&stylesheet.statements, &mut conditional_edits);
+        conditional_edits
+            .retain(|edit| !preexisting_empty.contains(&(edit.start, edit.end)));
         if conditional_edits.is_empty() {
             break;
         }
@@ -1689,6 +1714,10 @@ fn finish_vue_stylesheet(
             block.outer_end = shift_offset(&conditional_edits, block.outer_end);
             block.content_start = shift_offset(&conditional_edits, block.content_start);
             block.content_end = shift_offset(&conditional_edits, block.content_end);
+        }
+        for span in &mut preexisting_empty {
+            span.0 = shift_offset(&conditional_edits, span.0);
+            span.1 = shift_offset(&conditional_edits, span.1);
         }
         source = apply_edits(&source, conditional_edits.clone())?;
         masked = apply_edits(&masked, conditional_edits)?;
@@ -3632,6 +3661,36 @@ mod tests {
         let response: serde_json::Value =
             serde_json::from_str(&plan_batch_json(&clear.to_string()).unwrap()).unwrap();
         assert_eq!(response["convertedRules"], 1);
+    }
+
+    #[test]
+    fn vue_unverifiable_shadow_corpus_retains_every_closed_rule() {
+        let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n";
+        let mut request = vue_batch_request(source, true, None);
+        request["stylesheets"][0]["vueShadowText"] = serde_json::json!("$name: card;");
+        request["stylesheets"][0]["vueShadowUnverifiable"] = serde_json::json!(true);
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 1);
+        assert_eq!(response["warnings"][0]["code"], "shadowed-scoped-rule");
+    }
+
+    #[test]
+    fn vue_preserves_conditionals_that_were_already_empty() {
+        let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n@media print {\n}\n.card { padding: 13px; }\n</style>\n";
+        let request = vue_batch_request(source, true, None);
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 1);
+        let migrated = response["files"][0]["source"].as_str().unwrap();
+        assert!(migrated.contains("@media print {"));
+        assert!(migrated.contains("<style scoped>"));
+        assert!(!migrated.contains(".card {"));
     }
 
     #[test]

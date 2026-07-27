@@ -3,7 +3,8 @@ use std::collections::{BTreeSet, HashMap};
 use crate::{
     css_plan::SelectorKey,
     js_rewrite::{CandidateMatch, SourcePlan},
-    planner::{Edit, HtmlAttribute, SourceFile},
+    planner::{Edit, HtmlAttribute, SourceFile, Warning},
+    utilities::tailwind_utilities_conflict,
 };
 
 pub(crate) fn plan_html_file(
@@ -27,6 +28,7 @@ pub(crate) fn plan_html_file(
     let mut matches = Vec::new();
     let mut module_refs = HashMap::new();
     let mut matched_module_refs = HashMap::new();
+    let mut warnings = Vec::new();
     for element in &file.html_elements {
         let Some(class_attribute) = element
             .class_attribute
@@ -83,6 +85,25 @@ pub(crate) fn plan_html_file(
                 &mut matches,
             );
         }
+        // Parity with the JS rewrite path: a generated utility that overlaps
+        // an existing Tailwind class on the element is appended with a
+        // warning, and Tailwind's output order decides between them.
+        if let Some((generated, existing)) = additions.iter().find_map(|candidate| {
+            classes
+                .iter()
+                .find(|existing| tailwind_utilities_conflict(candidate, existing))
+                .map(|existing| (candidate.clone(), existing.clone()))
+        }) {
+            warnings.push(Warning {
+                code: "existing-tailwind-conflict",
+                file: file.path.clone(),
+                start: class_attribute.start,
+                end: class_attribute.end,
+                message: format!(
+                    "Generated utility `{generated}` may conflict with existing `{existing}`."
+                ),
+            });
+        }
         for candidate in additions {
             if !classes.contains(&candidate) {
                 classes.push(candidate);
@@ -111,7 +132,7 @@ pub(crate) fn plan_html_file(
         module_refs,
         matched_module_refs,
         module_references_safe: true,
-        warnings: Vec::new(),
+        warnings,
     }
 }
 
@@ -357,6 +378,22 @@ mod tests {
         // The reference stays partially unmigrated, so removal must stay blocked.
         assert_eq!(plan.module_refs.get("card"), Some(&1));
         assert_eq!(plan.matched_module_refs.get("card"), None);
+    }
+
+    #[test]
+    fn warns_when_a_generated_utility_conflicts_with_an_existing_class() {
+        let source = "<div class=\"card p-4\"></div>";
+        let file = quoted_fixture(source, source.find("card").unwrap(), "card p-4");
+        let candidates = HashMap::from([(
+            SelectorKey::Class("card".to_string()),
+            vec!["p-[13px]".to_string()],
+        )]);
+        let plan = plan_html_file(&file, "/project/site.css", &candidates, None);
+        // Parity with the JS path: append with a warning, do not block.
+        assert_eq!(plan.edits.len(), 1);
+        assert_eq!(plan.edits[0].replacement, "card p-4 p-[13px]");
+        assert_eq!(plan.warnings.len(), 1);
+        assert_eq!(plan.warnings[0].code, "existing-tailwind-conflict");
     }
 
     #[test]

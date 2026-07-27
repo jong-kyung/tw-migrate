@@ -213,7 +213,9 @@ the rule to retain-with-append or retain-only:
    scanned for a `.class` selector token matching any of the rule's classes;
    a match retains the rule with `shadowed-scoped-rule`. The corpus includes
    scan-only (gitignored) SFCs and any module CSS containing `:global`
-   escapes, whose selectors are emitted unhashed. Candidates that cannot be
+   escapes, whose selectors are emitted unhashed. Preprocessor interpolation
+   (`#{...}`, `@{...}`) can synthesize selectors the textual scan cannot see,
+   so its presence anywhere in the corpus retains every closed rule. Candidates that cannot be
    written inside an attribute's own quote delimiter are withheld and their
    rules retained, sharing the static-HTML quote handling.
 6. **Directives that alter structure.** `v-for`, `v-if`/`v-else` duplicates
@@ -231,7 +233,9 @@ and a second run produces no diff.
 
 - A plain-CSS `<style scoped>` block whose rules are all removed is deleted
   whole, including its tags, mirroring fully migrated stylesheet deletion.
-  A partially migrated block keeps its remaining rules byte-exactly.
+  A partially migrated block keeps its remaining rules byte-exactly, and
+  conditionals that were already empty in the authored source (often
+  comment-only) are never removed.
 - `<style>` without `scoped` retains whole with `unscoped-style-block`.
 - `<style lang="…">` retains whole with `preprocessor-style-block` until
   Phase 2.
@@ -353,12 +357,16 @@ phases.
    retained rules, as the global-rule policy already does.
 5. Choosing the official JS compiler keeps template analysis contracts
    crossing the NAPI boundary instead of a single-language Rust pipeline.
-6. Repeated same-selector rules with conflicting declarations inside one
+6. A generated utility that overlaps a Tailwind class already present on
+   the element is appended with an `existing-tailwind-conflict` warning and
+   Tailwind's output order decides between them, matching the JS rewrite
+   path.
+7. Repeated same-selector rules with conflicting declarations inside one
    stylesheet migrate as they always have across the tool: both rules'
    utilities are appended and Tailwind's output order decides the winner,
    because relative precedence between distinct sources is not modeled. This
    long-standing engine-wide behavior is accepted for Vue as well.
-7. The cascade-shadowing scan is textual and package-scoped: a `.class`
+8. The cascade-shadowing scan is textual and package-scoped: a `.class`
    token anywhere in the non-scoped corpus retains the rule even when the
    competitor could never match the same element, and CSS outside the
    package is not seen.

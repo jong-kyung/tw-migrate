@@ -441,6 +441,62 @@ test("withholds quote-bearing candidates inside Vue class attributes", async () 
   }
 });
 
+test("reports Vue-only warnings without requiring a Tailwind entry", async () => {
+  await mkdir(".tmp", { recursive: true });
+  const cwd = await mkdtemp(join(process.cwd(), ".tmp", "fixture-"));
+  const vue =
+    '<template>\n  <p class="note">A</p>\n</template>\n<style>\n.note { margin: 3px; }\n</style>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "package.json"), '{"private":true}'),
+      writeFile(join(cwd, "site.css"), ".plain { color: red; }\n"),
+      writeFile(join(cwd, "Blocks.vue"), vue),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Blocks.vue" });
+    assert.deepEqual(report.changedFiles, []);
+    assert.deepEqual(
+      report.warnings.map((entry) => entry.code),
+      ["unscoped-style-block"],
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("interpolated preprocessor selectors make the shadow corpus unverifiable", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "theme.scss"), "$name: card;\n.#{$name} { padding: 20px; }\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.equal(report.convertedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("warns when a Vue element already carries a conflicting utility", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card p-4">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    const warning = report.warnings.find((entry) => entry.code === "existing-tailwind-conflict")!;
+    assert.equal(warning.file, "Card.vue");
+    // Parity with the JS path: the conversion still happens.
+    assert.equal(report.convertedRules, 1);
+    assert.match(report.diff, /class="card p-4 p-\[13px\]"/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("retains a CSS Module referenced by a Vue SFC script", async () => {
   const cwd = await fixture();
   const vue =

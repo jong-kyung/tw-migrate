@@ -73,6 +73,7 @@ const migrationSourceExtensions = new Set([
   ".ts",
   ".tsx",
   ".html",
+  ".vue",
   ".css",
   ".scss",
   ".sass",

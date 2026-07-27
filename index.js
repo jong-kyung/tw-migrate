@@ -301,6 +301,15 @@ async function planPackage(context, packageRoot) {
     if (!options.force || isIntegrityError(error)) throw error;
     return { failure: packageFailure(workspaceRoot, packageRoot, error) };
   }
+  // An explicit .vue selection that produced nothing to plan must surface
+  // its retention warnings without requiring an unrelated Tailwind entry.
+  if (
+    explicitStyle &&
+    extension(explicitStyle) === ".vue" &&
+    preparedVue.stylesheets.length === 0
+  ) {
+    return vueWarningsOnlyResult(preparedVue);
+  }
   const packageSources = [
     ...sourceFiles
       .filter((file) => extension(file.path) !== ".html")
@@ -794,17 +803,16 @@ async function preparePackageVue({
   // scoped rule whose classes this pool also targets, so collect every
   // package stylesheet, HTML source (inline style blocks are never parsed),
   // and retained Vue style block.
-  const vueShadowText = [
-    ...[...styleSources]
+  const shadowStyleSources = [...styleSources].filter(
+    ([path, source]) =>
+      pathOwners.get(path) === packageRoot &&
       // Module stylesheet classes are hashed at build time and cannot
       // collide with scoped classes in the DOM -- unless the module uses
       // `:global` escapes, which emit unhashed selectors.
-      .filter(
-        ([path, source]) =>
-          pathOwners.get(path) === packageRoot &&
-          (!isStylesheetModule(path) || source.includes(":global")),
-      )
-      .map(([, source]) => source),
+      (!isStylesheetModule(path) || source.includes(":global")),
+  );
+  const vueShadowText = [
+    ...shadowStyleSources.map(([, source]) => source),
     ...sourceFiles
       .filter(
         (file) => extension(file.path) === ".html" && pathOwners.get(file.path) === packageRoot,
@@ -817,6 +825,17 @@ async function preparePackageVue({
   ]
     .filter(Boolean)
     .join("\n");
+  // Preprocessor interpolation can synthesize selectors the textual scan
+  // cannot see, so its presence makes the whole corpus unverifiable.
+  const interpolated = (text) => /#\{|@\{/.test(text);
+  const vueShadowUnverifiable =
+    shadowStyleSources.some(([path, source]) => isPreprocessorPath(path) && interpolated(source)) ||
+    ownedVue.some((file) => {
+      const analysis = analyses.get(file.path);
+      return analysis.retained
+        ? interpolated(file.source)
+        : interpolated(analysis.retainedStyleText);
+    });
 
   const files = new Map();
   const stylesheets = [];
@@ -843,6 +862,7 @@ async function preparePackageVue({
       // Open-surface files never delete rules, so only closed files carry
       // the shadow pool.
       vueShadowText: analysis.retention ? undefined : vueShadowText,
+      vueShadowUnverifiable: analysis.retention ? undefined : vueShadowUnverifiable,
     });
   }
   return { files, stylesheets, warnings, compiler: loaded.compiler };
