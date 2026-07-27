@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     animations::append_keyframes,
     at_rules::{append_global_at_rules, is_conditional},
-    css_plan::{ParseOptions, ParsedCss, RulePlan, SelectorKey, parse_css_rules},
+    css_plan::{
+        ParseOptions, ParsedCss, RulePlan, SelectorKey, index_shadow_selectors, parse_css_rules,
+    },
     html_rewrite::{empty_source_plan, plan_html_file},
     js_rewrite::{
         SourcePlan, opaque_reference_plan, plan_batch_source_file, plan_source_file, validate_js,
@@ -159,14 +161,15 @@ struct PlanRequest {
     #[serde(default)]
     vue_retention: Option<String>,
     /// Present only for closed Vue SFC stylesheets: the package's non-scoped
-    /// CSS corpus (other stylesheets, HTML sources, retained SFC blocks).
-    /// A scoped rule whose class this text also targets is retained, because
-    /// deleting it would hand the cascade to the unlayered competitor.
+    /// CSS corpus as parseable pieces (other stylesheets, retained SFC
+    /// blocks, scope-escape selector fragments). Their parsed selector
+    /// surface decides which scoped rules may be deleted without handing the
+    /// cascade to an unlayered competitor.
     #[serde(default)]
-    vue_shadow_text: Option<String>,
+    vue_shadow_css: Vec<String>,
     /// True when the shadow corpus contains selectors that cannot be proven
-    /// textually (e.g. preprocessor interpolation); every closed rule is
-    /// then retained as shadowed.
+    /// (preprocessor interpolation or concatenation, inline HTML styles,
+    /// unextractable escapes); every closed rule is then retained.
     #[serde(default)]
     vue_shadow_unverifiable: bool,
     files: Vec<SourceFile>,
@@ -211,7 +214,7 @@ struct BatchStylesheet {
     #[serde(default)]
     vue_retention: Option<String>,
     #[serde(default)]
-    vue_shadow_text: Option<String>,
+    vue_shadow_css: Vec<String>,
     #[serde(default)]
     vue_shadow_unverifiable: bool,
     /// Rules whose candidates failed Tailwind compilation in a previous
@@ -247,6 +250,9 @@ pub(crate) struct HtmlAttribute {
 pub(crate) struct HtmlElement {
     pub(crate) class_attribute: Option<HtmlAttribute>,
     pub(crate) id_attribute: Option<HtmlAttribute>,
+    /// Element tag name, provided by the Vue lowering for shadow matching.
+    #[serde(default)]
+    pub(crate) tag: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -806,7 +812,7 @@ fn batch_stylesheet_request(
         css_dependents: stylesheet.css_dependents.clone(),
         vue_blocks: stylesheet.vue_blocks.clone(),
         vue_retention: stylesheet.vue_retention.clone(),
-        vue_shadow_text: stylesheet.vue_shadow_text.clone(),
+        vue_shadow_css: stylesheet.vue_shadow_css.clone(),
         vue_shadow_unverifiable: stylesheet.vue_shadow_unverifiable,
         files,
     }
@@ -891,15 +897,56 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
     // non-scoped CSS that a layered Tailwind utility would lose to. Retain
     // any rule whose class the package's non-scoped corpus also targets.
     if vue_masked.is_some() && is_module {
-        let shadow = request.vue_shadow_text.as_deref().unwrap_or("");
+        let shadow = index_shadow_selectors(&request.vue_shadow_css);
+        let unverifiable = request.vue_shadow_unverifiable || shadow.unverifiable;
+        let vue_file = request.files.iter().find(|file| file.path == request.css_path);
         for rule in &mut parsed.rules {
-            if rule.warning.is_none()
-                && (request.vue_shadow_unverifiable
-                    || rule
-                        .related_classes
-                        .iter()
-                        .any(|class| mentions_class_selector(shadow, class)))
-            {
+            if rule.warning.is_some() {
+                continue;
+            }
+            // The rule is shadowed when non-scoped CSS targets one of its
+            // classes directly, or can match one of its template sites
+            // through the site's tag or id.
+            let shadowed = unverifiable
+                || rule
+                    .related_classes
+                    .iter()
+                    .any(|class| shadow.classes.contains(class))
+                || vue_file.is_some_and(|file| {
+                    file.html_elements.iter().any(|element| {
+                        let classes = element
+                            .class_attribute
+                            .as_ref()
+                            .map(|attribute| {
+                                attribute.value.split_whitespace().collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
+                        let site_matches_rule = rule
+                            .related_classes
+                            .iter()
+                            .any(|class| classes.contains(&class.as_str()))
+                            || matches!(
+                                &rule.key,
+                                Some(SelectorKey::Id(name))
+                                    if element
+                                        .id_attribute
+                                        .as_ref()
+                                        .is_some_and(|id| id.value == *name)
+                            );
+                        if !site_matches_rule {
+                            return false;
+                        }
+                        element
+                            .tag
+                            .as_deref()
+                            .is_some_and(|tag| shadow.types.contains(&tag.to_ascii_lowercase()))
+                            || element
+                                .id_attribute
+                                .as_ref()
+                                .is_some_and(|id| shadow.ids.contains(&id.value))
+                    })
+                });
+            if shadowed {
                 rule.warning = Some("shadowed-scoped-rule");
             }
         }
@@ -1102,20 +1149,6 @@ fn is_ident_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-'
 }
 
-/// Whether `text` contains a `.class` selector token for `class`. Only the
-/// trailing boundary is checked so compound selectors like `div.card` still
-/// match; anything before the `.` is irrelevant to selector syntax.
-fn mentions_class_selector(text: &str, class: &str) -> bool {
-    if class.is_empty() {
-        return false;
-    }
-    let needle = format!(".{class}");
-    let bytes = text.as_bytes();
-    text.match_indices(&needle).any(|(start, _)| {
-        let end = start + needle.len();
-        end >= bytes.len() || !is_ident_byte(bytes[end])
-    })
-}
 
 fn dedup_candidate_map(candidate_map: &mut HashMap<SelectorKey, Vec<String>>) {
     for candidates in candidate_map.values_mut() {
@@ -3577,6 +3610,7 @@ mod tests {
             .filter_map(|class| {
                 let value_start = source.find(&format!("class=\"{class}\""))? + "class=\"".len();
                 Some(serde_json::json!({
+                    "tag": "p",
                     "classAttribute": {
                         "value": class,
                         "start": value_start,
@@ -3642,8 +3676,8 @@ mod tests {
     fn vue_shadowed_scoped_rule_is_retained_without_template_edits() {
         let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n";
         let mut request = vue_batch_request(source, true, None);
-        request["stylesheets"][0]["vueShadowText"] =
-            serde_json::json!("main.css: div.card { padding: 20px; } .cardio { top: 0; }");
+        request["stylesheets"][0]["vueShadowCss"] =
+            serde_json::json!(["div.card { padding: 20px; } .cardio { top: 0; }"]);
 
         let response: serde_json::Value =
             serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
@@ -3655,19 +3689,45 @@ mod tests {
         assert_eq!(warning["code"], "shadowed-scoped-rule");
         assert_eq!(warning["file"], "/project/Card.vue");
 
-        // A non-selector mention like `.cardio` must not shadow `.card`.
+        // A different class like `.cardio` must not shadow `.card`.
         let mut clear = vue_batch_request(source, true, None);
-        clear["stylesheets"][0]["vueShadowText"] = serde_json::json!(".cardio { top: 0; }");
+        clear["stylesheets"][0]["vueShadowCss"] = serde_json::json!([".cardio { top: 0; }"]);
         let response: serde_json::Value =
             serde_json::from_str(&plan_batch_json(&clear.to_string()).unwrap()).unwrap();
         assert_eq!(response["convertedRules"], 1);
     }
 
     #[test]
+    fn vue_type_selector_shadow_matches_by_site_tag() {
+        let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n";
+        // A type selector for another tag cannot match the `p` sites.
+        let mut clear = vue_batch_request(source, true, None);
+        clear["stylesheets"][0]["vueShadowCss"] =
+            serde_json::json!(["article { padding: 20px; }"]);
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&clear.to_string()).unwrap()).unwrap();
+        assert_eq!(response["convertedRules"], 1);
+
+        // A `p` type selector reaches the rule's site, so the rule retains.
+        let mut shadowed = vue_batch_request(source, true, None);
+        shadowed["stylesheets"][0]["vueShadowCss"] = serde_json::json!(["p { padding: 20px; }"]);
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&shadowed.to_string()).unwrap()).unwrap();
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["warnings"][0]["code"], "shadowed-scoped-rule");
+
+        // An unparseable piece is unverifiable and retains everything.
+        let mut opaque = vue_batch_request(source, true, None);
+        opaque["stylesheets"][0]["vueShadowCss"] = serde_json::json!(["$name: card;"]);
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&opaque.to_string()).unwrap()).unwrap();
+        assert_eq!(response["convertedRules"], 0);
+    }
+
+    #[test]
     fn vue_unverifiable_shadow_corpus_retains_every_closed_rule() {
         let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n";
         let mut request = vue_batch_request(source, true, None);
-        request["stylesheets"][0]["vueShadowText"] = serde_json::json!("$name: card;");
         request["stylesheets"][0]["vueShadowUnverifiable"] = serde_json::json!(true);
 
         let response: serde_json::Value =

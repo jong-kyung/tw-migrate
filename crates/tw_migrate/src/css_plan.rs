@@ -6,7 +6,7 @@ use oxc_css_parser::{
     Parser as CssParser, Syntax,
     ast::{
         CombinatorKind, ComplexSelectorChild, CompoundSelector, InterpolableIdent, SimpleSelector,
-        Statement, Stylesheet,
+        Statement, Stylesheet, TypeSelector,
     },
 };
 
@@ -647,6 +647,122 @@ fn selector_classes(rule: &oxc_css_parser::ast::QualifiedRule<'_>) -> Vec<String
             _ => None,
         })
         .collect()
+}
+
+/// Selector surface of the package's non-scoped CSS: the classes, ids, and
+/// element types its rules can match, plus whether anything defied
+/// classification. Used to decide if deleting a Vue scoped rule could hand
+/// the cascade to an unlayered competitor.
+pub(crate) struct ShadowIndex {
+    pub(crate) classes: HashSet<String>,
+    pub(crate) ids: HashSet<String>,
+    pub(crate) types: HashSet<String>,
+    pub(crate) unverifiable: bool,
+}
+
+pub(crate) fn index_shadow_selectors(pieces: &[String]) -> ShadowIndex {
+    let mut index = ShadowIndex {
+        classes: HashSet::new(),
+        ids: HashSet::new(),
+        types: HashSet::new(),
+        unverifiable: false,
+    };
+    for piece in pieces {
+        let allocator = oxc_css_parser::Allocator::default();
+        let mut parser = CssParser::new(&allocator, piece, Syntax::Css);
+        match parser.parse::<Stylesheet>() {
+            Ok(stylesheet) => index_shadow_statements(&stylesheet.statements, &mut index),
+            // A piece that is not plain CSS cannot prove its selectors.
+            Err(_) => index.unverifiable = true,
+        }
+    }
+    index
+}
+
+fn index_shadow_statements(statements: &[Statement<'_>], index: &mut ShadowIndex) {
+    for statement in statements {
+        match statement {
+            Statement::QualifiedRule(rule) => {
+                for selector in &rule.selector.selectors {
+                    index_shadow_complex(selector, index);
+                }
+                index_shadow_statements(&rule.block.statements, index);
+            }
+            Statement::AtRule(at_rule) => {
+                if let Some(block) = &at_rule.block {
+                    index_shadow_statements(&block.statements, index);
+                }
+            }
+            // Declarations and keyframe steps cannot match DOM elements.
+            Statement::Declaration(_) | Statement::KeyframeBlock(_) => {}
+            _ => index.unverifiable = true,
+        }
+    }
+}
+
+/// Classify one complex selector by its rightmost compound: the compound
+/// that must match the element itself. Ancestor compounds only narrow the
+/// match, so they are ignored (conservatively assuming they can be
+/// satisfied).
+fn index_shadow_complex(
+    selector: &oxc_css_parser::ast::ComplexSelector<'_>,
+    index: &mut ShadowIndex,
+) {
+    let Some(compound) = selector.children.iter().rev().find_map(|child| match child {
+        ComplexSelectorChild::CompoundSelector(compound) => Some(compound),
+        ComplexSelectorChild::Combinator(_) => None,
+    }) else {
+        index.unverifiable = true;
+        return;
+    };
+    let mut classes = Vec::new();
+    let mut ids = Vec::new();
+    let mut types = Vec::new();
+    let mut root_only = false;
+    for simple in &compound.children {
+        match simple {
+            SimpleSelector::Class(class) => match literal_ident(&class.name) {
+                Some(name) => classes.push(name.to_string()),
+                None => index.unverifiable = true,
+            },
+            SimpleSelector::Id(id) => match literal_ident(&id.name) {
+                Some(name) => ids.push(name.to_string()),
+                None => index.unverifiable = true,
+            },
+            SimpleSelector::Type(TypeSelector::TagName(tag)) => {
+                match literal_ident(&tag.name.name) {
+                    Some(name) => types.push(name.to_ascii_lowercase()),
+                    None => index.unverifiable = true,
+                }
+            }
+            SimpleSelector::Type(TypeSelector::Universal(_)) => index.unverifiable = true,
+            // Attribute selectors and pseudo-classes only narrow a match
+            // that already has a base; pseudo-elements style separate boxes.
+            SimpleSelector::Attribute(_)
+            | SimpleSelector::PseudoElement(_) => {}
+            SimpleSelector::PseudoClass(pseudo) => {
+                // `:root` alone can only match the document element, which a
+                // template can never contain.
+                if literal_ident(&pseudo.name) == Some("root") && pseudo.arg.is_none() {
+                    root_only = true;
+                }
+            }
+            SimpleSelector::Nesting(_) | SimpleSelector::SassPlaceholder(_) => {
+                index.unverifiable = true;
+            }
+        }
+    }
+    if !classes.is_empty() {
+        index.classes.extend(classes);
+    } else if !ids.is_empty() {
+        index.ids.extend(ids);
+    } else if !types.is_empty() {
+        index.types.extend(types);
+    } else if !root_only {
+        // A compound with no class/id/type base (bare pseudo-class or
+        // attribute selector) can match arbitrary elements.
+        index.unverifiable = true;
+    }
 }
 
 fn declaration_value<'a>(

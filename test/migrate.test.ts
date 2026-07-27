@@ -535,6 +535,61 @@ test("a paren-less deep combinator makes the shadow corpus unverifiable", async 
   }
 });
 
+test("retains an SFC with an external script block", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script src="./behavior.js"></script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "behavior.js"), "export default {};\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.deepEqual(report.changedFiles, []);
+    assert.ok(report.warnings.some((entry) => entry.code === "unsupported-sfc-block"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a global type selector shadows scoped deletion only for matching tags", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "site.css"), "p { padding: 20px; }\n"),
+    ]);
+    const shadowed = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.ok(shadowed.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.equal(shadowed.convertedRules, 0);
+
+    await writeFile(join(cwd, "site.css"), "article { padding: 20px; }\n");
+    const clear = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.equal(clear.convertedRules, 1);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("Sass parent-selector concatenation makes the shadow corpus unverifiable", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card-active">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card-active { padding: 13px; }\n</style>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "theme.scss"), ".card { &-active { padding: 20px; } }\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.equal(report.convertedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("retains a CSS Module referenced by a Vue SFC script", async () => {
   const cwd = await fixture();
   const vue =

@@ -350,6 +350,7 @@ mod tests {
                     writable: true,
                 }),
                 id_attribute: None,
+                tag: None,
             }],
             html_stylesheets: vec![HtmlStylesheet {
                 css_path: "/project/site.css".to_string(),
@@ -431,6 +432,7 @@ mod tests {
                     synthetic: false,
                     writable: true,
                 }),
+                tag: None,
             }],
             html_stylesheets: vec![HtmlStylesheet {
                 css_path: "/project/site.css".to_string(),

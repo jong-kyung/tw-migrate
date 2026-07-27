@@ -803,39 +803,48 @@ async function preparePackageVue({
   // scoped rule whose classes this pool also targets, so collect every
   // package stylesheet, HTML source (inline style blocks are never parsed),
   // and retained Vue style block.
-  const shadowStyleSources = [...styleSources].filter(
-    ([path, source]) =>
-      pathOwners.get(path) === packageRoot &&
-      // Module stylesheet classes are hashed at build time and cannot
-      // collide with scoped classes in the DOM -- unless the module uses
-      // `:global` escapes, which emit unhashed selectors.
-      (!isStylesheetModule(path) || source.includes(":global")),
-  );
-  const vueShadowText = [
-    ...shadowStyleSources.map(([, source]) => source),
-    ...sourceFiles
-      .filter(
-        (file) => extension(file.path) === ".html" && pathOwners.get(file.path) === packageRoot,
-      )
-      .map((file) => file.source),
-    ...ownedVue.map((file) => {
-      const analysis = analyses.get(file.path);
-      return analysis.retained ? file.source : analysis.retainedStyleText;
-    }),
-  ]
-    .filter(Boolean)
-    .join("\n");
-  // Preprocessor interpolation can synthesize selectors the textual scan
-  // cannot see, so its presence makes the whole corpus unverifiable.
-  const interpolated = (text) => /#\{|@\{/.test(text);
-  const vueShadowUnverifiable =
-    shadowStyleSources.some(([path, source]) => isPreprocessorPath(path) && interpolated(source)) ||
-    ownedVue.some((file) => {
-      const analysis = analyses.get(file.path);
-      return analysis.retained
-        ? interpolated(file.source)
-        : interpolated(analysis.retainedStyleText) || analysis.escapeUnverifiable;
-    });
+  // The shadow corpus is a list of parseable CSS pieces whose selector
+  // surface the planner indexes; anything whose selectors cannot be proven
+  // (interpolation or `&`-concatenation in preprocessor text, inline HTML
+  // style blocks, unanalyzable SFCs, unextractable escapes) marks the whole
+  // corpus unverifiable and retains every closed deletion.
+  const generatesSelectors = (text) => /#\{|@\{|&[\w-]/.test(text);
+  const vueShadowCss = [];
+  let vueShadowUnverifiable = false;
+  for (const [path, source] of styleSources) {
+    if (pathOwners.get(path) !== packageRoot) continue;
+    // Module stylesheet classes are hashed at build time and cannot collide
+    // with scoped classes in the DOM -- unless the module uses `:global`
+    // escapes, which emit unhashed selectors.
+    if (isStylesheetModule(path) && !source.includes(":global")) continue;
+    if (isPreprocessorPath(path) && generatesSelectors(source)) {
+      vueShadowUnverifiable = true;
+      continue;
+    }
+    vueShadowCss.push(source);
+  }
+  for (const file of sourceFiles) {
+    if (
+      extension(file.path) === ".html" &&
+      pathOwners.get(file.path) === packageRoot &&
+      /<style/i.test(file.source)
+    ) {
+      vueShadowUnverifiable = true;
+    }
+  }
+  for (const file of ownedVue) {
+    const analysis = analyses.get(file.path);
+    if (analysis.retained) {
+      if (/<style/i.test(file.source)) vueShadowUnverifiable = true;
+      continue;
+    }
+    if (analysis.escapeUnverifiable) vueShadowUnverifiable = true;
+    for (const text of analysis.shadowPreprocessorTexts) {
+      if (generatesSelectors(text)) vueShadowUnverifiable = true;
+      else vueShadowCss.push(text);
+    }
+    vueShadowCss.push(...analysis.shadowCssTexts);
+  }
 
   const files = new Map();
   const stylesheets = [];
@@ -861,7 +870,7 @@ async function preparePackageVue({
       vueRetention: analysis.retention,
       // Open-surface files never delete rules, so only closed files carry
       // the shadow pool.
-      vueShadowText: analysis.retention ? undefined : vueShadowText,
+      vueShadowCss: analysis.retention ? undefined : vueShadowCss,
       vueShadowUnverifiable: analysis.retention ? undefined : vueShadowUnverifiable,
     });
   }

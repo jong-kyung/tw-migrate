@@ -68,12 +68,20 @@ export function analyzeVueSource(compiler, path, source) {
     warn("unsupported-sfc-block", 0, 0, reason);
     return { warnings: toByteWarnings(source, warnings), retained: true };
   }
+  // An external script can mutate classes at runtime but cannot be fed to
+  // the mention guard, so the file's class surface cannot be analyzed.
+  if (descriptor.script?.src !== undefined || descriptor.scriptSetup?.src !== undefined) {
+    warn("unsupported-sfc-block", 0, 0, "External <script src> blocks are not analyzed.");
+    return { warnings: toByteWarnings(source, warnings), retained: true };
+  }
 
   const blocks = [];
   // Retained blocks are still real CSS that can win the cascade against the
-  // utilities replacing a deleted scoped rule; their text feeds the planner's
-  // shadowing gate.
-  const retainedStyleTexts = [];
+  // utilities replacing a deleted scoped rule. Plain-CSS text feeds the
+  // planner's parsed shadow index; preprocessor text is screened by the
+  // caller before joining it.
+  const shadowCssTexts = [];
+  const shadowPreprocessorTexts = [];
   let escapeUnverifiable = false;
   for (const style of descriptor.styles) {
     const start = style.loc.start.offset;
@@ -87,7 +95,7 @@ export function analyzeVueSource(compiler, path, source) {
       // with plain scoped classes -- except through `:global` escapes, which
       // emit unhashed selectors and must feed the shadowing gate.
       warn("unsupported-sfc-block", start, end, "<style module> blocks are not supported yet.");
-      if (style.content.includes(":global")) retainedStyleTexts.push(style.content);
+      if (style.content.includes(":global")) shadowCssTexts.push(style.content);
       continue;
     }
     if (style.lang && style.lang !== "css") {
@@ -97,7 +105,7 @@ export function analyzeVueSource(compiler, path, source) {
         end,
         `A <style lang="${style.lang}"> block is not migrated yet.`,
       );
-      retainedStyleTexts.push(style.content);
+      shadowPreprocessorTexts.push(style.content);
       continue;
     }
     if (!style.scoped) {
@@ -107,7 +115,7 @@ export function analyzeVueSource(compiler, path, source) {
         end,
         "A <style> block without `scoped` is global CSS and is retained.",
       );
-      retainedStyleTexts.push(style.content);
+      shadowCssTexts.push(style.content);
       continue;
     }
     const outerStart = source.lastIndexOf("<style", start);
@@ -121,7 +129,7 @@ export function analyzeVueSource(compiler, path, source) {
     // must join the cascade-shadow corpus. Nested or paren-less escape forms
     // cannot be extracted textually and make the corpus unverifiable.
     for (const [, inner] of style.content.matchAll(ESCAPE_SELECTOR)) {
-      retainedStyleTexts.push(inner);
+      shadowCssTexts.push(`${inner} {}`);
       if (inner.includes("(")) escapeUnverifiable = true;
     }
     if (ESCAPE_RESIDUE.test(style.content.replace(ESCAPE_SELECTOR, " "))) {
@@ -164,11 +172,29 @@ export function analyzeVueSource(compiler, path, source) {
     .filter(Boolean)
     .join("\n");
 
-  const offset = (index) => Buffer.byteLength(source.slice(0, index));
+  const offsets = utf8OffsetMap(source, [
+    ...warnings.flatMap((warning) => [warning.start, warning.end]),
+    ...blocks.flatMap((block) => [
+      block.outerStart,
+      block.outerEnd,
+      block.contentStart,
+      block.contentEnd,
+    ]),
+    ...state.elements.flatMap((element) =>
+      [element.classAttribute, element.idAttribute]
+        .filter(Boolean)
+        .flatMap((value) => [value.start, value.end]),
+    ),
+  ]);
+  const offset = (index) => offsets.get(index);
   const attribute = (value) =>
     value && { ...value, start: offset(value.start), end: offset(value.end) };
   return {
-    warnings: toByteWarnings(source, warnings),
+    warnings: warnings.map((warning) => ({
+      ...warning,
+      start: offset(warning.start),
+      end: offset(warning.end),
+    })),
     blocks: blocks.map((block) => ({
       outerStart: offset(block.outerStart),
       outerEnd: offset(block.outerEnd),
@@ -176,12 +202,14 @@ export function analyzeVueSource(compiler, path, source) {
       contentEnd: offset(block.contentEnd),
     })),
     htmlElements: state.elements.map((element) => ({
+      tag: element.tag,
       classAttribute: attribute(element.classAttribute),
       idAttribute: attribute(element.idAttribute),
     })),
     scriptText,
     retention,
-    retainedStyleText: retainedStyleTexts.join("\n"),
+    shadowCssTexts,
+    shadowPreprocessorTexts,
     escapeUnverifiable,
     retained: false,
   };
@@ -282,7 +310,7 @@ function visitTemplateNode(source, node, state) {
             }
           }
         }
-        if (site) state.elements.push({ classAttribute: site, idAttribute });
+        if (site) state.elements.push({ tag: node.tag, classAttribute: site, idAttribute });
       }
     }
   }
@@ -317,11 +345,29 @@ function classInsertionOffset(source, node) {
   return offset;
 }
 
+// Map UTF-16 string indices to UTF-8 byte offsets in one source pass, so
+// large templates stay linear instead of rescanning the prefix per site.
+function utf8OffsetMap(source, indices) {
+  const sorted = [...new Set(indices)].sort((left, right) => left - right);
+  const map = new Map();
+  let lastIndex = 0;
+  let bytes = 0;
+  for (const index of sorted) {
+    bytes += Buffer.byteLength(source.slice(lastIndex, index));
+    lastIndex = index;
+    map.set(index, bytes);
+  }
+  return map;
+}
+
 function toByteWarnings(source, warnings) {
-  const offset = (index) => Buffer.byteLength(source.slice(0, index));
+  const offsets = utf8OffsetMap(
+    source,
+    warnings.flatMap((warning) => [warning.start, warning.end]),
+  );
   return warnings.map((warning) => ({
     ...warning,
-    start: offset(warning.start),
-    end: offset(warning.end),
+    start: offsets.get(warning.start),
+    end: offsets.get(warning.end),
   }));
 }

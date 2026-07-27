@@ -209,17 +209,20 @@ the rule to retain-with-append or retain-only:
    attribute and sits outside CSS layers, so it can outrank non-scoped CSS
    that the layered Tailwind utility replacing it would lose to. Before a
    closed file deletes a rule, the package's non-scoped corpus — other
-   non-module stylesheets, HTML sources, and retained SFC style blocks — is
-   scanned for a `.class` selector token matching any of the rule's classes;
-   a match retains the rule with `shadowed-scoped-rule`. The corpus includes
-   scan-only (gitignored) SFCs and any module CSS containing `:global`
-   escapes, whose selectors are emitted unhashed, and the inner selectors of
-   scope-escape pseudo-classes (`:deep()`, `:global()`, `:slotted()`) found
-   in any analyzable scoped block, since those reach elements outside their
-   own SFC. Preprocessor interpolation (`#{...}`, `@{...}`), nested escape
-   arguments, and paren-less escape forms (`>>>`, `/deep/`, combinator
-   `::v-deep`) cannot be resolved textually, so their presence anywhere in
-   the corpus retains every closed rule. Candidates that cannot be
+   non-module stylesheets, retained SFC style blocks, scan-only (gitignored)
+   SFC blocks, module CSS containing `:global` escapes, and the inner
+   selectors of scope-escape pseudo-classes (`:deep()`, `:global()`,
+   `:slotted()`) from analyzable scoped blocks — is parsed as CSS and
+   reduced to a selector index keyed by each selector's rightmost compound:
+   its classes, ids, and element types. A rule is retained with
+   `shadowed-scoped-rule` when the index targets one of its classes or can
+   reach one of its template sites through the site's tag or id. Anything
+   the index cannot prove — pieces that fail to parse, universal or
+   base-less selectors, preprocessor interpolation or `&`-concatenation,
+   HTML sources containing inline `<style` blocks, unanalyzable SFCs, and
+   unextractable escape forms (`>>>`, `/deep/`, combinator `::v-deep`,
+   nested escape arguments) — marks the corpus unverifiable and retains
+   every closed rule. Candidates that cannot be
    written inside an attribute's own quote delimiter are withheld and their
    rules retained, sharing the static-HTML quote handling.
 6. **Directives that alter structure.** `v-for`, `v-if`/`v-else` duplicates
@@ -370,10 +373,9 @@ phases.
    utilities are appended and Tailwind's output order decides the winner,
    because relative precedence between distinct sources is not modeled. This
    long-standing engine-wide behavior is accepted for Vue as well.
-8. The cascade-shadowing scan is textual and package-scoped: a `.class`
-   token anywhere in the non-scoped corpus retains the rule even when the
-   competitor could never match the same element, and CSS outside the
-   package is not seen.
+8. The cascade-shadowing index is package-scoped and rightmost-compound
+   based: a corpus selector retains the rule even when its ancestor parts
+   could never be satisfied, and CSS outside the package is not seen.
 
 ## Deferred Work
 
