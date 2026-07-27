@@ -150,6 +150,11 @@ fn stamp_in_file_shadow(rules: &mut [RulePlan], vue_file: Option<&SourceFile>) {
         let mut retained_ids: HashSet<String> = HashSet::new();
         let mut retained_unclassifiable = false;
         for rule in rules.iter().filter(|rule| rule.warning.is_some()) {
+            // Retained at-rules (`@keyframes`, `@font-face`) select no
+            // elements and cannot compete for a template site.
+            if rule.selector.starts_with('@') {
+                continue;
+            }
             if rule.related_classes.is_empty()
                 && !matches!(&rule.key, Some(SelectorKey::Id(_)))
             {
@@ -3893,6 +3898,37 @@ mod tests {
             serde_json::json!(["p { padding: 20px; }"]);
         let response: serde_json::Value =
             serde_json::from_str(&plan_batch_json(&typed.to_string()).unwrap()).unwrap();
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["warnings"][0]["code"], "shadowed-scoped-rule");
+    }
+
+    #[test]
+    fn vue_retained_keyframes_do_not_shadow_sibling_rules() {
+        let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n@keyframes spin { from { opacity: 0; } to { opacity: 1; } }\n.card { padding: 13px; }\n</style>\n";
+        let request = vue_batch_request(source, true, None);
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(response["retainedRules"], 1);
+    }
+
+    #[test]
+    fn vue_module_global_arguments_shadow_only_their_own_selectors() {
+        let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n";
+        // An unrelated `:global` escape must not disable the whole index.
+        let mut unrelated = vue_batch_request(source, true, None);
+        unrelated["stylesheets"][0]["vueShadowModuleCss"] =
+            serde_json::json!([":global(.unrelated) { padding: 20px; }"]);
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&unrelated.to_string()).unwrap()).unwrap();
+        assert_eq!(response["convertedRules"], 1);
+
+        // A matching `:global` escape shadows precisely.
+        let mut matching = vue_batch_request(source, true, None);
+        matching["stylesheets"][0]["vueShadowModuleCss"] =
+            serde_json::json!([":global(.card) { padding: 20px; }"]);
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&matching.to_string()).unwrap()).unwrap();
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["warnings"][0]["code"], "shadowed-scoped-rule");
     }

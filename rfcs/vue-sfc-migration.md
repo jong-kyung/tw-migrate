@@ -222,9 +222,13 @@ the rule to retain-with-append or retain-only:
    reach one of its template sites through the site's tag, id, or
    co-occurring classes. Module CSS joins through a separate channel that
    indexes only its global surface (type and attribute selectors), since
-   module class and id names are localized at build time. Retained rules in
-   the same scoped block are competitors too: a rule sharing a site with any
-   retained sibling is itself retained, iterated to a fixpoint. Anything
+   module class and id names are localized at build time; `:global(...)`
+   arguments are re-indexed as plain global selectors rather than
+   invalidating the corpus. Retained rules in the same scoped block are
+   competitors too: a rule sharing a site with any retained sibling is
+   itself retained, iterated to a fixpoint — except retained at-rules
+   (`@keyframes`), which select no elements. `<style src>` blocks may point
+   outside the discovered corpus and mark it unverifiable. Anything
    the index cannot prove — pieces that fail to parse, universal or
    base-less selectors, preprocessor interpolation or `&`-concatenation,
    HTML sources containing inline `<style` blocks, unanalyzable SFCs, and

@@ -654,6 +654,23 @@ test("any script block keeps the template surface open", async () => {
   }
 });
 
+test("a style src block makes the shadow corpus unverifiable", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped src="./external.css"></style>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "external.css"), ".card { padding: 20px; }\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.equal(report.convertedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("retains a CSS Module referenced by a Vue SFC script", async () => {
   const cwd = await fixture();
   const vue =

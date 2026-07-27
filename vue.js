@@ -94,6 +94,9 @@ export function analyzeVueSource(compiler, path, source) {
     const end = style.loc.end.offset;
     if (style.src !== undefined) {
       warn("unsupported-sfc-block", start, end, "A <style src> block is not analyzed.");
+      // The external target may not be in the discovered corpus, so its
+      // selectors cannot be proven.
+      escapeUnverifiable = true;
       continue;
     }
     if (style.module !== undefined) {

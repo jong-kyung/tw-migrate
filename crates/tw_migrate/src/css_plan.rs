@@ -720,6 +720,10 @@ fn index_shadow_complex(
         index.unverifiable = true;
         return;
     };
+    index_shadow_compound(compound, module, index);
+}
+
+fn index_shadow_compound(compound: &CompoundSelector<'_>, module: bool, index: &mut ShadowIndex) {
     // CSS Modules localize class and id names, so a module compound carrying
     // either can never match a template element; only its bare type and
     // attribute selectors stay global.
@@ -733,7 +737,7 @@ fn index_shadow_complex(
     let mut classes = Vec::new();
     let mut ids = Vec::new();
     let mut types = Vec::new();
-    let mut root_only = false;
+    let mut base_free_but_bounded = false;
     for simple in &compound.children {
         match simple {
             SimpleSelector::Class(class) => match literal_ident(&class.name) {
@@ -755,13 +759,19 @@ fn index_shadow_complex(
             // that already has a base; pseudo-elements style separate boxes.
             SimpleSelector::Attribute(_)
             | SimpleSelector::PseudoElement(_) => {}
-            SimpleSelector::PseudoClass(pseudo) => {
+            SimpleSelector::PseudoClass(pseudo) => match literal_ident(&pseudo.name) {
                 // `:root` alone can only match the document element, which a
                 // template can never contain.
-                if literal_ident(&pseudo.name) == Some("root") && pseudo.arg.is_none() {
-                    root_only = true;
+                Some("root") if pseudo.arg.is_none() => base_free_but_bounded = true,
+                // `:global(...)` re-exposes its argument as plain global
+                // selectors; `:local(...)` content stays localized.
+                Some("global") if pseudo.arg.is_some() => {
+                    index_shadow_global_arg(pseudo.arg.as_ref().expect("checked"), index);
+                    base_free_but_bounded = true;
                 }
-            }
+                Some("local") if pseudo.arg.is_some() => base_free_but_bounded = true,
+                _ => {}
+            },
             SimpleSelector::Nesting(_) | SimpleSelector::SassPlaceholder(_) => {
                 index.unverifiable = true;
             }
@@ -773,10 +783,33 @@ fn index_shadow_complex(
         index.ids.extend(ids);
     } else if !types.is_empty() {
         index.types.extend(types);
-    } else if !root_only {
+    } else if !base_free_but_bounded {
         // A compound with no class/id/type base (bare pseudo-class or
         // attribute selector) can match arbitrary elements.
         index.unverifiable = true;
+    }
+}
+
+fn index_shadow_global_arg(
+    arg: &oxc_css_parser::ast::PseudoClassSelectorArg<'_>,
+    index: &mut ShadowIndex,
+) {
+    use oxc_css_parser::ast::PseudoClassSelectorArgKind;
+    match &arg.kind {
+        PseudoClassSelectorArgKind::CompoundSelector(compound) => {
+            index_shadow_compound(compound, false, index);
+        }
+        PseudoClassSelectorArgKind::CompoundSelectorList(list) => {
+            for compound in &list.selectors {
+                index_shadow_compound(compound, false, index);
+            }
+        }
+        PseudoClassSelectorArgKind::SelectorList(list) => {
+            for selector in &list.selectors {
+                index_shadow_complex(selector, false, index);
+            }
+        }
+        _ => index.unverifiable = true,
     }
 }
 
