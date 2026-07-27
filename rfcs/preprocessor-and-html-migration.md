@@ -30,7 +30,7 @@ Static HTML support is limited to literal `class` and `id` attributes reached th
 
 ## Non-Goals
 
-1. Vue, Svelte, Astro, Angular, PHP, ERB, or other template languages.
+1. Svelte, Astro, Angular, PHP, ERB, or other template languages; Vue single-file components are scoped separately in `vue-sfc-migration.md`.
 2. HTML `<style>` blocks or `style` attributes.
 3. Template expressions, bound attributes, or runtime-generated classes in `.html` files.
 4. Automatic loading or execution of Vite, Webpack, PostCSS, or framework configuration.
@@ -113,12 +113,12 @@ Generated CSS and source maps are never listed as changed files unless they are 
 
 ### Stylesheets
 
-| Extension | Parser syntax | Semantic evaluator |
-| --- | --- | --- |
-| `.css` | `Syntax::Css` | none |
-| `.scss` | `Syntax::Scss` | target package's `sass` |
-| `.sass` | `Syntax::Sass` | target package's `sass` |
-| `.less` | `Syntax::Less` | target package's `less` |
+| Extension | Parser syntax  | Semantic evaluator      |
+| --------- | -------------- | ----------------------- |
+| `.css`    | `Syntax::Css`  | none                    |
+| `.scss`   | `Syntax::Scss` | target package's `sass` |
+| `.sass`   | `Syntax::Sass` | target package's `sass` |
+| `.less`   | `Syntax::Less` | target package's `less` |
 
 CSS Modules are recognized by `.module.css`, `.module.scss`, `.module.sass`, and `.module.less`.
 
@@ -258,7 +258,9 @@ For example:
 
 ```scss
 $space: 13px;
-.card { padding: $space; }
+.card {
+  padding: $space;
+}
 ```
 
 may produce `p-[13px]`. The variable definition is not automatically removed, even if it becomes unused.
@@ -301,8 +303,14 @@ The following remain unchanged:
 ```html
 <div class="card {{ state }}"></div>
 <div :class="state"></div>
-<div class="card" style="padding: 1rem"></div> <!-- style is ignored -->
-<style>.card { padding: 1rem }</style>            <!-- block is ignored -->
+<div class="card" style="padding: 1rem"></div>
+<!-- style is ignored -->
+<style>
+  .card {
+    padding: 1rem;
+  }
+</style>
+<!-- block is ignored -->
 ```
 
 `<template>` descendants containing plain literal HTML are eligible. Script contents are never scanned for class strings.
