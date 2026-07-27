@@ -3,8 +3,8 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const ESCAPE_SELECTOR = /:(?:deep|global|slotted)\(([^)]*)\)/g;
-const ESCAPE_RESIDUE = /(?:>>>|\/deep\/|::v-deep|:deep|::v-slotted|:slotted)/;
+const ESCAPE_SELECTOR = /(?:::v-|:)(?:deep|global|slotted)\(([^)]*)\)/g;
+const ESCAPE_RESIDUE = /(?:>>>|\/deep\/|::v-deep|:deep|::v-slotted|:slotted|::v-global|:global)/;
 
 // @vue/compiler-core node and element kinds; @vue/compiler-sfc does not
 // re-export the enums, so the numeric values are pinned here.
@@ -72,6 +72,11 @@ export function analyzeVueSource(compiler, path, source) {
   // the mention guard, so the file's class surface cannot be analyzed.
   if (descriptor.script?.src !== undefined || descriptor.scriptSetup?.src !== undefined) {
     warn("unsupported-sfc-block", 0, 0, "External <script src> blocks are not analyzed.");
+    return { warnings: toByteWarnings(source, warnings), retained: true };
+  }
+  const scriptLang = descriptor.script?.lang ?? descriptor.scriptSetup?.lang;
+  if (scriptLang && !["js", "jsx", "ts", "tsx"].includes(scriptLang)) {
+    warn("unsupported-sfc-block", 0, 0, `A <script lang="${scriptLang}"> block is not analyzed.`);
     return { warnings: toByteWarnings(source, warnings), retained: true };
   }
 
@@ -155,15 +160,6 @@ export function analyzeVueSource(compiler, path, source) {
       ),
   ).length;
 
-  // Priority order: the most specific open surface names the retention.
-  const retention = state.dynamic
-    ? "dynamic-template-class"
-    : state.componentTags
-      ? "component-class-target"
-      : alwaysRenderedRoots < 2
-        ? "open-root-fallthrough"
-        : undefined;
-
   const scriptText = [
     descriptor.script?.content,
     descriptor.scriptSetup?.content,
@@ -171,6 +167,21 @@ export function analyzeVueSource(compiler, path, source) {
   ]
     .filter(Boolean)
     .join("\n");
+  // JS that touches class-mutation APIs can add any class to any element at
+  // runtime, including through values the mention guard cannot see; such
+  // files are never closed, matching the module philosophy of
+  // proof-or-retain.
+  const mutatesClasses = /\b(?:classList|className|setAttribute)\b/.test(scriptText);
+
+  // Priority order: the most specific open surface names the retention.
+  const retention =
+    state.dynamic || mutatesClasses
+      ? "dynamic-template-class"
+      : state.componentTags
+        ? "component-class-target"
+        : alwaysRenderedRoots < 2
+          ? "open-root-fallthrough"
+          : undefined;
 
   const offsets = utf8OffsetMap(source, [
     ...warnings.flatMap((warning) => [warning.start, warning.end]),

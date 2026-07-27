@@ -936,10 +936,15 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
                         if !site_matches_rule {
                             return false;
                         }
-                        element
-                            .tag
-                            .as_deref()
-                            .is_some_and(|tag| shadow.types.contains(&tag.to_ascii_lowercase()))
+                        // Any class co-occurring on the site can carry a
+                        // competing unlayered rule to the same element.
+                        classes.iter().any(|class| shadow.classes.contains(*class))
+                            || element
+                                .tag
+                                .as_deref()
+                                .is_some_and(|tag| {
+                                    shadow.types.contains(&tag.to_ascii_lowercase())
+                                })
                             || element
                                 .id_attribute
                                 .as_ref()
@@ -3695,6 +3700,52 @@ mod tests {
         let response: serde_json::Value =
             serde_json::from_str(&plan_batch_json(&clear.to_string()).unwrap()).unwrap();
         assert_eq!(response["convertedRules"], 1);
+    }
+
+    #[test]
+    fn vue_cooccurring_site_class_shadow_retains_the_rule() {
+        let source = "<template>\n  <p class=\"card foo\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n";
+        let value_start = source.find("card foo").unwrap();
+        let request = serde_json::json!({
+            "stylesheets": [{
+                "cssPath": "/project/Card.vue",
+                "cssSource": source,
+                "isModule": true,
+                "syntax": "css",
+                "vueBlocks": [{
+                    "outerStart": source.find("<style scoped>").unwrap(),
+                    "outerEnd": source.find("</style>").unwrap() + "</style>".len(),
+                    "contentStart": source.find("<style scoped>").unwrap() + "<style scoped>".len(),
+                    "contentEnd": source.find("</style>").unwrap(),
+                }],
+                "vueShadowCss": [".foo { padding: 20px; }"],
+            }],
+            "files": [{
+                "path": "/project/Card.vue",
+                "source": source,
+                "htmlElements": [{
+                    "tag": "p",
+                    "classAttribute": {
+                        "value": "card foo",
+                        "start": value_start,
+                        "end": value_start + "card foo".len(),
+                    },
+                }],
+                "htmlStylesheets": [{
+                    "cssPath": "/project/Card.vue",
+                    "variants": [],
+                    "direct": true,
+                    "analyzable": true,
+                }],
+                "htmlReferencesSafe": true,
+            }],
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["warnings"][0]["code"], "shadowed-scoped-rule");
     }
 
     #[test]
