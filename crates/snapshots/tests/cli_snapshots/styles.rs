@@ -68,4 +68,21 @@ snapshot_cases! {
     style_unproven_relationship => default_setup,
     style_unsupported_url => default_setup,
     style_url_import_retained => default_setup,
+    style_vue_sfc => default_setup,
+    style_vue_unsupported_version => setup_vue_two,
+}
+
+// A `vue` package whose manifest declares Vue 2: the version gate reads
+// package.json before resolving compiler-sfc, so no real Vue 2 install is
+// needed.
+fn setup_vue_two(context: &tw_migrate_snapshots::CaseContext<'_>) -> Result<(), String> {
+    let root = context.workspace.join("node_modules").join("vue");
+    std::fs::create_dir_all(&root).map_err(|error| format!("create {}: {error}", root.display()))?;
+    std::fs::write(
+        root.join("package.json"),
+        "{\"name\":\"vue\",\"version\":\"2.7.16\",\"main\":\"index.js\"}\n",
+    )
+    .map_err(|error| format!("write fake vue package.json: {error}"))?;
+    std::fs::write(root.join("index.js"), "module.exports = {};\n")
+        .map_err(|error| format!("write fake vue index.js: {error}"))
 }

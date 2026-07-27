@@ -26,6 +26,7 @@ snapshot_cases! {
     safety_missing_sass => setup_missing_sass,
     safety_post_edit_sass => setup_fake_sass,
     safety_missing_less => setup_missing_less,
+    safety_missing_vue => setup_missing_vue,
     safety_post_edit_less => setup_fake_less,
 }
 
@@ -106,6 +107,10 @@ fn setup_missing_sass(context: &CaseContext<'_>) -> Result<(), String> {
 
 fn setup_missing_less(context: &CaseContext<'_>) -> Result<(), String> {
     install_tailwind_only(context, "less")
+}
+
+fn setup_missing_vue(context: &CaseContext<'_>) -> Result<(), String> {
+    install_tailwind_only(context, "vue")
 }
 
 fn setup_fake_sass(context: &CaseContext<'_>) -> Result<(), String> {
