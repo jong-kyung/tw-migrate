@@ -375,6 +375,29 @@ test("retains a CSS Module referenced by a Vue SFC script", async () => {
   }
 });
 
+test("withholds quote-bearing candidates from quoted HTML attributes and retains their rules", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "site.css"),
+        '.card { font-family: "My Font", sans-serif; }\n.btn { padding: 13px; }\n',
+      ),
+      writeFile(
+        join(cwd, "index.html"),
+        '<link rel="stylesheet" href="./site.css"><div class="card"></div><div class=\'btn\'></div>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    // The double-quoted attribute cannot hold the quoted candidate; the
+    // single-quoted one can, and the global rules stay retained as always.
+    assert.ok(!report.diff.includes("My_Font"));
+    assert.match(report.diff, /class='btn p-\[13px\]'/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("preserves CRLF line endings through a partial migration", async () => {
   const cwd = await fixture({
     css: ".button {\r\n  padding: 13px;\r\n}\r\n.other {\r\n  display: grid;\r\n}\r\n",

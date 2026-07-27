@@ -42,15 +42,17 @@ pub(crate) fn plan_html_file(
             .collect::<Vec<_>>();
         let mut additions = Vec::new();
 
+        let quote = attribute_quote(&file.source, class_attribute);
         for class in classes.clone() {
             let key = SelectorKey::Class(class.clone());
             let matched = candidates.contains_key(&key);
             if matched {
                 *module_refs.entry(class.clone()).or_default() += 1;
             }
-            collect_candidates(
+            let appended = collect_candidates(
                 key,
                 class_attribute,
+                quote,
                 &contexts,
                 candidates,
                 utility_prefix,
@@ -58,7 +60,9 @@ pub(crate) fn plan_html_file(
                 &mut emitted,
                 &mut matches,
             );
-            if matched {
+            // A candidate that cannot be written into this attribute leaves
+            // the reference unmigrated, which must block rule removal.
+            if matched && appended {
                 *matched_module_refs.entry(class).or_default() += 1;
             }
         }
@@ -70,6 +74,7 @@ pub(crate) fn plan_html_file(
             collect_candidates(
                 SelectorKey::Id(id.value.clone()),
                 class_attribute,
+                quote,
                 &contexts,
                 candidates,
                 utility_prefix,
@@ -110,24 +115,34 @@ pub(crate) fn plan_html_file(
     }
 }
 
+/// Collect the appendable candidates for one selector key, returning whether
+/// every candidate could be appended. A candidate containing the attribute's
+/// own quote delimiter has no writable form inside that attribute value and
+/// is skipped, so the caller retains the owning rule instead.
 #[allow(clippy::too_many_arguments)]
 fn collect_candidates(
     key: SelectorKey,
     attribute: &HtmlAttribute,
+    quote: Option<u8>,
     contexts: &[&crate::planner::HtmlStylesheet],
     candidates: &HashMap<SelectorKey, Vec<String>>,
     utility_prefix: Option<&str>,
     additions: &mut Vec<String>,
     emitted: &mut BTreeSet<String>,
     matches: &mut Vec<CandidateMatch>,
-) {
+) -> bool {
     let Some(origin_candidates) = candidates.get(&key) else {
-        return;
+        return true;
     };
+    let mut appended_all = true;
     for origin_candidate in origin_candidates {
         for context in contexts {
             let candidate =
                 contextual_candidate(origin_candidate, &context.variants, utility_prefix);
+            if candidate_breaks_attribute(&candidate, quote) {
+                appended_all = false;
+                continue;
+            }
             emitted.insert(candidate.clone());
             additions.push(candidate.clone());
             matches.push(CandidateMatch {
@@ -138,6 +153,30 @@ fn collect_candidates(
                 origin_candidate: origin_candidate.clone(),
             });
         }
+    }
+    appended_all
+}
+
+/// The quote delimiter enclosing a live attribute value: the byte before the
+/// value span, or `"` for a synthetic attribute the planner itself inserts
+/// with double quotes.
+fn attribute_quote(source: &str, attribute: &HtmlAttribute) -> Option<u8> {
+    if attribute.synthetic {
+        return Some(b'"');
+    }
+    attribute
+        .start
+        .checked_sub(1)
+        .and_then(|index| source.as_bytes().get(index))
+        .copied()
+        .filter(|byte| matches!(byte, b'"' | b'\''))
+}
+
+fn candidate_breaks_attribute(candidate: &str, quote: Option<u8>) -> bool {
+    match quote {
+        Some(quote) => candidate.bytes().any(|byte| byte == quote),
+        // An unquoted or unrecognized site cannot safely hold either quote.
+        None => candidate.bytes().any(|byte| matches!(byte, b'"' | b'\'')),
     }
 }
 
@@ -275,6 +314,64 @@ fn empty_plan() -> SourcePlan {
 mod tests {
     use super::*;
     use crate::planner::{HtmlElement, HtmlStylesheet};
+
+    fn quoted_fixture(source: &str, value_start: usize, value: &str) -> SourceFile {
+        SourceFile {
+            path: "/project/index.html".to_string(),
+            source: source.to_string(),
+            writable: true,
+            html_elements: vec![HtmlElement {
+                class_attribute: Some(HtmlAttribute {
+                    value: value.to_string(),
+                    start: value_start,
+                    end: value_start + value.len(),
+                    synthetic: false,
+                    writable: true,
+                }),
+                id_attribute: None,
+            }],
+            html_stylesheets: vec![HtmlStylesheet {
+                css_path: "/project/site.css".to_string(),
+                variants: Vec::new(),
+                direct: true,
+                analyzable: true,
+            }],
+            html_references_safe: true,
+            html_script_text: String::new(),
+        }
+    }
+
+    #[test]
+    fn skips_candidates_containing_the_enclosing_quote_and_blocks_removal() {
+        let source = "<div class=\"card\"></div>";
+        let file = quoted_fixture(source, source.find("card").unwrap(), "card");
+        let candidates = HashMap::from([(
+            SelectorKey::Class("card".to_string()),
+            vec!["[font-family:\"My_Font\"]".to_string(), "p-[13px]".to_string()],
+        )]);
+        let plan = plan_html_file(&file, "/project/site.css", &candidates, None);
+        // The quote-bearing candidate is withheld; the safe one still lands.
+        assert_eq!(plan.candidates, vec!["p-[13px]".to_string()]);
+        assert_eq!(plan.edits.len(), 1);
+        assert!(!plan.edits[0].replacement.contains("My_Font"));
+        // The reference stays partially unmigrated, so removal must stay blocked.
+        assert_eq!(plan.module_refs.get("card"), Some(&1));
+        assert_eq!(plan.matched_module_refs.get("card"), None);
+    }
+
+    #[test]
+    fn appends_double_quoted_candidates_inside_single_quoted_attributes() {
+        let source = "<div class='card'></div>";
+        let file = quoted_fixture(source, source.find("card").unwrap(), "card");
+        let candidates = HashMap::from([(
+            SelectorKey::Class("card".to_string()),
+            vec!["[font-family:\"My_Font\"]".to_string()],
+        )]);
+        let plan = plan_html_file(&file, "/project/site.css", &candidates, None);
+        assert_eq!(plan.edits.len(), 1);
+        assert_eq!(plan.edits[0].replacement, "card [font-family:\"My_Font\"]");
+        assert_eq!(plan.matched_module_refs.get("card"), Some(&1));
+    }
 
     #[test]
     fn preserves_html_bytes_around_literal_value_edits() {
