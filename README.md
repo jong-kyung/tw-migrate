@@ -1,6 +1,6 @@
 # tw-migrate
 
-Preview and migrate static React/Next.js stylesheet references to Tailwind v4 utilities.
+Preview and migrate static React/Next.js, Vue 3 SFC, and HTML stylesheet references to Tailwind v4 utilities.
 
 ## Usage
 
@@ -41,6 +41,8 @@ node /path/to/tw-migrate/bin/tw-migrate.js --write
 - SCSS/Sass/Less values evaluated with the target project's installed compiler; ambiguous mixin and partial origins are retained
 - `.js`, `.jsx`, `.ts`, and `.tsx` source files
 - static `.html` literal `class`/`id` attributes scoped by local external stylesheet links (link-level `print` media supported; other link media conditions are retained)
+- Vue 3 `.vue` files: literal template `class`/`id` attributes matched against the same file's plain-CSS `<style scoped>` blocks, parsed with the target project's own `vue/compiler-sfc`; a fully migrated scoped block is removed
+- open Vue template surfaces (dynamic class bindings, component tags, single-root attribute fallthrough) append utilities while retaining the scoped rule; unscoped, preprocessor, and `<style module>` blocks are retained with warnings
 - direct CSS Module members, static template literals, and static expression literals
 - global `className` and `id` literals
 - multi-compound CSS Module selectors whose element relationships are proven from the JSX graph

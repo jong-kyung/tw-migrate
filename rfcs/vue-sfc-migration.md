@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft
+Accepted (Phase 1 implemented)
 
 ## Summary
 
@@ -176,26 +176,31 @@ the rule removed) only when it is a closed rule. Each open surface downgrades
 the rule to retain-with-append or retain-only:
 
 1. **Component tags.** A scoped rule also matches a child component's root
-   element. Any rule whose selector could match a component tag's classes, or
-   whose element-type selector could match an unknown child root, is not
-   closed. Utilities are still appended to proven host-element sites; the rule
-   is retained with `component-class-target`.
+   element, and that root's own classes come from the child file, which
+   same-file analysis cannot see. Any component tag in the template therefore
+   opens every scoped class rule: utilities are still appended to proven
+   host-element sites, and the rules are retained with
+   `component-class-target`. Phase 2's cross-file analysis can narrow this by
+   reading the child components.
 2. **Root fallthrough.** A parent can merge arbitrary classes onto a
    single-root component's root element, so any class rule could match the
-   root. Class rules in a single-root SFC are therefore not closed unless the
-   file proves fallthrough impossible: a multi-root template, or a statically
-   visible `inheritAttrs: false` without `$attrs` class forwarding. Open rules
-   append utilities to proven sites and retain with `open-root-fallthrough`.
-   Phase 2's cross-file analysis can close this surface by proving no caller
-   passes a `class` to the component.
-3. **Dynamic class bindings.** `:class`, `v-bind` object spreads, and
-   `v-html` make an element's class set opaque; an opaque set can contain any
-   class. If the template contains any such binding, all scoped class rules
-   retain with `dynamic-template-class` in Phase 1. Phase 3 narrows this to
-   literal object/array bindings.
+   root. Class rules in a single-root SFC are therefore not closed; Phase 1
+   recognizes exactly one closure proof: a multi-root template (two or more
+   unconditionally rendered root nodes), which disables automatic attribute
+   inheritance. Statically visible `inheritAttrs: false` is deferred to a
+   later phase. Open rules append utilities to proven sites and retain with
+   `open-root-fallthrough`. Phase 2's cross-file analysis can close this
+   surface by proving no caller passes a `class` to the component.
+3. **Dynamic class bindings.** `:class` and spread `v-bind` make an
+   element's class set opaque; an opaque set can contain any class. If the
+   template contains any such binding — or a class/id attribute that is not a
+   safely writable quoted literal — all scoped class rules retain with
+   `dynamic-template-class` in Phase 1. Phase 3 narrows this to literal
+   object/array bindings.
 4. **Escape hatches.** Rules containing `:deep()`, `:global()`, `>>>`,
-   `/deep/`, or declarations using `v-bind()` retain with
-   `retained-scoped-rule`; these have no utility representation.
+   `/deep/`, or declarations using `v-bind()` have no utility representation
+   and retain through the existing selector/declaration support codes
+   (`unsupported-selector`, `unsupported-value`, and friends).
 5. **Directives that alter structure.** `v-for`, `v-if`/`v-else` duplicates
    or removes elements but does not change their literal class sets; matched
    sites under these directives are still proven hosts. `<slot>` content is
@@ -225,15 +230,17 @@ and a second run produces no diff.
 New stable warning codes, keeping the `{code, file, start, end, message}`
 shape and deterministic ordering:
 
-- `missing-vue-compiler`
 - `unsupported-vue-version`
 - `unsupported-sfc-block`
 - `unscoped-style-block`
 - `preprocessor-style-block`
-- `retained-scoped-rule`
 - `component-class-target`
 - `open-root-fallthrough`
 - `dynamic-template-class`
+
+A missing `vue/compiler-sfc` is a recoverable package failure ("Vue 3 with
+compiler-sfc must be installed in the target project."), not a warning code,
+mirroring a missing Sass compiler.
 
 ## Implementation Phases
 
@@ -320,9 +327,10 @@ phases.
 
 ## Accepted Trade-offs
 
-1. Root fallthrough keeps most single-root SFCs in retain-with-append mode
-   until Phase 2's caller analysis; Phase 1 favors provable safety over
-   removal coverage.
+1. Root fallthrough and component tags keep most SFCs in retain-with-append
+   mode until Phase 2's cross-file analysis; Phase 1 favors provable safety
+   over removal coverage, and only multi-root component-free templates reach
+   scoped-rule removal.
 2. Any dynamic class binding retains all scoped class rules in Phase 1.
 3. Real-world SFCs using `lang="scss"` see no Phase 1 changes.
 4. Retain-with-append intentionally duplicates validated utilities alongside

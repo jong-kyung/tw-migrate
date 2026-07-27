@@ -1,7 +1,7 @@
 {
   "name": "tw-migrate",
   "version": "0.1.0",
-  "description": "Preview and migrate React CSS to Tailwind utilities",
+  "description": "Preview and migrate React, Vue, and HTML CSS to Tailwind utilities",
   "keywords": [
     "codemod",
     "css",
@@ -10,7 +10,8 @@
     "napi-rs",
     "react",
     "tailwind",
-    "tailwindcss"
+    "tailwindcss",
+    "vue"
   ],
   "homepage": "https://github.com/jong-kyung/tw-migrate#readme",
   "bugs": {
