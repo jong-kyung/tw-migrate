@@ -318,6 +318,45 @@ test("warns and retains unsupported Vue style blocks", async () => {
   }
 });
 
+test("treats a dynamic v-bind argument as an open class surface", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p v-bind:[key]="v" class="etc">B</p>\n</template>\n<script setup>\nconst key = "class";\nconst v = "x";\n</script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    const warning = report.warnings.find((entry) => entry.code === "dynamic-template-class")!;
+    assert.equal(warning.file, "Card.vue");
+    assert.equal(report.convertedRules, 0);
+    assert.equal(report.retainedRules, 1);
+    assert.match(report.diff, /\+<style scoped>/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("retains a scoped rule whose class other package CSS also targets", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="only">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n.only { margin: 3px; }\n</style>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "site.css"), ".card { padding: 20px; }\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    const warning = report.warnings.find((entry) => entry.code === "shadowed-scoped-rule")!;
+    assert.equal(warning.file, "Card.vue");
+    // The unshadowed rule in the same block still migrates.
+    assert.equal(report.convertedRules, 1);
+    assert.equal(report.retainedRules, 1);
+    assert.match(report.diff, /class="only m-\[3px\]"/);
+    assert.match(report.diff, /\+\.card \{ padding: 13px; \}/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("retains a CSS Module referenced by a Vue SFC script", async () => {
   const cwd = await fixture();
   const vue =

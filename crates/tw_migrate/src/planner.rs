@@ -158,6 +158,12 @@ struct PlanRequest {
     /// the retention warning code every otherwise-unwarned rule receives.
     #[serde(default)]
     vue_retention: Option<String>,
+    /// Present only for closed Vue SFC stylesheets: the package's non-scoped
+    /// CSS corpus (other stylesheets, HTML sources, retained SFC blocks).
+    /// A scoped rule whose class this text also targets is retained, because
+    /// deleting it would hand the cascade to the unlayered competitor.
+    #[serde(default)]
+    vue_shadow_text: Option<String>,
     files: Vec<SourceFile>,
 }
 
@@ -199,6 +205,8 @@ struct BatchStylesheet {
     vue_blocks: Vec<VueBlock>,
     #[serde(default)]
     vue_retention: Option<String>,
+    #[serde(default)]
+    vue_shadow_text: Option<String>,
     /// Rules whose candidates failed Tailwind compilation in a previous
     /// planning pass; they are retained without converting anything.
     #[serde(default)]
@@ -334,6 +342,7 @@ const WARNING_CODES: &[&str] = &[
     "rebuild-required",
     "reference-only-css-module-consumer",
     "retained-global-rule",
+    "shadowed-scoped-rule",
     "shared-preprocessor-source",
     "unproven-css-module-relationship",
     "unproven-script-reference",
@@ -790,6 +799,7 @@ fn batch_stylesheet_request(
         css_dependents: stylesheet.css_dependents.clone(),
         vue_blocks: stylesheet.vue_blocks.clone(),
         vue_retention: stylesheet.vue_retention.clone(),
+        vue_shadow_text: stylesheet.vue_shadow_text.clone(),
         files,
     }
 }
@@ -866,6 +876,25 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
     if request.is_partial {
         for rule in &mut parsed.rules {
             rule.warning = Some("shared-preprocessor-source");
+        }
+    }
+    // A closed Vue SFC may delete scoped rules, but a scoped selector's
+    // `[data-v-*]` specificity (and its unlayered position) let it outrank
+    // non-scoped CSS that a layered Tailwind utility would lose to. Retain
+    // any rule whose class the package's non-scoped corpus also targets.
+    if vue_masked.is_some()
+        && is_module
+        && let Some(shadow) = request.vue_shadow_text.as_deref()
+    {
+        for rule in &mut parsed.rules {
+            if rule.warning.is_none()
+                && rule
+                    .related_classes
+                    .iter()
+                    .any(|class| mentions_class_selector(shadow, class))
+            {
+                rule.warning = Some("shadowed-scoped-rule");
+            }
         }
     }
     if let Some(prefix) = request
@@ -1064,6 +1093,21 @@ fn mentions_word(text: &str, word: &str) -> bool {
 
 fn is_ident_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-'
+}
+
+/// Whether `text` contains a `.class` selector token for `class`. Only the
+/// trailing boundary is checked so compound selectors like `div.card` still
+/// match; anything before the `.` is irrelevant to selector syntax.
+fn mentions_class_selector(text: &str, class: &str) -> bool {
+    if class.is_empty() {
+        return false;
+    }
+    let needle = format!(".{class}");
+    let bytes = text.as_bytes();
+    text.match_indices(&needle).any(|(start, _)| {
+        let end = start + needle.len();
+        end >= bytes.len() || !is_ident_byte(bytes[end])
+    })
 }
 
 fn dedup_candidate_map(candidate_map: &mut HashMap<SelectorKey, Vec<String>>) {
@@ -1399,6 +1443,12 @@ fn plan_request(
                 (
                     "shared-preprocessor-source",
                     "A Sass partial must be analyzed through every consuming entry, so it is retained."
+                        .to_string(),
+                )
+            } else if rule.warning == Some("shadowed-scoped-rule") {
+                (
+                    "shadowed-scoped-rule",
+                    "Other package CSS also targets a class this scoped rule matches, so deleting it could change the cascade; the rule is retained."
                         .to_string(),
                 )
             } else if let Some(code) = rule.warning {
@@ -3557,6 +3607,31 @@ mod tests {
             response["files"][0]["source"],
             "<template>\n  <p class=\"card p-[13px]\">A</p>\n  <p class=\"note\">B</p>\n</template>\n"
         );
+    }
+
+    #[test]
+    fn vue_shadowed_scoped_rule_is_retained_without_template_edits() {
+        let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n";
+        let mut request = vue_batch_request(source, true, None);
+        request["stylesheets"][0]["vueShadowText"] =
+            serde_json::json!("main.css: div.card { padding: 20px; } .cardio { top: 0; }");
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 1);
+        assert_eq!(response["files"], serde_json::json!([]));
+        let warning = &response["warnings"][0];
+        assert_eq!(warning["code"], "shadowed-scoped-rule");
+        assert_eq!(warning["file"], "/project/Card.vue");
+
+        // A non-selector mention like `.cardio` must not shadow `.card`.
+        let mut clear = vue_batch_request(source, true, None);
+        clear["stylesheets"][0]["vueShadowText"] = serde_json::json!(".cardio { top: 0; }");
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&clear.to_string()).unwrap()).unwrap();
+        assert_eq!(response["convertedRules"], 1);
     }
 
     #[test]

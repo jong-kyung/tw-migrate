@@ -201,7 +201,16 @@ the rule to retain-with-append or retain-only:
    `/deep/`, or declarations using `v-bind()` have no utility representation
    and retain through the existing selector/declaration support codes
    (`unsupported-selector`, `unsupported-value`, and friends).
-5. **Directives that alter structure.** `v-for`, `v-if`/`v-else` duplicates
+5. **Cascade shadowing.** A scoped selector compiles with a `[data-v-*]`
+   attribute and sits outside CSS layers, so it can outrank non-scoped CSS
+   that the layered Tailwind utility replacing it would lose to. Before a
+   closed file deletes a rule, the package's non-scoped corpus — other
+   non-module stylesheets, HTML sources, and retained SFC style blocks — is
+   scanned for a `.class` selector token matching any of the rule's classes;
+   a match retains the rule with `shadowed-scoped-rule`. Dynamic directive
+   arguments (`v-bind:[key]`) count as dynamic class bindings, since the
+   argument can evaluate to `class` at runtime.
+6. **Directives that alter structure.** `v-for`, `v-if`/`v-else` duplicates
    or removes elements but does not change their literal class sets; matched
    sites under these directives are still proven hosts. `<slot>` content is
    rendered in the parent's scope and is not a match surface for this file's
@@ -237,6 +246,7 @@ shape and deterministic ordering:
 - `component-class-target`
 - `open-root-fallthrough`
 - `dynamic-template-class`
+- `shadowed-scoped-rule`
 
 A missing `vue/compiler-sfc` is a recoverable package failure ("Vue 3 with
 compiler-sfc must be installed in the target project."), not a warning code,
@@ -337,6 +347,15 @@ phases.
    retained rules, as the global-rule policy already does.
 5. Choosing the official JS compiler keeps template analysis contracts
    crossing the NAPI boundary instead of a single-language Rust pipeline.
+6. Repeated same-selector rules with conflicting declarations inside one
+   stylesheet migrate as they always have across the tool: both rules'
+   utilities are appended and Tailwind's output order decides the winner,
+   because relative precedence between distinct sources is not modeled. This
+   long-standing engine-wide behavior is accepted for Vue as well.
+7. The cascade-shadowing scan is textual and package-scoped: a `.class`
+   token anywhere in the non-scoped corpus retains the rule even when the
+   competitor could never match the same element, and CSS outside the
+   package is not seen.
 
 ## Deferred Work
 

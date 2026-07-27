@@ -292,6 +292,7 @@ async function planPackage(context, packageRoot) {
     preparedVue = await preparePackageVue({
       packageRoot,
       sourceFiles,
+      styleSources,
       pathOwners,
       targetable,
       explicitStyle,
@@ -750,6 +751,7 @@ function vueWarningsOnlyResult(preparedVue) {
 async function preparePackageVue({
   packageRoot,
   sourceFiles,
+  styleSources,
   pathOwners,
   targetable,
   explicitStyle,
@@ -757,19 +759,19 @@ async function preparePackageVue({
   const none = { files: new Map(), stylesheets: [], warnings: [], compiler: undefined };
   // An explicit non-vue stylesheet selection plans only that stylesheet.
   if (explicitStyle && extension(explicitStyle) !== ".vue") return none;
-  const vueFiles = sourceFiles.filter(
+  const ownedVue = sourceFiles.filter(
     (file) =>
       extension(file.path) === ".vue" &&
       pathOwners.get(file.path) === packageRoot &&
-      targetable.has(file.path) &&
-      (!explicitStyle || file.path === explicitStyle),
+      targetable.has(file.path),
   );
-  if (vueFiles.length === 0) return none;
+  const selected = ownedVue.filter((file) => !explicitStyle || file.path === explicitStyle);
+  if (selected.length === 0) return none;
 
   const loaded = await loadProjectVueCompiler(packageRoot);
   const warnings = [];
   if (loaded.unsupportedVersion) {
-    for (const file of vueFiles) {
+    for (const file of selected) {
       warnings.push({
         code: "unsupported-vue-version",
         file: file.path,
@@ -781,11 +783,40 @@ async function preparePackageVue({
     return { ...none, warnings };
   }
 
+  // Every owned SFC is analyzed even under explicit selection: retained
+  // style blocks anywhere in the package feed the cascade-shadow gate below.
+  const analyses = new Map(
+    ownedVue.map((file) => [file.path, analyzeVueSource(loaded.compiler, file.path, file.source)]),
+  );
+  // Non-scoped CSS in the package is unlayered and can outrank the layered
+  // utilities that replace a deleted scoped rule. The planner retains any
+  // scoped rule whose classes this pool also targets, so collect every
+  // package stylesheet, HTML source (inline style blocks are never parsed),
+  // and retained Vue style block.
+  const vueShadowText = [
+    ...[...styleSources]
+      // Module stylesheet classes are hashed at build time and cannot
+      // collide with scoped classes in the DOM.
+      .filter(([path]) => pathOwners.get(path) === packageRoot && !isStylesheetModule(path))
+      .map(([, source]) => source),
+    ...sourceFiles
+      .filter(
+        (file) => extension(file.path) === ".html" && pathOwners.get(file.path) === packageRoot,
+      )
+      .map((file) => file.source),
+    ...ownedVue.map((file) => {
+      const analysis = analyses.get(file.path);
+      return analysis.retained ? file.source : analysis.retainedStyleText;
+    }),
+  ]
+    .filter(Boolean)
+    .join("\n");
+
   const files = new Map();
   const stylesheets = [];
-  for (const file of vueFiles) {
+  for (const file of selected) {
     await rejectSymlinkTarget(file.path, packageRoot);
-    const analysis = analyzeVueSource(loaded.compiler, file.path, file.source);
+    const analysis = analyses.get(file.path);
     warnings.push(...analysis.warnings);
     if (analysis.retained || analysis.blocks.length === 0) continue;
     files.set(file.path, {
@@ -803,6 +834,9 @@ async function preparePackageVue({
       isModule: !analysis.retention,
       vueBlocks: analysis.blocks,
       vueRetention: analysis.retention,
+      // Open-surface files never delete rules, so only closed files carry
+      // the shadow pool.
+      vueShadowText: analysis.retention ? undefined : vueShadowText,
     });
   }
   return { files, stylesheets, warnings, compiler: loaded.compiler };

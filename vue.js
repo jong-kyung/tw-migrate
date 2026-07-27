@@ -67,6 +67,10 @@ export function analyzeVueSource(compiler, path, source) {
   }
 
   const blocks = [];
+  // Retained blocks are still real CSS that can win the cascade against the
+  // utilities replacing a deleted scoped rule; their text feeds the planner's
+  // shadowing gate.
+  const retainedStyleTexts = [];
   for (const style of descriptor.styles) {
     const start = style.loc.start.offset;
     const end = style.loc.end.offset;
@@ -75,6 +79,8 @@ export function analyzeVueSource(compiler, path, source) {
       continue;
     }
     if (style.module !== undefined) {
+      // Module block classes are hashed at build time, so they can never
+      // collide with plain scoped classes and do not feed the shadowing gate.
       warn("unsupported-sfc-block", start, end, "<style module> blocks are not supported yet.");
       continue;
     }
@@ -85,6 +91,7 @@ export function analyzeVueSource(compiler, path, source) {
         end,
         `A <style lang="${style.lang}"> block is not migrated yet.`,
       );
+      retainedStyleTexts.push(style.content);
       continue;
     }
     if (!style.scoped) {
@@ -94,6 +101,7 @@ export function analyzeVueSource(compiler, path, source) {
         end,
         "A <style> block without `scoped` is global CSS and is retained.",
       );
+      retainedStyleTexts.push(style.content);
       continue;
     }
     const outerStart = source.lastIndexOf("<style", start);
@@ -152,6 +160,7 @@ export function analyzeVueSource(compiler, path, source) {
     })),
     scriptText,
     retention,
+    retainedStyleText: retainedStyleTexts.join("\n"),
     retained: false,
   };
 }
@@ -180,8 +189,13 @@ function visitTemplateNode(source, node, state) {
     let classBound = false;
     for (const prop of node.props ?? []) {
       if (prop.type !== PROP_DIRECTIVE) continue;
-      // `:class`, or a spread `v-bind="..."`, can put any class anywhere.
-      if (prop.name === "bind" && (!prop.arg || prop.arg.content === "class")) {
+      // `:class`, a spread `v-bind="..."`, or a dynamic argument
+      // `v-bind:[key]` (which can evaluate to `class` at runtime) can put any
+      // class anywhere.
+      if (
+        prop.name === "bind" &&
+        (!prop.arg || !prop.arg.isStatic || prop.arg.content === "class")
+      ) {
         state.dynamic = true;
         classBound = true;
       }

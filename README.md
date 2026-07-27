@@ -78,6 +78,7 @@ Everything outside this subset is retained and reported with one of the warning 
 | `rebuild-required`                   | A preprocessor entry was migrated; rebuild it to refresh its generated CSS.                                            |
 | `reference-only-css-module-consumer` | A reference-only (non-writable) source uses the CSS Module, so it is retained.                                         |
 | `retained-global-rule`               | Global CSS is never deleted automatically.                                                                             |
+| `shadowed-scoped-rule`               | Other package CSS also targets a class a Vue scoped rule matches, so the rule is retained to preserve the cascade.     |
 | `shared-preprocessor-source`         | A Sass partial must be analyzed through every consuming entry, so it is retained.                                      |
 | `unproven-css-module-relationship`   | A compound selector's element relationship could not be proven for every usage.                                        |
 | `unproven-script-reference`          | An inline script names a CSS Module class, so the module is retained.                                                  |
