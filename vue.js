@@ -86,6 +86,7 @@ export function analyzeVueSource(compiler, path, source) {
   // planner's parsed shadow index; preprocessor text is screened by the
   // caller before joining it.
   const shadowCssTexts = [];
+  const shadowModuleCssTexts = [];
   const shadowPreprocessorTexts = [];
   let escapeUnverifiable = false;
   for (const style of descriptor.styles) {
@@ -96,11 +97,11 @@ export function analyzeVueSource(compiler, path, source) {
       continue;
     }
     if (style.module !== undefined) {
-      // Module block classes are hashed at build time and cannot collide
-      // with plain scoped classes -- except through `:global` escapes, which
-      // emit unhashed selectors and must feed the shadowing gate.
+      // Module class and id names are localized at build time, but type and
+      // attribute selectors (and `:global` escapes) stay global, so the
+      // block feeds the module shadow channel.
       warn("unsupported-sfc-block", start, end, "<style module> blocks are not supported yet.");
-      if (style.content.includes(":global")) shadowCssTexts.push(style.content);
+      shadowModuleCssTexts.push(style.content);
       continue;
     }
     if (style.lang && style.lang !== "css") {
@@ -148,7 +149,7 @@ export function analyzeVueSource(compiler, path, source) {
     });
   }
 
-  const state = { elements: [], dynamic: false, componentTags: false, expressionTexts: [] };
+  const state = { elements: [], dynamic: false, componentTags: false };
   visitTemplateNode(source, template.ast, state);
   const alwaysRenderedRoots = template.ast.children.filter(
     (node) =>
@@ -160,22 +161,18 @@ export function analyzeVueSource(compiler, path, source) {
       ),
   ).length;
 
-  const scriptText = [
-    descriptor.script?.content,
-    descriptor.scriptSetup?.content,
-    ...state.expressionTexts,
-  ]
+  const scriptText = [descriptor.script?.content, descriptor.scriptSetup?.content]
     .filter(Boolean)
     .join("\n");
-  // JS that touches class-mutation APIs can add any class to any element at
-  // runtime, including through values the mention guard cannot see; such
-  // files are never closed, matching the module philosophy of
-  // proof-or-retain.
-  const mutatesClasses = /\b(?:classList|className|setAttribute)\b/.test(scriptText);
+  // Scripts are never analyzed: only the template markup is tokenized, so
+  // any script content can mutate classes in ways this analyzer cannot see
+  // and the file is never closed -- proof-or-retain, matching the CSS
+  // Module philosophy.
+  const hasScript = scriptText.trim().length > 0;
 
   // Priority order: the most specific open surface names the retention.
   const retention =
-    state.dynamic || mutatesClasses
+    state.dynamic || hasScript
       ? "dynamic-template-class"
       : state.componentTags
         ? "component-class-target"
@@ -220,6 +217,7 @@ export function analyzeVueSource(compiler, path, source) {
     scriptText,
     retention,
     shadowCssTexts,
+    shadowModuleCssTexts,
     shadowPreprocessorTexts,
     escapeUnverifiable,
     retained: false,
@@ -258,7 +256,6 @@ const CLASS_INERT_DIRECTIVES = new Set([
   "if",
   "memo",
   "model",
-  "on",
   "once",
   "pre",
   "show",
@@ -271,9 +268,9 @@ function visitTemplateNode(source, node, state) {
     let classBound = false;
     for (const prop of node.props ?? []) {
       if (prop.type !== PROP_DIRECTIVE) continue;
-      // Inline directive expressions (e.g. `v-on` handlers) can name classes
-      // they mutate at runtime; feed them to the script mention guard.
-      if (prop.exp?.content) state.expressionTexts.push(prop.exp.content);
+      // Event handlers are inline scripts: never analyzed, so their presence
+      // opens the class surface like a script block does.
+      if (prop.name === "on") state.dynamic = true;
       // `:class`, a spread `v-bind="..."`, or a dynamic argument
       // `v-bind:[key]` (which can evaluate to `class` at runtime) can put any
       // class anywhere.

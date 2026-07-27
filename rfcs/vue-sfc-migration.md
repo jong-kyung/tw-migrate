@@ -198,12 +198,11 @@ the rule to retain-with-append or retain-only:
    binding — or a class/id attribute that is not a safely writable quoted
    literal — all scoped class rules retain with `dynamic-template-class` in
    Phase 1. Literal class attributes beside a dynamic binding remain proven
-   sites and still receive appended utilities. Inline directive expressions
-   join the script text fed to the mention guard, and any script or handler
-   text touching a class-mutation API (`classList`, `className`,
-   `setAttribute`) opens the file outright — proof-or-retain, matching the
-   CSS Module philosophy. Phase 3 narrows this to literal object/array
-   bindings.
+   sites and still receive appended utilities. Scripts and inline event
+   handlers are never analyzed — only template markup is tokenized — so any
+   `<script>` content or `v-on` handler opens the file outright:
+   proof-or-retain, matching the CSS Module philosophy. Phase 3 narrows this
+   to literal object/array bindings.
 4. **Escape hatches.** Rules containing `:deep()`, `:global()`, `>>>`,
    `/deep/`, or declarations using `v-bind()` have no utility representation
    and retain through the existing selector/declaration support codes
@@ -221,7 +220,11 @@ the rule to retain-with-append or retain-only:
    its classes, ids, and element types. A rule is retained with
    `shadowed-scoped-rule` when the index targets one of its classes or can
    reach one of its template sites through the site's tag, id, or
-   co-occurring classes. Anything
+   co-occurring classes. Module CSS joins through a separate channel that
+   indexes only its global surface (type and attribute selectors), since
+   module class and id names are localized at build time. Retained rules in
+   the same scoped block are competitors too: a rule sharing a site with any
+   retained sibling is itself retained, iterated to a fixpoint. Anything
    the index cannot prove — pieces that fail to parse, universal or
    base-less selectors, preprocessor interpolation or `&`-concatenation,
    HTML sources containing inline `<style` blocks, unanalyzable SFCs, and
@@ -254,9 +257,9 @@ and a second run produces no diff.
 - `<style module>` retains whole with `unsupported-sfc-block` until Phase 4.
 - `<style src="…">` retains with `unsupported-sfc-block`; Phase 2 revisits it
   as an import edge.
-- `<script>` blocks feed the class-mention and mutation-API guards;
-  external (`src`) and non-JS/TS (`lang`) script blocks retain the whole
-  file with `unsupported-sfc-block`.
+- `<script>` blocks are never analyzed: any script content or event handler
+  opens the template's class surface; external (`src`) and non-JS/TS
+  (`lang`) script blocks retain the whole file with `unsupported-sfc-block`.
 
 ## Diagnostics
 
@@ -383,9 +386,9 @@ phases.
 8. The cascade-shadowing index is package-scoped and rightmost-compound
    based: a corpus selector retains the rule even when its ancestor parts
    could never be satisfied, and CSS outside the package is not seen.
-9. Class mutation hidden behind an imported helper (`util(el)` defined in
-   another file) is invisible to the same-file script guards, matching the
-   existing cross-file limits of the engine's script analysis.
+9. Because scripts are never analyzed, an SFC with any `<script>` content
+   or event handler stays in retain-with-append mode; scoped-rule deletion
+   is effectively limited to purely presentational SFCs in Phase 1.
 
 ## Deferred Work
 

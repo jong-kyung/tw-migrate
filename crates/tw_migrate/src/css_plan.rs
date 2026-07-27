@@ -660,18 +660,22 @@ pub(crate) struct ShadowIndex {
     pub(crate) unverifiable: bool,
 }
 
-pub(crate) fn index_shadow_selectors(pieces: &[String]) -> ShadowIndex {
+pub(crate) fn index_shadow_selectors(pieces: &[String], module_pieces: &[String]) -> ShadowIndex {
     let mut index = ShadowIndex {
         classes: HashSet::new(),
         ids: HashSet::new(),
         types: HashSet::new(),
         unverifiable: false,
     };
-    for piece in pieces {
+    for (piece, module) in pieces
+        .iter()
+        .map(|piece| (piece, false))
+        .chain(module_pieces.iter().map(|piece| (piece, true)))
+    {
         let allocator = oxc_css_parser::Allocator::default();
         let mut parser = CssParser::new(&allocator, piece, Syntax::Css);
         match parser.parse::<Stylesheet>() {
-            Ok(stylesheet) => index_shadow_statements(&stylesheet.statements, &mut index),
+            Ok(stylesheet) => index_shadow_statements(&stylesheet.statements, module, &mut index),
             // A piece that is not plain CSS cannot prove its selectors.
             Err(_) => index.unverifiable = true,
         }
@@ -679,18 +683,18 @@ pub(crate) fn index_shadow_selectors(pieces: &[String]) -> ShadowIndex {
     index
 }
 
-fn index_shadow_statements(statements: &[Statement<'_>], index: &mut ShadowIndex) {
+fn index_shadow_statements(statements: &[Statement<'_>], module: bool, index: &mut ShadowIndex) {
     for statement in statements {
         match statement {
             Statement::QualifiedRule(rule) => {
                 for selector in &rule.selector.selectors {
-                    index_shadow_complex(selector, index);
+                    index_shadow_complex(selector, module, index);
                 }
-                index_shadow_statements(&rule.block.statements, index);
+                index_shadow_statements(&rule.block.statements, module, index);
             }
             Statement::AtRule(at_rule) => {
                 if let Some(block) = &at_rule.block {
-                    index_shadow_statements(&block.statements, index);
+                    index_shadow_statements(&block.statements, module, index);
                 }
             }
             // Declarations and keyframe steps cannot match DOM elements.
@@ -706,6 +710,7 @@ fn index_shadow_statements(statements: &[Statement<'_>], index: &mut ShadowIndex
 /// satisfied).
 fn index_shadow_complex(
     selector: &oxc_css_parser::ast::ComplexSelector<'_>,
+    module: bool,
     index: &mut ShadowIndex,
 ) {
     let Some(compound) = selector.children.iter().rev().find_map(|child| match child {
@@ -715,6 +720,16 @@ fn index_shadow_complex(
         index.unverifiable = true;
         return;
     };
+    // CSS Modules localize class and id names, so a module compound carrying
+    // either can never match a template element; only its bare type and
+    // attribute selectors stay global.
+    if module
+        && compound.children.iter().any(|simple| {
+            matches!(simple, SimpleSelector::Class(_) | SimpleSelector::Id(_))
+        })
+    {
+        return;
+    }
     let mut classes = Vec::new();
     let mut ids = Vec::new();
     let mut types = Vec::new();

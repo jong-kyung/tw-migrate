@@ -810,18 +810,18 @@ async function preparePackageVue({
   // corpus unverifiable and retains every closed deletion.
   const generatesSelectors = (text) => /#\{|@\{|&[\w-]/.test(text);
   const vueShadowCss = [];
+  const vueShadowModuleCss = [];
   let vueShadowUnverifiable = false;
   for (const [path, source] of styleSources) {
     if (pathOwners.get(path) !== packageRoot) continue;
-    // Module stylesheet classes are hashed at build time and cannot collide
-    // with scoped classes in the DOM -- unless the module uses `:global`
-    // escapes, which emit unhashed selectors.
-    if (isStylesheetModule(path) && !source.includes(":global")) continue;
     if (isPreprocessorPath(path) && generatesSelectors(source)) {
       vueShadowUnverifiable = true;
       continue;
     }
-    vueShadowCss.push(source);
+    // Module class and id names are localized at build time; the planner
+    // indexes only their global (type/attribute/:global) selector surface.
+    if (isStylesheetModule(path)) vueShadowModuleCss.push(source);
+    else vueShadowCss.push(source);
   }
   for (const file of sourceFiles) {
     if (
@@ -844,6 +844,7 @@ async function preparePackageVue({
       else vueShadowCss.push(text);
     }
     vueShadowCss.push(...analysis.shadowCssTexts);
+    vueShadowModuleCss.push(...analysis.shadowModuleCssTexts);
   }
 
   const files = new Map();
@@ -871,6 +872,7 @@ async function preparePackageVue({
       // Open-surface files never delete rules, so only closed files carry
       // the shadow pool.
       vueShadowCss: analysis.retention ? undefined : vueShadowCss,
+      vueShadowModuleCss: analysis.retention ? undefined : vueShadowModuleCss,
       vueShadowUnverifiable: analysis.retention ? undefined : vueShadowUnverifiable,
     });
   }

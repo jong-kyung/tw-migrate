@@ -638,6 +638,22 @@ test("a ::v-global escape in another SFC shadows scoped deletion", async () => {
   }
 });
 
+test("any script block keeps the template surface open", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script setup>\nconst answer = 42;\n</script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.ok(report.warnings.some((entry) => entry.code === "dynamic-template-class"));
+    assert.equal(report.convertedRules, 0);
+    assert.match(report.diff, /class="card p-\[13px\]"/);
+    assert.match(report.diff, /\+<style scoped>/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("retains a CSS Module referenced by a Vue SFC script", async () => {
   const cwd = await fixture();
   const vue =
