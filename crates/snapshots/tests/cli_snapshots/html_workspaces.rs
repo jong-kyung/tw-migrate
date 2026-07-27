@@ -2,6 +2,7 @@ use tw_migrate_snapshots::{default_setup, run_case};
 
 snapshot_cases! {
     html_static_literals => default_setup,
+    html_quoted_value_retained => default_setup,
     html_static_module_link => default_setup,
     html_dynamic_attribute => default_setup,
     html_inline_script_reference => default_setup,
