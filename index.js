@@ -834,7 +834,7 @@ async function preparePackageVue({
       const analysis = analyses.get(file.path);
       return analysis.retained
         ? interpolated(file.source)
-        : interpolated(analysis.retainedStyleText);
+        : interpolated(analysis.retainedStyleText) || analysis.escapeUnverifiable;
     });
 
   const files = new Map();

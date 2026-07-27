@@ -3,6 +3,9 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
+const ESCAPE_SELECTOR = /:(?:deep|global|slotted)\(([^)]*)\)/g;
+const ESCAPE_RESIDUE = /(?:>>>|\/deep\/|::v-deep|:deep|::v-slotted|:slotted)/;
+
 // @vue/compiler-core node and element kinds; @vue/compiler-sfc does not
 // re-export the enums, so the numeric values are pinned here.
 const NODE_ELEMENT = 1;
@@ -71,6 +74,7 @@ export function analyzeVueSource(compiler, path, source) {
   // utilities replacing a deleted scoped rule; their text feeds the planner's
   // shadowing gate.
   const retainedStyleTexts = [];
+  let escapeUnverifiable = false;
   for (const style of descriptor.styles) {
     const start = style.loc.start.offset;
     const end = style.loc.end.offset;
@@ -111,6 +115,17 @@ export function analyzeVueSource(compiler, path, source) {
     if (outerStart < 0 || closing < 0) {
       warn("unsupported-sfc-block", start, end, "The style block tags could not be located.");
       continue;
+    }
+    // Scope-escape selectors (`:deep`, `:global`, `:slotted`) reach elements
+    // outside this SFC even from a scoped block, so their inner selectors
+    // must join the cascade-shadow corpus. Nested or paren-less escape forms
+    // cannot be extracted textually and make the corpus unverifiable.
+    for (const [, inner] of style.content.matchAll(ESCAPE_SELECTOR)) {
+      retainedStyleTexts.push(inner);
+      if (inner.includes("(")) escapeUnverifiable = true;
+    }
+    if (ESCAPE_RESIDUE.test(style.content.replace(ESCAPE_SELECTOR, " "))) {
+      escapeUnverifiable = true;
     }
     blocks.push({
       outerStart,
@@ -167,6 +182,7 @@ export function analyzeVueSource(compiler, path, source) {
     scriptText,
     retention,
     retainedStyleText: retainedStyleTexts.join("\n"),
+    escapeUnverifiable,
     retained: false,
   };
 }

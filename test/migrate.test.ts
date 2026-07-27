@@ -497,6 +497,44 @@ test("warns when a Vue element already carries a conflicting utility", async () 
   }
 });
 
+test("a :deep escape in another SFC shadows scoped deletion", async () => {
+  const cwd = await fixture();
+  const child =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  const parent =
+    '<template>\n  <div class="wrap">P</div>\n</template>\n<style scoped>\n.wrap :deep(.card) { padding: 20px; }\n</style>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Child.vue"), child),
+      writeFile(join(cwd, "Parent.vue"), parent),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Child.vue" });
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.equal(report.convertedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a paren-less deep combinator makes the shadow corpus unverifiable", async () => {
+  const cwd = await fixture();
+  const child =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  const parent =
+    '<template>\n  <div class="wrap">P</div>\n</template>\n<style scoped>\n.wrap ::v-deep .card { padding: 20px; }\n</style>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Child.vue"), child),
+      writeFile(join(cwd, "Parent.vue"), parent),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Child.vue" });
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.equal(report.convertedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("retains a CSS Module referenced by a Vue SFC script", async () => {
   const cwd = await fixture();
   const vue =

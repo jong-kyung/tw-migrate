@@ -213,9 +213,13 @@ the rule to retain-with-append or retain-only:
    scanned for a `.class` selector token matching any of the rule's classes;
    a match retains the rule with `shadowed-scoped-rule`. The corpus includes
    scan-only (gitignored) SFCs and any module CSS containing `:global`
-   escapes, whose selectors are emitted unhashed. Preprocessor interpolation
-   (`#{...}`, `@{...}`) can synthesize selectors the textual scan cannot see,
-   so its presence anywhere in the corpus retains every closed rule. Candidates that cannot be
+   escapes, whose selectors are emitted unhashed, and the inner selectors of
+   scope-escape pseudo-classes (`:deep()`, `:global()`, `:slotted()`) found
+   in any analyzable scoped block, since those reach elements outside their
+   own SFC. Preprocessor interpolation (`#{...}`, `@{...}`), nested escape
+   arguments, and paren-less escape forms (`>>>`, `/deep/`, combinator
+   `::v-deep`) cannot be resolved textually, so their presence anywhere in
+   the corpus retains every closed rule. Candidates that cannot be
    written inside an attribute's own quote delimiter are withheld and their
    rules retained, sharing the static-HTML quote handling.
 6. **Directives that alter structure.** `v-for`, `v-if`/`v-else` duplicates
