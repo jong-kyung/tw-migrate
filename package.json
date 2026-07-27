@@ -32,7 +32,8 @@
     "index.d.ts",
     "native.js",
     "rfcs",
-    "style-compiler.js"
+    "style-compiler.js",
+    "vue.js"
   ],
   "type": "module",
   "main": "index.js",
@@ -64,7 +65,8 @@
     "verdaccio": "6.8.0",
     "vite": "catalog:",
     "vite-plus": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "vue": "3.5.40"
   },
   "optionalDependencies": {
     "tw-migrate-darwin-arm64": "workspace:*",

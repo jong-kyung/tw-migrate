@@ -254,6 +254,10 @@ fn contextual_candidate(
     format!("{variants}:{candidate}")
 }
 
+pub(crate) fn empty_source_plan() -> SourcePlan {
+    empty_plan()
+}
+
 fn empty_plan() -> SourcePlan {
     SourcePlan {
         edits: Vec::new(),

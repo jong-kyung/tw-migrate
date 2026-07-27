@@ -60,15 +60,19 @@ Everything outside this subset is retained and reported with one of the warning 
 | `aliased-css-module-reference`       | A CSS Module class is aliased to a local binding, so the module is retained.                                           |
 | `batch-stylesheet-conflict`          | Utilities generated from different stylesheets conflict on the same JSX element, so the contributing rule is retained. |
 | `candidate-compilation-failure`      | A generated candidate did not compile under the project's Tailwind entry, so its rule is retained.                     |
+| `component-class-target`             | A child component's root element can carry classes a Vue scoped rule matches, so the rule is retained.                 |
 | `computed-css-module-reference`      | A computed CSS Module access cannot be verified, so the module is retained.                                            |
 | `cross-package-stylesheet-link`      | A linked stylesheet is owned by another package, so it is not analyzed outside workspace mode.                         |
 | `css-module-composes`                | The rule uses or is targeted by `composes`, so it is retained.                                                         |
 | `dynamic-class-name`                 | A `className` value is dynamic, so the element cannot be migrated.                                                     |
 | `dynamic-html-attribute`             | An HTML attribute is not a safely writable quoted literal, so the element cannot be migrated.                          |
+| `dynamic-template-class`             | A dynamic class binding makes a Vue template's class set unprovable, so its scoped rules are retained.                 |
 | `existing-tailwind-conflict`         | A generated utility may conflict with a Tailwind class already on the element.                                         |
 | `inferred-preprocessor-source`       | A linked CSS file was matched to a uniquely named preprocessor source file.                                            |
 | `module-utilities-conflict`          | Utilities generated from different module classes on one element overlap, so their rules are retained.                 |
 | `non-classname-css-module-reference` | A CSS Module class is used outside a supported `className`, so the module is retained.                                 |
+| `open-root-fallthrough`              | A parent component can merge classes onto a Vue SFC's single root element, so its scoped rules are retained.           |
+| `preprocessor-style-block`           | A Vue `<style>` block uses a preprocessor language, so it is retained.                                                 |
 | `rebuild-required`                   | A preprocessor entry was migrated; rebuild it to refresh its generated CSS.                                            |
 | `reference-only-css-module-consumer` | A reference-only (non-writable) source uses the CSS Module, so it is retained.                                         |
 | `retained-global-rule`               | Global CSS is never deleted automatically.                                                                             |
@@ -77,6 +81,7 @@ Everything outside this subset is retained and reported with one of the warning 
 | `unproven-script-reference`          | An inline script names a CSS Module class, so the module is retained.                                                  |
 | `unproven-source-map`                | A generated rule does not map uniquely to one authored source rule, so it is retained.                                 |
 | `unresolved-selector-target`         | No exclusively supported `className` references were found for the rule.                                               |
+| `unscoped-style-block`               | A Vue `<style>` block without `scoped` is global CSS, so it is retained.                                               |
 | `unsupported-animation`              | The animation references keyframes that cannot be converted.                                                           |
 | `unsupported-at-rule`                | The rule contains or sits inside an at-rule outside the supported set.                                                 |
 | `unsupported-container-query`        | The `@container` condition has no Tailwind variant equivalent.                                                         |
@@ -91,9 +96,11 @@ Everything outside this subset is retained and reported with one of the warning 
 | `unsupported-overlap`                | Shorthand and longhand declarations overlap in a way that cannot be normalized.                                        |
 | `unsupported-rule-content`           | The rule contains non-declaration content that cannot be converted.                                                    |
 | `unsupported-selector`               | The selector is outside the supported subset.                                                                          |
+| `unsupported-sfc-block`              | A Vue SFC or one of its blocks cannot be analyzed safely, so it is retained.                                           |
 | `unsupported-starting-style`         | The `@starting-style` condition could not be converted.                                                                |
 | `unsupported-supports-query`         | The `@supports` condition has no Tailwind variant equivalent.                                                          |
 | `unsupported-value`                  | A declaration value cannot be represented as a Tailwind utility.                                                       |
+| `unsupported-vue-version`            | The project's Vue version is not Vue 3, so its SFCs are retained.                                                      |
 
 See the [core RFC](./rfcs/css-to-tailwind-migration-cli.md) and [preprocessor/HTML RFC](./rfcs/preprocessor-and-html-migration.md) for the complete design and remaining scope.
 
