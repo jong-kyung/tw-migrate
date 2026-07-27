@@ -759,13 +759,14 @@ async function preparePackageVue({
   const none = { files: new Map(), stylesheets: [], warnings: [], compiler: undefined };
   // An explicit non-vue stylesheet selection plans only that stylesheet.
   if (explicitStyle && extension(explicitStyle) !== ".vue") return none;
+  // Ignore filtering scopes what gets migrated, never what gets scanned: a
+  // gitignored SFC's retained style blocks still shadow scoped deletions.
   const ownedVue = sourceFiles.filter(
-    (file) =>
-      extension(file.path) === ".vue" &&
-      pathOwners.get(file.path) === packageRoot &&
-      targetable.has(file.path),
+    (file) => extension(file.path) === ".vue" && pathOwners.get(file.path) === packageRoot,
   );
-  const selected = ownedVue.filter((file) => !explicitStyle || file.path === explicitStyle);
+  const selected = ownedVue.filter(
+    (file) => targetable.has(file.path) && (!explicitStyle || file.path === explicitStyle),
+  );
   if (selected.length === 0) return none;
 
   const loaded = await loadProjectVueCompiler(packageRoot);
@@ -796,8 +797,13 @@ async function preparePackageVue({
   const vueShadowText = [
     ...[...styleSources]
       // Module stylesheet classes are hashed at build time and cannot
-      // collide with scoped classes in the DOM.
-      .filter(([path]) => pathOwners.get(path) === packageRoot && !isStylesheetModule(path))
+      // collide with scoped classes in the DOM -- unless the module uses
+      // `:global` escapes, which emit unhashed selectors.
+      .filter(
+        ([path, source]) =>
+          pathOwners.get(path) === packageRoot &&
+          (!isStylesheetModule(path) || source.includes(":global")),
+      )
       .map(([, source]) => source),
     ...sourceFiles
       .filter(

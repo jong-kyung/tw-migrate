@@ -79,9 +79,11 @@ export function analyzeVueSource(compiler, path, source) {
       continue;
     }
     if (style.module !== undefined) {
-      // Module block classes are hashed at build time, so they can never
-      // collide with plain scoped classes and do not feed the shadowing gate.
+      // Module block classes are hashed at build time and cannot collide
+      // with plain scoped classes -- except through `:global` escapes, which
+      // emit unhashed selectors and must feed the shadowing gate.
       warn("unsupported-sfc-block", start, end, "<style module> blocks are not supported yet.");
+      if (style.content.includes(":global")) retainedStyleTexts.push(style.content);
       continue;
     }
     if (style.lang && style.lang !== "css") {
@@ -118,7 +120,7 @@ export function analyzeVueSource(compiler, path, source) {
     });
   }
 
-  const state = { elements: [], dynamic: false, componentTags: false };
+  const state = { elements: [], dynamic: false, componentTags: false, expressionTexts: [] };
   visitTemplateNode(source, template.ast, state);
   const alwaysRenderedRoots = template.ast.children.filter(
     (node) =>
@@ -139,7 +141,11 @@ export function analyzeVueSource(compiler, path, source) {
         ? "open-root-fallthrough"
         : undefined;
 
-  const scriptText = [descriptor.script?.content, descriptor.scriptSetup?.content]
+  const scriptText = [
+    descriptor.script?.content,
+    descriptor.scriptSetup?.content,
+    ...state.expressionTexts,
+  ]
     .filter(Boolean)
     .join("\n");
 
@@ -184,11 +190,35 @@ export function verifyVueSource(compiler, path, source) {
     .map((style) => style.content);
 }
 
+// Directives that cannot add or remove classes on their host element. Any
+// other directive receives the element at runtime and may mutate its
+// classList, which opens the template's class surface.
+const CLASS_INERT_DIRECTIVES = new Set([
+  "bind",
+  "cloak",
+  "else",
+  "else-if",
+  "for",
+  "html",
+  "if",
+  "memo",
+  "model",
+  "on",
+  "once",
+  "pre",
+  "show",
+  "slot",
+  "text",
+]);
+
 function visitTemplateNode(source, node, state) {
   if (node.type === NODE_ELEMENT) {
     let classBound = false;
     for (const prop of node.props ?? []) {
       if (prop.type !== PROP_DIRECTIVE) continue;
+      // Inline directive expressions (e.g. `v-on` handlers) can name classes
+      // they mutate at runtime; feed them to the script mention guard.
+      if (prop.exp?.content) state.expressionTexts.push(prop.exp.content);
       // `:class`, a spread `v-bind="..."`, or a dynamic argument
       // `v-bind:[key]` (which can evaluate to `class` at runtime) can put any
       // class anywhere.
@@ -198,6 +228,9 @@ function visitTemplateNode(source, node, state) {
       ) {
         state.dynamic = true;
         classBound = true;
+      }
+      if (!CLASS_INERT_DIRECTIVES.has(prop.name)) {
+        state.dynamic = true;
       }
     }
     if (node.tagType === TAG_COMPONENT) {
@@ -215,14 +248,22 @@ function visitTemplateNode(source, node, state) {
       // makes the template's class set unprovable.
       if ((hasClassAttr && !classAttribute) || (hasIdAttr && !idAttribute)) {
         state.dynamic = true;
-      } else if (!classBound && (classAttribute || idAttribute)) {
+      } else if (classAttribute || idAttribute) {
+        // A literal class beside a dynamic binding is still an always-present
+        // proven site: the open file retains its rules, so appending their
+        // utilities there is the same retain-with-append the global path uses.
         let site = classAttribute;
         if (!site && idAttribute) {
-          const insertion = classInsertionOffset(source, node);
-          if (insertion === undefined) {
-            state.dynamic = true;
+          if (classBound) {
+            // Never add a synthetic attribute to a dynamically bound element.
+            site = undefined;
           } else {
-            site = { value: "", start: insertion, end: insertion, synthetic: true };
+            const insertion = classInsertionOffset(source, node);
+            if (insertion === undefined) {
+              state.dynamic = true;
+            } else {
+              site = { value: "", start: insertion, end: insertion, synthetic: true };
+            }
           }
         }
         if (site) state.elements.push({ classAttribute: site, idAttribute });

@@ -191,12 +191,16 @@ the rule to retain-with-append or retain-only:
    later phase. Open rules append utilities to proven sites and retain with
    `open-root-fallthrough`. Phase 2's cross-file analysis can close this
    surface by proving no caller passes a `class` to the component.
-3. **Dynamic class bindings.** `:class` and spread `v-bind` make an
-   element's class set opaque; an opaque set can contain any class. If the
-   template contains any such binding — or a class/id attribute that is not a
-   safely writable quoted literal — all scoped class rules retain with
-   `dynamic-template-class` in Phase 1. Phase 3 narrows this to literal
-   object/array bindings.
+3. **Dynamic class bindings.** `:class`, spread `v-bind`, dynamic directive
+   arguments (`v-bind:[key]`), and custom directives (which receive the
+   element and may mutate its classList) make an element's class set opaque;
+   an opaque set can contain any class. If the template contains any such
+   binding — or a class/id attribute that is not a safely writable quoted
+   literal — all scoped class rules retain with `dynamic-template-class` in
+   Phase 1. Literal class attributes beside a dynamic binding remain proven
+   sites and still receive appended utilities. Inline directive expressions
+   join the script text fed to the mention guard. Phase 3 narrows this to
+   literal object/array bindings.
 4. **Escape hatches.** Rules containing `:deep()`, `:global()`, `>>>`,
    `/deep/`, or declarations using `v-bind()` have no utility representation
    and retain through the existing selector/declaration support codes
@@ -207,9 +211,11 @@ the rule to retain-with-append or retain-only:
    closed file deletes a rule, the package's non-scoped corpus — other
    non-module stylesheets, HTML sources, and retained SFC style blocks — is
    scanned for a `.class` selector token matching any of the rule's classes;
-   a match retains the rule with `shadowed-scoped-rule`. Dynamic directive
-   arguments (`v-bind:[key]`) count as dynamic class bindings, since the
-   argument can evaluate to `class` at runtime.
+   a match retains the rule with `shadowed-scoped-rule`. The corpus includes
+   scan-only (gitignored) SFCs and any module CSS containing `:global`
+   escapes, whose selectors are emitted unhashed. Candidates that cannot be
+   written inside an attribute's own quote delimiter are withheld and their
+   rules retained, sharing the static-HTML quote handling.
 6. **Directives that alter structure.** `v-for`, `v-if`/`v-else` duplicates
    or removes elements but does not change their literal class sets; matched
    sites under these directives are still proven hosts. `<slot>` content is
@@ -359,6 +365,9 @@ phases.
 
 ## Deferred Work
 
+- ID-selector removal accounting: a proven `#id` scoped rule currently
+  appends its utilities but is never removed, because module reference
+  counting tracks classes only.
 - Vue 2 support, pending demonstrated demand.
 - `vize` re-evaluation at a stable or officially adopted release.
 - Non-default template and script block languages.
