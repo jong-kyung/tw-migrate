@@ -13,6 +13,8 @@ const SUPPORTED_STYLE_LANGUAGES = new Set([undefined, "css", "scss", "sass", "le
 // @vue/compiler-core node and element kinds; @vue/compiler-sfc does not
 // re-export the enums, so the numeric values are pinned here.
 const NODE_ELEMENT = 1;
+const NODE_TEXT = 2;
+const NODE_INTERPOLATION = 5;
 const PROP_ATTRIBUTE = 6;
 const PROP_DIRECTIVE = 7;
 const TAG_ELEMENT = 0;
@@ -196,15 +198,20 @@ export function analyzeVueSource(compiler, path, source) {
     Boolean(descriptor.script) ||
     descriptor.scriptSetup?.src !== undefined ||
     /\b(?:defineOptions|defineProps|inheritAttrs)\b/.test(descriptor.scriptSetup?.content ?? "");
+  // A script whose imports cannot be read (external src, unsupported
+  // language, parse failure) may still load global CSS invisible to the
+  // shadow corpus, so its presence alone opens that surface.
+  let scriptImportsUnverifiable = false;
   const styleImports = [descriptor.script, descriptor.scriptSetup].flatMap((script) => {
-    if (!script || script.src || ![undefined, "js", "jsx", "ts", "tsx"].includes(script.lang)) {
+    if (!script) return [];
+    if (script.src || ![undefined, "js", "jsx", "ts", "tsx"].includes(script.lang)) {
+      scriptImportsUnverifiable = true;
       return [];
     }
     try {
       return staticImports(`${path}.${script.lang ?? "js"}`, script.content);
     } catch {
-      // Script analysis is optional: unparseable scripts simply do not become
-      // stylesheet consumer edges.
+      scriptImportsUnverifiable = true;
       return [];
     }
   });
@@ -285,11 +292,21 @@ export function analyzeVueSource(compiler, path, source) {
         node.type === NODE_ELEMENT &&
         node.props?.some((prop) => prop.type === PROP_DIRECTIVE && prop.name === "for"),
     ),
+    // Non-comment text or interpolation roots also fragment the render
+    // output, defeating attribute fallthrough.
+    rootFragment:
+      template.ast.children.filter(
+        (node) =>
+          node.type === NODE_ELEMENT ||
+          node.type === NODE_INTERPOLATION ||
+          (node.type === NODE_TEXT && node.content?.trim?.() !== ""),
+      ).length !== 1,
     scriptText,
     // Script imports follow module-specifier semantics (bare = package);
     // style-block `@import`s follow CSS semantics (bare = relative). They
     // must resolve differently, so they stay separate.
     scriptStyleImports: [...new Set(styleImports)],
+    scriptImportsUnverifiable,
     styleBlockImports: styleBlockImports.map((entry) => ({
       ...entry,
       start: offset(entry.start),

@@ -1187,6 +1187,30 @@ test("a root v-for child renders a fragment and blocks call-site rewrites", asyn
   }
 });
 
+test("a text root fragments the child and blocks call-site rewrites", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div class="leaf">A</div>\n  text tail\n</template>\n',
+      ),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Child class="leaf" />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n<style scoped>\n.leaf { margin: 7px; }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd, write: true });
+    const rule = report.rules.find(
+      (entry) => entry.file === "Parent.vue" && entry.selector === ".leaf",
+    )!;
+    assert.equal(rule.status, "retained");
+    assert.doesNotMatch(await readFile(join(cwd, "Parent.vue"), "utf8"), /m-\[7px\]/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("a multi-root child never receives call-site rewrites", async () => {
   const cwd = await fixture();
   try {
@@ -1760,7 +1784,7 @@ test("maps partial Vue preprocessor edits to absolute authored bytes", async () 
   }
 });
 
-test("migrates static template classes beside an external script block", async () => {
+test("an external script block leaves scoped rules shadow-retained", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script src="./behavior.js"></script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -1770,9 +1794,10 @@ test("migrates static template classes beside an external script block", async (
       writeFile(join(cwd, "behavior.js"), "export default {};\n"),
     ]);
     const report = await migrate({ cwd, styleFile: "Card.vue" });
-    assert.equal(report.convertedRules, 1);
-    assert.equal(report.retainedRules, 0);
-    assert.match(report.diff, /class="card p-\[13px\]"/);
+    // The external script's imports are unreadable, so the global CSS it may
+    // load keeps the scoped rule from being deleted.
+    assert.equal(report.convertedRules, 0);
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
   } finally {
     await cleanup(cwd);
   }
@@ -1846,16 +1871,16 @@ test("ignores handler runtime mutations outside static template scope", async ()
   }
 });
 
-test("migrates static template classes with an unsupported script language", async () => {
+test("an unsupported script language leaves scoped rules shadow-retained", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script lang="coffee">\nx = 1\n</script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
   try {
     await writeFile(join(cwd, "Card.vue"), vue);
     const report = await migrate({ cwd, styleFile: "Card.vue" });
-    assert.equal(report.convertedRules, 1);
-    assert.equal(report.retainedRules, 0);
-    assert.match(report.diff, /class="card p-\[13px\]"/);
+    // Unreadable script imports may load competing global CSS.
+    assert.equal(report.convertedRules, 0);
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
   } finally {
     await cleanup(cwd);
   }

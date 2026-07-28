@@ -1152,7 +1152,9 @@ async function preparePackageVue({
       if (/<style/i.test(file.source)) vueShadowUnverifiable = true;
       continue;
     }
-    if (analysis.escapeUnverifiable) vueShadowUnverifiable = true;
+    if (analysis.escapeUnverifiable || analysis.scriptImportsUnverifiable) {
+      vueShadowUnverifiable = true;
+    }
     for (const text of analysis.shadowPreprocessorTexts) {
       if (generatesSelectors(text)) vueShadowUnverifiable = true;
       else vueShadowCss.push({ path: file.path, source: text });
@@ -1266,7 +1268,10 @@ async function preparePackageVue({
       // Vue only inherits call-site attributes onto a single-root child;
       // htmlElements holds class-bearing hosts only, so the total root count
       // must gate the rewrite, not the classed-root count.
-      const singleRoot = childAnalysis?.rootStarts.length === 1 && !childAnalysis.rootVFor;
+      const singleRoot =
+        childAnalysis?.rootStarts.length === 1 &&
+        !childAnalysis.rootVFor &&
+        !childAnalysis.rootFragment;
       const childRoots = childAnalysis?.htmlElements.filter((element) =>
         childAnalysis.rootStarts.includes(element.nodeStart),
       );
@@ -1313,6 +1318,7 @@ async function preparePackageVue({
           child.dynamic ||
           child.fallthroughUnverifiable ||
           child.rootVFor ||
+          child.rootFragment ||
           child.rootStarts.length !== 1 ||
           !child.htmlElements.some((element) => element.nodeStart === child.rootStarts[0])
         );
