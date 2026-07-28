@@ -1211,6 +1211,33 @@ test("a text root fragments the child and blocks call-site rewrites", async () =
   }
 });
 
+test("an unscanned template format keeps caller fallthrough open", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div class="passed">Child</div>\n</template>\n<style scoped>\n.passed { padding: 13px; }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "App.vue"),
+        '<template>\n  <Child class="passed" />\n  <main>App</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+      ),
+      writeFile(join(cwd, "Page.astro"), '<Child class="passed" />\n'),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "open-root-fallthrough"));
+    assert.ok(
+      report.rules.some(
+        (rule) =>
+          rule.file === "Child.vue" && rule.selector === ".passed" && rule.status === "retained",
+      ),
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("a multi-root child never receives call-site rewrites", async () => {
   const cwd = await fixture();
   try {

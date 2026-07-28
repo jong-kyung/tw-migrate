@@ -1207,12 +1207,16 @@ async function preparePackageVue({
     ownedSources.every((file) => targetable.has(file.path)) &&
     ownedVue.every((file) => !analyses.get(file.path).retained);
   // Files in unsupported template formats (.astro, .svelte, .mdx, ...) are
-  // never scanned, so the closed-world proof must confirm the package holds
-  // nothing outside the analyzed and provably inert extensions.
-  const projectWideUsageProven =
-    provenBase &&
-    !(await collectFiles(packageRoot, (path) => !PROOF_INERT_EXTENSIONS.has(extension(path))))
-      .length;
+  // never scanned, so the closed-world proofs must confirm the package holds
+  // nothing outside the analyzed and provably inert extensions. SVG can
+  // carry class attributes (class-usage threat) but cannot render
+  // components, so it defeats only the unscoped proof.
+  const unknownClassSources = await collectFiles(
+    packageRoot,
+    (path) => !PROOF_INERT_EXTENSIONS.has(extension(path)),
+  );
+  const unknownCallerSources = unknownClassSources.some((path) => extension(path) !== ".svg");
+  const projectWideUsageProven = provenBase && unknownClassSources.length === 0;
   const elementsByFile = new Map();
   const addElement = (path, element, cssPaths) => {
     if (!element.classAttribute || cssPaths.length === 0) return;
@@ -1326,6 +1330,9 @@ async function preparePackageVue({
     const callers = vueGraph.callers.get(file.path);
     const callerOpen =
       !packageIsPrivate ||
+      // An unscanned template format could render this component with
+      // arbitrary call-site classes.
+      unknownCallerSources ||
       callers.length === 0 ||
       vueGraph.callerOpen.has(file.path) ||
       callers.some(
