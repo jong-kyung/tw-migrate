@@ -396,6 +396,12 @@ phases.
 9. Runtime class mutation through scripts, event handlers, refs, or custom
    directives is outside the supported scope and does not block migration of
    proven static template sites, matching the React/JSX path.
+10. The closed-world proofs see only the formats this tool analyzes.
+    Packages containing unsupported template sources (`.astro`, `.svelte`,
+    `.mdx`, `.php`, ...) are outside the supported scope per the Non-Goals,
+    and their presence is deliberately not detected: guarding an
+    out-of-scope boundary with a package walk was evaluated and removed as
+    disproportionate to its edge cases.
 
 ## Deferred Work
 
