@@ -759,21 +759,19 @@ function sourceReferencesStyle(file, stylePath) {
   );
 }
 
-function sourceReferencesVue(file, vuePath) {
-  let reference = normalizedRelativePath(dirname(file.path), vuePath);
-  if (!reference.startsWith(".")) reference = `./${reference}`;
-  const references = [reference, reference.replace(/\.vue$/, "")];
-  if (basename(vuePath) === "index.vue")
-    references.push(normalizedRelativePath(dirname(file.path), dirname(vuePath)));
-  return references.some((value) =>
-    [`'${value}'`, `"${value}"`, `\`${value}\``].some((literal) => file.source.includes(literal)),
-  );
-}
-
 function vueReferenceTarget(importer, reference, vuePaths) {
   if (!reference.startsWith(".")) return undefined;
   const target = resolve(dirname(importer), reference);
   return [target, `${target}.vue`, join(target, "index.vue")].find((path) => vuePaths.has(path));
+}
+
+function vueLiteralTargets(file, vuePaths) {
+  return new Set(
+    [...file.source.matchAll(/(["'`])([^"'`\r\n]+)\1/g)].flatMap((match) => {
+      const target = vueReferenceTarget(file.path, match[2], vuePaths);
+      return target ? [target] : [];
+    }),
+  );
 }
 
 function normalizedVueTag(value) {
@@ -829,8 +827,8 @@ function buildVueComponentGraph(ownedVue, sourceFiles, analyses) {
         callerOpen.add(target);
       }
     }
-    for (const target of vuePaths) {
-      if (sourceReferencesVue(file, target) && !imported.has(target)) callerOpen.add(target);
+    for (const target of vueLiteralTargets(file, vuePaths)) {
+      if (!imported.has(target)) callerOpen.add(target);
     }
   }
 

@@ -5,6 +5,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+use napi_derive::napi;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     Argument, CallExpression, ComputedMemberExpression, ExportAllDeclaration,
@@ -18,7 +19,6 @@ use oxc_parser::Parser;
 use oxc_semantic::{Scoping, SemanticBuilder};
 use oxc_span::{SourceType, Span};
 use oxc_syntax::symbol::SymbolId;
-use serde::Serialize;
 
 use crate::{
     css_plan::SelectorKey,
@@ -45,10 +45,10 @@ pub(crate) struct SourcePlan {
     pub(crate) warnings: Vec<Warning>,
 }
 
-#[derive(Serialize)]
-pub(crate) struct StaticImportBinding {
-    source: String,
-    local: String,
+#[napi(object)]
+pub struct StaticImportBinding {
+    pub source: String,
+    pub local: String,
 }
 
 pub(crate) fn static_import_bindings(

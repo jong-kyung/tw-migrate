@@ -44,9 +44,8 @@ export async function loadProjectVueCompiler(packageRoot) {
 }
 
 // Lower one SFC to the planner contract: plain-CSS scoped blocks in absolute
-// byte offsets, literal template class sites for the HTML matching model,
-// and the open-surface retention decision. Returns `retained: true` when the
-// whole file must stay untouched.
+// byte offsets and literal template class sites for the HTML matching model.
+// Returns `retained: true` when the whole file must stay untouched.
 export function analyzeVueSource(compiler, path, source) {
   const warnings = [];
   const warn = (code, start, end, message) =>
@@ -170,7 +169,7 @@ export function analyzeVueSource(compiler, path, source) {
     blocks.push(block);
   }
 
-  const state = { elements: [], components: [], dynamic: false, componentTags: false };
+  const state = { elements: [], components: [], dynamic: false };
   visitTemplateNode(source, template.ast, state);
   const alwaysRenderedRoots = template.ast.children.filter(
     (node) =>
@@ -207,25 +206,14 @@ export function analyzeVueSource(compiler, path, source) {
     [undefined, "js", "jsx", "ts", "tsx"].includes(descriptor.scriptSetup.lang)
   ) {
     try {
-      componentImports = JSON.parse(
-        staticImportBindings(
-          `${path}.${descriptor.scriptSetup.lang ?? "js"}`,
-          descriptor.scriptSetup.content,
-        ),
+      componentImports = staticImportBindings(
+        `${path}.${descriptor.scriptSetup.lang ?? "js"}`,
+        descriptor.scriptSetup.content,
       );
     } catch {
       componentImports = [];
     }
   }
-
-  // Priority order: the most specific open surface names the retention.
-  const retention = state.dynamic
-    ? "dynamic-template-class"
-    : state.componentTags
-      ? "component-class-target"
-      : alwaysRenderedRoots < 2
-        ? "open-root-fallthrough"
-        : undefined;
 
   const offsets = utf8OffsetMap(source, [
     ...warnings.flatMap((warning) => [warning.start, warning.end]),
@@ -284,7 +272,6 @@ export function analyzeVueSource(compiler, path, source) {
     componentImports,
     dynamic: state.dynamic,
     alwaysRenderedRoots,
-    retention,
     shadowCssTexts,
     shadowModuleCssTexts,
     shadowPreprocessorTexts,
@@ -328,7 +315,6 @@ function visitTemplateNode(source, node, state) {
       }
     }
     if (node.tagType === TAG_COMPONENT) {
-      state.componentTags = true;
       state.components.push({
         tag: node.tag,
         nodeStart: node.loc.start.offset,

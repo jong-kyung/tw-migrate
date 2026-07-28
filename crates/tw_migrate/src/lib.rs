@@ -57,10 +57,11 @@ pub fn static_imports(path: String, source: String) -> napi::Result<Vec<String>>
 }
 
 #[napi]
-pub fn static_import_bindings(path: String, source: String) -> napi::Result<String> {
-    let imports = js_rewrite::static_import_bindings(&path, &source)
-        .map_err(napi::Error::from_reason)?;
-    serde_json::to_string(&imports).map_err(|error| napi::Error::from_reason(error.to_string()))
+pub fn static_import_bindings(
+    path: String,
+    source: String,
+) -> napi::Result<Vec<js_rewrite::StaticImportBinding>> {
+    js_rewrite::static_import_bindings(&path, &source).map_err(napi::Error::from_reason)
 }
 
 const RECOVERABLE_INPUT_ERROR: &str = "TW_MIGRATE_RECOVERABLE_INPUT:";
@@ -97,11 +98,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            serde_json::to_value(imports).unwrap(),
-            serde_json::json!([
-                { "source": "./Child.vue", "local": "Child" },
-                { "source": "./Named.vue", "local": "Named" }
-            ])
+            imports
+                .into_iter()
+                .map(|import| (import.source, import.local))
+                .collect::<Vec<_>>(),
+            [
+                ("./Child.vue".to_string(), "Child".to_string()),
+                ("./Named.vue".to_string(), "Named".to_string()),
+            ]
         );
     }
 
