@@ -175,7 +175,7 @@ export function analyzeVueSource(compiler, path, source) {
     blocks.push(block);
   }
 
-  const state = { elements: [], components: [], dynamic: false };
+  const state = { elements: [], components: [], dynamic: false, vHtml: false };
   visitTemplateNode(source, template.ast, state);
   const alwaysRenderedRoots = template.ast.children.filter(
     (node) =>
@@ -290,6 +290,7 @@ export function analyzeVueSource(compiler, path, source) {
     componentImports,
     fallthroughUnverifiable,
     dynamic: state.dynamic,
+    vHtml: state.vHtml,
     alwaysRenderedRoots,
     shadowCssTexts,
     unscopedShadowCssTexts,
@@ -334,6 +335,9 @@ function visitTemplateNode(source, node, state) {
         state.dynamic = true;
         classBound = true;
       }
+      // Injected markup carries no scope attribute, so scoped proofs are
+      // unaffected -- but it can use any class an unscoped rule targets.
+      if (prop.name === "html") state.vHtml = true;
     }
     if (node.tagType === TAG_COMPONENT) {
       const site = templateSite(source, node, classBound, state);

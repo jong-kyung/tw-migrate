@@ -834,10 +834,20 @@ function normalizedVueTag(value) {
   return value.replaceAll("-", "").toLowerCase();
 }
 
-function buildVueComponentGraph(ownedVue, sourceFiles, analyses) {
+function buildVueComponentGraph(
+  ownedVue,
+  sourceFiles,
+  analyses,
+  { styleSources, pathOwners, packageRoot },
+) {
   const vuePaths = new Set(ownedVue.map((file) => file.path));
   const callers = new Map([...vuePaths].map((path) => [path, []]));
   const callerOpen = new Set();
+  // A stylesheet import that does not resolve to a package-owned file (a
+  // dependency or aliased stylesheet) still loads globally and can shadow
+  // scoped deletions, but its selectors cannot be analyzed.
+  let unresolvedStyleImport = false;
+  const stylesheetReference = /\.(?:css|scss|sass|less)(?:$|[?#])/;
 
   for (const file of ownedVue) {
     const analysis = analyses.get(file.path);
@@ -858,6 +868,12 @@ function buildVueComponentGraph(ownedVue, sourceFiles, analyses) {
       if (site.idAttribute || analysis.dynamic) {
         callerOpen.add(edge.child);
         analyses.get(edge.child).rootIdsOverridden = true;
+      }
+      // A component rendered as a single-root parent's root chains the
+      // parent's own fallthrough surface down to this child; that chain is
+      // not modeled, so the child cannot be closed.
+      if (analysis.alwaysRenderedRoots < 2 && analysis.rootStarts.includes(site.nodeStart)) {
+        callerOpen.add(edge.child);
       }
       return [edge];
     });
@@ -883,12 +899,24 @@ function buildVueComponentGraph(ownedVue, sourceFiles, analyses) {
       /\bimport\s*\(/.test(file.source) ||
       references.some(
         (reference) =>
-          !/\.(?:css|scss|sass|less)(?:$|[?#])/.test(reference) &&
+          !stylesheetReference.test(reference) &&
           isLocalVueReference(reference) &&
           !vueReferenceTarget(file.path, reference, vuePaths),
       )
     ) {
       for (const target of vuePaths) callerOpen.add(target);
+    }
+    if (
+      pathOwners.get(file.path) === packageRoot &&
+      references.some(
+        (reference) =>
+          stylesheetReference.test(reference) &&
+          !stylesheetReferenceTargets(file.path, reference, styleSources).some(
+            (path) => pathOwners.get(path) === packageRoot,
+          ),
+      )
+    ) {
+      unresolvedStyleImport = true;
     }
     const imported = new Set(
       references.flatMap((reference) => {
@@ -906,7 +934,7 @@ function buildVueComponentGraph(ownedVue, sourceFiles, analyses) {
     }
   }
 
-  return { callers, callerOpen };
+  return { callers, callerOpen, unresolvedStyleImport };
 }
 
 // Vue analysis can produce retention warnings even when nothing remains to
@@ -1038,7 +1066,11 @@ async function preparePackageVue({
     const analysis = analyses.get(file.path);
     if (!analysis.retained) await compileBlocks(file, analysis.blocks);
   }
-  const vueGraph = buildVueComponentGraph(ownedVue, sourceFiles, analyses);
+  const vueGraph = buildVueComponentGraph(ownedVue, sourceFiles, analyses, {
+    styleSources,
+    pathOwners,
+    packageRoot,
+  });
 
   // Non-scoped CSS in the package is unlayered and can outrank the layered
   // utilities that replace a deleted scoped rule. The planner retains any
@@ -1053,7 +1085,7 @@ async function preparePackageVue({
   const generatesSelectors = (text) => /#\{|@\{|&[\w-]/.test(text);
   const vueShadowCss = [];
   const vueShadowModuleCss = [];
-  let vueShadowUnverifiable = false;
+  let vueShadowUnverifiable = vueGraph.unresolvedStyleImport;
   for (const [path, source] of styleSources) {
     if (pathOwners.get(path) !== packageRoot) continue;
     if (isPreprocessorPath(path) && generatesSelectors(source)) {
@@ -1246,6 +1278,9 @@ async function preparePackageVue({
       analysis.unscopedBlocks.length > 0 &&
       projectWideUsageProven &&
       !analysis.dynamic &&
+      // Injected `v-html` content can use any class an unscoped rule
+      // targets without ever receiving its utility.
+      !analysis.vHtml &&
       !analysis.escapeUnverifiable &&
       !componentOpen &&
       ownedSources.length === 1 &&

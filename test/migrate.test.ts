@@ -988,6 +988,70 @@ test("writes parent scoped utilities at the proven component call site", async (
   }
 });
 
+test("a component chained through a single-root parent stays open", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div class="item">Child</div>\n</template>\n<style scoped>\n.item { padding: 13px; }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "Wrapper.vue"),
+        '<template>\n  <Child />\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+      ),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Wrapper class="item" />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Wrapper from "./Wrapper.vue";\n</script>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    // Parent's class chains through Wrapper's component root to Child, so
+    // Child's scoped rule must not be deleted.
+    assert.ok(
+      report.rules.some(
+        (rule) =>
+          rule.file === "Child.vue" && rule.selector === ".item" && rule.status === "retained",
+      ),
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("v-html defeats the unscoped sole-source proof", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, "Button.module.css")),
+      rm(join(cwd, "Button.tsx")),
+      writeFile(
+        join(cwd, "Card.vue"),
+        '<template>\n  <div class="shared">Card</div>\n  <span v-html="raw"></span>\n</template>\n<script setup>\nconst raw = "<i>x</i>";\n</script>\n<style>\n.shared { margin: 7px; }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "unscoped-style-block"));
+    assert.equal(report.convertedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("an unresolved package stylesheet import shadows scoped deletion", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script setup>\nimport "bootstrap/dist/css/bootstrap.css";\n</script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.equal(report.convertedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("checks effective child roots when retaining child scoped rules", async () => {
   const cwd = await fixture();
   try {
@@ -998,7 +1062,9 @@ test("checks effective child roots when retaining child scoped rules", async () 
       ),
       writeFile(
         join(cwd, "Parent.vue"),
-        '<template>\n  <Child class="extra" />\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+        // Multi-root parent: the chained-root fallthrough gate must not
+        // fire, so the effective-root shadow check is what retains the rule.
+        '<template>\n  <Child class="extra" />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
       ),
       writeFile(join(cwd, "globals.css"), '@import "tailwindcss";\n.extra { margin: 0; }\n'),
     ]);
