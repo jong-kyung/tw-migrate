@@ -278,6 +278,13 @@ export function analyzeVueSource(compiler, path, source) {
     rootStarts: template.ast.children
       .filter((node) => node.type === NODE_ELEMENT)
       .map((node) => offset(node.loc.start.offset)),
+    // A root-level `v-for` renders a fragment, so a lone AST root is not a
+    // fallthrough-eligible single root.
+    rootVFor: template.ast.children.some(
+      (node) =>
+        node.type === NODE_ELEMENT &&
+        node.props?.some((prop) => prop.type === PROP_DIRECTIVE && prop.name === "for"),
+    ),
     scriptText,
     // Script imports follow module-specifier semantics (bare = package);
     // style-block `@import`s follow CSS semantics (bare = relative). They

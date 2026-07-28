@@ -1161,6 +1161,32 @@ test("explicit non-Vue local imports do not open proven caller surfaces", async 
   }
 });
 
+test("a root v-for child renders a fragment and blocks call-site rewrites", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div v-for="item in items" class="leaf">{{ item }}</div>\n</template>\n<script setup>\nconst items = ["a"];\n</script>\n',
+      ),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Child class="leaf" />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n<style scoped>\n.leaf { margin: 7px; }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd, write: true });
+    // The fragment child never receives the call-site class, so the parent
+    // rule must be retained and the call site left alone.
+    const rule = report.rules.find(
+      (entry) => entry.file === "Parent.vue" && entry.selector === ".leaf",
+    )!;
+    assert.equal(rule.status, "retained");
+    assert.doesNotMatch(await readFile(join(cwd, "Parent.vue"), "utf8"), /m-\[7px\]/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("a multi-root child never receives call-site rewrites", async () => {
   const cwd = await fixture();
   try {
