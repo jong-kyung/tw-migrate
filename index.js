@@ -467,48 +467,53 @@ async function planPackage(context, packageRoot) {
   removeMigratedHtmlLinks(plan, preparedHtml);
   plan.warnings.push(...preparedHtml.warnings);
   plan.warnings.push(...preparedVue.warnings);
-  for (const file of plan.files.filter((file) => extension(file.path) === ".html")) {
-    parseHtmlSource(file.path, file.source);
-  }
-  for (const file of plan.files.filter((file) => extension(file.path) === ".vue")) {
-    const blocks = verifyVueSource(preparedVue.compiler, file.path, file.source);
-    for (const [index, block] of blocks.entries()) {
-      if (block.syntax === "css") {
-        validateCss(block.content);
-      } else if (block.syntax === "less") {
-        validateCss(
-          (
-            await compileLessEntry(
-              (preparedVue.less ??= await loadProjectLess(packageRoot)),
-              `${file.path}.${index}.less`,
-              block.content,
-            )
-          ).css,
-        );
-      } else {
-        validateCss(
-          (
-            await compileSassEntry(
-              (preparedVue.sass ??= await loadProjectSass(packageRoot)),
-              `${file.path}.${index}.${block.syntax}`,
-              block.content,
-            )
-          ).css,
-        );
+  try {
+    for (const file of plan.files.filter((file) => extension(file.path) === ".html")) {
+      parseHtmlSource(file.path, file.source);
+    }
+    for (const file of plan.files.filter((file) => extension(file.path) === ".vue")) {
+      const blocks = verifyVueSource(preparedVue.compiler, file.path, file.source);
+      for (const [index, block] of blocks.entries()) {
+        if (block.syntax === "css") {
+          validateCss(block.content);
+        } else if (block.syntax === "less") {
+          validateCss(
+            (
+              await compileLessEntry(
+                (preparedVue.less ??= await loadProjectLess(packageRoot)),
+                `${file.path}.${index}.less`,
+                block.content,
+              )
+            ).css,
+          );
+        } else {
+          validateCss(
+            (
+              await compileSassEntry(
+                (preparedVue.sass ??= await loadProjectSass(packageRoot)),
+                `${file.path}.${index}.${block.syntax}`,
+                block.content,
+              )
+            ).css,
+          );
+        }
       }
     }
-  }
-  for (const stylesheet of stylesheets.filter((stylesheet) =>
-    isPreprocessorPath(stylesheet.cssPath),
-  )) {
-    const changed = plan.files.find((file) => file.path === stylesheet.cssPath);
-    if (!changed && !plan.deletedFiles.includes(stylesheet.cssPath)) continue;
-    const source = changed?.source ?? "";
-    if (isSassPath(stylesheet.cssPath)) {
-      validateCss((await compileSassEntry(sass, stylesheet.cssPath, source)).css);
-    } else {
-      validateCss((await compileLessEntry(less, stylesheet.cssPath, source)).css);
+    for (const stylesheet of stylesheets.filter((stylesheet) =>
+      isPreprocessorPath(stylesheet.cssPath),
+    )) {
+      const changed = plan.files.find((file) => file.path === stylesheet.cssPath);
+      if (!changed && !plan.deletedFiles.includes(stylesheet.cssPath)) continue;
+      const source = changed?.source ?? "";
+      if (isSassPath(stylesheet.cssPath)) {
+        validateCss((await compileSassEntry(sass, stylesheet.cssPath, source)).css);
+      } else {
+        validateCss((await compileLessEntry(less, stylesheet.cssPath, source)).css);
+      }
     }
+  } catch (error) {
+    if (!options.force || !isMissingStyleCompilerError(error)) throw error;
+    return { failure: packageFailure(workspaceRoot, packageRoot, error) };
   }
   return { plan };
 }
@@ -773,7 +778,7 @@ function vueReferenceTarget(importer, reference, vuePaths) {
 function vueLiteralTargets(file, vuePaths) {
   return new Set(
     [...file.source.matchAll(/(["'`])([^"'`\r\n]+)\1/g)].flatMap((match) => {
-      if (/[?*[\]]/.test(match[2]) && match[2].includes(".vue")) return [...vuePaths];
+      if (/[?*[\]{}]/.test(match[2]) && match[2].includes("vue")) return [...vuePaths];
       const target = vueReferenceTarget(file.path, match[2], vuePaths);
       return target ? [target] : [];
     }),
@@ -1116,6 +1121,7 @@ async function preparePackageVue({
       analysis.unscopedBlocks.length > 0 &&
       projectWideUsageProven &&
       !analysis.dynamic &&
+      !analysis.escapeUnverifiable &&
       !componentOpen &&
       ownedSources.length === 1 &&
       ownedSources[0].path === file.path;
@@ -1605,6 +1611,11 @@ function packageFailure(workspaceRoot, packageRoot, error) {
 function isRecoverablePlanningError(error) {
   const message = error instanceof Error ? error.message : String(error);
   return message.startsWith(RECOVERABLE_INPUT_ERROR);
+}
+
+function isMissingStyleCompilerError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /^(?:Sass|Less) must be installed in the target project\.$/.test(message);
 }
 
 function isIntegrityError(error) {

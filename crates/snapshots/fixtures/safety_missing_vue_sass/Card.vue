@@ -1,7 +1,10 @@
 <template>
-  <p class="card">Card</p>
-  <p>Leaf</p>
+  <Child />
+  <main>Parent</main>
 </template>
-<style scoped lang="scss">
-.card { padding: 13px; }
+<script setup>
+import Child from "./Child.vue";
+</script>
+<style scoped>
+.leaf { margin: 7px; }
 </style>

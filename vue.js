@@ -111,6 +111,7 @@ export function analyzeVueSource(compiler, path, source) {
     if (style.src !== undefined) {
       if (style.module !== undefined) {
         warn("unsupported-sfc-block", start, end, "A <style module src> block is not supported.");
+        escapeUnverifiable = true;
       } else {
         styleBlockImports.push({ reference: style.src, start, end });
       }

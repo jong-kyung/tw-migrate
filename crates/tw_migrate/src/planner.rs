@@ -275,6 +275,31 @@ fn shift_offset(edits: &[Edit], offset: usize) -> usize {
     offset.checked_add_signed(delta).unwrap_or(offset)
 }
 
+fn original_offset(edit_batches: &[Vec<Edit>], mut offset: usize) -> usize {
+    for edits in edit_batches.iter().rev() {
+        let mut edits = edits.iter().collect::<Vec<_>>();
+        edits.sort_by_key(|edit| (edit.start, edit.end));
+        let mut delta = 0isize;
+        for edit in edits {
+            let Some(post_start) = edit.start.checked_add_signed(delta) else {
+                continue;
+            };
+            let post_end = post_start + edit.replacement.len();
+            if offset < post_start {
+                break;
+            }
+            if offset < post_end {
+                offset = edit.start;
+                delta = 0;
+                break;
+            }
+            delta += edit.replacement.len() as isize - (edit.end - edit.start) as isize;
+        }
+        offset = offset.checked_add_signed(-delta).unwrap_or(offset);
+    }
+    offset
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PlanRequest {
@@ -1693,6 +1718,12 @@ fn plan_request(
     let mut converted_rules = 0;
     let mut retained_rules = 0;
     let mut rule_reports = Vec::new();
+    let prior_edits = request
+        .files
+        .iter()
+        .find(|file| file.path == request.css_path)
+        .map(|file| file.prior_edits.as_slice())
+        .unwrap_or_default();
 
     for rule in rules {
         let can_remove = is_module
@@ -1711,8 +1742,8 @@ fn plan_request(
         let report_authored_span = rule.authored_span.as_ref().map_or(
             RuleId { start: 0, end: 0 },
             |span| RuleId {
-                start: span.start,
-                end: span.end,
+                start: original_offset(prior_edits, span.start),
+                end: original_offset(prior_edits, span.end),
             },
         );
         if can_remove {

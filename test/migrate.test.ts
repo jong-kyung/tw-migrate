@@ -752,7 +752,7 @@ test("dynamic Vue import globs keep caller fallthrough open", async () => {
       ),
       writeFile(
         join(cwd, "registry.ts"),
-        'export const components = import.meta.glob("./*.vue");\n',
+        'export const components = import.meta.glob("./*.{vue,js}");\n',
       ),
     ]);
     const report = await migrate({ cwd });
@@ -886,6 +886,26 @@ test("unresolved component roots block unscoped Vue deletion", async () => {
   }
 });
 
+test("unresolved external styles block unscoped Vue deletion", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, "Button.module.css")),
+      rm(join(cwd, "Button.tsx")),
+      writeFile(
+        join(cwd, "Card.vue"),
+        '<template>\n  <div class="shared">Card</div>\n  <span>Leaf</span>\n</template>\n<style module src="@/theme.css"></style>\n<style>\n.shared { margin: 7px; }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "unsupported-sfc-block"));
+    assert.ok(report.warnings.some((entry) => entry.code === "unscoped-style-block"));
+    assert.ok(!report.changedFiles.includes("Card.vue"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("rebases Vue style blocks after earlier cross-file template edits", async () => {
   const cwd = await fixture();
   try {
@@ -902,6 +922,16 @@ test("rebases Vue style blocks after earlier cross-file template edits", async (
     const report = await migrate({ cwd, write: true });
     assert.equal(report.convertedRules, 2);
     assert.ok(!report.warnings.some((entry) => entry.code === "unsupported-overlap"));
+    const childRuleStart = Buffer.byteLength(
+      '<template>\n  <div class="child own">Child</div>\n  <span>Leaf</span>\n</template>\n<style scoped>\n',
+    );
+    const childRule = report.rules.find(
+      (rule) => rule.file === "ZChild.vue" && rule.selector === ".own",
+    )!;
+    assert.deepEqual(childRule.authoredSpan, {
+      start: childRuleStart,
+      end: childRuleStart + ".own { padding: 13px; }".length,
+    });
     assert.match(
       await readFile(join(cwd, "ZChild.vue"), "utf8"),
       /class="child own m-\[7px\] p-\[13px\]"/,
