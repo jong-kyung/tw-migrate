@@ -30,6 +30,11 @@ pub(crate) fn plan_html_file(
     let mut matched_module_refs = HashMap::new();
     let mut warnings = Vec::new();
     for element in &file.html_elements {
+        if !element.css_paths.is_empty()
+            && !element.css_paths.iter().any(|path| path == css_path)
+        {
+            continue;
+        }
         let Some(class_attribute) = element
             .class_attribute
             .as_ref()
@@ -362,6 +367,7 @@ mod tests {
                 }),
                 id_attribute: None,
                 tag: None,
+                css_paths: Vec::new(),
             }],
             html_stylesheets: vec![HtmlStylesheet {
                 css_path: "/project/site.css".to_string(),
@@ -444,6 +450,7 @@ mod tests {
                     writable: true,
                 }),
                 tag: None,
+                css_paths: Vec::new(),
             }],
             html_stylesheets: vec![HtmlStylesheet {
                 css_path: "/project/site.css".to_string(),

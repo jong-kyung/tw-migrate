@@ -33,5 +33,6 @@ if (!binding) {
 
 export const decodeSourceMap = binding.decodeSourceMap;
 export const planBatchMigration = binding.planBatchMigration;
+export const staticImportBindings = binding.staticImportBindings;
 export const staticImports = binding.staticImports;
 export const validateCss = binding.validateCss;

@@ -253,6 +253,8 @@ struct PlanRequest {
     /// the retention warning code every otherwise-unwarned rule receives.
     #[serde(default)]
     vue_retention: Option<String>,
+    #[serde(default)]
+    vue_unscoped: bool,
     /// Present only for closed Vue SFC stylesheets: the package's non-scoped
     /// CSS corpus as parseable pieces (other stylesheets, retained SFC
     /// blocks, scope-escape selector fragments). Their parsed selector
@@ -311,6 +313,8 @@ struct BatchStylesheet {
     #[serde(default)]
     vue_retention: Option<String>,
     #[serde(default)]
+    vue_unscoped: bool,
+    #[serde(default)]
     vue_shadow_css: Vec<String>,
     #[serde(default)]
     vue_shadow_module_css: Vec<String>,
@@ -352,6 +356,10 @@ pub(crate) struct HtmlElement {
     /// Element tag name, provided by the Vue lowering for shadow matching.
     #[serde(default)]
     pub(crate) tag: Option<String>,
+    /// Optional per-element stylesheet reachability used by cross-file Vue
+    /// component proofs. Empty means every file-level HTML context applies.
+    #[serde(default)]
+    pub(crate) css_paths: Vec<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -651,6 +659,7 @@ struct BatchMatch {
     properties: BTreeSet<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn plan_consumer_file(
     file: &SourceFile,
     css_path: &str,
@@ -659,6 +668,7 @@ fn plan_consumer_file(
     preserved_module_classes: &BTreeSet<String>,
     utility_prefix: Option<&str>,
     batch_mode: bool,
+    vue_unscoped: bool,
 ) -> Result<SourcePlan, String> {
     // Vue scoped styles never apply outside their own SFC, and a `.vue` file
     // is not parseable JS: the only live pairing is an SFC consuming its own
@@ -666,18 +676,26 @@ fn plan_consumer_file(
     // stylesheet is an opaque reference that can only retain a module.
     let stylesheet_is_vue = is_vue_path(css_path);
     let file_is_vue = is_vue_path(&file.path);
-    if stylesheet_is_vue || file_is_vue {
-        if stylesheet_is_vue && file.path == css_path {
+    if stylesheet_is_vue && vue_unscoped {
+        if file_is_vue || Path::new(&file.path).extension().is_some_and(|ext| ext == "html") {
             return Ok(plan_html_file(file, css_path, candidates, utility_prefix));
         }
-        if file_is_vue && !stylesheet_is_vue {
-            if file
+        return if batch_mode {
+            plan_batch_source_file(file, css_path, false, candidates, preserved_module_classes)
+        } else {
+            plan_source_file(file, css_path, false, candidates)
+        };
+    }
+    if stylesheet_is_vue || file_is_vue {
+        if file_is_vue
+            && file
                 .html_stylesheets
                 .iter()
                 .any(|context| context.analyzable && context.css_path == css_path)
-            {
-                return Ok(plan_html_file(file, css_path, candidates, utility_prefix));
-            }
+        {
+            return Ok(plan_html_file(file, css_path, candidates, utility_prefix));
+        }
+        if file_is_vue && !stylesheet_is_vue {
             return Ok(opaque_reference_plan(file, css_path, is_module));
         }
         return Ok(empty_source_plan());
@@ -739,6 +757,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
                 &BTreeSet::new(),
                 request.utility_prefix.as_deref(),
                 true,
+                stylesheet.vue_unscoped,
             )?;
             for matched in result.matches {
                 if let Some(origins) = candidate_maps
@@ -918,6 +937,7 @@ fn batch_stylesheet_request(
         css_dependents: stylesheet.css_dependents.clone(),
         vue_blocks: stylesheet.vue_blocks.clone(),
         vue_retention: stylesheet.vue_retention.clone(),
+        vue_unscoped: stylesheet.vue_unscoped,
         vue_shadow_css: stylesheet.vue_shadow_css.clone(),
         vue_shadow_module_css: stylesheet.vue_shadow_module_css.clone(),
         vue_shadow_unverifiable: stylesheet.vue_shadow_unverifiable,
@@ -1003,7 +1023,7 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
     // `[data-v-*]` specificity (and its unlayered position) let it outrank
     // non-scoped CSS that a layered Tailwind utility would lose to. Retain
     // any rule whose class the package's non-scoped corpus also targets.
-    if vue_masked.is_some() && is_module {
+    if vue_masked.is_some() && is_module && !request.vue_unscoped {
         let shadow = index_shadow_selectors(&request.vue_shadow_css, &request.vue_shadow_module_css);
         let unverifiable = request.vue_shadow_unverifiable || shadow.unverifiable;
         let vue_file = request.files.iter().find(|file| file.path == request.css_path);
@@ -1522,6 +1542,7 @@ fn plan_request(
             &preserved_module_classes,
             request.utility_prefix.as_deref(),
             batch_mode,
+            request.vue_unscoped,
         )?;
 
         module_references_safe &= result.module_references_safe;

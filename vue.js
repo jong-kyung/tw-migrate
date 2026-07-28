@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { staticImports } from "./native.js";
+import { staticImportBindings, staticImports } from "./native.js";
 
 const ESCAPE_SELECTOR = /(?:::v-|:)(?:deep|global|slotted)\(([^)]*)\)/g;
 const ESCAPE_RESIDUE = /(?:>>>|\/deep\/|::v-deep|:deep|::v-slotted|:slotted|::v-global|:global)/;
@@ -83,6 +83,8 @@ export function analyzeVueSource(compiler, path, source) {
     return { warnings: toByteWarnings(source, warnings), retained: true };
   }
   const blocks = [];
+  const unscopedBlocks = [];
+  const styleBlockImports = [];
   // Retained blocks are still real CSS that can win the cascade against the
   // utilities replacing a deleted scoped rule. Plain-CSS text feeds the
   // planner's parsed shadow index; preprocessor text is screened by the
@@ -108,10 +110,11 @@ export function analyzeVueSource(compiler, path, source) {
       continue;
     }
     if (style.src !== undefined) {
-      warn("unsupported-sfc-block", start, end, "A <style src> block is not analyzed.");
-      // The external target may not be in the discovered corpus, so its
-      // selectors cannot be proven.
-      escapeUnverifiable = true;
+      if (style.module !== undefined) {
+        warn("unsupported-sfc-block", start, end, "A <style module src> block is not supported.");
+      } else {
+        styleBlockImports.push(style.src);
+      }
       continue;
     }
     if (style.module !== undefined) {
@@ -132,21 +135,25 @@ export function analyzeVueSource(compiler, path, source) {
       shadowPreprocessorTexts.push(style.content);
       continue;
     }
-    if (!style.scoped) {
-      warn(
-        "unscoped-style-block",
-        start,
-        end,
-        "A <style> block without `scoped` is global CSS and is retained.",
-      );
-      shadowCssTexts.push(style.content);
-      continue;
-    }
     const outerStart = source.lastIndexOf("<style", start);
     const closing = source.slice(end).match(/^<\/style\s*>/)?.[0];
     if (outerStart < 0 || !closing) {
       warn("unsupported-sfc-block", start, end, "The style block tags could not be located.");
       escapeUnverifiable = true;
+      continue;
+    }
+    const block = {
+      outerStart,
+      outerEnd: end + closing.length,
+      contentStart: start,
+      contentEnd: end,
+      syntax: style.lang ?? "css",
+      content: style.content,
+    };
+    if (!style.scoped) {
+      unscopedBlocks.push(block);
+      if (style.lang && style.lang !== "css") shadowPreprocessorTexts.push(style.content);
+      else shadowCssTexts.push(style.content);
       continue;
     }
     // Scope-escape selectors (`:deep`, `:global`, `:slotted`) reach elements
@@ -160,17 +167,10 @@ export function analyzeVueSource(compiler, path, source) {
     if (ESCAPE_RESIDUE.test(style.content.replace(ESCAPE_SELECTOR, " "))) {
       escapeUnverifiable = true;
     }
-    blocks.push({
-      outerStart,
-      outerEnd: end + closing.length,
-      contentStart: start,
-      contentEnd: end,
-      syntax: style.lang ?? "css",
-      content: style.content,
-    });
+    blocks.push(block);
   }
 
-  const state = { elements: [], dynamic: false, componentTags: false };
+  const state = { elements: [], components: [], dynamic: false, componentTags: false };
   visitTemplateNode(source, template.ast, state);
   const alwaysRenderedRoots = template.ast.children.filter(
     (node) =>
@@ -200,6 +200,24 @@ export function analyzeVueSource(compiler, path, source) {
     }
   });
 
+  let componentImports = [];
+  if (
+    descriptor.scriptSetup &&
+    !descriptor.scriptSetup.src &&
+    [undefined, "js", "jsx", "ts", "tsx"].includes(descriptor.scriptSetup.lang)
+  ) {
+    try {
+      componentImports = JSON.parse(
+        staticImportBindings(
+          `${path}.${descriptor.scriptSetup.lang ?? "js"}`,
+          descriptor.scriptSetup.content,
+        ),
+      );
+    } catch {
+      componentImports = [];
+    }
+  }
+
   // Priority order: the most specific open surface names the retention.
   const retention = state.dynamic
     ? "dynamic-template-class"
@@ -211,16 +229,16 @@ export function analyzeVueSource(compiler, path, source) {
 
   const offsets = utf8OffsetMap(source, [
     ...warnings.flatMap((warning) => [warning.start, warning.end]),
-    ...blocks.flatMap((block) => [
+    ...[...blocks, ...unscopedBlocks].flatMap((block) => [
       block.outerStart,
       block.outerEnd,
       block.contentStart,
       block.contentEnd,
     ]),
-    ...state.elements.flatMap((element) =>
-      [element.classAttribute, element.idAttribute]
-        .filter(Boolean)
-        .flatMap((value) => [value.start, value.end]),
+    ...[...state.elements, ...state.components].flatMap((element) =>
+      [element.nodeStart, element.classAttribute, element.idAttribute]
+        .filter((value) => value !== undefined)
+        .flatMap((value) => (typeof value === "number" ? [value] : [value.start, value.end])),
     ),
   ]);
   const offset = (index) => offsets.get(index);
@@ -239,13 +257,33 @@ export function analyzeVueSource(compiler, path, source) {
       contentStart: offset(block.contentStart),
       contentEnd: offset(block.contentEnd),
     })),
+    unscopedBlocks: unscopedBlocks.map((block) => ({
+      ...block,
+      outerStart: offset(block.outerStart),
+      outerEnd: offset(block.outerEnd),
+      contentStart: offset(block.contentStart),
+      contentEnd: offset(block.contentEnd),
+    })),
     htmlElements: state.elements.map((element) => ({
       tag: element.tag,
+      nodeStart: offset(element.nodeStart),
       classAttribute: attribute(element.classAttribute),
       idAttribute: attribute(element.idAttribute),
     })),
+    componentSites: state.components.map((element) => ({
+      tag: element.tag,
+      nodeStart: offset(element.nodeStart),
+      classAttribute: attribute(element.classAttribute),
+      idAttribute: attribute(element.idAttribute),
+    })),
+    rootStarts: template.ast.children
+      .filter((node) => node.type === NODE_ELEMENT)
+      .map((node) => offset(node.loc.start.offset)),
     scriptText,
-    styleImports: [...new Set(styleImports)],
+    styleImports: [...new Set([...styleImports, ...styleBlockImports])],
+    componentImports,
+    dynamic: state.dynamic,
+    alwaysRenderedRoots,
     retention,
     shadowCssTexts,
     shadowModuleCssTexts,
@@ -266,7 +304,6 @@ export function verifyVueSource(compiler, path, source) {
   return descriptor.styles
     .filter(
       (style) =>
-        style.scoped &&
         style.src === undefined &&
         style.module === undefined &&
         SUPPORTED_STYLE_LANGUAGES.has(style.lang),
@@ -292,42 +329,43 @@ function visitTemplateNode(source, node, state) {
     }
     if (node.tagType === TAG_COMPONENT) {
       state.componentTags = true;
+      state.components.push({
+        tag: node.tag,
+        nodeStart: node.loc.start.offset,
+        ...templateSite(source, node, classBound, state),
+      });
     } else if (node.tagType === TAG_ELEMENT) {
-      const classAttribute = literalAttribute(source, node, "class");
-      const idAttribute = literalAttribute(source, node, "id");
-      const hasClassAttr = node.props?.some(
-        (prop) => prop.type === PROP_ATTRIBUTE && prop.name === "class",
-      );
-      const hasIdAttr = node.props?.some(
-        (prop) => prop.type === PROP_ATTRIBUTE && prop.name === "id",
-      );
-      // An attribute that exists but is not a safely writable quoted literal
-      // makes the template's class set unprovable.
-      if ((hasClassAttr && !classAttribute) || (hasIdAttr && !idAttribute)) {
-        state.dynamic = true;
-      } else if (classAttribute || idAttribute) {
-        // A literal class beside a dynamic binding is still an always-present
-        // proven site: the open file retains its rules, so appending their
-        // utilities there is the same retain-with-append the global path uses.
-        let site = classAttribute;
-        if (!site && idAttribute) {
-          if (classBound) {
-            // Never add a synthetic attribute to a dynamically bound element.
-            site = undefined;
-          } else {
-            const insertion = classInsertionOffset(source, node);
-            if (insertion === undefined) {
-              state.dynamic = true;
-            } else {
-              site = { value: "", start: insertion, end: insertion, synthetic: true };
-            }
-          }
-        }
-        if (site) state.elements.push({ tag: node.tag, classAttribute: site, idAttribute });
+      const site = templateSite(source, node, classBound, state);
+      if (site.classAttribute) {
+        state.elements.push({ tag: node.tag, nodeStart: node.loc.start.offset, ...site });
       }
     }
   }
   for (const child of node.children ?? []) visitTemplateNode(source, child, state);
+}
+
+function templateSite(source, node, classBound, state) {
+  const classAttribute = literalAttribute(source, node, "class");
+  const idAttribute = literalAttribute(source, node, "id");
+  const hasClassAttr = node.props?.some(
+    (prop) => prop.type === PROP_ATTRIBUTE && prop.name === "class",
+  );
+  const hasIdAttr = node.props?.some((prop) => prop.type === PROP_ATTRIBUTE && prop.name === "id");
+  if ((hasClassAttr && !classAttribute) || (hasIdAttr && !idAttribute)) {
+    state.dynamic = true;
+    return { idAttribute };
+  }
+  if (classAttribute) return { classAttribute, idAttribute };
+  if (!idAttribute || classBound) return { idAttribute };
+  const insertion = classInsertionOffset(source, node);
+  if (insertion === undefined) {
+    state.dynamic = true;
+    return { idAttribute };
+  }
+  return {
+    classAttribute: { value: "", start: insertion, end: insertion, synthetic: true },
+    idAttribute,
+  };
 }
 
 // The inner span of a quoted, entity-free, literal attribute value, or

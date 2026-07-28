@@ -18,6 +18,7 @@ use oxc_parser::Parser;
 use oxc_semantic::{Scoping, SemanticBuilder};
 use oxc_span::{SourceType, Span};
 use oxc_syntax::symbol::SymbolId;
+use serde::Serialize;
 
 use crate::{
     css_plan::SelectorKey,
@@ -42,6 +43,57 @@ pub(crate) struct SourcePlan {
     pub(crate) matched_module_refs: HashMap<String, usize>,
     pub(crate) module_references_safe: bool,
     pub(crate) warnings: Vec<Warning>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct StaticImportBinding {
+    source: String,
+    local: String,
+}
+
+pub(crate) fn static_import_bindings(
+    path: &str,
+    source: &str,
+) -> Result<Vec<StaticImportBinding>, String> {
+    let allocator = Allocator::default();
+    let source_type = source_type_for_path(path)?;
+    let parsed = Parser::new(&allocator, source, source_type).parse();
+    if !parsed.diagnostics.is_empty() {
+        return Err(format!("Failed to parse {path}: {:?}", parsed.diagnostics));
+    }
+    Ok(parsed
+        .program
+        .body
+        .iter()
+        .filter_map(|statement| {
+            let Statement::ImportDeclaration(declaration) = statement else {
+                return None;
+            };
+            (declaration.import_kind == ImportOrExportKind::Value && declaration.phase.is_none())
+                .then_some(declaration)
+        })
+        .flat_map(|declaration| {
+            declaration
+                .specifiers
+                .iter()
+                .flatten()
+                .filter_map(|specifier| match specifier {
+                    ImportDeclarationSpecifier::ImportDefaultSpecifier(specifier) => {
+                        Some(specifier.local.name.as_str())
+                    }
+                    ImportDeclarationSpecifier::ImportSpecifier(specifier)
+                        if specifier.import_kind == ImportOrExportKind::Value =>
+                    {
+                        Some(specifier.local.name.as_str())
+                    }
+                    _ => None,
+                })
+                .map(|local| StaticImportBinding {
+                    source: declaration.source.value.to_string(),
+                    local: local.to_string(),
+                })
+        })
+        .collect())
 }
 
 pub(crate) fn static_imports(path: &str, source: &str) -> Result<Vec<String>, String> {

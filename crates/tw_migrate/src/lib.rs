@@ -56,6 +56,13 @@ pub fn static_imports(path: String, source: String) -> napi::Result<Vec<String>>
     js_rewrite::static_imports(&path, &source).map_err(napi::Error::from_reason)
 }
 
+#[napi]
+pub fn static_import_bindings(path: String, source: String) -> napi::Result<String> {
+    let imports = js_rewrite::static_import_bindings(&path, &source)
+        .map_err(napi::Error::from_reason)?;
+    serde_json::to_string(&imports).map_err(|error| napi::Error::from_reason(error.to_string()))
+}
+
 const RECOVERABLE_INPUT_ERROR: &str = "TW_MIGRATE_RECOVERABLE_INPUT:";
 
 #[napi]
@@ -80,6 +87,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(imports, ["./card.css", "./card.module.css"]);
+    }
+
+    #[test]
+    fn extracts_runtime_import_bindings() {
+        let imports = crate::js_rewrite::static_import_bindings(
+            "Component.ts",
+            "import Child from './Child.vue';\nimport { Named, type Props } from './Named.vue';\n",
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(imports).unwrap(),
+            serde_json::json!([
+                { "source": "./Child.vue", "local": "Child" },
+                { "source": "./Named.vue", "local": "Named" }
+            ])
+        );
     }
 
     #[test]
