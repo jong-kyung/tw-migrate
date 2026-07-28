@@ -306,7 +306,8 @@ async function planPackage(context, packageRoot) {
   if (
     explicitStyle &&
     extension(explicitStyle) === ".vue" &&
-    preparedVue.stylesheets.length === 0
+    preparedVue.stylesheets.length === 0 &&
+    ![...preparedVue.stylePaths].some((path) => !isStylesheetModule(path))
   ) {
     return vueWarningsOnlyResult(preparedVue);
   }
@@ -319,7 +320,9 @@ async function planPackage(context, packageRoot) {
   const ownedStyles = [...styleSources.keys()].filter(
     (path) =>
       pathOwners.get(path) === packageRoot &&
-      (targetable.has(path) || preparedHtml.stylePaths.has(path)),
+      (targetable.has(path) ||
+        preparedHtml.stylePaths.has(path) ||
+        preparedVue.stylePaths.has(path)),
   );
   if (ownedStyles.length === 0 && preparedVue.stylesheets.length === 0) {
     return vueWarningsOnlyResult(preparedVue);
@@ -344,7 +347,9 @@ async function planPackage(context, packageRoot) {
   const targets = explicitCss
     ? [explicitCss]
     : explicitStyle
-      ? []
+      ? [...preparedVue.stylePaths].filter(
+          (path) => !isStylesheetModule(path) && !excludedEntries.has(path),
+        )
       : ownedStyles.filter(
           (path) =>
             !excludedEntries.has(path) &&
@@ -765,7 +770,13 @@ async function preparePackageVue({
   targetable,
   explicitStyle,
 }) {
-  const none = { files: new Map(), stylesheets: [], warnings: [], compiler: undefined };
+  const none = {
+    files: new Map(),
+    stylesheets: [],
+    stylePaths: new Set(),
+    warnings: [],
+    compiler: undefined,
+  };
   // An explicit non-vue stylesheet selection plans only that stylesheet.
   if (explicitStyle && extension(explicitStyle) !== ".vue") return none;
   // Ignore filtering scopes what gets migrated, never what gets scanned: a
@@ -849,18 +860,38 @@ async function preparePackageVue({
 
   const files = new Map();
   const stylesheets = [];
+  const stylePaths = new Set();
   for (const file of selected) {
     await rejectSymlinkTarget(file.path, packageRoot);
     const analysis = analyses.get(file.path);
     warnings.push(...analysis.warnings);
-    if (analysis.retained || analysis.blocks.length === 0) continue;
-    files.set(file.path, {
-      ...file,
-      htmlElements: analysis.htmlElements,
-      htmlStylesheets: [{ cssPath: file.path, variants: [], direct: true, analyzable: true }],
-      htmlReferencesSafe: !analysis.retention,
-      htmlScriptText: analysis.scriptText,
-    });
+    if (analysis.retained) continue;
+    const importedStyles = [
+      ...new Set(
+        analysis.styleImports
+          .flatMap((reference) => stylesheetReferenceTargets(file.path, reference, styleSources))
+          .filter((path) => pathOwners.get(path) === packageRoot),
+      ),
+    ];
+    for (const path of importedStyles) stylePaths.add(path);
+    const htmlStylesheets = [
+      ...(analysis.blocks.length > 0
+        ? [{ cssPath: file.path, variants: [], direct: true, analyzable: true }]
+        : []),
+      ...importedStyles
+        .filter((path) => !isStylesheetModule(path))
+        .map((cssPath) => ({ cssPath, variants: [], direct: false, analyzable: true })),
+    ];
+    if (htmlStylesheets.length > 0) {
+      files.set(file.path, {
+        ...file,
+        htmlElements: analysis.htmlElements,
+        htmlStylesheets,
+        htmlReferencesSafe: !analysis.retention,
+        htmlScriptText: analysis.scriptText,
+      });
+    }
+    if (analysis.blocks.length === 0) continue;
     stylesheets.push({
       cssPath: file.path,
       cssSource: file.source,
@@ -876,7 +907,7 @@ async function preparePackageVue({
       vueShadowUnverifiable: analysis.retention ? undefined : vueShadowUnverifiable,
     });
   }
-  return { files, stylesheets, warnings, compiler: loaded.compiler };
+  return { files, stylesheets, stylePaths, warnings, compiler: loaded.compiler };
 }
 
 async function preparePackageHtml({

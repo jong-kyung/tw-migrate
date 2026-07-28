@@ -663,6 +663,13 @@ fn plan_consumer_file(
             return Ok(plan_html_file(file, css_path, candidates, utility_prefix));
         }
         if file_is_vue && !stylesheet_is_vue {
+            if file
+                .html_stylesheets
+                .iter()
+                .any(|context| context.analyzable && context.css_path == css_path)
+            {
+                return Ok(plan_html_file(file, css_path, candidates, utility_prefix));
+            }
             return Ok(opaque_reference_plan(file, css_path, is_module));
         }
         return Ok(empty_source_plan());
@@ -1729,7 +1736,7 @@ fn plan_request(
             let source = apply_edits(&file.source, result.edits)?;
             if Path::new(&file.path)
                 .extension()
-                .is_none_or(|extension| extension != "html")
+                .is_none_or(|extension| extension != "html" && extension != "vue")
             {
                 validate_js(&file.path, &source)?;
             }

@@ -51,6 +51,11 @@ pub fn validate_css(source: String) -> napi::Result<()> {
     planner::validate_css(&source).map_err(napi::Error::from_reason)
 }
 
+#[napi]
+pub fn static_imports(path: String, source: String) -> napi::Result<Vec<String>> {
+    js_rewrite::static_imports(&path, &source).map_err(napi::Error::from_reason)
+}
+
 const RECOVERABLE_INPUT_ERROR: &str = "TW_MIGRATE_RECOVERABLE_INPUT:";
 
 #[napi]
@@ -67,6 +72,16 @@ pub fn plan_batch_migration(request: String) -> napi::Result<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn extracts_only_static_runtime_imports() {
+        let imports = crate::js_rewrite::static_imports(
+            "Component.ts",
+            "import type { Props } from './types';\nimport { type Card } from './types.css';\nimport './card.css';\nimport styles from './card.module.css';\nimport('./lazy.css');\n",
+        )
+        .unwrap();
+        assert_eq!(imports, ["./card.css", "./card.module.css"]);
+    }
+
     #[test]
     fn decodes_source_map_mappings() {
         let decoded = super::decode_source_map_json(

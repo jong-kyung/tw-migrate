@@ -3,6 +3,8 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { staticImports } from "./native.js";
+
 const ESCAPE_SELECTOR = /(?:::v-|:)(?:deep|global|slotted)\(([^)]*)\)/g;
 const ESCAPE_RESIDUE = /(?:>>>|\/deep\/|::v-deep|:deep|::v-slotted|:slotted|::v-global|:global)/;
 const SUPPORTED_STYLE_ATTRIBUTES = new Set(["lang", "module", "scoped", "src"]);
@@ -182,6 +184,18 @@ export function analyzeVueSource(compiler, path, source) {
   const scriptText = [descriptor.script?.content, descriptor.scriptSetup?.content]
     .filter(Boolean)
     .join("\n");
+  const styleImports = [descriptor.script, descriptor.scriptSetup].flatMap((script) => {
+    if (!script || script.src || ![undefined, "js", "jsx", "ts", "tsx"].includes(script.lang)) {
+      return [];
+    }
+    try {
+      return staticImports(`${path}.${script.lang ?? "js"}`, script.content);
+    } catch {
+      // Script analysis is optional: unparseable scripts simply do not become
+      // stylesheet consumer edges.
+      return [];
+    }
+  });
 
   // Priority order: the most specific open surface names the retention.
   const retention = state.dynamic
@@ -227,6 +241,7 @@ export function analyzeVueSource(compiler, path, source) {
       idAttribute: attribute(element.idAttribute),
     })),
     scriptText,
+    styleImports: [...new Set(styleImports)],
     retention,
     shadowCssTexts,
     shadowModuleCssTexts,

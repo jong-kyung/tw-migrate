@@ -578,6 +578,81 @@ test("a paren-less deep combinator makes the shadow corpus unverifiable", async 
   }
 });
 
+test("migrates a stylesheet statically imported by a Vue script", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script setup lang="ts">\nimport type { Props } from "./props";\ndefineProps<Props>();\nimport "./card.css";\n</script>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "card.css"), ".card { padding: 13px; }\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue", write: true });
+    assert.deepEqual(report.changedFiles, ["Card.vue"]);
+    assert.equal(report.convertedRules, 0);
+    assert.equal(report.retainedRules, 1);
+    assert.match(report.diff, /class="card p-\[13px\]"/);
+    assert.match(report.diff, /import "\.\/card\.css";/);
+    assert.match(await readFile(join(cwd, "Card.vue"), "utf8"), /class="card p-\[13px\]"/);
+    const second = await migrate({ cwd, styleFile: "Card.vue", write: true });
+    assert.deepEqual(second.changedFiles, []);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("routes a Vue script's imported preprocessor through the existing compiler", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script>\nimport "./card.scss";\nexport default {};\n</script>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "card.scss"), "$space: 13px;\n.card { padding: $space; }\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.deepEqual(report.changedFiles, ["Card.vue"]);
+    assert.match(report.diff, /class="card p-\[13px\]"/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("ignores dynamic and commented Vue stylesheet imports", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script setup>\n// import "./card.css";\nimport("./card.css");\n</script>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "card.css"), ".card { padding: 13px; }\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.deepEqual(report.changedFiles, []);
+    assert.equal(report.convertedRules, 0);
+    assert.equal(report.retainedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("does not require Tailwind for an explicitly selected Vue module import", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script setup>\nimport styles from "./card.module.css";\n</script>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "card.module.css"), ".card { padding: 13px; }\n"),
+      rm(join(cwd, "globals.css")),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.deepEqual(report.changedFiles, []);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("migrates static template classes beside an external script block", async () => {
   const cwd = await fixture();
   const vue =
