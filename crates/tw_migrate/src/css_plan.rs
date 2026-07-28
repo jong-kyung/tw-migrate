@@ -728,6 +728,23 @@ fn index_shadow_complex(
     module: bool,
     index: &mut ShadowIndex,
 ) {
+    // Selector-mode `:global .card` changes the scope of a later compound.
+    // The rightmost-compound index does not carry that state, so retain
+    // conservatively rather than misclassifying `.card` as module-local.
+    if module
+        && selector.children.iter().any(|child| {
+            let ComplexSelectorChild::CompoundSelector(compound) = child else {
+                return false;
+            };
+            compound.children.iter().any(|simple| {
+                matches!(simple, SimpleSelector::PseudoClass(pseudo)
+                    if literal_ident(&pseudo.name) == Some("global") && pseudo.arg.is_none())
+            })
+        })
+    {
+        index.unverifiable = true;
+        return;
+    }
     let Some(compound) = selector.children.iter().rev().find_map(|child| match child {
         ComplexSelectorChild::CompoundSelector(compound) => Some(compound),
         ComplexSelectorChild::Combinator(_) => None,

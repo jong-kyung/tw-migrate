@@ -15,7 +15,7 @@ use crate::{
     css_plan::{
         ParseOptions, ParsedCss, RulePlan, SelectorKey, index_shadow_selectors, parse_css_rules,
     },
-    html_rewrite::{empty_source_plan, plan_html_file},
+    html_rewrite::{candidates_fit_attribute, empty_source_plan, plan_html_file},
     js_rewrite::{
         SourcePlan, opaque_reference_plan, plan_batch_source_file, plan_source_file, validate_js,
     },
@@ -143,23 +143,32 @@ fn rule_site_reachable(
 /// competitor: deleting a sibling rule that shares one of its sites would
 /// expose it over the layered replacement utility. Retention can cascade, so
 /// stamp to a fixpoint.
-fn stamp_in_file_shadow(rules: &mut [RulePlan], vue_file: Option<&SourceFile>) {
+fn stamp_in_file_shadow(
+    rules: &mut [RulePlan],
+    vue_file: Option<&SourceFile>,
+    additionally_retained: &HashSet<RuleId>,
+) {
     let Some(file) = vue_file else { return };
     loop {
         // Retained conditionals may contain selectors that are no longer
         // available on their synthetic plan.
         let retained_at_rule_unverifiable = rules.iter().any(|rule| {
-            rule.warning.is_some() && rule.selector.starts_with('@') && rule.contains_selectors
+            (rule.warning.is_some() || additionally_retained.contains(&rule_id(rule)))
+                && rule.selector.starts_with('@')
+                && rule.contains_selectors
         });
         let retained_selectors = rules
             .iter()
-            .filter(|rule| rule.warning.is_some() && !rule.selector.starts_with('@'))
+            .filter(|rule| {
+                (rule.warning.is_some() || additionally_retained.contains(&rule_id(rule)))
+                    && !rule.selector.starts_with('@')
+            })
             .map(|rule| format!("{} {{}}", rule.selector))
             .collect::<Vec<_>>();
         let retained = index_shadow_selectors(&retained_selectors, &[]);
         let mut changed = false;
         for rule in rules.iter_mut() {
-            if rule.warning.is_some() {
+            if rule.warning.is_some() || additionally_retained.contains(&rule_id(rule)) {
                 continue;
             }
             let shadowed = retained_at_rule_unverifiable
@@ -1014,7 +1023,7 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
                 rule.warning = Some("shadowed-scoped-rule");
             }
         }
-        stamp_in_file_shadow(&mut parsed.rules, vue_file);
+        stamp_in_file_shadow(&mut parsed.rules, vue_file, &HashSet::new());
     }
     if let Some(prefix) = request
         .utility_prefix
@@ -1332,7 +1341,32 @@ fn plan_request(
     // expose in-file cascade competitors the parse-time pass could not see.
     if vue_mode {
         let vue_file = request.files.iter().find(|file| file.path == request.css_path);
-        stamp_in_file_shadow(&mut rules, vue_file);
+        let quote_blocked = vue_file
+            .map(|file| {
+                rules
+                    .iter()
+                    .filter(|rule| rule.warning.is_none())
+                    .filter_map(|rule| {
+                        let Some(SelectorKey::Class(class)) = &rule.key else {
+                            return None;
+                        };
+                        file.html_elements.iter().any(|element| {
+                            element.class_attribute.as_ref().is_some_and(|attribute| {
+                                attribute.writable
+                                    && attribute.value.split_whitespace().any(|value| value == class)
+                                    && !candidates_fit_attribute(
+                                        &file.source,
+                                        attribute,
+                                        &rule.candidates,
+                                    )
+                            })
+                        })
+                        .then(|| rule_id(rule))
+                    })
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default();
+        stamp_in_file_shadow(&mut rules, vue_file, &quote_blocked);
     }
 
     let preserved_module_classes = rules
@@ -3879,6 +3913,59 @@ mod tests {
     }
 
     #[test]
+    fn vue_quote_blocked_rule_shadows_cooccurring_sibling() {
+        let source = "<template>\n  <p class=\"bad good\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n.bad { font-family: \"My Font\"; }\n.good { font-family: Arial; }\n</style>\n";
+        let value_start = source.find("bad good").unwrap();
+        let request = serde_json::json!({
+            "stylesheets": [{
+                "cssPath": "/project/Card.vue",
+                "cssSource": source,
+                "isModule": true,
+                "syntax": "css",
+                "vueBlocks": [{
+                    "outerStart": source.find("<style scoped>").unwrap(),
+                    "outerEnd": source.find("</style>").unwrap() + "</style>".len(),
+                    "contentStart": source.find("<style scoped>").unwrap() + "<style scoped>".len(),
+                    "contentEnd": source.find("</style>").unwrap(),
+                }],
+            }],
+            "files": [{
+                "path": "/project/Card.vue",
+                "source": source,
+                "htmlElements": [{
+                    "tag": "p",
+                    "classAttribute": {
+                        "value": "bad good",
+                        "start": value_start,
+                        "end": value_start + "bad good".len(),
+                    },
+                }],
+                "htmlStylesheets": [{
+                    "cssPath": "/project/Card.vue",
+                    "variants": [],
+                    "direct": true,
+                    "analyzable": true,
+                }],
+                "htmlReferencesSafe": true,
+            }],
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 2);
+        assert_eq!(response["files"], serde_json::json!([]));
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| warning["code"] == "shadowed-scoped-rule")
+        );
+    }
+
+    #[test]
     fn vue_retained_unbounded_target_shadows_sibling_rules() {
         let source = "<template>\n  <div class=\"ancestor\"><p class=\"card\">A</p></div>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n.ancestor > * { padding: 20px !important; }\n.card { padding: 13px; }\n</style>\n";
         let request = vue_batch_request(source, true, None);
@@ -3957,7 +4044,7 @@ mod tests {
     }
 
     #[test]
-    fn vue_module_global_arguments_shadow_only_their_own_selectors() {
+    fn vue_module_global_escapes_are_indexed_or_retained_conservatively() {
         let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n";
         // An unrelated `:global` escape must not disable the whole index.
         let mut unrelated = vue_batch_request(source, true, None);
@@ -3973,6 +4060,17 @@ mod tests {
             serde_json::json!([":global(.card) { padding: 20px; }"]);
         let response: serde_json::Value =
             serde_json::from_str(&plan_batch_json(&matching.to_string()).unwrap()).unwrap();
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["warnings"][0]["code"], "shadowed-scoped-rule");
+
+        // Selector-mode `:global` is not represented by a pseudo-class
+        // argument, so conservatively retain rather than treating `.card` as
+        // a localized module class.
+        let mut selector_mode = vue_batch_request(source, true, None);
+        selector_mode["stylesheets"][0]["vueShadowModuleCss"] =
+            serde_json::json!([":global .card { padding: 20px; }"]);
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&selector_mode.to_string()).unwrap()).unwrap();
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["warnings"][0]["code"], "shadowed-scoped-rule");
     }

@@ -193,6 +193,17 @@ fn attribute_quote(source: &str, attribute: &HtmlAttribute) -> Option<u8> {
         .filter(|byte| matches!(byte, b'"' | b'\''))
 }
 
+pub(crate) fn candidates_fit_attribute(
+    source: &str,
+    attribute: &HtmlAttribute,
+    candidates: &[String],
+) -> bool {
+    let quote = attribute_quote(source, attribute);
+    candidates
+        .iter()
+        .all(|candidate| !candidate_breaks_attribute(candidate, quote))
+}
+
 fn candidate_breaks_attribute(candidate: &str, quote: Option<u8>) -> bool {
     match quote {
         Some(quote) => candidate.bytes().any(|byte| byte == quote),
