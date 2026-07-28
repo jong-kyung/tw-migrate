@@ -35,7 +35,7 @@ export function loadProjectLess(packageRoot) {
   return loadProjectModule(packageRoot, "less", "Less must be installed in the target project.");
 }
 
-export async function compileSassEntry(sass, entryPath, source) {
+export async function compileSassEntry(sass, entryPath, source, { virtualEntry = false } = {}) {
   const options = {
     sourceMap: true,
     sourceMapIncludeSources: true,
@@ -57,6 +57,7 @@ export async function compileSassEntry(sass, entryPath, source) {
   const normalizedPaths = await normalizeEntryPaths(
     [...loadedPaths, ...mappings.map((mapping) => mapping.sourcePath)],
     entryPath,
+    virtualEntry,
   );
   return {
     css: result.css,
@@ -68,8 +69,10 @@ export async function compileSassEntry(sass, entryPath, source) {
   };
 }
 
-async function normalizeEntryPaths(paths, entryPath) {
-  const canonicalEntryPath = await realpath(entryPath).catch(() => entryPath);
+async function normalizeEntryPaths(paths, entryPath, virtualEntry) {
+  // A virtual SFC block entry never exists on disk; a real entry that
+  // vanished mid-run must keep failing as a source-integrity error.
+  const canonicalEntryPath = virtualEntry ? entryPath : await realpath(entryPath);
   return new Map(
     await Promise.all(
       [...new Set(paths)].map(async (path) => {

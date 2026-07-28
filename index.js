@@ -272,6 +272,7 @@ async function planPackage(context, packageRoot) {
     pathOwners,
     targetable,
     writablePackages,
+    scannedPaths,
   } = context;
   let preparedHtml;
   try {
@@ -299,6 +300,7 @@ async function planPackage(context, packageRoot) {
       snapshots,
       workspaceRoot,
       workspaces: options.workspaces,
+      scannedPaths,
     });
   } catch (error) {
     if (!options.force || isIntegrityError(error)) throw error;
@@ -473,13 +475,28 @@ async function planPackage(context, packageRoot) {
       parseHtmlSource(file.path, file.source);
     }
     for (const file of plan.files.filter((file) => extension(file.path) === ".vue")) {
-      const blocks = verifyVueSource(
+      const includeUnscoped = preparedVue.unscopedPaths.has(file.path);
+      const blocks = verifyVueSource(preparedVue.compiler, file.path, file.source, includeUnscoped);
+      // Blocks the migration never edited are byte-identical to the authored
+      // input and need no recompilation; a caller that only received a
+      // template edit must not suddenly require a preprocessor.
+      const untouched = new Map();
+      for (const block of verifyVueSource(
         preparedVue.compiler,
         file.path,
-        file.source,
-        preparedVue.unscopedPaths.has(file.path),
-      );
+        snapshots.get(file.path),
+        includeUnscoped,
+      )) {
+        const key = `${block.syntax}\0${block.content}`;
+        untouched.set(key, (untouched.get(key) ?? 0) + 1);
+      }
       for (const [index, block] of blocks.entries()) {
+        const key = `${block.syntax}\0${block.content}`;
+        const remaining = untouched.get(key) ?? 0;
+        if (remaining > 0) {
+          untouched.set(key, remaining - 1);
+          continue;
+        }
         if (block.syntax === "css") {
           validateCss(block.content);
         } else if (block.syntax === "less") {
@@ -499,6 +516,7 @@ async function planPackage(context, packageRoot) {
                 (preparedVue.sass ??= await loadProjectSass(packageRoot)),
                 `${file.path}.${index}.${block.syntax}`,
                 block.content,
+                { virtualEntry: true },
               )
             ).css,
           );
@@ -916,6 +934,7 @@ async function preparePackageVue({
   snapshots,
   workspaceRoot,
   workspaces,
+  scannedPaths,
 }) {
   const none = {
     files: new Map(),
@@ -988,6 +1007,7 @@ async function preparePackageVue({
             (sass ??= await loadProjectSass(packageRoot)),
             virtualPath,
             block.content,
+            { virtualEntry: true },
           )
         : await compileLessEntry(
             (less ??= await loadProjectLess(packageRoot)),
@@ -1086,11 +1106,22 @@ async function preparePackageVue({
   const stylePaths = new Set();
   const unscopedPaths = new Set();
   const ownedSources = sourceFiles.filter((file) => pathOwners.get(file.path) === packageRoot);
+  // A scanned HTML file without a stylesheet link never enters sourceFiles,
+  // but its class attributes are still a global usage surface (e.g. a
+  // gitignored mount shell), so its existence alone defeats the proof.
+  const sourcePathSet = new Set(sourceFiles.map((file) => file.path));
+  const hiddenHtml = scannedPaths.some(
+    (path) =>
+      extension(path) === ".html" &&
+      pathOwners.get(path) === packageRoot &&
+      !sourcePathSet.has(path),
+  );
   const projectWideUsageProven =
     packageIsPrivate &&
     workspaceRoot === packageRoot &&
     !workspaces &&
     !explicitStyle &&
+    !hiddenHtml &&
     ownedSources.every((file) => targetable.has(file.path)) &&
     ownedVue.every((file) => !analyses.get(file.path).retained);
   const elementsByFile = new Map();

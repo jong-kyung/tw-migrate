@@ -10,7 +10,7 @@ import { __unstable__loadDesignSystem as loadDesignSystem } from "tailwindcss";
 
 import { migrate } from "../index.js";
 import type { MigrateOptions } from "../index.d.ts";
-import { sourceMappings } from "../style-compiler.js";
+import { compileSassEntry, loadProjectSass, sourceMappings } from "../style-compiler.js";
 
 const initialCss = ".button { padding: 13px; }\n";
 const initialTsx =
@@ -1104,6 +1104,67 @@ test("retains root fallthrough for callers outside script setup", async () => {
     assert.ok(report.warnings.some((entry) => entry.code === "open-root-fallthrough"));
     assert.match(report.diff, /class="passed p-\[13px\]"/);
     assert.match(report.diff, /\.passed \{ padding: 13px; \}/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a vanished real Sass entry stays a fatal integrity error", async () => {
+  const sass = await loadProjectSass(process.cwd());
+  await mkdir(".tmp", { recursive: true });
+  const missing = join(process.cwd(), ".tmp", "missing-entry.scss");
+  await assert.rejects(compileSassEntry(sass, missing, ".a { padding: 1px; }"), /ENOENT/);
+  // Virtual SFC block entries never exist on disk and must keep compiling.
+  const virtual = await compileSassEntry(sass, missing, ".a { padding: 1px; }", {
+    virtualEntry: true,
+  });
+  assert.match(virtual.css, /padding: 1px/);
+});
+
+test("a scan-excluded HTML shell defeats the unscoped sole-source proof", async () => {
+  const cwd = await fixture();
+  try {
+    execFileSync("git", ["init", "-q"], { cwd });
+    await Promise.all([
+      rm(join(cwd, "Button.module.css")),
+      rm(join(cwd, "Button.tsx")),
+      writeFile(join(cwd, ".gitignore"), "index.html\n"),
+      writeFile(
+        join(cwd, "Card.vue"),
+        '<template>\n  <div class="shared">Card</div>\n  <span>Leaf</span>\n</template>\n<style>\n.shared { margin: 7px; }\n</style>\n',
+      ),
+      writeFile(join(cwd, "index.html"), '<div id="app" class="shared"></div>\n'),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "unscoped-style-block"));
+    assert.equal(report.convertedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("caller template edits do not recompile untouched preprocessor blocks", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div class="passed">Child</div>\n</template>\n<style scoped>\n.passed { padding: 13px; }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "App.vue"),
+        '<template>\n  <Child class="passed" />\n  <main>App</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n<style scoped lang="scss">\n.app-box { margin: $undefined-size; }\n</style>\n',
+      ),
+    ]);
+    // The caller's broken SCSS block was never selected or edited; migrating
+    // the child must not force it through the compiler.
+    const report = await migrate({ cwd, styleFile: "Child.vue", write: true });
+    assert.deepEqual(
+      report.warnings.filter((entry) => entry.code === "open-root-fallthrough"),
+      [],
+    );
+    assert.match(await readFile(join(cwd, "App.vue"), "utf8"), /class="passed p-\[13px\]"/);
+    assert.doesNotMatch(await readFile(join(cwd, "Child.vue"), "utf8"), /<style/);
   } finally {
     await cleanup(cwd);
   }
