@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (Phase 1 implemented)
+Accepted (Phases 1–2 implemented)
 
 ## Summary
 
@@ -11,10 +11,10 @@ consumed by JS/TS JSX and static HTML. This RFC extends the pipeline to Vue 3
 single-file components (`.vue`), where one file is both a stylesheet source
 (`<style>` blocks) and a consumer (`<template>` class usage).
 
-Support ships in staged phases. Phase 1 is closed over a single file: literal
-`class` attributes in `<template>` and plain-CSS `<style scoped>` blocks in the
-same SFC. Later phases add external stylesheet imports, preprocessor style
-blocks, literal `:class` bindings, and `<style module>`/`$style`.
+Support ships in staged phases. Phases 1–2 cover literal `class` attributes,
+inline scoped CSS/SCSS/Sass/Less, static external stylesheet edges, and direct
+`<script setup>` component relationships. Later phases add literal `:class`
+bindings and `<style module>`/`$style`.
 
 SFC parsing uses the official `@vue/compiler-sfc`, resolved from the target
 project like Sass and Less. The unofficial Rust toolchain `vize` was evaluated
@@ -247,17 +247,20 @@ and a second run produces no diff.
 
 ### Blocks
 
-- A plain-CSS `<style scoped>` block whose rules are all removed is deleted
-  whole, including its tags, mirroring fully migrated stylesheet deletion.
+- A supported `<style scoped>` block whose authored content becomes empty is
+  deleted whole, including its tags, mirroring fully migrated stylesheet
+  deletion.
   A partially migrated block keeps its remaining rules byte-exactly, and
   conditionals that were already empty in the authored source (often
   comment-only) are never removed.
-- `<style>` without `scoped` retains whole with `unscoped-style-block`.
-- `<style lang="…">` retains whole with `preprocessor-style-block` until
-  Phase 2.
+- `<style>` without `scoped` migrates only in a private package whose SFC is
+  the package's sole source; broader global reach retains with
+  `unscoped-style-block` until co-loading can be proven.
+- `<style scoped lang="scss|sass|less">` compiles with the target project's
+  compiler and maps generated rules back to block-relative authored offsets.
 - `<style module>` retains whole with `unsupported-sfc-block` until Phase 4.
-- `<style src="…">` retains with `unsupported-sfc-block`; Phase 2 revisits it
-  as an import edge.
+- `<style src="…">` contributes a stylesheet consumer edge; module forms
+  retain until Phase 4.
 - `<script>` contents and languages do not participate in template closure.
   Inline text is carried only by the existing CSS Module deletion guard;
   runtime class mutation remains outside the supported scope.
@@ -282,7 +285,7 @@ mirroring a missing Sass compiler.
 
 ## Implementation Phases
 
-### Phase 1: Same-File Static Migration (this RFC's committed scope)
+### Phase 1: Same-File Static Migration (implemented)
 
 - Add `.vue` discovery, explicit selection, and the dual-identity file model.
 - Add `vue.js` with project-local `@vue/compiler-sfc` loading and the
@@ -291,7 +294,7 @@ mirroring a missing Sass compiler.
   with the closure rules above.
 - Add packaged snapshot fixtures and one controlled ecosystem-ci Vue case.
 
-### Phase 2: External Stylesheets and Preprocessor Blocks
+### Phase 2: External Stylesheets and Preprocessor Blocks (implemented)
 
 - Treat `<script>` stylesheet imports (`.css`, `.module.css`, preprocessor
   variants) as consumer edges into the existing entry graph.
@@ -364,12 +367,12 @@ phases.
 
 ## Accepted Trade-offs
 
-1. Root fallthrough and component tags keep most SFCs in retain-with-append
-   mode until Phase 2's cross-file analysis; Phase 1 favors provable safety
-   over removal coverage, and only multi-root component-free templates reach
-   scoped-rule removal.
-2. Any dynamic class binding retains all scoped class rules in Phase 1.
-3. Real-world SFCs using `lang="scss"` see no Phase 1 changes.
+1. Cross-file closure recognizes direct local component imports from
+   `<script setup>`. Normal-script registration, aliases outside that graph,
+   publishable package roots, and components without known callers retain.
+2. Any dynamic class binding retains all scoped class rules until Phase 3.
+3. Inline preprocessors rely on source maps from the target project's
+   compiler; ambiguous or dependency-owned rule origins retain.
 4. Retain-with-append intentionally duplicates validated utilities alongside
    retained rules, as the global-rule policy already does.
 5. Choosing the official JS compiler keeps template analysis contracts
