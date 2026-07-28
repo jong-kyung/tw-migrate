@@ -102,6 +102,64 @@ fn mask_vue_source(source: &str, blocks: &[VueBlock]) -> Result<String, String> 
 
 /// Map a caller-supplied Vue retention code onto the static warning code and
 /// per-rule message used when an open template surface retains a scoped rule.
+fn rebase_vue_blocks(
+    original: &str,
+    current: &str,
+    blocks: &mut [VueBlock],
+) -> Result<(), String> {
+    if original == current {
+        return Ok(());
+    }
+    let mut prefix = original
+        .bytes()
+        .zip(current.bytes())
+        .take_while(|(left, right)| left == right)
+        .count();
+    while !original.is_char_boundary(prefix) || !current.is_char_boundary(prefix) {
+        prefix -= 1;
+    }
+    let max_suffix = original.len().min(current.len()) - prefix;
+    let mut suffix = original
+        .bytes()
+        .rev()
+        .zip(current.bytes().rev())
+        .take(max_suffix)
+        .take_while(|(left, right)| left == right)
+        .count();
+    while !original.is_char_boundary(original.len() - suffix)
+        || !current.is_char_boundary(current.len() - suffix)
+    {
+        suffix -= 1;
+    }
+    let original_change_end = original.len() - suffix;
+    let delta = current.len() as isize - original.len() as isize;
+    for block in blocks {
+        if block.outer_end <= prefix {
+            continue;
+        }
+        if block.outer_start < original_change_end {
+            return Err("A Vue style block changed during batch planning".to_string());
+        }
+        block.outer_start = block
+            .outer_start
+            .checked_add_signed(delta)
+            .ok_or_else(|| "Invalid Vue style block span".to_string())?;
+        block.outer_end = block
+            .outer_end
+            .checked_add_signed(delta)
+            .ok_or_else(|| "Invalid Vue style block span".to_string())?;
+        block.content_start = block
+            .content_start
+            .checked_add_signed(delta)
+            .ok_or_else(|| "Invalid Vue style block span".to_string())?;
+        block.content_end = block
+            .content_end
+            .checked_add_signed(delta)
+            .ok_or_else(|| "Invalid Vue style block span".to_string())?;
+    }
+    Ok(())
+}
+
 fn vue_retention_warning(code: &str) -> Result<(&'static str, &'static str), String> {
     match code {
         "dynamic-template-class" => Ok((
@@ -391,6 +449,8 @@ pub(crate) struct SourceFile {
     pub(crate) html_references_safe: bool,
     #[serde(default, rename = "htmlScriptText")]
     pub(crate) html_script_text: String,
+    #[serde(skip)]
+    pub(crate) prior_edits: Vec<Vec<Edit>>,
 }
 
 #[derive(Serialize)]
@@ -404,6 +464,8 @@ struct PlanResponse {
     retained_rules: usize,
     rules: Vec<RuleReport>,
     warnings: Vec<Warning>,
+    #[serde(skip)]
+    applied_edits: HashMap<String, Vec<Vec<Edit>>>,
 }
 
 #[derive(Serialize)]
@@ -824,6 +886,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
         originals.insert(path.clone(), source.clone());
     }
     let mut current = originals.clone();
+    let mut applied_edits: HashMap<String, Vec<Vec<Edit>>> = HashMap::new();
     let mut deleted = HashSet::new();
     let mut unlinked = HashSet::new();
     let mut candidates = BTreeSet::new();
@@ -845,12 +908,20 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
             if let Some(source) = current.get(&file.path) {
                 file.source.clone_from(source);
             }
+            file.prior_edits = applied_edits.get(&file.path).cloned().unwrap_or_default();
         }
         let mut stylesheet_request = batch_stylesheet_request(&request, stylesheet, files);
         stylesheet_request.css_source = current
             .get(&stylesheet.css_path)
             .cloned()
             .unwrap_or_else(|| stylesheet.css_source.clone());
+        if !stylesheet_request.vue_blocks.is_empty() {
+            rebase_vue_blocks(
+                &stylesheet.css_source,
+                &stylesheet_request.css_source,
+                &mut stylesheet_request.vue_blocks,
+            )?;
+        }
         stylesheet_request.tailwind_source = request
             .tailwind_path
             .as_ref()
@@ -868,6 +939,9 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
             true,
         )?;
 
+        for (path, batches) in response.applied_edits {
+            applied_edits.entry(path).or_default().extend(batches);
+        }
         for file in response.files {
             deleted.remove(&file.path);
             current.insert(file.path, file.source);
@@ -912,6 +986,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
         retained_rules,
         rules,
         warnings,
+        applied_edits: HashMap::new(),
     })
     .map_err(|error| error.to_string())
 }
@@ -1806,14 +1881,17 @@ fn plan_request(
     }
     let stylesheet_changed = !css_edits.is_empty();
     let mut deleted_files = Vec::new();
+    let mut applied_edits = HashMap::new();
     if stylesheet_changed {
         if let Some(masked) = vue_masked.as_deref() {
-            let source = finish_vue_stylesheet(&request, masked, css_edits)?;
+            let (source, edit_batches) = finish_vue_stylesheet(&request, masked, css_edits)?;
+            applied_edits.insert(request.css_path.clone(), edit_batches);
             planned_files.push(PlannedFile {
                 path: request.css_path.clone(),
                 source,
             });
         } else {
+            applied_edits.insert(request.css_path.clone(), vec![css_edits.clone()]);
             let source = apply_edits(&request.css_source, css_edits)?;
             let source = if is_module {
                 remove_empty_conditionals(source, request.syntax.parser_syntax())?
@@ -1843,6 +1921,10 @@ fn plan_request(
             result.edits.append(&mut result.removable_import_edits);
         }
         if !result.edits.is_empty() {
+            applied_edits
+                .entry(file.path.clone())
+                .or_insert_with(Vec::new)
+                .push(result.edits.clone());
             let source = apply_edits(&file.source, result.edits)?;
             if Path::new(&file.path)
                 .extension()
@@ -1885,6 +1967,7 @@ fn plan_request(
         retained_rules,
         rules: rule_reports,
         warnings,
+        applied_edits,
     })
 }
 
@@ -1903,7 +1986,7 @@ fn finish_vue_stylesheet(
     request: &PlanRequest,
     masked: &str,
     mut edits: Vec<Edit>,
-) -> Result<String, String> {
+) -> Result<(String, Vec<Vec<Edit>>), String> {
     if request
         .vue_blocks
         .iter()
@@ -1912,6 +1995,7 @@ fn finish_vue_stylesheet(
         return finish_vue_preprocessor_stylesheet(request, edits);
     }
     edits.sort_by_key(|edit| (edit.start, edit.end));
+    let mut edit_batches = vec![edits.clone()];
     // Template replacements must not leak into the masked CSS view; replace
     // them with same-length whitespace to keep the two strings aligned.
     let masked_edits = edits
@@ -1982,7 +2066,8 @@ fn finish_vue_stylesheet(
             span.1 = shift_offset(&conditional_edits, span.1);
         }
         source = apply_edits(&source, conditional_edits.clone())?;
-        masked = apply_edits(&masked, conditional_edits)?;
+        masked = apply_edits(&masked, conditional_edits.clone())?;
+        edit_batches.push(conditional_edits);
     }
 
     let mut removal_edits = Vec::new();
@@ -2013,21 +2098,23 @@ fn finish_vue_stylesheet(
     }
     if !removal_edits.is_empty() {
         source = apply_edits(&source, removal_edits.clone())?;
-        masked = apply_edits(&masked, removal_edits)?;
+        masked = apply_edits(&masked, removal_edits.clone())?;
+        edit_batches.push(removal_edits);
     }
     let allocator = oxc_css_parser::Allocator::default();
     CssParser::new(&allocator, &masked, Syntax::Css)
         .parse::<Stylesheet>()
         .map(|_| ())
         .map_err(|error| format!("Edited stylesheet no longer parses: {error:?}"))?;
-    Ok(source)
+    Ok((source, edit_batches))
 }
 
 fn finish_vue_preprocessor_stylesheet(
     request: &PlanRequest,
     mut edits: Vec<Edit>,
-) -> Result<String, String> {
+) -> Result<(String, Vec<Vec<Edit>>), String> {
     edits.sort_by_key(|edit| (edit.start, edit.end));
+    let mut edit_batches = vec![edits.clone()];
     let mut blocks = request.vue_blocks.clone();
     for block in &mut blocks {
         block.outer_start = shift_offset(&edits, block.outer_start);
@@ -2062,9 +2149,10 @@ fn finish_vue_preprocessor_stylesheet(
         });
     }
     if !removals.is_empty() {
-        source = apply_edits(&source, removals)?;
+        source = apply_edits(&source, removals.clone())?;
+        edit_batches.push(removals);
     }
-    Ok(source)
+    Ok((source, edit_batches))
 }
 
 fn apply_edits(source: &str, mut edits: Vec<Edit>) -> Result<String, String> {
@@ -4751,6 +4839,7 @@ mod tests {
             html_stylesheets: Vec::new(),
             html_references_safe: true,
             html_script_text: String::new(),
+            prior_edits: Vec::new(),
         };
         let candidates = HashMap::from([(
             SelectorKey::Class("a".to_string()),

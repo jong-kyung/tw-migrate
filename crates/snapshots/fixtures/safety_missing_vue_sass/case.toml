@@ -1,0 +1,11 @@
+isolated = true
+
+[[steps]]
+name = "without force"
+args = ["Card.vue", "--tailwind-css", "globals.css"]
+status = 1
+
+[[steps]]
+name = "with force"
+args = ["Card.vue", "--tailwind-css", "globals.css", "--force"]
+status = 0

@@ -230,11 +230,19 @@ fn rebased_attributes(file: &SourceFile) -> HashMap<usize, HtmlAttribute> {
             .flatten()
             .filter(|attribute| attribute.writable)
         })
+        .filter_map(|attribute| {
+            let original_start = attribute.start;
+            let mut attribute = attribute.clone();
+            for edits in &file.prior_edits {
+                attribute = rebase_attribute(attribute, edits)?;
+            }
+            Some((original_start, attribute))
+        })
         .collect::<Vec<_>>();
-    attributes.sort_by_key(|attribute| attribute.start);
+    attributes.sort_by_key(|(_, attribute)| attribute.start);
     let mut delta = 0isize;
     let mut rebased = HashMap::new();
-    for attribute in attributes {
+    for (original_start, attribute) in attributes {
         let Some(start) = attribute.start.checked_add_signed(delta) else {
             continue;
         };
@@ -243,7 +251,7 @@ fn rebased_attributes(file: &SourceFile) -> HashMap<usize, HtmlAttribute> {
                 continue;
             };
             delta += inserted as isize;
-            rebased.insert(attribute.start, live);
+            rebased.insert(original_start, live);
             continue;
         }
         let Some(end) = live_attribute_end(&file.source, start) else {
@@ -252,7 +260,7 @@ fn rebased_attributes(file: &SourceFile) -> HashMap<usize, HtmlAttribute> {
         let value = file.source[start..end].to_string();
         delta += (end - start) as isize - (attribute.end - attribute.start) as isize;
         rebased.insert(
-            attribute.start,
+            original_start,
             HtmlAttribute {
                 value,
                 start,
@@ -263,6 +271,44 @@ fn rebased_attributes(file: &SourceFile) -> HashMap<usize, HtmlAttribute> {
         );
     }
     rebased
+}
+
+fn rebase_attribute(mut attribute: HtmlAttribute, edits: &[Edit]) -> Option<HtmlAttribute> {
+    let original_start = attribute.start;
+    let original_end = attribute.end;
+    let exact = edits
+        .iter()
+        .find(|edit| edit.start == original_start && edit.end == original_end);
+    if edits.iter().any(|edit| {
+        !(edit.start == original_start && edit.end == original_end)
+            && edit.start < original_end
+            && (edit.end > original_start || edit.start == edit.end)
+    }) {
+        return None;
+    }
+    let delta = edits
+        .iter()
+        .filter(|edit| {
+            !(edit.start == original_start && edit.end == original_end)
+                && edit.end <= original_start
+        })
+        .map(|edit| edit.replacement.len() as isize - (edit.end - edit.start) as isize)
+        .sum::<isize>();
+    attribute.start = original_start.checked_add_signed(delta)?;
+    attribute.end = original_end.checked_add_signed(delta)?;
+    if let Some(edit) = exact {
+        if attribute.synthetic {
+            let value = edit.replacement.strip_prefix(" class=\"")?.strip_suffix('"')?;
+            attribute.start += " class=\"".len();
+            attribute.end = attribute.start + value.len();
+            attribute.value = value.to_string();
+            attribute.synthetic = false;
+        } else {
+            attribute.end = attribute.start + edit.replacement.len();
+            attribute.value.clone_from(&edit.replacement);
+        }
+    }
+    Some(attribute)
 }
 
 fn live_synthetic_class(source: &str, start: usize) -> Option<(HtmlAttribute, usize)> {
@@ -377,6 +423,7 @@ mod tests {
             }],
             html_references_safe: true,
             html_script_text: String::new(),
+            prior_edits: Vec::new(),
         }
     }
 
@@ -460,6 +507,7 @@ mod tests {
             }],
             html_references_safe: true,
             html_script_text: String::new(),
+            prior_edits: Vec::new(),
         };
         let candidates = HashMap::from([
             (

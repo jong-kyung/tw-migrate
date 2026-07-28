@@ -477,14 +477,19 @@ async function planPackage(context, packageRoot) {
         validateCss(block.content);
       } else if (block.syntax === "less") {
         validateCss(
-          (await compileLessEntry(preparedVue.less, `${file.path}.${index}.less`, block.content))
-            .css,
+          (
+            await compileLessEntry(
+              (preparedVue.less ??= await loadProjectLess(packageRoot)),
+              `${file.path}.${index}.less`,
+              block.content,
+            )
+          ).css,
         );
       } else {
         validateCss(
           (
             await compileSassEntry(
-              preparedVue.sass,
+              (preparedVue.sass ??= await loadProjectSass(packageRoot)),
               `${file.path}.${index}.${block.syntax}`,
               block.content,
             )
@@ -768,6 +773,7 @@ function vueReferenceTarget(importer, reference, vuePaths) {
 function vueLiteralTargets(file, vuePaths) {
   return new Set(
     [...file.source.matchAll(/(["'`])([^"'`\r\n]+)\1/g)].flatMap((match) => {
+      if (/[?*[\]]/.test(match[2]) && match[2].includes(".vue")) return [...vuePaths];
       const target = vueReferenceTarget(file.path, match[2], vuePaths);
       return target ? [target] : [];
     }),
@@ -907,6 +913,27 @@ async function preparePackageVue({
   const analyses = new Map(
     ownedVue.map((file) => [file.path, analyzeVueSource(loaded.compiler, file.path, file.source)]),
   );
+  const selectedPaths = new Set(selected.map((file) => file.path));
+  for (const file of ownedVue) {
+    const analysis = analyses.get(file.path);
+    if (analysis.retained) continue;
+    for (const edge of analysis.styleBlockImports) {
+      const local = stylesheetReferenceTargets(file.path, edge.reference, styleSources).some(
+        (path) => pathOwners.get(path) === packageRoot,
+      );
+      if (local) continue;
+      analysis.escapeUnverifiable = true;
+      if (selectedPaths.has(file.path)) {
+        warnings.push({
+          code: "unsupported-sfc-block",
+          file: file.path,
+          start: edge.start,
+          end: edge.end,
+          message: `The external style ${JSON.stringify(edge.reference)} could not be resolved inside the package.`,
+        });
+      }
+    }
+  }
   let sass;
   let less;
   for (const file of selected) {
@@ -1001,7 +1028,6 @@ async function preparePackageVue({
     !explicitStyle &&
     ownedSources.every((file) => targetable.has(file.path)) &&
     ownedVue.every((file) => !analyses.get(file.path).retained);
-  const selectedPaths = new Set(selected.map((file) => file.path));
   const elementsByFile = new Map();
   const addElement = (path, element, cssPaths) => {
     if (!element.classAttribute || cssPaths.length === 0) return;
@@ -1089,6 +1115,8 @@ async function preparePackageVue({
       analysis.blocks.length === 0 &&
       analysis.unscopedBlocks.length > 0 &&
       projectWideUsageProven &&
+      !analysis.dynamic &&
+      !componentOpen &&
       ownedSources.length === 1 &&
       ownedSources[0].path === file.path;
     if (analysis.unscopedBlocks.length > 0 && !migrateUnscoped) {
@@ -1126,6 +1154,7 @@ async function preparePackageVue({
     const elements = elementsByFile.get(file.path) ?? [];
     const contextPaths = [...new Set(elements.flatMap((element) => element.cssPaths))];
     if (contextPaths.length === 0) continue;
+    await rejectSymlinkTarget(file.path, packageRoot);
     files.set(file.path, {
       ...file,
       htmlElements: elements,

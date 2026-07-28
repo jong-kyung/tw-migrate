@@ -112,7 +112,7 @@ export function analyzeVueSource(compiler, path, source) {
       if (style.module !== undefined) {
         warn("unsupported-sfc-block", start, end, "A <style module src> block is not supported.");
       } else {
-        styleBlockImports.push(style.src);
+        styleBlockImports.push({ reference: style.src, start, end });
       }
       continue;
     }
@@ -223,6 +223,7 @@ export function analyzeVueSource(compiler, path, source) {
       block.contentStart,
       block.contentEnd,
     ]),
+    ...styleBlockImports.flatMap((entry) => [entry.start, entry.end]),
     ...[...state.elements, ...state.components].flatMap((element) =>
       [element.nodeStart, element.classAttribute, element.idAttribute]
         .filter((value) => value !== undefined)
@@ -268,7 +269,14 @@ export function analyzeVueSource(compiler, path, source) {
       .filter((node) => node.type === NODE_ELEMENT)
       .map((node) => offset(node.loc.start.offset)),
     scriptText,
-    styleImports: [...new Set([...styleImports, ...styleBlockImports])],
+    styleImports: [
+      ...new Set([...styleImports, ...styleBlockImports.map((entry) => entry.reference)]),
+    ],
+    styleBlockImports: styleBlockImports.map((entry) => ({
+      ...entry,
+      start: offset(entry.start),
+      end: offset(entry.end),
+    })),
     componentImports,
     dynamic: state.dynamic,
     alwaysRenderedRoots,
