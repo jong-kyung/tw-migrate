@@ -41,6 +41,25 @@ pub(crate) fn plan_html_file(
             .filter(|attribute| attribute.writable)
             .and_then(|attribute| live_attributes.get(&attribute.start))
         else {
+            // A read-only effective-root record receives the generated
+            // utility through fallthrough at runtime, so the promised
+            // conflict warning must still fire against its own classes.
+            if let Some((generated, existing)) = readonly_conflict(element, candidates) {
+                let span = element
+                    .class_attribute
+                    .as_ref()
+                    .map(|attribute| (attribute.start, attribute.end))
+                    .unwrap_or((0, 0));
+                warnings.push(Warning {
+                    code: "existing-tailwind-conflict",
+                    file: file.path.clone(),
+                    start: span.0,
+                    end: span.1,
+                    message: format!(
+                        "Generated utility `{generated}` may conflict with existing `{existing}`."
+                    ),
+                });
+            }
             continue;
         };
         let mut classes = class_attribute
@@ -190,6 +209,34 @@ fn collect_candidates(
 /// The quote delimiter enclosing a live attribute value: the byte before the
 /// value span, or `"` for a synthetic attribute the planner itself inserts
 /// with double quotes.
+/// The first (generated, existing) utility conflict on a record whose
+/// classes cannot be edited but still receive fallthrough utilities.
+fn readonly_conflict(
+    element: &crate::planner::HtmlElement,
+    candidates: &HashMap<SelectorKey, Vec<String>>,
+) -> Option<(String, String)> {
+    let classes = element_classes(element);
+    let ids = element_ids(element);
+    let keys = classes
+        .iter()
+        .map(|class| SelectorKey::Class((*class).to_string()))
+        .chain(ids.iter().map(|id| SelectorKey::Id((*id).to_string())));
+    for key in keys {
+        let Some(generated) = candidates.get(&key) else {
+            continue;
+        };
+        for candidate in generated {
+            if let Some(existing) = classes
+                .iter()
+                .find(|existing| tailwind_utilities_conflict(candidate, existing))
+            {
+                return Some((candidate.clone(), (*existing).to_string()));
+            }
+        }
+    }
+    None
+}
+
 fn attribute_quote(source: &str, attribute: &HtmlAttribute) -> Option<u8> {
     if attribute.synthetic {
         return Some(b'"');

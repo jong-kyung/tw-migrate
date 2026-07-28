@@ -1052,6 +1052,69 @@ test("an unresolved package stylesheet import shadows scoped deletion", async ()
   }
 });
 
+test("warns when a fallthrough utility conflicts with a child-root class", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div class="leaf p-2">Child</div>\n</template>\n<style scoped>\n.external { padding: 1rem; }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Child class="external" />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    const warning = report.warnings.find((entry) => entry.code === "existing-tailwind-conflict");
+    assert.ok(warning);
+    assert.match(warning.message, /p-2/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("an unscanned template format defeats the unscoped sole-source proof", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, "Button.module.css")),
+      rm(join(cwd, "Button.tsx")),
+      writeFile(
+        join(cwd, "Card.vue"),
+        '<template>\n  <div class="shared">Card</div>\n  <span>Leaf</span>\n</template>\n<style>\n.shared { margin: 7px; }\n</style>\n',
+      ),
+      writeFile(join(cwd, "Page.astro"), '<div class="shared">Astro</div>\n'),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "unscoped-style-block"));
+    assert.equal(report.convertedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("bare stylesheet specifiers never bind coincidental local files", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card other">A</p>\n  <p class="etc">B</p>\n</template>\n<script setup>\nimport "theme/card.css";\n</script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await mkdir(join(cwd, "theme"), { recursive: true });
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "theme", "card.css"), ".other { margin: 3px; }\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    // The bare specifier is a package import: it must not consume the local
+    // decoy, and its unresolved global CSS retains the scoped rule.
+    assert.ok(!report.diff.includes("m-[3px]"));
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.equal(report.convertedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("checks effective child roots when retaining child scoped rules", async () => {
   const cwd = await fixture();
   try {

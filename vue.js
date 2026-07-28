@@ -279,9 +279,10 @@ export function analyzeVueSource(compiler, path, source) {
       .filter((node) => node.type === NODE_ELEMENT)
       .map((node) => offset(node.loc.start.offset)),
     scriptText,
-    styleImports: [
-      ...new Set([...styleImports, ...styleBlockImports.map((entry) => entry.reference)]),
-    ],
+    // Script imports follow module-specifier semantics (bare = package);
+    // style-block `@import`s follow CSS semantics (bare = relative). They
+    // must resolve differently, so they stay separate.
+    scriptStyleImports: [...new Set(styleImports)],
     styleBlockImports: styleBlockImports.map((entry) => ({
       ...entry,
       start: offset(entry.start),

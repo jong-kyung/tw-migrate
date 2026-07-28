@@ -47,6 +47,31 @@ const STYLESHEET_SYNTAX = new Map([
   [".less", "less"],
 ]);
 const IGNORED_DIRECTORIES = new Set([".git", ".next", "build", "dist", "node_modules"]);
+// Extensions that cannot carry or consume class names, for the closed-world
+// unscoped proof. Anything else (unknown template formats, SVG with class
+// attributes) defeats the proof.
+const PROOF_INERT_EXTENSIONS = new Set([
+  ...SOURCE_EXTENSIONS,
+  ...STYLESHEET_SYNTAX.keys(),
+  "",
+  ".avif",
+  ".eot",
+  ".gif",
+  ".ico",
+  ".jpeg",
+  ".jpg",
+  ".json",
+  ".lock",
+  ".map",
+  ".md",
+  ".otf",
+  ".png",
+  ".ttf",
+  ".txt",
+  ".webp",
+  ".woff",
+  ".woff2",
+]);
 const RECOVERABLE_INPUT_ERROR = "TW_MIGRATE_RECOVERABLE_INPUT:";
 
 export async function migrate(options = {}) {
@@ -886,8 +911,11 @@ function buildVueComponentGraph(
 
   for (const file of sourceFiles) {
     let references;
+    let blockReferences = [];
     if (extension(file.path) === ".vue") {
-      references = analyses.get(file.path)?.styleImports ?? [];
+      const fileAnalysis = analyses.get(file.path);
+      references = fileAnalysis?.scriptStyleImports ?? [];
+      blockReferences = fileAnalysis?.styleBlockImports?.map((entry) => entry.reference) ?? [];
     } else {
       try {
         references = staticImports(file.path, file.source);
@@ -906,15 +934,19 @@ function buildVueComponentGraph(
     ) {
       for (const target of vuePaths) callerOpen.add(target);
     }
+    const resolvesOwned = (reference) =>
+      stylesheetReferenceTargets(file.path, reference, styleSources).some(
+        (path) => pathOwners.get(path) === packageRoot,
+      );
     if (
       pathOwners.get(file.path) === packageRoot &&
-      references.some(
+      (references.some(
         (reference) =>
           stylesheetReference.test(reference) &&
-          !stylesheetReferenceTargets(file.path, reference, styleSources).some(
-            (path) => pathOwners.get(path) === packageRoot,
-          ),
-      )
+          // Bare script specifiers load package CSS this analysis cannot see.
+          (!reference.startsWith(".") || !resolvesOwned(reference)),
+      ) ||
+        blockReferences.some((reference) => !resolvesOwned(reference)))
     ) {
       unresolvedStyleImport = true;
     }
@@ -1156,7 +1188,7 @@ async function preparePackageVue({
       pathOwners.get(path) === packageRoot &&
       !sourcePathSet.has(path),
   );
-  const projectWideUsageProven =
+  const provenBase =
     packageIsPrivate &&
     workspaceRoot === packageRoot &&
     !workspaces &&
@@ -1164,6 +1196,13 @@ async function preparePackageVue({
     !hiddenHtml &&
     ownedSources.every((file) => targetable.has(file.path)) &&
     ownedVue.every((file) => !analyses.get(file.path).retained);
+  // Files in unsupported template formats (.astro, .svelte, .mdx, ...) are
+  // never scanned, so the closed-world proof must confirm the package holds
+  // nothing outside the analyzed and provably inert extensions.
+  const projectWideUsageProven =
+    provenBase &&
+    !(await collectFiles(packageRoot, (path) => !PROOF_INERT_EXTENSIONS.has(extension(path))))
+      .length;
   const elementsByFile = new Map();
   const addElement = (path, element, cssPaths) => {
     if (!element.classAttribute || cssPaths.length === 0) return;
@@ -1185,9 +1224,16 @@ async function preparePackageVue({
     if (analysis.retained) continue;
     const importedStyles = [
       ...new Set(
-        analysis.styleImports
-          .flatMap((reference) => stylesheetReferenceTargets(file.path, reference, styleSources))
-          .filter((path) => pathOwners.get(path) === packageRoot),
+        [
+          // A bare script specifier is a package import; resolving it against
+          // the SFC directory could bind an unrelated local file.
+          ...analysis.scriptStyleImports
+            .filter((reference) => reference.startsWith("."))
+            .flatMap((reference) => stylesheetReferenceTargets(file.path, reference, styleSources)),
+          ...analysis.styleBlockImports.flatMap((entry) =>
+            stylesheetReferenceTargets(file.path, entry.reference, styleSources),
+          ),
+        ].filter((path) => pathOwners.get(path) === packageRoot),
       ),
     ];
     for (const path of importedStyles) stylePaths.add(path);
