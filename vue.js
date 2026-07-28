@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 
 const ESCAPE_SELECTOR = /(?:::v-|:)(?:deep|global|slotted)\(([^)]*)\)/g;
 const ESCAPE_RESIDUE = /(?:>>>|\/deep\/|::v-deep|:deep|::v-slotted|:slotted|::v-global|:global)/;
+const SUPPORTED_STYLE_ATTRIBUTES = new Set(["lang", "module", "scoped", "src"]);
 
 // @vue/compiler-core node and element kinds; @vue/compiler-sfc does not
 // re-export the enums, so the numeric values are pinned here.
@@ -68,6 +69,16 @@ export function analyzeVueSource(compiler, path, source) {
     warn("unsupported-sfc-block", 0, 0, reason);
     return { warnings: toByteWarnings(source, warnings), retained: true };
   }
+  if (descriptor.customBlocks.length > 0) {
+    const block = descriptor.customBlocks[0];
+    warn(
+      "unsupported-sfc-block",
+      block.loc.start.offset,
+      block.loc.end.offset,
+      `The custom <${block.type}> block is not analyzed.`,
+    );
+    return { warnings: toByteWarnings(source, warnings), retained: true };
+  }
   // An external script can mutate classes at runtime but cannot be fed to
   // the mention guard, so the file's class surface cannot be analyzed.
   if (descriptor.script?.src !== undefined || descriptor.scriptSetup?.src !== undefined) {
@@ -92,6 +103,19 @@ export function analyzeVueSource(compiler, path, source) {
   for (const style of descriptor.styles) {
     const start = style.loc.start.offset;
     const end = style.loc.end.offset;
+    const unsupportedAttributes = Object.keys(style.attrs).filter(
+      (attribute) => !SUPPORTED_STYLE_ATTRIBUTES.has(attribute),
+    );
+    if (unsupportedAttributes.length > 0) {
+      warn(
+        "unsupported-sfc-block",
+        start,
+        end,
+        `Unsupported <style> attributes: ${unsupportedAttributes.join(", ")}.`,
+      );
+      escapeUnverifiable = true;
+      continue;
+    }
     if (style.src !== undefined) {
       warn("unsupported-sfc-block", start, end, "A <style src> block is not analyzed.");
       // The external target may not be in the discovered corpus, so its
@@ -128,9 +152,10 @@ export function analyzeVueSource(compiler, path, source) {
       continue;
     }
     const outerStart = source.lastIndexOf("<style", start);
-    const closing = source.indexOf("</style>", end);
-    if (outerStart < 0 || closing < 0) {
+    const closing = source.slice(end).match(/^<\/style\s*>/)?.[0];
+    if (outerStart < 0 || !closing) {
       warn("unsupported-sfc-block", start, end, "The style block tags could not be located.");
+      escapeUnverifiable = true;
       continue;
     }
     // Scope-escape selectors (`:deep`, `:global`, `:slotted`) reach elements
@@ -146,7 +171,7 @@ export function analyzeVueSource(compiler, path, source) {
     }
     blocks.push({
       outerStart,
-      outerEnd: closing + "</style>".length,
+      outerEnd: end + closing.length,
       contentStart: start,
       contentEnd: end,
     });
@@ -283,6 +308,9 @@ function visitTemplateNode(source, node, state) {
       ) {
         state.dynamic = true;
         classBound = true;
+      }
+      if (prop.name === "bind" && prop.arg?.isStatic && prop.arg.content === "ref") {
+        state.dynamic = true;
       }
       if (!CLASS_INERT_DIRECTIVES.has(prop.name)) {
         state.dynamic = true;

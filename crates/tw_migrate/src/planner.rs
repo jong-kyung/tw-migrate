@@ -146,39 +146,36 @@ fn rule_site_reachable(
 fn stamp_in_file_shadow(rules: &mut [RulePlan], vue_file: Option<&SourceFile>) {
     let Some(file) = vue_file else { return };
     loop {
-        let mut retained_classes: HashSet<String> = HashSet::new();
-        let mut retained_ids: HashSet<String> = HashSet::new();
-        let mut retained_unclassifiable = false;
-        for rule in rules.iter().filter(|rule| rule.warning.is_some()) {
-            // Retained at-rules (`@keyframes`, `@font-face`) select no
-            // elements and cannot compete for a template site.
-            if rule.selector.starts_with('@') {
-                continue;
-            }
-            if rule.related_classes.is_empty()
-                && !matches!(&rule.key, Some(SelectorKey::Id(_)))
-            {
-                // A retained rule whose match surface is unknown (type or
-                // exotic selectors) can reach any site.
-                retained_unclassifiable = true;
-            }
-            retained_classes.extend(rule.related_classes.iter().cloned());
-            if let Some(SelectorKey::Id(name)) = &rule.key {
-                retained_ids.insert(name.clone());
-            }
-        }
+        // Retained conditionals may contain selectors that are no longer
+        // available on their synthetic plan.
+        let retained_at_rule_unverifiable = rules.iter().any(|rule| {
+            rule.warning.is_some() && rule.selector.starts_with('@') && rule.contains_selectors
+        });
+        let retained_selectors = rules
+            .iter()
+            .filter(|rule| rule.warning.is_some() && !rule.selector.starts_with('@'))
+            .map(|rule| format!("{} {{}}", rule.selector))
+            .collect::<Vec<_>>();
+        let retained = index_shadow_selectors(&retained_selectors, &[]);
         let mut changed = false;
         for rule in rules.iter_mut() {
             if rule.warning.is_some() {
                 continue;
             }
-            let shadowed = retained_unclassifiable
+            let shadowed = retained_at_rule_unverifiable
+                || retained.unverifiable
                 || rule_site_reachable(rule, file, |classes, element| {
-                    classes.iter().any(|class| retained_classes.contains(*class))
+                    classes
+                        .iter()
+                        .any(|class| retained.classes.contains(*class))
+                        || element
+                            .tag
+                            .as_deref()
+                            .is_some_and(|tag| retained.types.contains(&tag.to_ascii_lowercase()))
                         || element
                             .id_attribute
                             .as_ref()
-                            .is_some_and(|id| retained_ids.contains(&id.value))
+                            .is_some_and(|id| retained.ids.contains(&id.value))
                 });
             if shadowed {
                 rule.warning = Some("shadowed-scoped-rule");
@@ -3882,6 +3879,43 @@ mod tests {
     }
 
     #[test]
+    fn vue_retained_unbounded_target_shadows_sibling_rules() {
+        let source = "<template>\n  <div class=\"ancestor\"><p class=\"card\">A</p></div>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n.ancestor > * { padding: 20px !important; }\n.card { padding: 13px; }\n</style>\n";
+        let request = vue_batch_request(source, true, None);
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 2);
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| warning["code"] == "shadowed-scoped-rule")
+        );
+    }
+
+    #[test]
+    fn vue_retained_conditional_with_unbounded_target_shadows_sibling_rules() {
+        let source = "<template>\n  <div class=\"ancestor\"><p class=\"card\">A</p></div>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n@supports (content: \"x\") { .ancestor > * { padding: 20px; } }\n.card { padding: 13px; }\n</style>\n";
+        let request = vue_batch_request(source, true, None);
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 0);
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| warning["code"] == "shadowed-scoped-rule")
+        );
+    }
+
+    #[test]
     fn vue_module_shadow_indexes_only_global_selectors() {
         let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n";
         // A localized module class cannot match template elements.
@@ -3905,6 +3939,16 @@ mod tests {
     #[test]
     fn vue_retained_keyframes_do_not_shadow_sibling_rules() {
         let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n@keyframes spin { from { opacity: 0; } to { opacity: 1; } }\n.card { padding: 13px; }\n</style>\n";
+        let request = vue_batch_request(source, true, None);
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(response["retainedRules"], 1);
+    }
+
+    #[test]
+    fn vue_retained_definition_at_rules_do_not_shadow_sibling_rules() {
+        let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n@property --accent { syntax: \"<color>\"; inherits: false; initial-value: red; }\n.card { padding: 13px; }\n</style>\n";
         let request = vue_batch_request(source, true, None);
         let response: serde_json::Value =
             serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();

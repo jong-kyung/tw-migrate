@@ -60,6 +60,7 @@ pub(crate) struct RulePlan {
     pub(crate) provenance_offsets: Vec<usize>,
     pub(crate) selector: String,
     pub(crate) related_classes: Vec<String>,
+    pub(crate) contains_selectors: bool,
     pub(crate) key: Option<SelectorKey>,
     pub(crate) relationship: Option<ModuleRelationship>,
     pub(crate) candidates: Vec<String>,
@@ -197,6 +198,7 @@ pub(crate) fn parse_css_rules(
             provenance_offsets,
             selector,
             related_classes: selector_classes(rule),
+            contains_selectors: true,
             key,
             relationship,
             candidates,
@@ -601,21 +603,34 @@ fn retained_at_rule(
         .as_ref()
         .map_or(at_rule.span.end, |block| block.span.start);
     let mut related_classes = BTreeSet::new();
-    if let Some(block) = &at_rule.block {
+    let contains_selectors = at_rule.block.as_ref().is_some_and(|block| {
         collect_statement_classes(&block.statements, &mut related_classes);
-    }
+        statements_contain_selectors(&block.statements)
+    });
     RulePlan {
         span: at_rule.span.start..at_rule.span.end,
         authored_span: None,
         provenance_offsets: Vec::new(),
         selector: source[at_rule.span.start..end].trim().to_string(),
         related_classes: related_classes.into_iter().collect(),
+        contains_selectors,
         key: None,
         relationship: None,
         candidates: Vec::new(),
         candidate_properties: HashMap::new(),
         warning: Some(warning),
     }
+}
+
+fn statements_contain_selectors(statements: &[Statement<'_>]) -> bool {
+    statements.iter().any(|statement| match statement {
+        Statement::QualifiedRule(_) => true,
+        Statement::AtRule(at_rule) => at_rule
+            .block
+            .as_ref()
+            .is_some_and(|block| statements_contain_selectors(&block.statements)),
+        _ => false,
+    })
 }
 
 fn collect_statement_classes(statements: &[Statement<'_>], classes: &mut BTreeSet<String>) {
