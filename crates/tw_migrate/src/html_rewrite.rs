@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap};
 use crate::{
     css_plan::SelectorKey,
     js_rewrite::{CandidateMatch, SourcePlan},
-    planner::{Edit, HtmlAttribute, SourceFile, Warning},
+    planner::{element_classes, element_ids, Edit, HtmlAttribute, SourceFile, Warning},
     utilities::tailwind_utilities_conflict,
 };
 
@@ -38,6 +38,7 @@ pub(crate) fn plan_html_file(
         let Some(class_attribute) = element
             .class_attribute
             .as_ref()
+            .filter(|attribute| attribute.writable)
             .and_then(|attribute| live_attributes.get(&attribute.start))
         else {
             continue;
@@ -50,7 +51,8 @@ pub(crate) fn plan_html_file(
         let mut additions = Vec::new();
 
         let quote = attribute_quote(&file.source, class_attribute);
-        for class in classes.clone() {
+        for class in element_classes(element) {
+            let class = class.to_string();
             let key = SelectorKey::Class(class.clone());
             let matched = candidates.contains_key(&key);
             if matched {
@@ -73,13 +75,9 @@ pub(crate) fn plan_html_file(
                 *matched_module_refs.entry(class).or_default() += 1;
             }
         }
-        if let Some(id) = element
-            .id_attribute
-            .as_ref()
-            .and_then(|attribute| live_attributes.get(&attribute.start))
-        {
+        for id in element_ids(element) {
             collect_candidates(
-                SelectorKey::Id(id.value.clone()),
+                SelectorKey::Id(id.to_string()),
                 class_attribute,
                 quote,
                 &contexts,
@@ -91,13 +89,17 @@ pub(crate) fn plan_html_file(
             );
         }
         // Parity with the JS rewrite path: a generated utility that overlaps
-        // an existing Tailwind class on the element is appended with a
-        // warning, and Tailwind's output order decides between them.
+        // an existing Tailwind class on the rendered element is appended with
+        // a warning, and Tailwind's output order decides between them.
+        let existing_classes = element_classes(element)
+            .into_iter()
+            .chain(classes.iter().map(String::as_str))
+            .collect::<BTreeSet<_>>();
         if let Some((generated, existing)) = additions.iter().find_map(|candidate| {
-            classes
+            existing_classes
                 .iter()
                 .find(|existing| tailwind_utilities_conflict(candidate, existing))
-                .map(|existing| (candidate.clone(), existing.clone()))
+                .map(|existing| (candidate.clone(), (*existing).to_string()))
         }) {
             warnings.push(Warning {
                 code: "existing-tailwind-conflict",
@@ -120,7 +122,9 @@ pub(crate) fn plan_html_file(
         } else {
             value
         };
-        if replacement != class_attribute.value {
+        if (!class_attribute.synthetic || !classes.is_empty())
+            && replacement != class_attribute.value
+        {
             edits.push(Edit {
                 start: class_attribute.start,
                 end: class_attribute.end,
@@ -412,6 +416,9 @@ mod tests {
                     writable: true,
                 }),
                 id_attribute: None,
+                match_classes: None,
+                match_ids: None,
+                match_tag: None,
                 tag: None,
                 css_paths: Vec::new(),
             }],
@@ -496,6 +503,9 @@ mod tests {
                     synthetic: false,
                     writable: true,
                 }),
+                match_classes: None,
+                match_ids: None,
+                match_tag: None,
                 tag: None,
                 css_paths: Vec::new(),
             }],

@@ -178,31 +178,68 @@ fn vue_retention_warning(code: &str) -> Result<(&'static str, &'static str), Str
     }
 }
 
+pub(crate) fn element_classes(element: &HtmlElement) -> Vec<&str> {
+    element.match_classes.as_ref().map_or_else(
+        || {
+            element
+                .class_attribute
+                .as_ref()
+                .map(|attribute| attribute.value.split_whitespace().collect())
+                .unwrap_or_default()
+        },
+        |classes| classes.iter().map(String::as_str).collect(),
+    )
+}
+
+pub(crate) fn element_ids(element: &HtmlElement) -> Vec<&str> {
+    element.match_ids.as_ref().map_or_else(
+        || {
+            element
+                .id_attribute
+                .as_ref()
+                .map(|attribute| vec![attribute.value.as_str()])
+                .unwrap_or_default()
+        },
+        |ids| ids.iter().map(String::as_str).collect(),
+    )
+}
+
+fn element_tag(element: &HtmlElement) -> Option<&str> {
+    element
+        .match_tag
+        .as_deref()
+        .or(element.tag.as_deref())
+}
+
+fn element_has_context(element: &HtmlElement, css_path: &str) -> bool {
+    element.css_paths.is_empty() || element.css_paths.iter().any(|path| path == css_path)
+}
+
 /// Whether one of `rule`'s template sites (elements carrying the rule's
 /// class or id) satisfies `reachable`, which receives the site's class list
 /// and element.
 fn rule_site_reachable(
     rule: &RulePlan,
     file: &SourceFile,
+    css_path: &str,
     reachable: impl Fn(&[&str], &HtmlElement) -> bool,
 ) -> bool {
-    file.html_elements.iter().any(|element| {
-        let classes = element
-            .class_attribute
-            .as_ref()
-            .map(|attribute| attribute.value.split_whitespace().collect::<Vec<_>>())
-            .unwrap_or_default();
-        let site_matches_rule = rule
-            .related_classes
-            .iter()
-            .any(|class| classes.contains(&class.as_str()))
-            || matches!(
-                &rule.key,
-                Some(SelectorKey::Id(name))
-                    if element.id_attribute.as_ref().is_some_and(|id| id.value == *name)
-            );
-        site_matches_rule && reachable(&classes, element)
-    })
+    file.html_elements
+        .iter()
+        .filter(|element| element_has_context(element, css_path))
+        .any(|element| {
+            let classes = element_classes(element);
+            let ids = element_ids(element);
+            let site_matches_rule = rule
+                .related_classes
+                .iter()
+                .any(|class| classes.contains(&class.as_str()))
+                || matches!(
+                    &rule.key,
+                    Some(SelectorKey::Id(name)) if ids.contains(&name.as_str())
+                );
+            site_matches_rule && reachable(&classes, element)
+        })
 }
 
 /// A retained rule in the same scoped block is itself an unlayered
@@ -211,10 +248,10 @@ fn rule_site_reachable(
 /// stamp to a fixpoint.
 fn stamp_in_file_shadow(
     rules: &mut [RulePlan],
-    vue_file: Option<&SourceFile>,
+    vue_files: &[&SourceFile],
+    css_path: &str,
     additionally_retained: &HashSet<RuleId>,
 ) {
-    let Some(file) = vue_file else { return };
     loop {
         // Retained conditionals may contain selectors that are no longer
         // available on their synthetic plan.
@@ -239,18 +276,18 @@ fn stamp_in_file_shadow(
             }
             let shadowed = retained_at_rule_unverifiable
                 || retained.unverifiable
-                || rule_site_reachable(rule, file, |classes, element| {
-                    classes
-                        .iter()
-                        .any(|class| retained.classes.contains(*class))
-                        || element
-                            .tag
-                            .as_deref()
-                            .is_some_and(|tag| retained.types.contains(&tag.to_ascii_lowercase()))
-                        || element
-                            .id_attribute
-                            .as_ref()
-                            .is_some_and(|id| retained.ids.contains(&id.value))
+                || vue_files.iter().any(|file| {
+                    rule_site_reachable(rule, file, css_path, |classes, element| {
+                        classes
+                            .iter()
+                            .any(|class| retained.classes.contains(*class))
+                            || element_tag(element).is_some_and(|tag| {
+                                retained.types.contains(&tag.to_ascii_lowercase())
+                            })
+                            || element_ids(element)
+                                .iter()
+                                .any(|id| retained.ids.contains(*id))
+                    })
                 });
             if shadowed {
                 rule.warning = Some("shadowed-scoped-rule");
@@ -436,6 +473,14 @@ pub(crate) struct HtmlAttribute {
 pub(crate) struct HtmlElement {
     pub(crate) class_attribute: Option<HtmlAttribute>,
     pub(crate) id_attribute: Option<HtmlAttribute>,
+    /// Selector surface to match when the writable site is a Vue component
+    /// call whose attributes fall through to a different root element.
+    #[serde(default)]
+    pub(crate) match_classes: Option<Vec<String>>,
+    #[serde(default)]
+    pub(crate) match_ids: Option<Vec<String>>,
+    #[serde(default)]
+    pub(crate) match_tag: Option<String>,
     /// Element tag name, provided by the Vue lowering for shadow matching.
     #[serde(default)]
     pub(crate) tag: Option<String>,
@@ -1119,14 +1164,21 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
             rule.warning = Some("shared-preprocessor-source");
         }
     }
-    // A closed Vue SFC may delete scoped rules, but a scoped selector's
-    // `[data-v-*]` specificity (and its unlayered position) let it outrank
-    // non-scoped CSS that a layered Tailwind utility would lose to. Retain
-    // any rule whose class the package's non-scoped corpus also targets.
-    if vue_masked.is_some() && is_module && !request.vue_unscoped {
+    // A removable Vue rule is unlayered and can outrank non-scoped CSS that a
+    // layered Tailwind utility would lose to. Retain any rule whose reachable
+    // template site the package's non-scoped corpus can also target.
+    if vue_masked.is_some() && is_module {
         let shadow = index_shadow_selectors(&request.vue_shadow_css, &request.vue_shadow_module_css);
         let unverifiable = request.vue_shadow_unverifiable || shadow.unverifiable;
-        let vue_file = request.files.iter().find(|file| file.path == request.css_path);
+        let vue_files = request
+            .files
+            .iter()
+            .filter(|file| {
+                file.html_stylesheets.iter().any(|context| {
+                    context.analyzable && context.css_path == request.css_path
+                })
+            })
+            .collect::<Vec<_>>();
         for rule in &mut parsed.rules {
             if rule.warning.is_some() {
                 continue;
@@ -1139,26 +1191,27 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
                     .related_classes
                     .iter()
                     .any(|class| shadow.classes.contains(class))
-                || vue_file.is_some_and(|file| {
-                    rule_site_reachable(rule, file, |classes, element| {
+                || vue_files.iter().any(|file| {
+                    rule_site_reachable(rule, file, &request.css_path, |classes, element| {
                         classes.iter().any(|class| shadow.classes.contains(*class))
-                            || element
-                                .tag
-                                .as_deref()
-                                .is_some_and(|tag| {
-                                    shadow.types.contains(&tag.to_ascii_lowercase())
-                                })
-                            || element
-                                .id_attribute
-                                .as_ref()
-                                .is_some_and(|id| shadow.ids.contains(&id.value))
+                            || element_tag(element).is_some_and(|tag| {
+                                shadow.types.contains(&tag.to_ascii_lowercase())
+                            })
+                            || element_ids(element)
+                                .iter()
+                                .any(|id| shadow.ids.contains(*id))
                     })
                 });
             if shadowed {
                 rule.warning = Some("shadowed-scoped-rule");
             }
         }
-        stamp_in_file_shadow(&mut parsed.rules, vue_file, &HashSet::new());
+        stamp_in_file_shadow(
+            &mut parsed.rules,
+            &vue_files,
+            &request.css_path,
+            &HashSet::new(),
+        );
     }
     if let Some(prefix) = request
         .utility_prefix
@@ -1556,33 +1609,47 @@ fn plan_request(
     // Late retention stamps (blocked candidates, unproven relationships) can
     // expose in-file cascade competitors the parse-time pass could not see.
     if vue_mode {
-        let vue_file = request.files.iter().find(|file| file.path == request.css_path);
-        let quote_blocked = vue_file
-            .map(|file| {
-                rules
-                    .iter()
-                    .filter(|rule| rule.warning.is_none())
-                    .filter_map(|rule| {
-                        let Some(SelectorKey::Class(class)) = &rule.key else {
-                            return None;
-                        };
-                        file.html_elements.iter().any(|element| {
-                            element.class_attribute.as_ref().is_some_and(|attribute| {
-                                attribute.writable
-                                    && attribute.value.split_whitespace().any(|value| value == class)
-                                    && !candidates_fit_attribute(
-                                        &file.source,
-                                        attribute,
-                                        &rule.candidates,
-                                    )
-                            })
-                        })
-                        .then(|| rule_id(rule))
-                    })
-                    .collect::<HashSet<_>>()
+        let vue_files = request
+            .files
+            .iter()
+            .filter(|file| {
+                file.html_stylesheets.iter().any(|context| {
+                    context.analyzable && context.css_path == request.css_path
+                })
             })
-            .unwrap_or_default();
-        stamp_in_file_shadow(&mut rules, vue_file, &quote_blocked);
+            .collect::<Vec<_>>();
+        let quote_blocked = rules
+            .iter()
+            .filter(|rule| rule.warning.is_none())
+            .filter_map(|rule| {
+                let Some(SelectorKey::Class(class)) = &rule.key else {
+                    return None;
+                };
+                vue_files.iter().any(|file| {
+                    file.html_elements
+                        .iter()
+                        .filter(|element| element_has_context(element, &request.css_path))
+                        .any(|element| {
+                            element_classes(element).contains(&class.as_str())
+                                && element.class_attribute.as_ref().is_some_and(|attribute| {
+                                    attribute.writable
+                                        && !candidates_fit_attribute(
+                                            &file.source,
+                                            attribute,
+                                            &rule.candidates,
+                                        )
+                                })
+                        })
+                })
+                    .then(|| rule_id(rule))
+            })
+            .collect::<HashSet<_>>();
+        stamp_in_file_shadow(
+            &mut rules,
+            &vue_files,
+            &request.css_path,
+            &quote_blocked,
+        );
     }
 
     let preserved_module_classes = rules

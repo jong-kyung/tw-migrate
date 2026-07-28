@@ -1,10 +1,10 @@
 <template>
-  <Child />
-  <main>Parent</main>
+  <main class="card">Card</main>
+  <span>Leaf</span>
 </template>
-<script setup>
-import Child from "./Child.vue";
-</script>
 <style scoped>
-.leaf { margin: 7px; }
+.card { margin: 7px; }
+</style>
+<style lang="scss">
+.note { color: red; }
 </style>

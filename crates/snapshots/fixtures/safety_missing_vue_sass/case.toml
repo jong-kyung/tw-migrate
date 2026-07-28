@@ -1,11 +1,16 @@
 isolated = true
 
 [[steps]]
-name = "without force"
+name = "retained unscoped Sass"
 args = ["Card.vue", "--tailwind-css", "globals.css"]
+status = 0
+
+[[steps]]
+name = "required without force"
+args = ["Child.vue", "--tailwind-css", "globals.css"]
 status = 1
 
 [[steps]]
-name = "with force"
-args = ["Card.vue", "--tailwind-css", "globals.css", "--force"]
+name = "required with force"
+args = ["Child.vue", "--tailwind-css", "globals.css", "--force"]
 status = 0

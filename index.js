@@ -298,6 +298,7 @@ async function planPackage(context, packageRoot) {
       explicitStyle,
       snapshots,
       workspaceRoot,
+      workspaces: options.workspaces,
     });
   } catch (error) {
     if (!options.force || isIntegrityError(error)) throw error;
@@ -472,7 +473,12 @@ async function planPackage(context, packageRoot) {
       parseHtmlSource(file.path, file.source);
     }
     for (const file of plan.files.filter((file) => extension(file.path) === ".vue")) {
-      const blocks = verifyVueSource(preparedVue.compiler, file.path, file.source);
+      const blocks = verifyVueSource(
+        preparedVue.compiler,
+        file.path,
+        file.source,
+        preparedVue.unscopedPaths.has(file.path),
+      );
       for (const [index, block] of blocks.entries()) {
         if (block.syntax === "css") {
           validateCss(block.content);
@@ -769,6 +775,18 @@ function sourceReferencesStyle(file, stylePath) {
   );
 }
 
+function isLocalVueReference(reference) {
+  return (
+    reference.startsWith(".") ||
+    reference.startsWith("/") ||
+    reference.startsWith("@/") ||
+    reference.startsWith("~/") ||
+    reference.startsWith("#") ||
+    reference.includes("/") ||
+    reference.includes(".vue")
+  );
+}
+
 function vueReferenceTarget(importer, reference, vuePaths) {
   if (!reference.startsWith(".")) return undefined;
   const target = resolve(dirname(importer), reference);
@@ -780,7 +798,8 @@ function vueLiteralTargets(file, vuePaths) {
     [...file.source.matchAll(/(["'`])([^"'`\r\n]+)\1/g)].flatMap((match) => {
       if (/[?*[\]{}]/.test(match[2]) && match[2].includes("vue")) return [...vuePaths];
       const target = vueReferenceTarget(file.path, match[2], vuePaths);
-      return target ? [target] : [];
+      if (target) return [target];
+      return match[2].includes(".vue") ? [...vuePaths] : [];
     }),
   );
 }
@@ -810,10 +829,17 @@ function buildVueComponentGraph(ownedVue, sourceFiles, analyses) {
       if (matches.length !== 1) return [];
       const edge = { parent: file.path, child: matches[0].target, site };
       callers.get(edge.child).push(edge);
+      if (site.idAttribute || analysis.dynamic) {
+        callerOpen.add(edge.child);
+        analyses.get(edge.child).rootIdsOverridden = true;
+      }
       return [edge];
     });
     analysis.componentsOpen = analysis.resolvedComponents.length !== analysis.componentSites.length;
     analysis.setupImports = new Set(bindings.map((entry) => entry.target));
+    if (analysis.componentsOpen) {
+      for (const target of vuePaths) callerOpen.add(target);
+    }
   }
 
   for (const file of sourceFiles) {
@@ -826,6 +852,17 @@ function buildVueComponentGraph(ownedVue, sourceFiles, analyses) {
       } catch {
         references = [];
       }
+    }
+    if (
+      /\bimport\s*\(/.test(file.source) ||
+      references.some(
+        (reference) =>
+          !/\.(?:css|scss|sass|less)(?:$|[?#])/.test(reference) &&
+          isLocalVueReference(reference) &&
+          !vueReferenceTarget(file.path, reference, vuePaths),
+      )
+    ) {
+      for (const target of vuePaths) callerOpen.add(target);
     }
     const imported = new Set(
       references.flatMap((reference) => {
@@ -878,11 +915,13 @@ async function preparePackageVue({
   explicitStyle,
   snapshots,
   workspaceRoot,
+  workspaces,
 }) {
   const none = {
     files: new Map(),
     stylesheets: [],
     stylePaths: new Set(),
+    unscopedPaths: new Set(),
     warnings: [],
     compiler: undefined,
   };
@@ -941,12 +980,8 @@ async function preparePackageVue({
   }
   let sass;
   let less;
-  for (const file of selected) {
-    const analysis = analyses.get(file.path);
-    if (analysis.retained) continue;
-    for (const block of [...analysis.blocks, ...analysis.unscopedBlocks].filter(
-      (block) => block.syntax !== "css",
-    )) {
+  const compileBlocks = async (file, blocks) => {
+    for (const block of blocks.filter((block) => block.syntax !== "css")) {
       const virtualPath = `${file.path}.${block.syntax}`;
       const compiled = isSassPath(virtualPath)
         ? await compileSassEntry(
@@ -970,6 +1005,10 @@ async function preparePackageVue({
       block.sourcePath = virtualPath;
       block.sourceMappings = compiled.sourceMappings;
     }
+  };
+  for (const file of selected) {
+    const analysis = analyses.get(file.path);
+    if (!analysis.retained) await compileBlocks(file, analysis.blocks);
   }
   const vueGraph = buildVueComponentGraph(ownedVue, sourceFiles, analyses);
 
@@ -996,7 +1035,7 @@ async function preparePackageVue({
     // Module class and id names are localized at build time; the planner
     // indexes only their global (type/attribute/:global) selector surface.
     if (isStylesheetModule(path)) vueShadowModuleCss.push(source);
-    else vueShadowCss.push(source);
+    else vueShadowCss.push({ path, source });
   }
   for (const file of sourceFiles) {
     if (
@@ -1016,9 +1055,27 @@ async function preparePackageVue({
     if (analysis.escapeUnverifiable) vueShadowUnverifiable = true;
     for (const text of analysis.shadowPreprocessorTexts) {
       if (generatesSelectors(text)) vueShadowUnverifiable = true;
-      else vueShadowCss.push(text);
+      else vueShadowCss.push({ path: file.path, source: text });
     }
-    vueShadowCss.push(...analysis.shadowCssTexts);
+    for (const text of analysis.unscopedShadowPreprocessorTexts) {
+      if (generatesSelectors(text)) vueShadowUnverifiable = true;
+      else {
+        vueShadowCss.push({ path: file.path, source: text, migratingUnscoped: true });
+      }
+    }
+    vueShadowCss.push(
+      ...analysis.shadowCssTexts.map((source) => ({ path: file.path, source })),
+      ...analysis.unscopedShadowCssTexts.map((source) => ({
+        path: file.path,
+        source,
+        migratingUnscoped: true,
+      })),
+      ...analysis.blocks.map((block) => ({
+        path: file.path,
+        source: block.analysisSource ?? block.content,
+        scoped: true,
+      })),
+    );
     vueShadowModuleCss.push(...analysis.shadowModuleCssTexts);
   }
 
@@ -1027,9 +1084,12 @@ async function preparePackageVue({
   const files = new Map();
   const stylesheets = [];
   const stylePaths = new Set();
+  const unscopedPaths = new Set();
   const ownedSources = sourceFiles.filter((file) => pathOwners.get(file.path) === packageRoot);
   const projectWideUsageProven =
     packageIsPrivate &&
+    workspaceRoot === packageRoot &&
+    !workspaces &&
     !explicitStyle &&
     ownedSources.every((file) => targetable.has(file.path)) &&
     ownedVue.every((file) => !analyses.get(file.path).retained);
@@ -1037,16 +1097,17 @@ async function preparePackageVue({
   const addElement = (path, element, cssPaths) => {
     if (!element.classAttribute || cssPaths.length === 0) return;
     const elements = elementsByFile.get(path) ?? [];
-    const existing = elements.find(
-      (entry) => entry.classAttribute.start === element.classAttribute.start,
-    );
-    if (existing) {
-      existing.cssPaths = [...new Set([...existing.cssPaths, ...cssPaths])];
-    } else {
-      elements.push({ ...element, cssPaths: [...new Set(cssPaths)] });
-      elementsByFile.set(path, elements);
-    }
+    elements.push({ ...element, cssPaths: [...new Set(cssPaths)] });
+    elementsByFile.set(path, elements);
   };
+  const componentRootSite = (site, root) => ({
+    ...site,
+    matchClasses: [site.classAttribute, root.classAttribute].flatMap(
+      (attribute) => attribute?.value.split(/\s+/).filter(Boolean) ?? [],
+    ),
+    matchIds: [site.idAttribute?.value ?? root.idAttribute?.value].filter(Boolean),
+    matchTag: root.tag,
+  });
 
   for (const file of selected) {
     const analysis = analyses.get(file.path);
@@ -1063,7 +1124,13 @@ async function preparePackageVue({
       ...(analysis.blocks.length > 0 || analysis.unscopedBlocks.length > 0 ? [file.path] : []),
       ...importedStyles.filter((path) => !isStylesheetModule(path)),
     ];
-    for (const element of analysis.htmlElements) addElement(file.path, element, ownContexts);
+    for (const element of analysis.htmlElements) {
+      const ownElement =
+        analysis.rootIdsOverridden && analysis.rootStarts.includes(element.nodeStart)
+          ? { ...element, matchIds: [] }
+          : element;
+      addElement(file.path, ownElement, ownContexts);
+    }
   }
 
   for (const parent of ownedVue) {
@@ -1074,11 +1141,23 @@ async function preparePackageVue({
       const childRoots = childAnalysis?.htmlElements.filter((element) =>
         childAnalysis.rootStarts.includes(element.nodeStart),
       );
-      if (selectedPaths.has(parent.path)) {
-        addElement(parent.path, edge.site, [parent.path]);
-        if (childRoots?.length === 1) addElement(edge.child, childRoots[0], [parent.path]);
+      if (
+        selectedPaths.has(parent.path) &&
+        childRoots?.length === 1 &&
+        !childAnalysis.fallthroughUnverifiable
+      ) {
+        addElement(parent.path, componentRootSite(edge.site, childRoots[0]), [parent.path]);
       }
-      if (selectedPaths.has(edge.child)) addElement(parent.path, edge.site, [edge.child]);
+      if (selectedPaths.has(edge.child) && !childAnalysis?.fallthroughUnverifiable) {
+        addElement(parent.path, edge.site, [edge.child]);
+        if (childRoots?.length === 1) {
+          const shadowSite = componentRootSite(edge.site, childRoots[0]);
+          if (shadowSite.classAttribute) {
+            shadowSite.classAttribute = { ...shadowSite.classAttribute, writable: false };
+            addElement(parent.path, shadowSite, [edge.child]);
+          }
+        }
+      }
     }
   }
 
@@ -1095,6 +1174,7 @@ async function preparePackageVue({
           !child ||
           child.retained ||
           child.dynamic ||
+          child.fallthroughUnverifiable ||
           child.rootStarts.length !== 1 ||
           !child.htmlElements.some((element) => element.nodeStart === child.rootStarts[0])
         );
@@ -1125,6 +1205,10 @@ async function preparePackageVue({
       !componentOpen &&
       ownedSources.length === 1 &&
       ownedSources[0].path === file.path;
+    if (migrateUnscoped) {
+      await compileBlocks(file, analysis.unscopedBlocks);
+      unscopedPaths.add(file.path);
+    }
     if (analysis.unscopedBlocks.length > 0 && !migrateUnscoped) {
       for (const block of analysis.unscopedBlocks) {
         warnings.push({
@@ -1139,6 +1223,13 @@ async function preparePackageVue({
     const vueBlocks = migrateUnscoped ? analysis.unscopedBlocks : analysis.blocks;
     if (vueBlocks.length === 0) continue;
     const vueRetention = migrateUnscoped ? undefined : retention;
+    const shadowCss = vueShadowCss
+      .filter(
+        (entry) =>
+          entry.path !== file.path ||
+          (!entry.scoped && !(migrateUnscoped && entry.migratingUnscoped)),
+      )
+      .map((entry) => entry.source);
     stylesheets.push({
       cssPath: file.path,
       cssSource: file.source,
@@ -1148,9 +1239,9 @@ async function preparePackageVue({
       vueBlocks,
       vueRetention,
       vueUnscoped: migrateUnscoped,
-      vueShadowCss: vueRetention || migrateUnscoped ? undefined : vueShadowCss,
-      vueShadowModuleCss: vueRetention || migrateUnscoped ? undefined : vueShadowModuleCss,
-      vueShadowUnverifiable: vueRetention || migrateUnscoped ? undefined : vueShadowUnverifiable,
+      vueShadowCss: vueRetention ? undefined : shadowCss,
+      vueShadowModuleCss: vueRetention ? undefined : vueShadowModuleCss,
+      vueShadowUnverifiable: vueRetention ? undefined : vueShadowUnverifiable,
     });
   }
 
@@ -1178,6 +1269,7 @@ async function preparePackageVue({
     files,
     stylesheets,
     stylePaths,
+    unscopedPaths,
     warnings,
     compiler: loaded.compiler,
     sass,

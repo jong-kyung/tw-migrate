@@ -1,7 +1,6 @@
 <template>
-  <div class="leaf">Leaf</div>
+  <div class="required">Required</div>
 </template>
 <style scoped lang="scss">
-$color: red;
-.note { color: $color; }
+.required { color: red; }
 </style>

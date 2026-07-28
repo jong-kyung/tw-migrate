@@ -89,8 +89,10 @@ export function analyzeVueSource(compiler, path, source) {
   // planner's parsed shadow index; preprocessor text is screened by the
   // caller before joining it.
   const shadowCssTexts = [];
+  const unscopedShadowCssTexts = [];
   const shadowModuleCssTexts = [];
   const shadowPreprocessorTexts = [];
+  const unscopedShadowPreprocessorTexts = [];
   let escapeUnverifiable = false;
   for (const style of descriptor.styles) {
     const start = style.loc.start.offset;
@@ -152,8 +154,11 @@ export function analyzeVueSource(compiler, path, source) {
     };
     if (!style.scoped) {
       unscopedBlocks.push(block);
-      if (style.lang && style.lang !== "css") shadowPreprocessorTexts.push(style.content);
-      else shadowCssTexts.push(style.content);
+      if (style.lang && style.lang !== "css") {
+        unscopedShadowPreprocessorTexts.push(style.content);
+      } else {
+        unscopedShadowCssTexts.push(style.content);
+      }
       continue;
     }
     // Scope-escape selectors (`:deep`, `:global`, `:slotted`) reach elements
@@ -187,6 +192,10 @@ export function analyzeVueSource(compiler, path, source) {
   const scriptText = [descriptor.script?.content, descriptor.scriptSetup?.content]
     .filter(Boolean)
     .join("\n");
+  const fallthroughUnverifiable =
+    Boolean(descriptor.script) ||
+    descriptor.scriptSetup?.src !== undefined ||
+    /\b(?:defineOptions|defineProps|inheritAttrs)\b/.test(descriptor.scriptSetup?.content ?? "");
   const styleImports = [descriptor.script, descriptor.scriptSetup].flatMap((script) => {
     if (!script || script.src || ![undefined, "js", "jsx", "ts", "tsx"].includes(script.lang)) {
       return [];
@@ -279,11 +288,14 @@ export function analyzeVueSource(compiler, path, source) {
       end: offset(entry.end),
     })),
     componentImports,
+    fallthroughUnverifiable,
     dynamic: state.dynamic,
     alwaysRenderedRoots,
     shadowCssTexts,
+    unscopedShadowCssTexts,
     shadowModuleCssTexts,
     shadowPreprocessorTexts,
+    unscopedShadowPreprocessorTexts,
     escapeUnverifiable,
     retained: false,
   };
@@ -292,7 +304,7 @@ export function analyzeVueSource(compiler, path, source) {
 // Post-plan integrity check: the edited SFC must still parse, and each
 // remaining supported scoped block contents are returned for validation by
 // the caller.
-export function verifyVueSource(compiler, path, source) {
+export function verifyVueSource(compiler, path, source, includeUnscoped = false) {
   const { descriptor, errors } = compiler.parse(source, { filename: path });
   if (errors.length > 0) {
     throw new Error(`Edited SFC no longer parses: ${path}: ${errors[0].message}`);
@@ -302,6 +314,7 @@ export function verifyVueSource(compiler, path, source) {
       (style) =>
         style.src === undefined &&
         style.module === undefined &&
+        (style.scoped || includeUnscoped) &&
         SUPPORTED_STYLE_LANGUAGES.has(style.lang),
     )
     .map((style) => ({ content: style.content, syntax: style.lang ?? "css" }));
@@ -312,23 +325,27 @@ function visitTemplateNode(source, node, state) {
     let classBound = false;
     for (const prop of node.props ?? []) {
       if (prop.type !== PROP_DIRECTIVE) continue;
-      // `:class`, a spread `v-bind="..."`, or a dynamic argument
-      // `v-bind:[key]` (which can evaluate to `class` at runtime) can put any
-      // class anywhere.
+      // `:class`, `:id`, a spread `v-bind="..."`, or a dynamic argument
+      // opens the selector surface used by migration proofs.
       if (
         prop.name === "bind" &&
-        (!prop.arg || !prop.arg.isStatic || prop.arg.content === "class")
+        (!prop.arg || !prop.arg.isStatic || ["class", "id"].includes(prop.arg.content))
       ) {
         state.dynamic = true;
         classBound = true;
       }
     }
     if (node.tagType === TAG_COMPONENT) {
-      state.components.push({
-        tag: node.tag,
-        nodeStart: node.loc.start.offset,
-        ...templateSite(source, node, classBound, state),
-      });
+      const site = templateSite(source, node, classBound, state);
+      if (!site.classAttribute && !classBound) {
+        const insertion = classInsertionOffset(source, node);
+        if (insertion === undefined) {
+          state.dynamic = true;
+        } else {
+          site.classAttribute = { value: "", start: insertion, end: insertion, synthetic: true };
+        }
+      }
+      state.components.push({ tag: node.tag, nodeStart: node.loc.start.offset, ...site });
     } else if (node.tagType === TAG_ELEMENT) {
       const site = templateSite(source, node, classBound, state);
       if (site.classAttribute) {
@@ -386,8 +403,8 @@ function classInsertionOffset(source, node) {
   const tagEnd = source.indexOf(">", propsEnd);
   if (tagEnd < 0) return undefined;
   let offset = tagEnd;
-  while (offset > node.loc.start.offset && /\s/.test(source[offset - 1])) offset -= 1;
   if (source[offset - 1] === "/") offset -= 1;
+  while (offset > node.loc.start.offset && /\s/.test(source[offset - 1])) offset -= 1;
   return offset;
 }
 
