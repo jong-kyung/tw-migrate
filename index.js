@@ -419,7 +419,7 @@ async function planPackage(context, packageRoot) {
         validateCss(compiled.css);
         for (const loadedPath of compiled.loadedPaths) {
           if (!isProjectInput(workspaceRoot, loadedPath)) continue;
-          const source = await snapshotFile(snapshots, loadedPath);
+          const source = await snapshotLoadedSource(snapshots, loadedPath);
           if (!styleSources.has(loadedPath)) styleSources.set(loadedPath, source);
           if (loadedPath !== stylePath) {
             const dependents = compilerDependents.get(loadedPath) ?? [];
@@ -814,7 +814,15 @@ function vueReferenceTarget(importer, reference, vuePaths) {
 function vueLiteralTargets(file, vuePaths) {
   return new Set(
     [...file.source.matchAll(/(["'`])([^"'`\r\n]+)\1/g)].flatMap((match) => {
-      if (/[?*[\]{}]/.test(match[2]) && match[2].includes("vue")) return [...vuePaths];
+      // A local glob can match `.vue` files without spelling the extension
+      // (`import.meta.glob("./components/*")`), so any glob-bearing local
+      // pattern conservatively opens every caller surface.
+      if (
+        /[?*[\]{}]/.test(match[2]) &&
+        (match[2].includes("vue") || isLocalVueReference(match[2]))
+      ) {
+        return [...vuePaths];
+      }
       const target = vueReferenceTarget(file.path, match[2], vuePaths);
       if (target) return [target];
       return match[2].includes(".vue") ? [...vuePaths] : [];
@@ -1017,7 +1025,7 @@ async function preparePackageVue({
       validateCss(compiled.css);
       for (const loadedPath of compiled.loadedPaths) {
         if (loadedPath === virtualPath || !isProjectInput(workspaceRoot, loadedPath)) continue;
-        const source = await snapshotFile(snapshots, loadedPath);
+        const source = await snapshotLoadedSource(snapshots, loadedPath);
         if (!styleSources.has(loadedPath)) styleSources.set(loadedPath, source);
         if (!pathOwners.has(loadedPath)) pathOwners.set(loadedPath, packageRoot);
       }
@@ -1179,7 +1187,13 @@ async function preparePackageVue({
       ) {
         addElement(parent.path, componentRootSite(edge.site, childRoots[0]), [parent.path]);
       }
-      if (selectedPaths.has(edge.child) && !childAnalysis?.fallthroughUnverifiable) {
+      if (
+        selectedPaths.has(edge.child) &&
+        // A self-recursive edge is already covered by the parent-style site
+        // above; adding the same span twice would produce overlapping edits.
+        edge.parent !== edge.child &&
+        !childAnalysis?.fallthroughUnverifiable
+      ) {
         addElement(parent.path, edge.site, [edge.child]);
         if (childRoots?.length === 1) {
           const shadowSite = componentRootSite(edge.site, childRoots[0]);
@@ -1711,6 +1725,20 @@ async function rejectSymlinkTarget(path, root) {
 
 async function snapshotFile(snapshots, path) {
   return recordSnapshot(snapshots, path, await readFile(path, "utf8"));
+}
+
+// The compiler just loaded this dependency, so its disappearance is a source
+// change during planning -- a fatal integrity error `--force` must not
+// downgrade to a recoverable package failure.
+async function snapshotLoadedSource(snapshots, path) {
+  try {
+    return await snapshotFile(snapshots, path);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      throw new Error(`Source changed during planning: ${path}`);
+    }
+    throw error;
+  }
 }
 
 function recordSnapshot(snapshots, path, source) {

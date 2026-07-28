@@ -768,6 +768,91 @@ test("dynamic Vue import globs keep caller fallthrough open", async () => {
   }
 });
 
+test("extensionless local globs keep caller fallthrough open", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div class="passed">Child</div>\n</template>\n<style scoped>\n.passed { padding: 13px; }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "App.vue"),
+        '<template>\n  <Child />\n  <main>App</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+      ),
+      writeFile(
+        join(cwd, "registry.ts"),
+        'export const components = import.meta.glob("./components/*");\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "open-root-fallthrough"));
+    assert.ok(
+      report.rules.some(
+        (rule) =>
+          rule.file === "Child.vue" && rule.selector === ".passed" && rule.status === "retained",
+      ),
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a self-recursive component migrates without overlapping edits", async () => {
+  const cwd = await fixture();
+  const tree =
+    '<template>\n  <div class="node">\n    <Tree class="node" />\n  </div>\n</template>\n<script setup>\nimport Tree from "./Tree.vue";\n</script>\n<style scoped>\n.node { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Tree.vue"), tree);
+    const report = await migrate({ cwd });
+    // One call site, one appended utility -- never overlapping edits.
+    const appended = report.diff.match(/node p-\[13px\]/g) ?? [];
+    assert.ok(appended.length >= 1);
+    assert.ok(!report.failures.length);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a dependency vanishing during Vue block compilation stays fatal under force", async () => {
+  const cwd = await fixture();
+  const fakeSass = [
+    'import { pathToFileURL } from "node:url";',
+    "export const compileStringAsync = async () => ({",
+    '  css: ".card { padding: 13px; }",',
+    "  sourceMap: {",
+    "    version: 3,",
+    '    sources: [pathToFileURL("gone.scss").href],',
+    '    mappings: "AAAA",',
+    "    names: [],",
+    "  },",
+    '  loadedUrls: [new URL("../../gone.scss", import.meta.url)],',
+    "});",
+  ].join("\n");
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Card.vue"),
+        '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped lang="scss">\n.card { padding: 13px; }\n</style>\n',
+      ),
+      mkdir(join(cwd, "node_modules", "sass"), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(
+        join(cwd, "node_modules", "sass", "package.json"),
+        '{"name":"sass","version":"1.0.0","type":"module","main":"index.js"}',
+      ),
+      writeFile(join(cwd, "node_modules", "sass", "index.js"), fakeSass),
+    ]);
+    await assert.rejects(
+      migrate({ cwd, force: true }),
+      /Source changed during planning:.*gone\.scss/,
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("unresolved Vue aliases keep every possible caller surface open", async () => {
   const cwd = await fixture();
   try {
