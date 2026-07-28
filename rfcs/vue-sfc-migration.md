@@ -372,7 +372,11 @@ phases.
    publishable package roots, and components without known callers retain.
 2. Any dynamic class binding retains all scoped class rules until Phase 3.
 3. Inline preprocessors rely on source maps from the target project's
-   compiler; ambiguous or dependency-owned rule origins retain.
+   compiler; ambiguous or dependency-owned rule origins retain. Build-tool
+   preprocessor injection (Vite `additionalData`, webpack loader options) is
+   not reproduced, matching the framework-configuration non-goal of the
+   preprocessor RFC, so values computed only under that injection can
+   migrate from their standalone-compiled meaning.
 4. Retain-with-append intentionally duplicates validated utilities alongside
    retained rules, as the global-rule policy already does.
 5. Choosing the official JS compiler keeps template analysis contracts

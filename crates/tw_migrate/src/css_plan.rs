@@ -354,6 +354,13 @@ fn collect_declaration_candidates(
             continue;
         };
         let value = declaration_value(source, declaration);
+        // Vue rewrites `v-bind()` only while compiling SFC styles; a value
+        // moved into global Tailwind output would lose its reactive custom
+        // property, so such declarations are never converted.
+        if value.contains("v-bind(") {
+            warning = Some("unsupported-value");
+            continue;
+        }
         if property == "composes" {
             warning = Some("css-module-composes");
             continue;

@@ -1195,6 +1195,33 @@ test("a multi-root child never receives call-site rewrites", async () => {
   }
 });
 
+test("CSS v-bind declarations retain across plain and preprocessor blocks", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Card.vue"),
+        '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { color: v-bind(theme); }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "Tone.vue"),
+        '<template>\n  <p class="tone">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped lang="scss">\n.tone { color: v-bind("theme.color"); }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    // Vue rewrites v-bind() only inside SFC style compilation; a migrated
+    // utility would lose the reactive value.
+    assert.ok(
+      report.rules
+        .filter((rule) => rule.file.endsWith(".vue"))
+        .every((rule) => rule.status === "retained"),
+    );
+    assert.ok(report.warnings.some((entry) => entry.code === "unsupported-value"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("checks effective child roots when retaining child scoped rules", async () => {
   const cwd = await fixture();
   try {

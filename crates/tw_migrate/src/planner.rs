@@ -4430,6 +4430,17 @@ mod tests {
     }
 
     #[test]
+    fn vue_v_bind_declarations_are_never_converted() {
+        let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n.card { color: v-bind(theme); }\n</style>\n";
+        let request = vue_batch_request(source, true, None);
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 1);
+        assert_eq!(response["warnings"][0]["code"], "unsupported-value");
+    }
+
+    #[test]
     fn vue_type_selector_shadow_matches_by_site_tag() {
         let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n";
         // A type selector for another tag cannot match the `p` sites.
