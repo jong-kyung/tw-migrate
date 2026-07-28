@@ -8,6 +8,7 @@ import { staticImports } from "./native.js";
 const ESCAPE_SELECTOR = /(?:::v-|:)(?:deep|global|slotted)\(([^)]*)\)/g;
 const ESCAPE_RESIDUE = /(?:>>>|\/deep\/|::v-deep|:deep|::v-slotted|:slotted|::v-global|:global)/;
 const SUPPORTED_STYLE_ATTRIBUTES = new Set(["lang", "module", "scoped", "src"]);
+const SUPPORTED_STYLE_LANGUAGES = new Set([undefined, "css", "scss", "sass", "less"]);
 
 // @vue/compiler-core node and element kinds; @vue/compiler-sfc does not
 // re-export the enums, so the numeric values are pinned here.
@@ -121,12 +122,12 @@ export function analyzeVueSource(compiler, path, source) {
       shadowModuleCssTexts.push(style.content);
       continue;
     }
-    if (style.lang && style.lang !== "css") {
+    if (!SUPPORTED_STYLE_LANGUAGES.has(style.lang)) {
       warn(
         "preprocessor-style-block",
         start,
         end,
-        `A <style lang="${style.lang}"> block is not migrated yet.`,
+        `The <style lang="${style.lang}"> language is not supported.`,
       );
       shadowPreprocessorTexts.push(style.content);
       continue;
@@ -164,6 +165,8 @@ export function analyzeVueSource(compiler, path, source) {
       outerEnd: end + closing.length,
       contentStart: start,
       contentEnd: end,
+      syntax: style.lang ?? "css",
+      content: style.content,
     });
   }
 
@@ -230,6 +233,7 @@ export function analyzeVueSource(compiler, path, source) {
       end: offset(warning.end),
     })),
     blocks: blocks.map((block) => ({
+      ...block,
       outerStart: offset(block.outerStart),
       outerEnd: offset(block.outerEnd),
       contentStart: offset(block.contentStart),
@@ -252,8 +256,8 @@ export function analyzeVueSource(compiler, path, source) {
 }
 
 // Post-plan integrity check: the edited SFC must still parse, and each
-// remaining plain-CSS scoped block's contents are returned for CSS
-// validation by the caller.
+// remaining supported scoped block contents are returned for validation by
+// the caller.
 export function verifyVueSource(compiler, path, source) {
   const { descriptor, errors } = compiler.parse(source, { filename: path });
   if (errors.length > 0) {
@@ -265,9 +269,9 @@ export function verifyVueSource(compiler, path, source) {
         style.scoped &&
         style.src === undefined &&
         style.module === undefined &&
-        (!style.lang || style.lang === "css"),
+        SUPPORTED_STYLE_LANGUAGES.has(style.lang),
     )
-    .map((style) => style.content);
+    .map((style) => ({ content: style.content, syntax: style.lang ?? "css" }));
 }
 
 function visitTemplateNode(source, node, state) {

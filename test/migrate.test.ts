@@ -301,18 +301,19 @@ test("retains a single-root Vue SFC scoped rule while appending its utilities", 
   }
 });
 
-test("warns and retains unsupported Vue style blocks", async () => {
+test("migrates supported preprocessors beside retained Vue style blocks", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped lang="scss">\n.card { padding: 13px; }\n</style>\n<style>\n.free { color: red; }\n</style>\n';
   try {
     await writeFile(join(cwd, "Card.vue"), vue);
     const report = await migrate({ cwd, styleFile: "Card.vue" });
-    assert.deepEqual(report.changedFiles, []);
-    assert.deepEqual(report.warnings.map((entry) => entry.code).sort(), [
-      "preprocessor-style-block",
-      "unscoped-style-block",
-    ]);
+    assert.deepEqual(report.changedFiles, ["Card.vue"]);
+    assert.deepEqual(
+      report.warnings.map((entry) => entry.code),
+      ["unscoped-style-block"],
+    );
+    assert.match(report.diff, /class="card p-\[13px\]"/);
   } finally {
     await cleanup(cwd);
   }
@@ -650,6 +651,30 @@ test("does not require Tailwind for an explicitly selected Vue module import", a
     assert.deepEqual(report.changedFiles, []);
   } finally {
     await cleanup(cwd);
+  }
+});
+
+test("migrates scoped Vue preprocessor blocks through project compilers", async () => {
+  for (const [lang, declaration, candidate] of [
+    ["scss", "$space: 13px;\n.card { padding: $space; }", "p-[13px]"],
+    ["sass", "$space: 13px\n.card\n  padding: $space", "p-[13px]"],
+    ["less", "@space: 13px;\n.card { padding: @space; }", "p-[13px]"],
+  ]) {
+    const cwd = await fixture();
+    const vue = `<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped lang="${lang}">\n${declaration}\n</style>\n`;
+    try {
+      await writeFile(join(cwd, "Card.vue"), vue);
+      const report = await migrate({ cwd, styleFile: "Card.vue", write: true });
+      assert.deepEqual(report.changedFiles, ["Card.vue"]);
+      assert.equal(report.convertedRules, 1);
+      assert.match(
+        await readFile(join(cwd, "Card.vue"), "utf8"),
+        new RegExp(`class="card ${candidate.replaceAll("[", "\\[").replaceAll("]", "\\]")}"`),
+      );
+      assert.doesNotMatch(await readFile(join(cwd, "Card.vue"), "utf8"), /\.card\s*[{\n]/);
+    } finally {
+      await cleanup(cwd);
+    }
   }
 });
 

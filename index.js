@@ -296,6 +296,8 @@ async function planPackage(context, packageRoot) {
       pathOwners,
       targetable,
       explicitStyle,
+      snapshots,
+      workspaceRoot,
     });
   } catch (error) {
     if (!options.force || isIntegrityError(error)) throw error;
@@ -469,8 +471,26 @@ async function planPackage(context, packageRoot) {
     parseHtmlSource(file.path, file.source);
   }
   for (const file of plan.files.filter((file) => extension(file.path) === ".vue")) {
-    for (const block of verifyVueSource(preparedVue.compiler, file.path, file.source)) {
-      validateCss(block);
+    const blocks = verifyVueSource(preparedVue.compiler, file.path, file.source);
+    for (const [index, block] of blocks.entries()) {
+      if (block.syntax === "css") {
+        validateCss(block.content);
+      } else if (block.syntax === "less") {
+        validateCss(
+          (await compileLessEntry(preparedVue.less, `${file.path}.${index}.less`, block.content))
+            .css,
+        );
+      } else {
+        validateCss(
+          (
+            await compileSassEntry(
+              preparedVue.sass,
+              `${file.path}.${index}.${block.syntax}`,
+              block.content,
+            )
+          ).css,
+        );
+      }
     }
   }
   for (const stylesheet of stylesheets.filter((stylesheet) =>
@@ -769,6 +789,8 @@ async function preparePackageVue({
   pathOwners,
   targetable,
   explicitStyle,
+  snapshots,
+  workspaceRoot,
 }) {
   const none = {
     files: new Map(),
@@ -809,6 +831,36 @@ async function preparePackageVue({
   const analyses = new Map(
     ownedVue.map((file) => [file.path, analyzeVueSource(loaded.compiler, file.path, file.source)]),
   );
+  let sass;
+  let less;
+  for (const file of selected) {
+    const analysis = analyses.get(file.path);
+    if (analysis.retained) continue;
+    for (const block of analysis.blocks.filter((block) => block.syntax !== "css")) {
+      const virtualPath = `${file.path}.${block.syntax}`;
+      const compiled = isSassPath(virtualPath)
+        ? await compileSassEntry(
+            (sass ??= await loadProjectSass(packageRoot)),
+            virtualPath,
+            block.content,
+          )
+        : await compileLessEntry(
+            (less ??= await loadProjectLess(packageRoot)),
+            virtualPath,
+            block.content,
+          );
+      validateCss(compiled.css);
+      for (const loadedPath of compiled.loadedPaths) {
+        if (loadedPath === virtualPath || !isProjectInput(workspaceRoot, loadedPath)) continue;
+        const source = await snapshotFile(snapshots, loadedPath);
+        if (!styleSources.has(loadedPath)) styleSources.set(loadedPath, source);
+        if (!pathOwners.has(loadedPath)) pathOwners.set(loadedPath, packageRoot);
+      }
+      block.analysisSource = compiled.css;
+      block.sourcePath = virtualPath;
+      block.sourceMappings = compiled.sourceMappings;
+    }
+  }
   // Non-scoped CSS in the package is unlayered and can outrank the layered
   // utilities that replace a deleted scoped rule. The planner retains any
   // scoped rule whose classes this pool also targets, so collect every
@@ -907,7 +959,15 @@ async function preparePackageVue({
       vueShadowUnverifiable: analysis.retention ? undefined : vueShadowUnverifiable,
     });
   }
-  return { files, stylesheets, stylePaths, warnings, compiler: loaded.compiler };
+  return {
+    files,
+    stylesheets,
+    stylePaths,
+    warnings,
+    compiler: loaded.compiler,
+    sass,
+    less,
+  };
 }
 
 async function preparePackageHtml({

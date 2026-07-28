@@ -59,13 +59,21 @@ fn is_vue_path(path: &str) -> bool {
 /// One plain-CSS `<style scoped>` block of a Vue SFC, in absolute byte
 /// offsets of the `.vue` file. The outer span covers the whole block
 /// including its tags; the content span covers only the CSS text.
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct VueBlock {
     outer_start: usize,
     outer_end: usize,
     content_start: usize,
     content_end: usize,
+    #[serde(default)]
+    syntax: StylesheetSyntax,
+    #[serde(default)]
+    analysis_source: Option<String>,
+    #[serde(default)]
+    source_path: Option<String>,
+    #[serde(default)]
+    source_mappings: Vec<SourceMapping>,
 }
 
 /// Same-length copy of a `.vue` source with every byte outside the scoped
@@ -946,46 +954,46 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
         .css_module_id
         .as_deref()
         .unwrap_or(&request.css_path);
-    let analysis_source = vue_masked
-        .as_deref()
-        .or(request.analysis_source.as_deref())
-        .unwrap_or(&request.css_source);
-    let analysis_syntax = if vue_masked.is_some() || request.analysis_source.is_some() {
-        Syntax::Css
+    let mut parsed = if vue_masked.is_some() {
+        parse_vue_rules(request, is_module, keyframe_scope, relative_urls_stable)?
     } else {
-        request.syntax.parser_syntax()
-    };
-    let mut parsed = parse_css_rules(
-        &request.css_path,
-        keyframe_scope,
-        analysis_source,
-        &request.theme_tokens,
-        ParseOptions {
-            syntax: analysis_syntax,
-            is_module,
-            can_move_at_rules,
-            relative_urls_stable,
-        },
-    )?;
-    if vue_masked.is_some() {
-        // Masked-source spans are already absolute `.vue` byte offsets.
-        for rule in &mut parsed.rules {
-            rule.authored_span = Some(rule.span.clone());
-        }
-    } else if request.analysis_source.is_some() {
-        map_authored_rule_spans(request, analysis_source, &mut parsed.rules)?;
-        if is_module {
-            for rule in &mut parsed.rules {
-                if rule.warning.is_none() && rule.authored_span.is_none() {
-                    rule.warning = Some("unproven-source-map");
+        let analysis_source = request
+            .analysis_source
+            .as_deref()
+            .unwrap_or(&request.css_source);
+        let analysis_syntax = if request.analysis_source.is_some() {
+            Syntax::Css
+        } else {
+            request.syntax.parser_syntax()
+        };
+        let mut parsed = parse_css_rules(
+            &request.css_path,
+            keyframe_scope,
+            analysis_source,
+            &request.theme_tokens,
+            ParseOptions {
+                syntax: analysis_syntax,
+                is_module,
+                can_move_at_rules,
+                relative_urls_stable,
+            },
+        )?;
+        if request.analysis_source.is_some() {
+            map_authored_rule_spans(request, analysis_source, &mut parsed.rules)?;
+            if is_module {
+                for rule in &mut parsed.rules {
+                    if rule.warning.is_none() && rule.authored_span.is_none() {
+                        rule.warning = Some("unproven-source-map");
+                    }
                 }
             }
+        } else {
+            for rule in &mut parsed.rules {
+                rule.authored_span = Some(rule.span.clone());
+            }
         }
-    } else {
-        for rule in &mut parsed.rules {
-            rule.authored_span = Some(rule.span.clone());
-        }
-    }
+        parsed
+    };
     if request.is_partial {
         for rule in &mut parsed.rules {
             rule.warning = Some("shared-preprocessor-source");
@@ -1042,24 +1050,104 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
     Ok((is_module, parsed, vue_masked))
 }
 
+fn parse_vue_rules(
+    request: &PlanRequest,
+    is_module: bool,
+    keyframe_scope: &str,
+    relative_urls_stable: bool,
+) -> Result<ParsedCss, String> {
+    let mut rules = Vec::new();
+    let mut analysis_base = 0;
+    for block in &request.vue_blocks {
+        let authored = request
+            .css_source
+            .get(block.content_start..block.content_end)
+            .ok_or_else(|| "Invalid Vue style block span".to_string())?;
+        let analysis = block.analysis_source.as_deref().unwrap_or(authored);
+        let mut parsed = parse_css_rules(
+            &request.css_path,
+            keyframe_scope,
+            analysis,
+            &request.theme_tokens,
+            ParseOptions {
+                syntax: if block.analysis_source.is_some() {
+                    Syntax::Css
+                } else {
+                    block.syntax.parser_syntax()
+                },
+                is_module,
+                can_move_at_rules: false,
+                relative_urls_stable,
+            },
+        )?;
+        if block.analysis_source.is_some() {
+            map_rule_spans(
+                authored,
+                block.syntax,
+                block.source_path.as_deref().unwrap_or(&request.css_path),
+                &block.source_mappings,
+                analysis,
+                &mut parsed.rules,
+                block.content_start,
+            )?;
+            for rule in &mut parsed.rules {
+                if rule.warning.is_none() && rule.authored_span.is_none() {
+                    rule.warning = Some("unproven-source-map");
+                }
+            }
+        } else {
+            for rule in &mut parsed.rules {
+                rule.authored_span = Some(
+                    block.content_start + rule.span.start..block.content_start + rule.span.end,
+                );
+            }
+        }
+        for rule in &mut parsed.rules {
+            rule.span = analysis_base + rule.span.start..analysis_base + rule.span.end;
+        }
+        analysis_base += analysis.len() + 1;
+        rules.extend(parsed.rules);
+    }
+    Ok(ParsedCss {
+        rules,
+        keyframes: Vec::new(),
+        global_at_rules: Vec::new(),
+    })
+}
+
 fn map_authored_rule_spans(
     request: &PlanRequest,
     analysis_source: &str,
     rules: &mut [RulePlan],
 ) -> Result<(), String> {
-    let allocator = oxc_css_parser::Allocator::default();
-    let mut parser = CssParser::new(
-        &allocator,
+    map_rule_spans(
         &request.css_source,
-        request.syntax.parser_syntax(),
-    );
+        request.syntax,
+        &request.css_path,
+        &request.source_mappings,
+        analysis_source,
+        rules,
+        0,
+    )
+}
+
+fn map_rule_spans(
+    authored_source: &str,
+    syntax: StylesheetSyntax,
+    source_path: &str,
+    source_mappings: &[SourceMapping],
+    analysis_source: &str,
+    rules: &mut [RulePlan],
+    authored_base: usize,
+) -> Result<(), String> {
+    let allocator = oxc_css_parser::Allocator::default();
+    let mut parser = CssParser::new(&allocator, authored_source, syntax.parser_syntax());
     let stylesheet = parser
         .parse::<Stylesheet>()
-        .map_err(|error| format!("Failed to parse {}: {error:?}", request.css_path))?;
+        .map_err(|error| format!("Failed to parse {source_path}: {error:?}"))?;
     let mut authored_rules = Vec::new();
     collect_qualified_rule_spans(&stylesheet.statements, &mut authored_rules);
-    let mappings = request
-        .source_mappings
+    let mappings = source_mappings
         .iter()
         .map(|mapping| ((mapping.generated_line, mapping.generated_column), mapping))
         .collect::<HashMap<_, _>>();
@@ -1075,12 +1163,12 @@ fn map_authored_rule_spans(
                 original_offsets.clear();
                 break;
             };
-            if mapping.source_path != request.css_path {
+            if mapping.source_path != source_path {
                 original_offsets.clear();
                 break;
             }
             let Some(offset) = line_column_to_offset(
-                &request.css_source,
+                authored_source,
                 mapping.original_line,
                 mapping.original_column,
             ) else {
@@ -1100,7 +1188,7 @@ fn map_authored_rule_spans(
                     .all(|offset| span.start <= *offset && *offset < span.end)
             })
             .min_by_key(|(span, _)| span.end - span.start)
-            .map(|(span, _)| span.clone());
+            .map(|(span, _)| authored_base + span.start..authored_base + span.end);
     }
 
     let mut shared_spans: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
@@ -1132,7 +1220,7 @@ fn map_authored_rule_spans(
     for index in ambiguous {
         rules[index].authored_span = None;
     }
-    let interpolation = match request.syntax {
+    let interpolation = match syntax {
         StylesheetSyntax::Scss | StylesheetSyntax::Sass => Some("#{"),
         StylesheetSyntax::Less => Some("@{"),
         StylesheetSyntax::Css => None,
@@ -1141,8 +1229,9 @@ fn map_authored_rule_spans(
         for rule in rules {
             let interpolated = rule.authored_span.as_ref().is_some_and(|authored_span| {
                 authored_rules.iter().any(|(span, selector_span)| {
-                    span == authored_span
-                        && request.css_source[selector_span.clone()].contains(interpolation)
+                    authored_span.start == authored_base + span.start
+                        && authored_span.end == authored_base + span.end
+                        && authored_source[selector_span.clone()].contains(interpolation)
                 })
             });
             if interpolated {
@@ -1794,6 +1883,13 @@ fn finish_vue_stylesheet(
     masked: &str,
     mut edits: Vec<Edit>,
 ) -> Result<String, String> {
+    if request
+        .vue_blocks
+        .iter()
+        .any(|block| block.syntax != StylesheetSyntax::Css)
+    {
+        return finish_vue_preprocessor_stylesheet(request, edits);
+    }
     edits.sort_by_key(|edit| (edit.start, edit.end));
     // Template replacements must not leak into the masked CSS view; replace
     // them with same-length whitespace to keep the two strings aligned.
@@ -1903,6 +1999,50 @@ fn finish_vue_stylesheet(
         .parse::<Stylesheet>()
         .map(|_| ())
         .map_err(|error| format!("Edited stylesheet no longer parses: {error:?}"))?;
+    Ok(source)
+}
+
+fn finish_vue_preprocessor_stylesheet(
+    request: &PlanRequest,
+    mut edits: Vec<Edit>,
+) -> Result<String, String> {
+    edits.sort_by_key(|edit| (edit.start, edit.end));
+    let mut blocks = request.vue_blocks.clone();
+    for block in &mut blocks {
+        block.outer_start = shift_offset(&edits, block.outer_start);
+        block.outer_end = shift_offset(&edits, block.outer_end);
+        block.content_start = shift_offset(&edits, block.content_start);
+        block.content_end = shift_offset(&edits, block.content_end);
+    }
+    let mut source = apply_edits(&request.css_source, edits)?;
+    let mut removals = Vec::new();
+    for (block, original) in blocks.iter().zip(&request.vue_blocks) {
+        let originally_empty = request.css_source[original.content_start..original.content_end]
+            .trim()
+            .is_empty();
+        let content = source
+            .get(block.content_start..block.content_end)
+            .ok_or_else(|| "Invalid Vue style block span".to_string())?;
+        if originally_empty || !content.trim().is_empty() {
+            validate_stylesheet(content, block.syntax.parser_syntax())?;
+            continue;
+        }
+        let mut end = block.outer_end;
+        if source.as_bytes().get(end) == Some(&b'\r') {
+            end += 1;
+        }
+        if source.as_bytes().get(end) == Some(&b'\n') {
+            end += 1;
+        }
+        removals.push(Edit {
+            start: block.outer_start,
+            end,
+            replacement: String::new(),
+        });
+    }
+    if !removals.is_empty() {
+        source = apply_edits(&source, removals)?;
+    }
     Ok(source)
 }
 
