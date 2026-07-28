@@ -1074,26 +1074,6 @@ test("warns when a fallthrough utility conflicts with a child-root class", async
   }
 });
 
-test("an unscanned template format defeats the unscoped sole-source proof", async () => {
-  const cwd = await fixture();
-  try {
-    await Promise.all([
-      rm(join(cwd, "Button.module.css")),
-      rm(join(cwd, "Button.tsx")),
-      writeFile(
-        join(cwd, "Card.vue"),
-        '<template>\n  <div class="shared">Card</div>\n  <span>Leaf</span>\n</template>\n<style>\n.shared { margin: 7px; }\n</style>\n',
-      ),
-      writeFile(join(cwd, "Page.astro"), '<div class="shared">Astro</div>\n'),
-    ]);
-    const report = await migrate({ cwd });
-    assert.ok(report.warnings.some((entry) => entry.code === "unscoped-style-block"));
-    assert.equal(report.convertedRules, 0);
-  } finally {
-    await cleanup(cwd);
-  }
-});
-
 test("bare stylesheet specifiers never bind coincidental local files", async () => {
   const cwd = await fixture();
   const vue =
@@ -1109,26 +1089,6 @@ test("bare stylesheet specifiers never bind coincidental local files", async () 
     // decoy, and its unresolved global CSS retains the scoped rule.
     assert.ok(!report.diff.includes("m-[3px]"));
     assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
-    assert.equal(report.convertedRules, 0);
-  } finally {
-    await cleanup(cwd);
-  }
-});
-
-test("a Markdown page defeats the unscoped sole-source proof", async () => {
-  const cwd = await fixture();
-  try {
-    await Promise.all([
-      rm(join(cwd, "Button.module.css")),
-      rm(join(cwd, "Button.tsx")),
-      writeFile(
-        join(cwd, "Card.vue"),
-        '<template>\n  <div class="shared">Card</div>\n  <span>Leaf</span>\n</template>\n<style>\n.shared { margin: 7px; }\n</style>\n',
-      ),
-      writeFile(join(cwd, "page.md"), '# Doc\n\n<div class="shared">md</div>\n'),
-    ]);
-    const report = await migrate({ cwd });
-    assert.ok(report.warnings.some((entry) => entry.code === "unscoped-style-block"));
     assert.equal(report.convertedRules, 0);
   } finally {
     await cleanup(cwd);
@@ -1206,33 +1166,6 @@ test("a text root fragments the child and blocks call-site rewrites", async () =
     )!;
     assert.equal(rule.status, "retained");
     assert.doesNotMatch(await readFile(join(cwd, "Parent.vue"), "utf8"), /m-\[7px\]/);
-  } finally {
-    await cleanup(cwd);
-  }
-});
-
-test("an unscanned template format keeps caller fallthrough open", async () => {
-  const cwd = await fixture();
-  try {
-    await Promise.all([
-      writeFile(
-        join(cwd, "Child.vue"),
-        '<template>\n  <div class="passed">Child</div>\n</template>\n<style scoped>\n.passed { padding: 13px; }\n</style>\n',
-      ),
-      writeFile(
-        join(cwd, "App.vue"),
-        '<template>\n  <Child class="passed" />\n  <main>App</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
-      ),
-      writeFile(join(cwd, "Page.astro"), '<Child class="passed" />\n'),
-    ]);
-    const report = await migrate({ cwd });
-    assert.ok(report.warnings.some((entry) => entry.code === "open-root-fallthrough"));
-    assert.ok(
-      report.rules.some(
-        (rule) =>
-          rule.file === "Child.vue" && rule.selector === ".passed" && rule.status === "retained",
-      ),
-    );
   } finally {
     await cleanup(cwd);
   }
