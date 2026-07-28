@@ -48,8 +48,8 @@ if vize reaches a stable release or official adoption.
 1. Vue 2 single-file components; they are retained whole with a warning.
 2. Unofficial SFC compilers (`vize`, `fervid`) or bundling any Vue compiler
    with `tw-migrate`.
-3. Non-default template languages (`<template lang="pug">`) and non-JS/TS
-   script languages.
+3. Non-default template languages (`<template lang="pug">`) and analysis of
+   script contents or languages.
 4. Converting `:deep()`, `:global()`, `>>>`, `/deep/`, or CSS `v-bind()`
    expressions into utilities.
 5. Migrating `<style>` blocks without `scoped` in Phase 1; they are global CSS
@@ -150,9 +150,8 @@ The Node layer follows the `html.js` pattern with a new `vue.js` module:
 - extract style blocks with absolute content offsets and their attribute set
   (`scoped`, `module`, `lang`, `src`);
 - lower the template AST to a compact contract: class sites, element kind
-  (host or component tag), root/multi-root shape, presence of dynamic class
-  bindings, and `inheritAttrs` evidence from the script block when statically
-  visible;
+  (host or component tag), root/multi-root shape, and presence of dynamic
+  class bindings;
 - hand the contract to the Rust planner and apply returned byte edits through
   the existing transactional writer.
 
@@ -191,18 +190,16 @@ the rule to retain-with-append or retain-only:
    later phase. Open rules append utilities to proven sites and retain with
    `open-root-fallthrough`. Phase 2's cross-file analysis can close this
    surface by proving no caller passes a `class` to the component.
-3. **Dynamic class bindings.** `:class`, spread `v-bind`, dynamic directive
-   arguments (`v-bind:[key]`), and custom directives (which receive the
-   element and may mutate its classList) make an element's class set opaque;
+3. **Dynamic class bindings.** `:class`, spread `v-bind`, and dynamic
+   directive arguments (`v-bind:[key]`) make an element's class set opaque;
    an opaque set can contain any class. If the template contains any such
    binding — or a class/id attribute that is not a safely writable quoted
    literal — all scoped class rules retain with `dynamic-template-class` in
    Phase 1. Literal class attributes beside a dynamic binding remain proven
-   sites and still receive appended utilities. Scripts and inline event
-   handlers are never analyzed — only template markup is tokenized — so any
-   `<script>` content or `v-on` handler opens the file outright:
-   proof-or-retain, matching the CSS Module philosophy. Phase 3 narrows this
-   to literal object/array bindings.
+   sites and still receive appended utilities. Runtime class mutation through
+   scripts, event handlers, refs, or custom directives is outside the supported
+   scope, matching the React/JSX path. Phase 3 narrows dynamic bindings to
+   literal object/array forms.
 4. **Escape hatches.** Rules containing `:deep()`, `:global()`, `>>>`,
    `/deep/`, or declarations using `v-bind()` have no utility representation
    and retain through the existing selector/declaration support codes
@@ -261,9 +258,9 @@ and a second run produces no diff.
 - `<style module>` retains whole with `unsupported-sfc-block` until Phase 4.
 - `<style src="…">` retains with `unsupported-sfc-block`; Phase 2 revisits it
   as an import edge.
-- `<script>` blocks are never analyzed: any script content or event handler
-  opens the template's class surface; external (`src`) and non-JS/TS
-  (`lang`) script blocks retain the whole file with `unsupported-sfc-block`.
+- `<script>` contents and languages do not participate in template closure.
+  Inline text is carried only by the existing CSS Module deletion guard;
+  runtime class mutation remains outside the supported scope.
 
 ## Diagnostics
 
@@ -331,9 +328,8 @@ phases.
 
 ### Rust
 
-- Closure proofs: component tags, root fallthrough, `inheritAttrs: false`,
-  multi-root templates, dynamic bindings, and escape hatches each force the
-  documented retention.
+- Closure proofs: component tags, root fallthrough, multi-root templates,
+  dynamic bindings, and escape hatches each force the documented retention.
 - Matched host sites receive utilities; removed rules empty their block;
   partial blocks keep remaining rules byte-exactly.
 - Edits never overlap and never touch bytes outside planned spans.
@@ -390,9 +386,9 @@ phases.
 8. The cascade-shadowing index is package-scoped and rightmost-compound
    based: a corpus selector retains the rule even when its ancestor parts
    could never be satisfied, and CSS outside the package is not seen.
-9. Because scripts are never analyzed, an SFC with any `<script>` content
-   or event handler stays in retain-with-append mode; scoped-rule deletion
-   is effectively limited to purely presentational SFCs in Phase 1.
+9. Runtime class mutation through scripts, event handlers, refs, or custom
+   directives is outside the supported scope and does not block migration of
+   proven static template sites, matching the React/JSX path.
 
 ## Deferred Work
 
@@ -401,6 +397,6 @@ phases.
   counting tracks classes only.
 - Vue 2 support, pending demonstrated demand.
 - `vize` re-evaluation at a stable or officially adopted release.
-- Non-default template and script block languages.
+- Non-default template block languages.
 - `@theme` extraction from `v-bind()` usage.
 - Scoped `@keyframes` and animation name migration inside SFCs.

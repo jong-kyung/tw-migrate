@@ -79,18 +79,6 @@ export function analyzeVueSource(compiler, path, source) {
     );
     return { warnings: toByteWarnings(source, warnings), retained: true };
   }
-  // An external script can mutate classes at runtime but cannot be fed to
-  // the mention guard, so the file's class surface cannot be analyzed.
-  if (descriptor.script?.src !== undefined || descriptor.scriptSetup?.src !== undefined) {
-    warn("unsupported-sfc-block", 0, 0, "External <script src> blocks are not analyzed.");
-    return { warnings: toByteWarnings(source, warnings), retained: true };
-  }
-  const scriptLang = descriptor.script?.lang ?? descriptor.scriptSetup?.lang;
-  if (scriptLang && !["js", "jsx", "ts", "tsx"].includes(scriptLang)) {
-    warn("unsupported-sfc-block", 0, 0, `A <script lang="${scriptLang}"> block is not analyzed.`);
-    return { warnings: toByteWarnings(source, warnings), retained: true };
-  }
-
   const blocks = [];
   // Retained blocks are still real CSS that can win the cascade against the
   // utilities replacing a deleted scoped rule. Plain-CSS text feeds the
@@ -189,24 +177,20 @@ export function analyzeVueSource(compiler, path, source) {
       ),
   ).length;
 
+  // Script contents are outside template-class analysis, but the raw text
+  // still protects external CSS Modules from unsafe deletion.
   const scriptText = [descriptor.script?.content, descriptor.scriptSetup?.content]
     .filter(Boolean)
     .join("\n");
-  // Scripts are never analyzed: only the template markup is tokenized, so
-  // any script content can mutate classes in ways this analyzer cannot see
-  // and the file is never closed -- proof-or-retain, matching the CSS
-  // Module philosophy.
-  const hasScript = scriptText.trim().length > 0;
 
   // Priority order: the most specific open surface names the retention.
-  const retention =
-    state.dynamic || hasScript
-      ? "dynamic-template-class"
-      : state.componentTags
-        ? "component-class-target"
-        : alwaysRenderedRoots < 2
-          ? "open-root-fallthrough"
-          : undefined;
+  const retention = state.dynamic
+    ? "dynamic-template-class"
+    : state.componentTags
+      ? "component-class-target"
+      : alwaysRenderedRoots < 2
+        ? "open-root-fallthrough"
+        : undefined;
 
   const offsets = utf8OffsetMap(source, [
     ...warnings.flatMap((warning) => [warning.start, warning.end]),
@@ -271,34 +255,11 @@ export function verifyVueSource(compiler, path, source) {
     .map((style) => style.content);
 }
 
-// Directives that cannot add or remove classes on their host element. Any
-// other directive receives the element at runtime and may mutate its
-// classList, which opens the template's class surface.
-const CLASS_INERT_DIRECTIVES = new Set([
-  "bind",
-  "cloak",
-  "else",
-  "else-if",
-  "for",
-  "html",
-  "if",
-  "memo",
-  "model",
-  "once",
-  "pre",
-  "show",
-  "slot",
-  "text",
-]);
-
 function visitTemplateNode(source, node, state) {
   if (node.type === NODE_ELEMENT) {
     let classBound = false;
     for (const prop of node.props ?? []) {
       if (prop.type !== PROP_DIRECTIVE) continue;
-      // Event handlers are inline scripts: never analyzed, so their presence
-      // opens the class surface like a script block does.
-      if (prop.name === "on") state.dynamic = true;
       // `:class`, a spread `v-bind="..."`, or a dynamic argument
       // `v-bind:[key]` (which can evaluate to `class` at runtime) can put any
       // class anywhere.
@@ -308,12 +269,6 @@ function visitTemplateNode(source, node, state) {
       ) {
         state.dynamic = true;
         classBound = true;
-      }
-      if (prop.name === "bind" && prop.arg?.isStatic && prop.arg.content === "ref") {
-        state.dynamic = true;
-      }
-      if (!CLASS_INERT_DIRECTIVES.has(prop.name)) {
-        state.dynamic = true;
       }
     }
     if (node.tagType === TAG_COMPONENT) {

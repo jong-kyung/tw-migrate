@@ -416,17 +416,16 @@ test("appends utilities to a literal class site beside a dynamic binding", async
   }
 });
 
-test("treats a custom directive as an open class surface", async () => {
+test("ignores custom directive runtime mutations outside static template scope", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p v-highlight class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
   try {
     await writeFile(join(cwd, "Card.vue"), vue);
     const report = await migrate({ cwd, styleFile: "Card.vue" });
-    assert.ok(report.warnings.some((entry) => entry.code === "dynamic-template-class"));
-    assert.equal(report.convertedRules, 0);
-    assert.equal(report.retainedRules, 1);
-    assert.match(report.diff, /\+<style scoped>/);
+    assert.equal(report.convertedRules, 1);
+    assert.equal(report.retainedRules, 0);
+    assert.match(report.diff, /class="card p-\[13px\]"/);
   } finally {
     await cleanup(cwd);
   }
@@ -579,7 +578,7 @@ test("a paren-less deep combinator makes the shadow corpus unverifiable", async 
   }
 });
 
-test("retains an SFC with an external script block", async () => {
+test("migrates static template classes beside an external script block", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script src="./behavior.js"></script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -589,8 +588,9 @@ test("retains an SFC with an external script block", async () => {
       writeFile(join(cwd, "behavior.js"), "export default {};\n"),
     ]);
     const report = await migrate({ cwd, styleFile: "Card.vue" });
-    assert.deepEqual(report.changedFiles, []);
-    assert.ok(report.warnings.some((entry) => entry.code === "unsupported-sfc-block"));
+    assert.equal(report.convertedRules, 1);
+    assert.equal(report.retainedRules, 0);
+    assert.match(report.diff, /class="card p-\[13px\]"/);
   } finally {
     await cleanup(cwd);
   }
@@ -634,46 +634,46 @@ test("Sass parent-selector concatenation makes the shadow corpus unverifiable", 
   }
 });
 
-test("a function ref opens the template surface", async () => {
+test("ignores function ref runtime mutations outside static template scope", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p :ref="el => el?.classList.add(\'card\')">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
   try {
     await writeFile(join(cwd, "Card.vue"), vue);
     const report = await migrate({ cwd, styleFile: "Card.vue" });
-    assert.ok(report.warnings.some((entry) => entry.code === "dynamic-template-class"));
-    assert.equal(report.convertedRules, 0);
-    assert.equal(report.retainedRules, 1);
+    assert.equal(report.convertedRules, 1);
+    assert.equal(report.retainedRules, 0);
     assert.match(report.diff, /class="card p-\[13px\]"/);
   } finally {
     await cleanup(cwd);
   }
 });
 
-test("a class-mutating handler opens the template surface", async () => {
+test("ignores handler runtime mutations outside static template scope", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p @click="$event.currentTarget.classList.add(pick())">B</p>\n</template>\n<script setup>\nconst pick = () => "x";\n</script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
   try {
     await writeFile(join(cwd, "Card.vue"), vue);
     const report = await migrate({ cwd, styleFile: "Card.vue" });
-    assert.ok(report.warnings.some((entry) => entry.code === "dynamic-template-class"));
-    assert.equal(report.convertedRules, 0);
-    assert.match(report.diff, /\+<style scoped>/);
+    assert.equal(report.convertedRules, 1);
+    assert.equal(report.retainedRules, 0);
+    assert.match(report.diff, /class="card p-\[13px\]"/);
   } finally {
     await cleanup(cwd);
   }
 });
 
-test("retains an SFC with an unsupported script language", async () => {
+test("migrates static template classes with an unsupported script language", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script lang="coffee">\nx = 1\n</script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
   try {
     await writeFile(join(cwd, "Card.vue"), vue);
     const report = await migrate({ cwd, styleFile: "Card.vue" });
-    assert.deepEqual(report.changedFiles, []);
-    assert.ok(report.warnings.some((entry) => entry.code === "unsupported-sfc-block"));
+    assert.equal(report.convertedRules, 1);
+    assert.equal(report.retainedRules, 0);
+    assert.match(report.diff, /class="card p-\[13px\]"/);
   } finally {
     await cleanup(cwd);
   }
@@ -698,17 +698,16 @@ test("a ::v-global escape in another SFC shadows scoped deletion", async () => {
   }
 });
 
-test("any script block keeps the template surface open", async () => {
+test("script blocks do not open the static template class surface", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script setup>\nconst answer = 42;\n</script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
   try {
     await writeFile(join(cwd, "Card.vue"), vue);
     const report = await migrate({ cwd, styleFile: "Card.vue" });
-    assert.ok(report.warnings.some((entry) => entry.code === "dynamic-template-class"));
-    assert.equal(report.convertedRules, 0);
+    assert.equal(report.convertedRules, 1);
+    assert.equal(report.retainedRules, 0);
     assert.match(report.diff, /class="card p-\[13px\]"/);
-    assert.match(report.diff, /\+<style scoped>/);
   } finally {
     await cleanup(cwd);
   }

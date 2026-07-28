@@ -98,7 +98,7 @@ fn vue_retention_warning(code: &str) -> Result<(&'static str, &'static str), Str
     match code {
         "dynamic-template-class" => Ok((
             "dynamic-template-class",
-            "A dynamic class binding or unanalyzed script makes the template's class set unprovable, so the scoped rule is retained.",
+            "A dynamic class binding makes the template's class set unprovable, so the scoped rule is retained.",
         )),
         "component-class-target" => Ok((
             "component-class-target",

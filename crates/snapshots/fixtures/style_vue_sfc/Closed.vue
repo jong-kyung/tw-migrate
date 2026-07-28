@@ -2,6 +2,9 @@
   <p class="card">First</p>
   <p class="plain">Second</p>
 </template>
+<script setup>
+const answer = 42
+</script>
 <style scoped>
 .card {
   padding: 13px;
