@@ -91,7 +91,7 @@ mod tests {
     }
 
     #[test]
-    fn extracts_runtime_import_bindings() {
+    fn extracts_default_import_bindings() {
         let imports = crate::js_rewrite::static_import_bindings(
             "Component.ts",
             "import Child from './Child.vue';\nimport { Named, type Props } from './Named.vue';\n",
@@ -102,10 +102,7 @@ mod tests {
                 .into_iter()
                 .map(|import| (import.source, import.local))
                 .collect::<Vec<_>>(),
-            [
-                ("./Child.vue".to_string(), "Child".to_string()),
-                ("./Named.vue".to_string(), "Named".to_string()),
-            ]
+            [("./Child.vue".to_string(), "Child".to_string())]
         );
     }
 

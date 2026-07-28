@@ -81,11 +81,6 @@ pub(crate) fn static_import_bindings(
                     ImportDeclarationSpecifier::ImportDefaultSpecifier(specifier) => {
                         Some(specifier.local.name.as_str())
                     }
-                    ImportDeclarationSpecifier::ImportSpecifier(specifier)
-                        if specifier.import_kind == ImportOrExportKind::Value =>
-                    {
-                        Some(specifier.local.name.as_str())
-                    }
                     _ => None,
                 })
                 .map(|local| StaticImportBinding {
