@@ -30,9 +30,7 @@
             "value": "card"
           },
           "cardinality": 1,
-          "identity": [
-            "card"
-          ]
+          "identity": ["card"]
         },
         "hover": {
           "route": "/",
@@ -60,9 +58,7 @@
             "value": "card"
           },
           "cardinality": 1,
-          "identity": [
-            "card"
-          ]
+          "identity": ["card"]
         },
         "focus": {
           "route": "/",
@@ -92,9 +88,7 @@
             "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": [
-            "action"
-          ]
+          "identity": ["action"]
         },
         "focus-visible": {
           "route": "/",
@@ -120,9 +114,7 @@
             "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": [
-            "action"
-          ]
+          "identity": ["action"]
         },
         "responsive-below": {
           "route": "/",
@@ -143,9 +135,7 @@
             "value": "responsive-layout"
           },
           "cardinality": 1,
-          "identity": [
-            "responsive"
-          ]
+          "identity": ["responsive"]
         },
         "responsive-above": {
           "route": "/",
@@ -166,9 +156,7 @@
             "value": "responsive-layout"
           },
           "cardinality": 1,
-          "identity": [
-            "responsive"
-          ]
+          "identity": ["responsive"]
         }
       }
     },
@@ -202,9 +190,7 @@
             "value": "card"
           },
           "cardinality": 1,
-          "identity": [
-            "card"
-          ]
+          "identity": ["card"]
         },
         "hover": {
           "route": "/",
@@ -232,9 +218,7 @@
             "value": "card"
           },
           "cardinality": 1,
-          "identity": [
-            "card"
-          ]
+          "identity": ["card"]
         },
         "focus": {
           "route": "/",
@@ -264,9 +248,7 @@
             "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": [
-            "action"
-          ]
+          "identity": ["action"]
         },
         "focus-visible": {
           "route": "/",
@@ -292,9 +274,7 @@
             "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": [
-            "action"
-          ]
+          "identity": ["action"]
         },
         "responsive-below": {
           "route": "/",
@@ -315,9 +295,7 @@
             "value": "responsive-layout"
           },
           "cardinality": 1,
-          "identity": [
-            "responsive"
-          ]
+          "identity": ["responsive"]
         },
         "responsive-above": {
           "route": "/",
@@ -338,9 +316,7 @@
             "value": "responsive-layout"
           },
           "cardinality": 1,
-          "identity": [
-            "responsive"
-          ]
+          "identity": ["responsive"]
         }
       }
     },
@@ -374,9 +350,7 @@
             "value": "card"
           },
           "cardinality": 1,
-          "identity": [
-            "card"
-          ]
+          "identity": ["card"]
         },
         "hover": {
           "route": "/",
@@ -404,9 +378,7 @@
             "value": "card"
           },
           "cardinality": 1,
-          "identity": [
-            "card"
-          ]
+          "identity": ["card"]
         },
         "focus": {
           "route": "/",
@@ -436,9 +408,7 @@
             "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": [
-            "action"
-          ]
+          "identity": ["action"]
         },
         "focus-visible": {
           "route": "/",
@@ -464,9 +434,7 @@
             "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": [
-            "action"
-          ]
+          "identity": ["action"]
         },
         "responsive-below": {
           "route": "/",
@@ -487,9 +455,7 @@
             "value": "responsive-layout"
           },
           "cardinality": 1,
-          "identity": [
-            "responsive"
-          ]
+          "identity": ["responsive"]
         },
         "responsive-above": {
           "route": "/",
@@ -510,9 +476,7 @@
             "value": "responsive-layout"
           },
           "cardinality": 1,
-          "identity": [
-            "responsive"
-          ]
+          "identity": ["responsive"]
         }
       }
     },
@@ -546,9 +510,7 @@
             "value": "card"
           },
           "cardinality": 1,
-          "identity": [
-            "card"
-          ]
+          "identity": ["card"]
         },
         "hover": {
           "route": "/",
@@ -576,9 +538,7 @@
             "value": "card"
           },
           "cardinality": 1,
-          "identity": [
-            "card"
-          ]
+          "identity": ["card"]
         },
         "focus": {
           "route": "/",
@@ -608,9 +568,7 @@
             "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": [
-            "action"
-          ]
+          "identity": ["action"]
         },
         "focus-visible": {
           "route": "/",
@@ -636,9 +594,7 @@
             "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": [
-            "action"
-          ]
+          "identity": ["action"]
         },
         "responsive-below": {
           "route": "/",
@@ -659,9 +615,7 @@
             "value": "responsive-layout"
           },
           "cardinality": 1,
-          "identity": [
-            "responsive"
-          ]
+          "identity": ["responsive"]
         },
         "responsive-above": {
           "route": "/",
@@ -682,9 +636,7 @@
             "value": "responsive-layout"
           },
           "cardinality": 1,
-          "identity": [
-            "responsive"
-          ]
+          "identity": ["responsive"]
         }
       }
     },
@@ -718,9 +670,7 @@
             "value": "card"
           },
           "cardinality": 1,
-          "identity": [
-            "card"
-          ]
+          "identity": ["card"]
         },
         "hover": {
           "route": "/",
@@ -748,9 +698,7 @@
             "value": "card"
           },
           "cardinality": 1,
-          "identity": [
-            "card"
-          ]
+          "identity": ["card"]
         },
         "focus": {
           "route": "/",
@@ -780,9 +728,7 @@
             "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": [
-            "action"
-          ]
+          "identity": ["action"]
         },
         "focus-visible": {
           "route": "/",
@@ -808,9 +754,7 @@
             "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": [
-            "action"
-          ]
+          "identity": ["action"]
         },
         "responsive-below": {
           "route": "/",
@@ -831,9 +775,7 @@
             "value": "responsive-layout"
           },
           "cardinality": 1,
-          "identity": [
-            "responsive"
-          ]
+          "identity": ["responsive"]
         },
         "responsive-above": {
           "route": "/",
@@ -854,9 +796,7 @@
             "value": "responsive-layout"
           },
           "cardinality": 1,
-          "identity": [
-            "responsive"
-          ]
+          "identity": ["responsive"]
         }
       }
     },
@@ -890,9 +830,7 @@
             "value": "card"
           },
           "cardinality": 1,
-          "identity": [
-            "card"
-          ]
+          "identity": ["card"]
         },
         "hover": {
           "route": "/",
@@ -920,9 +858,7 @@
             "value": "card"
           },
           "cardinality": 1,
-          "identity": [
-            "card"
-          ]
+          "identity": ["card"]
         },
         "focus": {
           "route": "/",
@@ -952,9 +888,7 @@
             "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": [
-            "action"
-          ]
+          "identity": ["action"]
         },
         "focus-visible": {
           "route": "/",
@@ -980,9 +914,7 @@
             "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": [
-            "action"
-          ]
+          "identity": ["action"]
         },
         "responsive-below": {
           "route": "/",
@@ -1003,9 +935,7 @@
             "value": "responsive-layout"
           },
           "cardinality": 1,
-          "identity": [
-            "responsive"
-          ]
+          "identity": ["responsive"]
         },
         "responsive-above": {
           "route": "/",
@@ -1026,9 +956,7 @@
             "value": "responsive-layout"
           },
           "cardinality": 1,
-          "identity": [
-            "responsive"
-          ]
+          "identity": ["responsive"]
         }
       }
     },
@@ -1062,9 +990,7 @@
             "value": "card"
           },
           "cardinality": 1,
-          "identity": [
-            "card"
-          ]
+          "identity": ["card"]
         },
         "hover": {
           "route": "/",
@@ -1092,9 +1018,7 @@
             "value": "card"
           },
           "cardinality": 1,
-          "identity": [
-            "card"
-          ]
+          "identity": ["card"]
         },
         "focus": {
           "route": "/",
@@ -1124,9 +1048,7 @@
             "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": [
-            "action"
-          ]
+          "identity": ["action"]
         },
         "focus-visible": {
           "route": "/",
@@ -1152,9 +1074,7 @@
             "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": [
-            "action"
-          ]
+          "identity": ["action"]
         },
         "responsive-below": {
           "route": "/",
@@ -1175,9 +1095,7 @@
             "value": "responsive-layout"
           },
           "cardinality": 1,
-          "identity": [
-            "responsive"
-          ]
+          "identity": ["responsive"]
         },
         "responsive-above": {
           "route": "/",
@@ -1198,9 +1116,7 @@
             "value": "responsive-layout"
           },
           "cardinality": 1,
-          "identity": [
-            "responsive"
-          ]
+          "identity": ["responsive"]
         }
       }
     },
@@ -1234,9 +1150,7 @@
             "value": "card"
           },
           "cardinality": 1,
-          "identity": [
-            "card"
-          ]
+          "identity": ["card"]
         },
         "hover": {
           "route": "/",
@@ -1264,9 +1178,7 @@
             "value": "card"
           },
           "cardinality": 1,
-          "identity": [
-            "card"
-          ]
+          "identity": ["card"]
         },
         "focus": {
           "route": "/",
@@ -1296,9 +1208,7 @@
             "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": [
-            "action"
-          ]
+          "identity": ["action"]
         },
         "focus-visible": {
           "route": "/",
@@ -1324,9 +1234,7 @@
             "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": [
-            "action"
-          ]
+          "identity": ["action"]
         },
         "responsive-below": {
           "route": "/",
@@ -1347,9 +1255,7 @@
             "value": "responsive-layout"
           },
           "cardinality": 1,
-          "identity": [
-            "responsive"
-          ]
+          "identity": ["responsive"]
         },
         "responsive-above": {
           "route": "/",
@@ -1370,9 +1276,7 @@
             "value": "responsive-layout"
           },
           "cardinality": 1,
-          "identity": [
-            "responsive"
-          ]
+          "identity": ["responsive"]
         }
       }
     },
@@ -1406,9 +1310,7 @@
             "value": "card"
           },
           "cardinality": 1,
-          "identity": [
-            "card"
-          ]
+          "identity": ["card"]
         },
         "hover": {
           "route": "/",
@@ -1436,9 +1338,7 @@
             "value": "card"
           },
           "cardinality": 1,
-          "identity": [
-            "card"
-          ]
+          "identity": ["card"]
         },
         "focus": {
           "route": "/",
@@ -1468,9 +1368,7 @@
             "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": [
-            "action"
-          ]
+          "identity": ["action"]
         },
         "focus-visible": {
           "route": "/",
@@ -1496,9 +1394,7 @@
             "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": [
-            "action"
-          ]
+          "identity": ["action"]
         },
         "responsive-below": {
           "route": "/",
@@ -1519,9 +1415,7 @@
             "value": "responsive-layout"
           },
           "cardinality": 1,
-          "identity": [
-            "responsive"
-          ]
+          "identity": ["responsive"]
         },
         "responsive-above": {
           "route": "/",
@@ -1542,9 +1436,7 @@
             "value": "responsive-layout"
           },
           "cardinality": 1,
-          "identity": [
-            "responsive"
-          ]
+          "identity": ["responsive"]
         }
       }
     },
@@ -1578,9 +1470,7 @@
             "value": "card"
           },
           "cardinality": 1,
-          "identity": [
-            "card"
-          ]
+          "identity": ["card"]
         },
         "hover": {
           "route": "/",
@@ -1608,9 +1498,7 @@
             "value": "card"
           },
           "cardinality": 1,
-          "identity": [
-            "card"
-          ]
+          "identity": ["card"]
         },
         "focus": {
           "route": "/",
@@ -1640,9 +1528,7 @@
             "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": [
-            "action"
-          ]
+          "identity": ["action"]
         },
         "focus-visible": {
           "route": "/",
@@ -1668,9 +1554,7 @@
             "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": [
-            "action"
-          ]
+          "identity": ["action"]
         },
         "responsive-below": {
           "route": "/",
@@ -1691,9 +1575,7 @@
             "value": "responsive-layout"
           },
           "cardinality": 1,
-          "identity": [
-            "responsive"
-          ]
+          "identity": ["responsive"]
         },
         "responsive-above": {
           "route": "/",
@@ -1714,9 +1596,7 @@
             "value": "responsive-layout"
           },
           "cardinality": 1,
-          "identity": [
-            "responsive"
-          ]
+          "identity": ["responsive"]
         }
       }
     },
@@ -1750,9 +1630,7 @@
             "value": "card"
           },
           "cardinality": 1,
-          "identity": [
-            "card"
-          ]
+          "identity": ["card"]
         },
         "hover": {
           "route": "/",
@@ -1780,9 +1658,7 @@
             "value": "card"
           },
           "cardinality": 1,
-          "identity": [
-            "card"
-          ]
+          "identity": ["card"]
         },
         "focus": {
           "route": "/",
@@ -1812,9 +1688,7 @@
             "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": [
-            "action"
-          ]
+          "identity": ["action"]
         },
         "focus-visible": {
           "route": "/",
@@ -1840,9 +1714,7 @@
             "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": [
-            "action"
-          ]
+          "identity": ["action"]
         },
         "responsive-below": {
           "route": "/",
@@ -1863,9 +1735,7 @@
             "value": "responsive-layout"
           },
           "cardinality": 1,
-          "identity": [
-            "responsive"
-          ]
+          "identity": ["responsive"]
         },
         "responsive-above": {
           "route": "/",
@@ -1886,9 +1756,7 @@
             "value": "responsive-layout"
           },
           "cardinality": 1,
-          "identity": [
-            "responsive"
-          ]
+          "identity": ["responsive"]
         }
       }
     },
@@ -1922,9 +1790,7 @@
             "value": "card"
           },
           "cardinality": 1,
-          "identity": [
-            "card"
-          ]
+          "identity": ["card"]
         },
         "hover": {
           "route": "/",
@@ -1952,9 +1818,7 @@
             "value": "card"
           },
           "cardinality": 1,
-          "identity": [
-            "card"
-          ]
+          "identity": ["card"]
         },
         "focus": {
           "route": "/",
@@ -1984,9 +1848,7 @@
             "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": [
-            "action"
-          ]
+          "identity": ["action"]
         },
         "focus-visible": {
           "route": "/",
@@ -2012,9 +1874,7 @@
             "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": [
-            "action"
-          ]
+          "identity": ["action"]
         },
         "responsive-below": {
           "route": "/",
@@ -2035,9 +1895,7 @@
             "value": "responsive-layout"
           },
           "cardinality": 1,
-          "identity": [
-            "responsive"
-          ]
+          "identity": ["responsive"]
         },
         "responsive-above": {
           "route": "/",
@@ -2058,9 +1916,167 @@
             "value": "responsive-layout"
           },
           "cardinality": 1,
-          "identity": [
-            "responsive"
-          ]
+          "identity": ["responsive"]
+        }
+      }
+    },
+    {
+      "id": "vue-vite-css",
+      "kind": "controlled",
+      "runtime": "vue-vite",
+      "style": "css",
+      "source": {
+        "path": "src/App.vue",
+        "before": ".card",
+        "after": "p-[13px]"
+      },
+      "probes": {
+        "base": {
+          "route": "/",
+          "viewport": {
+            "width": 1280,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Toggle details"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "data",
+            "value": "card"
+          },
+          "cardinality": 1,
+          "identity": ["card"]
+        },
+        "hover": {
+          "route": "/",
+          "viewport": {
+            "width": 1280,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Toggle details"
+            },
+            "cardinality": 1
+          },
+          "action": {
+            "type": "hover",
+            "selector": {
+              "type": "data",
+              "value": "card"
+            }
+          },
+          "selector": {
+            "type": "data",
+            "value": "card"
+          },
+          "cardinality": 1,
+          "identity": ["card"]
+        },
+        "focus": {
+          "route": "/",
+          "viewport": {
+            "width": 1280,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Toggle details"
+            },
+            "cardinality": 1
+          },
+          "action": {
+            "type": "focus",
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Toggle details"
+            }
+          },
+          "selector": {
+            "type": "role",
+            "value": "button",
+            "name": "Toggle details"
+          },
+          "cardinality": 1,
+          "identity": ["action"]
+        },
+        "focus-visible": {
+          "route": "/",
+          "viewport": {
+            "width": 1280,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Toggle details"
+            },
+            "cardinality": 1
+          },
+          "action": {
+            "type": "press",
+            "key": "Tab"
+          },
+          "selector": {
+            "type": "role",
+            "value": "button",
+            "name": "Toggle details"
+          },
+          "cardinality": 1,
+          "identity": ["action"]
+        },
+        "responsive-below": {
+          "route": "/",
+          "viewport": {
+            "width": 375,
+            "height": 667
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Toggle details"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "data",
+            "value": "responsive-layout"
+          },
+          "cardinality": 1,
+          "identity": ["responsive"]
+        },
+        "responsive-above": {
+          "route": "/",
+          "viewport": {
+            "width": 1280,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Toggle details"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "data",
+            "value": "responsive-layout"
+          },
+          "cardinality": 1,
+          "identity": ["responsive"]
         }
       }
     },
@@ -2080,18 +2096,10 @@
       "installs": [
         {
           "cwd": ".",
-          "args": [
-            "ci",
-            "--ignore-scripts",
-            "--no-audit",
-            "--no-fund"
-          ]
+          "args": ["ci", "--ignore-scripts", "--no-audit", "--no-fund"]
         }
       ],
-      "start": [
-        "run",
-        "dev"
-      ],
+      "start": ["run", "dev"],
       "tailwindCss": "app/globals.css",
       "source": {
         "path": "app/page.module.css",
@@ -2117,15 +2125,11 @@
             "value": "main"
           },
           "cardinality": 1,
-          "identity": [
-            "main"
-          ]
+          "identity": ["main"]
         }
       },
       "server": "next",
-      "runtimeWrites": [
-        "tsconfig.json"
-      ]
+      "runtimeWrites": ["tsconfig.json"]
     },
     {
       "id": "external-stylized-components",
@@ -2138,17 +2142,10 @@
       "installs": [
         {
           "cwd": ".",
-          "args": [
-            "install",
-            "--frozen-lockfile",
-            "--ignore-scripts"
-          ]
+          "args": ["install", "--frozen-lockfile", "--ignore-scripts"]
         }
       ],
-      "start": [
-        "run",
-        "dev"
-      ],
+      "start": ["run", "dev"],
       "server": "next",
       "tailwindCss": "src/app/globals.css",
       "source": {
@@ -2175,9 +2172,7 @@
             "value": "body > div:not([hidden])"
           },
           "cardinality": 1,
-          "identity": [
-            "div"
-          ]
+          "identity": ["div"]
         }
       },
       "runtimeWrites": []

@@ -1,0 +1,44 @@
+---
+source: crates/snapshots/tests/cli_snapshots/styles.rs
+expression: document
+---
+case: style_vue_sfc
+
+--- step: preview ---
+status: 0
+stdout: "--- a/Closed.vue\n+++ b/Closed.vue\n@@ -1,18 +1,8 @@\n-<template>\n-  <p class=\"card\">First</p>\n-  <p class=\"plain\">Second</p>\n-</template>\n-<script setup>\n-const answer = 42\n-</script>\n-<style scoped>\n-.card {\n-  padding: 13px;\n-}\n-@media (min-width: 640px) {\n-  .card {\n-    padding: 17px;\n-  }\n-}\n-</style>\n \n+<template>\n+  <p class=\"card [@media_(min-width:640px)]:p-[17px] p-[13px]\">First</p>\n+  <p class=\"plain\">Second</p>\n+</template>\n+<script setup>\n+const answer = 42\n+</script>\n \n--- a/Dynamic.vue\n+++ b/Dynamic.vue\n@@ -1,13 +1,13 @@\n-<template>\n-  <ul class=\"list\">First</ul>\n-  <li :class=\"tone\" class=\"row\">Second</li>\n-</template>\n-<script setup>\n-const tone = 'warm';\n-</script>\n-<style scoped>\n-.list {\n-  color: red;\n-}\n-</style>\n \n+<template>\n+  <ul class=\"list text-[red]\">First</ul>\n+  <li :class=\"tone\" class=\"row\">Second</li>\n+</template>\n+<script setup>\n+const tone = 'warm';\n+</script>\n+<style scoped>\n+.list {\n+  color: red;\n+}\n+</style>\n \n--- a/Open.vue\n+++ b/Open.vue\n@@ -1,9 +1,9 @@\n-<template>\n-  <div class=\"panel\">Single root</div>\n-</template>\n-<style scoped>\n-.panel {\n-  margin: 7px;\n-}\n-</style>\n \n+<template>\n+  <div class=\"panel m-[7px]\">Single root</div>\n+</template>\n+<style scoped>\n+.panel {\n+  margin: 7px;\n+}\n+</style>\n \n--- a/Widget.vue\n+++ b/Widget.vue\n@@ -1,10 +1,10 @@\n-<template>\n-  <section class=\"frame\">Left</section>\n-  <MyButton class=\"frame\" />\n-</template>\n-<style scoped>\n-.frame {\n-  gap: 9px;\n-}\n-</style>\n \n+<template>\n+  <section class=\"frame gap-[9px]\">Left</section>\n+  <MyButton class=\"frame\" />\n+</template>\n+<style scoped>\n+.frame {\n+  gap: 9px;\n+}\n+</style>\n \nPreviewed 4 file(s); 2 rule(s) converted, 3 retained.\n"
+stderr: "warning[preprocessor-style-block] Blocks.vue:101-127 A <style lang=\"scss\"> block is not migrated yet.\nwarning[unscoped-style-block] Blocks.vue:143-169 A <style> block without `scoped` is global CSS and is retained.\nwarning[unsupported-sfc-block] Blocks.vue:192-220 <style module> blocks are not supported yet.\nwarning[dynamic-template-class] Dynamic.vue:158-181 A dynamic class binding makes the template's class set unprovable, so the scoped rule is retained.\nwarning[open-root-fallthrough] Open.vue:77-102 A parent component can merge classes onto the single root element, so the scoped rule is retained.\nwarning[component-class-target] Widget.vue:107-129 A child component's root element can carry classes this scoped rule matches, so it is retained.\n"
+workspace delta:
+  unchanged
+
+--- step: explicit selection ---
+status: 0
+stdout: "--- a/Closed.vue\n+++ b/Closed.vue\n@@ -1,18 +1,8 @@\n-<template>\n-  <p class=\"card\">First</p>\n-  <p class=\"plain\">Second</p>\n-</template>\n-<script setup>\n-const answer = 42\n-</script>\n-<style scoped>\n-.card {\n-  padding: 13px;\n-}\n-@media (min-width: 640px) {\n-  .card {\n-    padding: 17px;\n-  }\n-}\n-</style>\n \n+<template>\n+  <p class=\"card [@media_(min-width:640px)]:p-[17px] p-[13px]\">First</p>\n+  <p class=\"plain\">Second</p>\n+</template>\n+<script setup>\n+const answer = 42\n+</script>\n \nPreviewed 1 file(s); 2 rule(s) converted, 0 retained.\n"
+stderr: ""
+workspace delta:
+  unchanged
+
+--- step: write ---
+status: 0
+stdout: "--- a/Closed.vue\n+++ b/Closed.vue\n@@ -1,18 +1,8 @@\n-<template>\n-  <p class=\"card\">First</p>\n-  <p class=\"plain\">Second</p>\n-</template>\n-<script setup>\n-const answer = 42\n-</script>\n-<style scoped>\n-.card {\n-  padding: 13px;\n-}\n-@media (min-width: 640px) {\n-  .card {\n-    padding: 17px;\n-  }\n-}\n-</style>\n \n+<template>\n+  <p class=\"card [@media_(min-width:640px)]:p-[17px] p-[13px]\">First</p>\n+  <p class=\"plain\">Second</p>\n+</template>\n+<script setup>\n+const answer = 42\n+</script>\n \n--- a/Dynamic.vue\n+++ b/Dynamic.vue\n@@ -1,13 +1,13 @@\n-<template>\n-  <ul class=\"list\">First</ul>\n-  <li :class=\"tone\" class=\"row\">Second</li>\n-</template>\n-<script setup>\n-const tone = 'warm';\n-</script>\n-<style scoped>\n-.list {\n-  color: red;\n-}\n-</style>\n \n+<template>\n+  <ul class=\"list text-[red]\">First</ul>\n+  <li :class=\"tone\" class=\"row\">Second</li>\n+</template>\n+<script setup>\n+const tone = 'warm';\n+</script>\n+<style scoped>\n+.list {\n+  color: red;\n+}\n+</style>\n \n--- a/Open.vue\n+++ b/Open.vue\n@@ -1,9 +1,9 @@\n-<template>\n-  <div class=\"panel\">Single root</div>\n-</template>\n-<style scoped>\n-.panel {\n-  margin: 7px;\n-}\n-</style>\n \n+<template>\n+  <div class=\"panel m-[7px]\">Single root</div>\n+</template>\n+<style scoped>\n+.panel {\n+  margin: 7px;\n+}\n+</style>\n \n--- a/Widget.vue\n+++ b/Widget.vue\n@@ -1,10 +1,10 @@\n-<template>\n-  <section class=\"frame\">Left</section>\n-  <MyButton class=\"frame\" />\n-</template>\n-<style scoped>\n-.frame {\n-  gap: 9px;\n-}\n-</style>\n \n+<template>\n+  <section class=\"frame gap-[9px]\">Left</section>\n+  <MyButton class=\"frame\" />\n+</template>\n+<style scoped>\n+.frame {\n+  gap: 9px;\n+}\n+</style>\n \nApplied 4 file(s); 2 rule(s) converted, 3 retained.\n"
+stderr: "warning[preprocessor-style-block] Blocks.vue:101-127 A <style lang=\"scss\"> block is not migrated yet.\nwarning[unscoped-style-block] Blocks.vue:143-169 A <style> block without `scoped` is global CSS and is retained.\nwarning[unsupported-sfc-block] Blocks.vue:192-220 <style module> blocks are not supported yet.\nwarning[dynamic-template-class] Dynamic.vue:158-181 A dynamic class binding makes the template's class set unprovable, so the scoped rule is retained.\nwarning[open-root-fallthrough] Open.vue:77-102 A parent component can merge classes onto the single root element, so the scoped rule is retained.\nwarning[component-class-target] Widget.vue:107-129 A child component's root element can carry classes this scoped rule matches, so it is retained.\n"
+workspace delta:
+  modified Closed.vue
+    before: "<template>\n  <p class=\"card\">First</p>\n  <p class=\"plain\">Second</p>\n</template>\n<script setup>\nconst answer = 42\n</script>\n<style scoped>\n.card {\n  padding: 13px;\n}\n@media (min-width: 640px) {\n  .card {\n    padding: 17px;\n  }\n}\n</style>\n"
+    after: "<template>\n  <p class=\"card [@media_(min-width:640px)]:p-[17px] p-[13px]\">First</p>\n  <p class=\"plain\">Second</p>\n</template>\n<script setup>\nconst answer = 42\n</script>\n"
+  modified Dynamic.vue
+    before: "<template>\n  <ul class=\"list\">First</ul>\n  <li :class=\"tone\" class=\"row\">Second</li>\n</template>\n<script setup>\nconst tone = 'warm';\n</script>\n<style scoped>\n.list {\n  color: red;\n}\n</style>\n"
+    after: "<template>\n  <ul class=\"list text-[red]\">First</ul>\n  <li :class=\"tone\" class=\"row\">Second</li>\n</template>\n<script setup>\nconst tone = 'warm';\n</script>\n<style scoped>\n.list {\n  color: red;\n}\n</style>\n"
+  modified Open.vue
+    before: "<template>\n  <div class=\"panel\">Single root</div>\n</template>\n<style scoped>\n.panel {\n  margin: 7px;\n}\n</style>\n"
+    after: "<template>\n  <div class=\"panel m-[7px]\">Single root</div>\n</template>\n<style scoped>\n.panel {\n  margin: 7px;\n}\n</style>\n"
+  modified Widget.vue
+    before: "<template>\n  <section class=\"frame\">Left</section>\n  <MyButton class=\"frame\" />\n</template>\n<style scoped>\n.frame {\n  gap: 9px;\n}\n</style>\n"
+    after: "<template>\n  <section class=\"frame gap-[9px]\">Left</section>\n  <MyButton class=\"frame\" />\n</template>\n<style scoped>\n.frame {\n  gap: 9px;\n}\n</style>\n"
+
+--- step: second run ---
+status: 0
+stdout: "Applied 0 file(s); 0 rule(s) converted, 3 retained.\n"
+stderr: "warning[preprocessor-style-block] Blocks.vue:101-127 A <style lang=\"scss\"> block is not migrated yet.\nwarning[unscoped-style-block] Blocks.vue:143-169 A <style> block without `scoped` is global CSS and is retained.\nwarning[unsupported-sfc-block] Blocks.vue:192-220 <style module> blocks are not supported yet.\nwarning[dynamic-template-class] Dynamic.vue:169-192 A dynamic class binding makes the template's class set unprovable, so the scoped rule is retained.\nwarning[open-root-fallthrough] Open.vue:85-110 A parent component can merge classes onto the single root element, so the scoped rule is retained.\nwarning[component-class-target] Widget.vue:117-139 A child component's root element can carry classes this scoped rule matches, so it is retained.\n"
+workspace delta:
+  unchanged

@@ -1,0 +1,12 @@
+---
+source: crates/snapshots/tests/cli_snapshots/styles.rs
+expression: document
+---
+case: style_vue_unsupported_version
+
+--- step: preview ---
+status: 0
+stdout: "Previewed 0 file(s); 0 rule(s) converted, 0 retained.\n"
+stderr: "warning[unsupported-vue-version] App.vue:0-0 Vue 2.7.16 is not supported; only Vue 3 SFCs are analyzed.\n"
+workspace delta:
+  unchanged

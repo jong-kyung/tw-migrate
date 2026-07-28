@@ -82,7 +82,7 @@ test("validates API-only migration options", async () => {
     );
     await assert.rejects(
       migrate({ cwd, styleFile: "legacy.pcss" }),
-      /Only \.css, \.scss, \.sass, and \.less files can be migrated/,
+      /Only \.css, \.scss, \.sass, \.less, and \.vue files can be migrated/,
     );
     await assert.rejects(
       migrate({ cwd, tailwindCss: "globals.scss" }),
@@ -254,6 +254,495 @@ test("round-trips quoted values and urls through arbitrary candidates", async ()
     assert.match(css, /"My Font", sans-serif/);
     assert.match(css, /content: "a_b"/);
     assert.match(css, /calc\(min\(100%, 50vw\)\)/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("migrates a closed Vue SFC byte-exactly and removes the emptied scoped block", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">한글</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    await migrate({ cwd, styleFile: "Card.vue", write: true });
+    assert.deepEqual(
+      await readFile(join(cwd, "Card.vue")),
+      Buffer.from(
+        '<template>\n  <p class="card p-[13px]">한글</p>\n  <p class="etc">B</p>\n</template>\n',
+      ),
+    );
+    const second = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.deepEqual(second.changedFiles, []);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("retains a single-root Vue SFC scoped rule while appending its utilities", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <div class="panel">A</div>\n</template>\n<style scoped>\n.panel { margin: 7px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Panel.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Panel.vue" });
+    const warning = report.warnings.find((entry) => entry.code === "open-root-fallthrough")!;
+    const ruleStart = Buffer.byteLength(vue.slice(0, vue.indexOf(".panel {")));
+    assert.deepEqual(
+      [warning.file, warning.start, warning.end],
+      ["Panel.vue", ruleStart, ruleStart + ".panel { margin: 7px; }".length],
+    );
+    assert.match(report.diff, /class="panel m-\[7px\]"/);
+    assert.match(report.diff, /\+<style scoped>/);
+    assert.equal(report.retainedRules, 1);
+    assert.deepEqual(report.changedFiles, ["Panel.vue"]);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("warns and retains unsupported Vue style blocks", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped lang="scss">\n.card { padding: 13px; }\n</style>\n<style>\n.free { color: red; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.deepEqual(report.changedFiles, []);
+    assert.deepEqual(report.warnings.map((entry) => entry.code).sort(), [
+      "preprocessor-style-block",
+      "unscoped-style-block",
+    ]);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("locates scoped blocks with whitespace in their closing tags", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="note">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style >\n<style scoped>\n.note { margin: 3px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    await migrate({ cwd, styleFile: "Card.vue", write: true });
+    assert.equal(
+      await readFile(join(cwd, "Card.vue"), "utf8"),
+      '<template>\n  <p class="card p-[13px]">A</p>\n  <p class="note m-[3px]">B</p>\n</template>\n',
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("retains an SFC with a custom block", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="note">B</p>\n</template>\n<docs>runtime transform</docs>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.deepEqual(report.changedFiles, []);
+    assert.ok(report.warnings.some((entry) => entry.code === "unsupported-sfc-block"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("retains scoped styles with unsupported behavioral attributes", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="note">B</p>\n</template>\n<style scoped media="print">\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.deepEqual(report.changedFiles, []);
+    assert.ok(report.warnings.some((entry) => entry.code === "unsupported-sfc-block"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("treats a dynamic v-bind argument as an open class surface", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p v-bind:[key]="v" class="etc">B</p>\n</template>\n<script setup>\nconst key = "class";\nconst v = "x";\n</script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    const warning = report.warnings.find((entry) => entry.code === "dynamic-template-class")!;
+    assert.equal(warning.file, "Card.vue");
+    assert.equal(report.convertedRules, 0);
+    assert.equal(report.retainedRules, 1);
+    assert.match(report.diff, /\+<style scoped>/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("retains a scoped rule whose class other package CSS also targets", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="only">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n.only { margin: 3px; }\n</style>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "site.css"), ".card { padding: 20px; }\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    const warning = report.warnings.find((entry) => entry.code === "shadowed-scoped-rule")!;
+    assert.equal(warning.file, "Card.vue");
+    // The unshadowed rule in the same block still migrates.
+    assert.equal(report.convertedRules, 1);
+    assert.equal(report.retainedRules, 1);
+    assert.match(report.diff, /class="only m-\[3px\]"/);
+    assert.match(report.diff, /\+\.card \{ padding: 13px; \}/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("appends utilities to a literal class site beside a dynamic binding", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="row" :class="tone">A</p>\n</template>\n<script setup>\nconst tone = "warm";\n</script>\n<style scoped>\n.row { margin: 7px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Row.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Row.vue" });
+    assert.match(report.diff, /class="row m-\[7px\]" :class="tone"/);
+    assert.equal(report.retainedRules, 1);
+    assert.ok(report.warnings.some((entry) => entry.code === "dynamic-template-class"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("ignores custom directive runtime mutations outside static template scope", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p v-highlight class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.equal(report.convertedRules, 1);
+    assert.equal(report.retainedRules, 0);
+    assert.match(report.diff, /class="card p-\[13px\]"/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a :global escape in a module stylesheet shadows scoped deletion", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "Theme.module.css"), ":global(.card) { padding: 20px; }\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.equal(report.convertedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a gitignored SFC's unscoped block shadows scoped deletion", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  const legacy =
+    "<template>\n  <p>L</p>\n  <p>M</p>\n</template>\n<style>\n.card { padding: 20px; }\n</style>\n";
+  try {
+    execFileSync("git", ["init", "-q"], { cwd });
+    await Promise.all([
+      writeFile(join(cwd, ".gitignore"), "Legacy.vue\n.tmp\n"),
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "Legacy.vue"), legacy),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.equal(report.convertedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("withholds quote-bearing candidates inside Vue class attributes", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { font-family: "My Font", sans-serif; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.deepEqual(report.changedFiles, []);
+    assert.equal(report.retainedRules, 1);
+    assert.ok(report.warnings.some((entry) => entry.code === "unresolved-selector-target"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("reports Vue-only warnings without requiring a Tailwind entry", async () => {
+  await mkdir(".tmp", { recursive: true });
+  const cwd = await mkdtemp(join(process.cwd(), ".tmp", "fixture-"));
+  const vue =
+    '<template>\n  <p class="note">A</p>\n</template>\n<style>\n.note { margin: 3px; }\n</style>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "package.json"), '{"private":true}'),
+      writeFile(join(cwd, "site.css"), ".plain { color: red; }\n"),
+      writeFile(join(cwd, "Blocks.vue"), vue),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Blocks.vue" });
+    assert.deepEqual(report.changedFiles, []);
+    assert.deepEqual(
+      report.warnings.map((entry) => entry.code),
+      ["unscoped-style-block"],
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("interpolated preprocessor selectors make the shadow corpus unverifiable", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "theme.scss"), "$name: card;\n.#{$name} { padding: 20px; }\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.equal(report.convertedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("warns when a Vue element already carries a conflicting utility", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card p-4">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    const warning = report.warnings.find((entry) => entry.code === "existing-tailwind-conflict")!;
+    assert.equal(warning.file, "Card.vue");
+    // Parity with the JS path: the conversion still happens.
+    assert.equal(report.convertedRules, 1);
+    assert.match(report.diff, /class="card p-4 p-\[13px\]"/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a :deep escape in another SFC shadows scoped deletion", async () => {
+  const cwd = await fixture();
+  const child =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  const parent =
+    '<template>\n  <div class="wrap">P</div>\n</template>\n<style scoped>\n.wrap :deep(.card) { padding: 20px; }\n</style>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Child.vue"), child),
+      writeFile(join(cwd, "Parent.vue"), parent),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Child.vue" });
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.equal(report.convertedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a paren-less deep combinator makes the shadow corpus unverifiable", async () => {
+  const cwd = await fixture();
+  const child =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  const parent =
+    '<template>\n  <div class="wrap">P</div>\n</template>\n<style scoped>\n.wrap ::v-deep .card { padding: 20px; }\n</style>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Child.vue"), child),
+      writeFile(join(cwd, "Parent.vue"), parent),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Child.vue" });
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.equal(report.convertedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("migrates static template classes beside an external script block", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script src="./behavior.js"></script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "behavior.js"), "export default {};\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.equal(report.convertedRules, 1);
+    assert.equal(report.retainedRules, 0);
+    assert.match(report.diff, /class="card p-\[13px\]"/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a global type selector shadows scoped deletion only for matching tags", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "site.css"), "p { padding: 20px; }\n"),
+    ]);
+    const shadowed = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.ok(shadowed.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.equal(shadowed.convertedRules, 0);
+
+    await writeFile(join(cwd, "site.css"), "article { padding: 20px; }\n");
+    const clear = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.equal(clear.convertedRules, 1);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("Sass parent-selector concatenation makes the shadow corpus unverifiable", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card-active">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card-active { padding: 13px; }\n</style>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "theme.scss"), ".card { &-active { padding: 20px; } }\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.equal(report.convertedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("ignores function ref runtime mutations outside static template scope", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p :ref="el => el?.classList.add(\'card\')">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.equal(report.convertedRules, 1);
+    assert.equal(report.retainedRules, 0);
+    assert.match(report.diff, /class="card p-\[13px\]"/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("ignores handler runtime mutations outside static template scope", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p @click="$event.currentTarget.classList.add(pick())">B</p>\n</template>\n<script setup>\nconst pick = () => "x";\n</script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.equal(report.convertedRules, 1);
+    assert.equal(report.retainedRules, 0);
+    assert.match(report.diff, /class="card p-\[13px\]"/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("migrates static template classes with an unsupported script language", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script lang="coffee">\nx = 1\n</script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.equal(report.convertedRules, 1);
+    assert.equal(report.retainedRules, 0);
+    assert.match(report.diff, /class="card p-\[13px\]"/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a ::v-global escape in another SFC shadows scoped deletion", async () => {
+  const cwd = await fixture();
+  const child =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  const parent =
+    '<template>\n  <div class="wrap">P</div>\n</template>\n<style scoped>\n::v-global(.card) { padding: 20px; }\n</style>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Child.vue"), child),
+      writeFile(join(cwd, "Parent.vue"), parent),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Child.vue" });
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.equal(report.convertedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("script blocks do not open the static template class surface", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script setup>\nconst answer = 42;\n</script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.equal(report.convertedRules, 1);
+    assert.equal(report.retainedRules, 0);
+    assert.match(report.diff, /class="card p-\[13px\]"/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a style src block makes the shadow corpus unverifiable", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped src="./external.css"></style>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "external.css"), ".card { padding: 20px; }\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.equal(report.convertedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("retains a CSS Module referenced by a Vue SFC script", async () => {
+  const cwd = await fixture();
+  const vue =
+    "<template>\n  <button :class=\"styles.button\">Save</button>\n</template>\n<script setup>\nimport styles from './Button.module.css';\n</script>\n";
+  try {
+    await writeFile(join(cwd, "Button.vue"), vue);
+    const report = await migrate({ cwd });
+    const warning = report.warnings.find(
+      (entry) => entry.code === "unsupported-css-module-reference",
+    )!;
+    assert.equal(warning.file, "Button.vue");
+    assert.ok(!report.changedFiles.includes("Button.module.css"));
+    assert.equal(report.retainedRules, 1);
   } finally {
     await cleanup(cwd);
   }

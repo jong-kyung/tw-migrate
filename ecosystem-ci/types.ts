@@ -2,7 +2,7 @@
 // browser captures the lifecycle compares. `projects.json` is untrusted input
 // until `validateManifest` narrows it to `Manifest`.
 
-export type SelectorType = 'role' | 'name' | 'text' | 'data' | 'id' | 'tag' | 'css';
+export type SelectorType = "role" | "name" | "text" | "data" | "id" | "tag" | "css";
 
 export interface ProbeSelector {
   type: SelectorType;
@@ -21,8 +21,8 @@ export interface Viewport {
 }
 
 export type ProbeAction =
-  | { type: 'press'; key: string }
-  | { type: 'click' | 'hover' | 'focus'; selector: ProbeSelector };
+  | { type: "press"; key: string }
+  | { type: "click" | "hover" | "focus"; selector: ProbeSelector };
 
 export interface Probe {
   route: string;
@@ -42,16 +42,16 @@ export interface ProjectSource {
 
 export interface ControlledProject {
   id: string;
-  kind: 'controlled';
-  runtime: 'react-vite' | 'next' | 'vite-html';
-  style: 'css' | 'scss' | 'sass' | 'less';
+  kind: "controlled";
+  runtime: "react-vite" | "next" | "vite-html" | "vue-vite";
+  style: "css" | "scss" | "sass" | "less";
   source: ProjectSource;
   probes: Record<string, Probe>;
 }
 
 export interface SmokeProject {
   id: string;
-  kind: 'smoke';
+  kind: "smoke";
   fixture: string;
 }
 
@@ -62,7 +62,7 @@ export interface ExternalInstall {
 
 export interface ExternalProject {
   id: string;
-  kind: 'external';
+  kind: "external";
   repository: string;
   revision: string;
   packageManager: string;
@@ -71,7 +71,7 @@ export interface ExternalProject {
   installs: ExternalInstall[];
   runtimeWrites: string[];
   start: string[];
-  server: 'vite' | 'next';
+  server: "vite" | "next";
   tailwindCss: string;
   source: ProjectSource;
   probes: Record<string, Probe>;

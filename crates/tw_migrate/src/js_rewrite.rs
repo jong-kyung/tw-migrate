@@ -61,7 +61,7 @@ pub(crate) fn source_type_for_path(path: &str) -> Result<SourceType, String> {
 /// text names this stylesheet it becomes an unverifiable reference that
 /// conservatively retains the module; otherwise it has no effect. Writable
 /// files still fail loudly -- migration targets must be analyzable.
-fn opaque_reference_plan(file: &SourceFile, css_path: &str, is_module: bool) -> SourcePlan {
+pub(crate) fn opaque_reference_plan(file: &SourceFile, css_path: &str, is_module: bool) -> SourcePlan {
     let referenced = is_module
         && Path::new(css_path)
             .file_name()

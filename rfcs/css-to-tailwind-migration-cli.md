@@ -31,7 +31,7 @@ This RFC proposes `tw-migrate`, a one-shot codemod distributed as an npm package
 
 ## Non-Goals
 
-1. Vue, Svelte, Angular, or template languages other than JSX/TSX.
+1. Svelte, Angular, or template languages other than JSX/TSX; Vue single-file components are scoped separately in `vue-sfc-migration.md`.
 2. Tailwind v3 or earlier.
 3. Dynamic or conditional `className` evaluation.
 4. Runtime DOM inspection or browser-based migration.
@@ -188,7 +188,7 @@ Static `className` and `id` values are matched across project source files.
 The scanner follows imports of the selected file:
 
 ```tsx
-import styles from './Button.module.css';
+import styles from "./Button.module.css";
 
 export function Button() {
   return <button className={styles.button}>Save</button>;
@@ -414,11 +414,11 @@ The main npm package contains the CLI and JavaScript orchestration layer. NAPI-R
 
 Initial targets:
 
-| Platform | Architectures |
-| --- | --- |
-| macOS | arm64, x64 |
-| Linux glibc | arm64, x64 |
-| Windows | x64 |
+| Platform    | Architectures |
+| ----------- | ------------- |
+| macOS       | arm64, x64    |
+| Linux glibc | arm64, x64    |
+| Windows     | x64           |
 
 Linux musl and Windows arm64 are follow-ups rather than first-release requirements.
 

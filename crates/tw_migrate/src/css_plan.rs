@@ -6,7 +6,7 @@ use oxc_css_parser::{
     Parser as CssParser, Syntax,
     ast::{
         CombinatorKind, ComplexSelectorChild, CompoundSelector, InterpolableIdent, SimpleSelector,
-        Statement, Stylesheet,
+        Statement, Stylesheet, TypeSelector,
     },
 };
 
@@ -60,6 +60,7 @@ pub(crate) struct RulePlan {
     pub(crate) provenance_offsets: Vec<usize>,
     pub(crate) selector: String,
     pub(crate) related_classes: Vec<String>,
+    pub(crate) contains_selectors: bool,
     pub(crate) key: Option<SelectorKey>,
     pub(crate) relationship: Option<ModuleRelationship>,
     pub(crate) candidates: Vec<String>,
@@ -197,6 +198,7 @@ pub(crate) fn parse_css_rules(
             provenance_offsets,
             selector,
             related_classes: selector_classes(rule),
+            contains_selectors: true,
             key,
             relationship,
             candidates,
@@ -601,21 +603,34 @@ fn retained_at_rule(
         .as_ref()
         .map_or(at_rule.span.end, |block| block.span.start);
     let mut related_classes = BTreeSet::new();
-    if let Some(block) = &at_rule.block {
+    let contains_selectors = at_rule.block.as_ref().is_some_and(|block| {
         collect_statement_classes(&block.statements, &mut related_classes);
-    }
+        statements_contain_selectors(&block.statements)
+    });
     RulePlan {
         span: at_rule.span.start..at_rule.span.end,
         authored_span: None,
         provenance_offsets: Vec::new(),
         selector: source[at_rule.span.start..end].trim().to_string(),
         related_classes: related_classes.into_iter().collect(),
+        contains_selectors,
         key: None,
         relationship: None,
         candidates: Vec::new(),
         candidate_properties: HashMap::new(),
         warning: Some(warning),
     }
+}
+
+fn statements_contain_selectors(statements: &[Statement<'_>]) -> bool {
+    statements.iter().any(|statement| match statement {
+        Statement::QualifiedRule(_) => true,
+        Statement::AtRule(at_rule) => at_rule
+            .block
+            .as_ref()
+            .is_some_and(|block| statements_contain_selectors(&block.statements)),
+        _ => false,
+    })
 }
 
 fn collect_statement_classes(statements: &[Statement<'_>], classes: &mut BTreeSet<String>) {
@@ -647,6 +662,187 @@ fn selector_classes(rule: &oxc_css_parser::ast::QualifiedRule<'_>) -> Vec<String
             _ => None,
         })
         .collect()
+}
+
+/// Selector surface of the package's non-scoped CSS: the classes, ids, and
+/// element types its rules can match, plus whether anything defied
+/// classification. Used to decide if deleting a Vue scoped rule could hand
+/// the cascade to an unlayered competitor.
+pub(crate) struct ShadowIndex {
+    pub(crate) classes: HashSet<String>,
+    pub(crate) ids: HashSet<String>,
+    pub(crate) types: HashSet<String>,
+    pub(crate) unverifiable: bool,
+}
+
+pub(crate) fn index_shadow_selectors(pieces: &[String], module_pieces: &[String]) -> ShadowIndex {
+    let mut index = ShadowIndex {
+        classes: HashSet::new(),
+        ids: HashSet::new(),
+        types: HashSet::new(),
+        unverifiable: false,
+    };
+    for (piece, module) in pieces
+        .iter()
+        .map(|piece| (piece, false))
+        .chain(module_pieces.iter().map(|piece| (piece, true)))
+    {
+        let allocator = oxc_css_parser::Allocator::default();
+        let mut parser = CssParser::new(&allocator, piece, Syntax::Css);
+        match parser.parse::<Stylesheet>() {
+            Ok(stylesheet) => index_shadow_statements(&stylesheet.statements, module, &mut index),
+            // A piece that is not plain CSS cannot prove its selectors.
+            Err(_) => index.unverifiable = true,
+        }
+    }
+    index
+}
+
+fn index_shadow_statements(statements: &[Statement<'_>], module: bool, index: &mut ShadowIndex) {
+    for statement in statements {
+        match statement {
+            Statement::QualifiedRule(rule) => {
+                for selector in &rule.selector.selectors {
+                    index_shadow_complex(selector, module, index);
+                }
+                index_shadow_statements(&rule.block.statements, module, index);
+            }
+            Statement::AtRule(at_rule) => {
+                if let Some(block) = &at_rule.block {
+                    index_shadow_statements(&block.statements, module, index);
+                }
+            }
+            // Declarations and keyframe steps cannot match DOM elements.
+            Statement::Declaration(_) | Statement::KeyframeBlock(_) => {}
+            _ => index.unverifiable = true,
+        }
+    }
+}
+
+/// Classify one complex selector by its rightmost compound: the compound
+/// that must match the element itself. Ancestor compounds only narrow the
+/// match, so they are ignored (conservatively assuming they can be
+/// satisfied).
+fn index_shadow_complex(
+    selector: &oxc_css_parser::ast::ComplexSelector<'_>,
+    module: bool,
+    index: &mut ShadowIndex,
+) {
+    // Selector-mode `:global .card` changes the scope of a later compound.
+    // The rightmost-compound index does not carry that state, so retain
+    // conservatively rather than misclassifying `.card` as module-local.
+    if module
+        && selector.children.iter().any(|child| {
+            let ComplexSelectorChild::CompoundSelector(compound) = child else {
+                return false;
+            };
+            compound.children.iter().any(|simple| {
+                matches!(simple, SimpleSelector::PseudoClass(pseudo)
+                    if literal_ident(&pseudo.name) == Some("global") && pseudo.arg.is_none())
+            })
+        })
+    {
+        index.unverifiable = true;
+        return;
+    }
+    let Some(compound) = selector.children.iter().rev().find_map(|child| match child {
+        ComplexSelectorChild::CompoundSelector(compound) => Some(compound),
+        ComplexSelectorChild::Combinator(_) => None,
+    }) else {
+        index.unverifiable = true;
+        return;
+    };
+    index_shadow_compound(compound, module, index);
+}
+
+fn index_shadow_compound(compound: &CompoundSelector<'_>, module: bool, index: &mut ShadowIndex) {
+    // CSS Modules localize class and id names, so a module compound carrying
+    // either can never match a template element; only its bare type and
+    // attribute selectors stay global.
+    if module
+        && compound.children.iter().any(|simple| {
+            matches!(simple, SimpleSelector::Class(_) | SimpleSelector::Id(_))
+        })
+    {
+        return;
+    }
+    let mut classes = Vec::new();
+    let mut ids = Vec::new();
+    let mut types = Vec::new();
+    let mut base_free_but_bounded = false;
+    for simple in &compound.children {
+        match simple {
+            SimpleSelector::Class(class) => match literal_ident(&class.name) {
+                Some(name) => classes.push(name.to_string()),
+                None => index.unverifiable = true,
+            },
+            SimpleSelector::Id(id) => match literal_ident(&id.name) {
+                Some(name) => ids.push(name.to_string()),
+                None => index.unverifiable = true,
+            },
+            SimpleSelector::Type(TypeSelector::TagName(tag)) => {
+                match literal_ident(&tag.name.name) {
+                    Some(name) => types.push(name.to_ascii_lowercase()),
+                    None => index.unverifiable = true,
+                }
+            }
+            SimpleSelector::Type(TypeSelector::Universal(_)) => index.unverifiable = true,
+            // Attribute selectors and pseudo-classes only narrow a match
+            // that already has a base; pseudo-elements style separate boxes.
+            SimpleSelector::Attribute(_)
+            | SimpleSelector::PseudoElement(_) => {}
+            SimpleSelector::PseudoClass(pseudo) => match literal_ident(&pseudo.name) {
+                // `:root` alone can only match the document element, which a
+                // template can never contain.
+                Some("root") if pseudo.arg.is_none() => base_free_but_bounded = true,
+                // `:global(...)` re-exposes its argument as plain global
+                // selectors; `:local(...)` content stays localized.
+                Some("global") if pseudo.arg.is_some() => {
+                    index_shadow_global_arg(pseudo.arg.as_ref().expect("checked"), index);
+                    base_free_but_bounded = true;
+                }
+                Some("local") if pseudo.arg.is_some() => base_free_but_bounded = true,
+                _ => {}
+            },
+            SimpleSelector::Nesting(_) | SimpleSelector::SassPlaceholder(_) => {
+                index.unverifiable = true;
+            }
+        }
+    }
+    if !classes.is_empty() {
+        index.classes.extend(classes);
+    } else if !ids.is_empty() {
+        index.ids.extend(ids);
+    } else if !types.is_empty() {
+        index.types.extend(types);
+    } else if !base_free_but_bounded {
+        // A compound with no class/id/type base (bare pseudo-class or
+        // attribute selector) can match arbitrary elements.
+        index.unverifiable = true;
+    }
+}
+
+fn index_shadow_global_arg(
+    arg: &oxc_css_parser::ast::PseudoClassSelectorArg<'_>,
+    index: &mut ShadowIndex,
+) {
+    use oxc_css_parser::ast::PseudoClassSelectorArgKind;
+    match &arg.kind {
+        PseudoClassSelectorArgKind::CompoundSelector(compound) => {
+            index_shadow_compound(compound, false, index);
+        }
+        PseudoClassSelectorArgKind::CompoundSelectorList(list) => {
+            for compound in &list.selectors {
+                index_shadow_compound(compound, false, index);
+            }
+        }
+        PseudoClassSelectorArgKind::SelectorList(list) => {
+            for selector in &list.selectors {
+                index_shadow_complex(selector, false, index);
+            }
+        }
+        _ => index.unverifiable = true,
+    }
 }
 
 fn declaration_value<'a>(

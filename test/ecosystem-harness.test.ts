@@ -1,12 +1,12 @@
-import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { EventEmitter } from 'node:events';
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { readFileSync } from 'node:fs';
-import test from 'node:test';
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { readFileSync } from "node:fs";
+import test from "node:test";
 
 import {
   assertInstalledLayout,
@@ -16,9 +16,15 @@ import {
   publisherToken,
   stageRootPackage,
   validateProvenance,
-} from '../ecosystem-ci/packages.ts';
-import { registryConfig } from '../ecosystem-ci/registry.ts';
-import { assertOracle, captureProbe, normalizeStyleEntries, retryCapture, withTimeout } from '../ecosystem-ci/oracle.ts';
+} from "../ecosystem-ci/packages.ts";
+import { registryConfig } from "../ecosystem-ci/registry.ts";
+import {
+  assertOracle,
+  captureProbe,
+  normalizeStyleEntries,
+  retryCapture,
+  withTimeout,
+} from "../ecosystem-ci/oracle.ts";
 import {
   artifactAllowlist,
   assertExpectedChangedFiles,
@@ -32,11 +38,11 @@ import {
   teardownLifecycleServer,
   temporaryLifecyclePaths,
   waitForChild,
-} from '../ecosystem-ci/lifecycle.ts';
-import { loadManifest, runHarness, validateManifest, vitestProjects } from '../ecosystem-ci/run.ts';
-import type { ChildProcess } from 'node:child_process';
-import type { AddressInfo } from 'node:net';
-import type { Browser } from 'playwright';
+} from "../ecosystem-ci/lifecycle.ts";
+import { loadManifest, runHarness, validateManifest, vitestProjects } from "../ecosystem-ci/run.ts";
+import type { ChildProcess } from "node:child_process";
+import type { AddressInfo } from "node:net";
+import type { Browser } from "playwright";
 
 import type {
   CaptureSet,
@@ -47,46 +53,47 @@ import type {
   ProbeCapture,
   Project,
   Provenance,
-} from '../ecosystem-ci/types.ts';
+} from "../ecosystem-ci/types.ts";
 
 // Manifest fixtures are deliberately mutated into invalid shapes to exercise
 // the validator, so the builders hand back indexable records.
 type Fixture = Record<string, any>;
 type ExecFailure = { status: number; stderr: string };
 
-const isControlled = (project: Project): project is ControlledProject => project.kind === 'controlled';
-const isExternal = (project: Project): project is ExternalProject => project.kind === 'external';
+const isControlled = (project: Project): project is ControlledProject =>
+  project.kind === "controlled";
+const isExternal = (project: Project): project is ExternalProject => project.kind === "external";
 
-const selector = { type: 'role', value: 'button', name: 'Toggle details' };
+const selector = { type: "role", value: "button", name: "Toggle details" };
 const desktop = { width: 1280, height: 720 };
 const mobile = { width: 375, height: 667 };
 
 function probe(overrides: Fixture = {}): Fixture {
   return {
-    route: '/',
+    route: "/",
     viewport: desktop,
     readiness: { selector, cardinality: 1 },
-    selector: { type: 'data', value: 'card' },
+    selector: { type: "data", value: "card" },
     cardinality: 1,
-    identity: ['card'],
+    identity: ["card"],
     ...overrides,
   };
 }
 
 function controlled(overrides: Fixture = {}): Fixture {
   return {
-    id: 'react-vite-css',
-    kind: 'controlled',
-    runtime: 'react-vite',
-    style: 'css',
-    source: { path: 'src/App.module.css', before: '.card', after: 'p-[13px]' },
+    id: "react-vite-css",
+    kind: "controlled",
+    runtime: "react-vite",
+    style: "css",
+    source: { path: "src/App.module.css", before: ".card", after: "p-[13px]" },
     probes: {
       base: probe(),
-      hover: probe({ action: { type: 'hover', selector } }),
-      focus: probe({ action: { type: 'focus', selector } }),
-      'focus-visible': probe({ action: { type: 'press', key: 'Tab' } }),
-      'responsive-below': probe({ viewport: mobile }),
-      'responsive-above': probe(),
+      hover: probe({ action: { type: "hover", selector } }),
+      focus: probe({ action: { type: "focus", selector } }),
+      "focus-visible": probe({ action: { type: "press", key: "Tab" } }),
+      "responsive-below": probe({ viewport: mobile }),
+      "responsive-above": probe(),
     },
     ...overrides,
   };
@@ -95,18 +102,18 @@ function controlled(overrides: Fixture = {}): Fixture {
 function external(overrides: Fixture = {}): Fixture {
   const base = controlled();
   return {
-    id: 'external',
-    kind: 'external',
-    repository: 'https://example.test/project.git',
-    revision: '0123456789abcdef0123456789abcdef01234567',
-    packageManager: 'pnpm@10.0.0',
-    lockfile: 'pnpm-lock.yaml',
-    packageRoot: '.',
-    installs: [{ cwd: '.', args: ['install', '--frozen-lockfile', '--ignore-scripts'] }],
+    id: "external",
+    kind: "external",
+    repository: "https://example.test/project.git",
+    revision: "0123456789abcdef0123456789abcdef01234567",
+    packageManager: "pnpm@10.0.0",
+    lockfile: "pnpm-lock.yaml",
+    packageRoot: ".",
+    installs: [{ cwd: ".", args: ["install", "--frozen-lockfile", "--ignore-scripts"] }],
     runtimeWrites: [],
-    start: ['run', 'dev'],
-    server: 'vite',
-    tailwindCss: 'src/tailwind.css',
+    start: ["run", "dev"],
+    server: "vite",
+    tailwindCss: "src/tailwind.css",
     source: base.source,
     probes: { base: base.probes.base },
     ...overrides,
@@ -122,106 +129,117 @@ function errorFor(projects: unknown[]) {
 }
 
 async function readEcosystemWorkflow() {
-  return (await readFile(new URL('../.github/workflows/ecosystem.yml', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
+  return (
+    await readFile(new URL("../.github/workflows/ecosystem.yml", import.meta.url), "utf8")
+  ).replaceAll("\r\n", "\n");
 }
 
-test('admits the complete controlled runtime and stylesheet matrix', async () => {
+test("admits the complete controlled runtime and stylesheet matrix", async () => {
   const loaded = await loadManifest();
   assert.deepEqual(
-    loaded.projects.filter(isControlled).map(({ id, kind, runtime, style }) => [id, kind, runtime, style]),
+    loaded.projects
+      .filter(isControlled)
+      .map(({ id, kind, runtime, style }) => [id, kind, runtime, style]),
     [
-      ['react-vite-css', 'controlled', 'react-vite', 'css'],
-      ['react-vite-scss', 'controlled', 'react-vite', 'scss'],
-      ['react-vite-sass', 'controlled', 'react-vite', 'sass'],
-      ['react-vite-less', 'controlled', 'react-vite', 'less'],
-      ['next-css', 'controlled', 'next', 'css'],
-      ['next-scss', 'controlled', 'next', 'scss'],
-      ['next-sass', 'controlled', 'next', 'sass'],
-      ['next-less', 'controlled', 'next', 'less'],
-      ['vite-html-css', 'controlled', 'vite-html', 'css'],
-      ['vite-html-scss', 'controlled', 'vite-html', 'scss'],
-      ['vite-html-sass', 'controlled', 'vite-html', 'sass'],
-      ['vite-html-less', 'controlled', 'vite-html', 'less'],
+      ["react-vite-css", "controlled", "react-vite", "css"],
+      ["react-vite-scss", "controlled", "react-vite", "scss"],
+      ["react-vite-sass", "controlled", "react-vite", "sass"],
+      ["react-vite-less", "controlled", "react-vite", "less"],
+      ["next-css", "controlled", "next", "css"],
+      ["next-scss", "controlled", "next", "scss"],
+      ["next-sass", "controlled", "next", "sass"],
+      ["next-less", "controlled", "next", "less"],
+      ["vite-html-css", "controlled", "vite-html", "css"],
+      ["vite-html-scss", "controlled", "vite-html", "scss"],
+      ["vite-html-sass", "controlled", "vite-html", "sass"],
+      ["vite-html-less", "controlled", "vite-html", "less"],
+      ["vue-vite-css", "controlled", "vue-vite", "css"],
     ],
   );
-  assert.deepEqual(loaded.projects.filter(({ kind }) => kind === 'smoke'), [
-    { id: 'production-react-vite-css', kind: 'smoke', fixture: 'react-vite-css' },
-  ]);
-  assert.deepEqual(loaded.projects.filter(isExternal).map(({ id, revision }) => [id, revision]), [
-    ['external-namechecker', '285e10d3627f3eac5217d69e9eaccee956d7ac70'],
-    ['external-stylized-components', 'a26df5d21457095e466a41966822edb2ff016cff'],
-  ]);
+  assert.deepEqual(
+    loaded.projects.filter(({ kind }) => kind === "smoke"),
+    [{ id: "production-react-vite-css", kind: "smoke", fixture: "react-vite-css" }],
+  );
+  assert.deepEqual(
+    loaded.projects.filter(isExternal).map(({ id, revision }) => [id, revision]),
+    [
+      ["external-namechecker", "285e10d3627f3eac5217d69e9eaccee956d7ac70"],
+      ["external-stylized-components", "a26df5d21457095e466a41966822edb2ff016cff"],
+    ],
+  );
 });
 
-test('smoke and external cases accept non-exhaustive probes without occupying controlled matrix cells', () => {
+test("smoke and external cases accept non-exhaustive probes without occupying controlled matrix cells", () => {
   const base = controlled();
   const probeFields = {
     source: base.source,
     probes: {
       base: probe(),
-      details: probe({ action: { type: 'click', selector } }),
+      details: probe({ action: { type: "click", selector } }),
     },
   };
   assert.doesNotThrow(() =>
     validateManifest(
-      manifest(
-        base,
-        { id: 'smoke', kind: 'smoke', fixture: base.id },
-        external(probeFields),
-      ),
+      manifest(base, { id: "smoke", kind: "smoke", fixture: base.id }, external(probeFields)),
     ),
   );
-  errorFor([base, { id: 'smoke', kind: 'smoke', fixture: 'missing' }]);
+  errorFor([base, { id: "smoke", kind: "smoke", fixture: "missing" }]);
 });
 
-test('controlled cases require independent hover, focus, and keyboard focus-visible probes', () => {
-  for (const name of ['hover', 'focus', 'focus-visible']) {
+test("controlled cases require independent hover, focus, and keyboard focus-visible probes", () => {
+  for (const name of ["hover", "focus", "focus-visible"]) {
     const probes = structuredClone(controlled().probes);
     delete probes[name];
-    assert.throws(() => validateManifest(manifest(controlled({ probes }))), new RegExp(`missing.*${name}`));
+    assert.throws(
+      () => validateManifest(manifest(controlled({ probes }))),
+      new RegExp(`missing.*${name}`),
+    );
   }
 });
 
-test('controlled cases require responsive probes below and above the breakpoint', () => {
-  for (const name of ['responsive-below', 'responsive-above']) {
+test("controlled cases require responsive probes below and above the breakpoint", () => {
+  for (const name of ["responsive-below", "responsive-above"]) {
     const probes = structuredClone(controlled().probes);
     delete probes[name];
-    assert.throws(() => validateManifest(manifest(controlled({ probes }))), new RegExp(`missing.*${name}`));
+    assert.throws(
+      () => validateManifest(manifest(controlled({ probes }))),
+      new RegExp(`missing.*${name}`),
+    );
   }
 });
 
-test('every probe requires route, viewport, readiness, selector, and cardinality', () => {
-  for (const field of ['route', 'viewport', 'readiness', 'selector', 'cardinality', 'identity']) {
+test("every probe requires route, viewport, readiness, selector, and cardinality", () => {
+  for (const field of ["route", "viewport", "readiness", "selector", "cardinality", "identity"]) {
     const project = structuredClone(controlled());
     delete project.probes.base[field];
     errorFor([project]);
   }
 });
 
-test('controlled state actions and responsive ordering are strict', () => {
+test("controlled state actions and responsive ordering are strict", () => {
   const wrongHover = structuredClone(controlled());
-  wrongHover.probes.hover.action.type = 'focus';
+  wrongHover.probes.hover.action.type = "focus";
   errorFor([wrongHover]);
 
   const wrongKey = structuredClone(controlled());
-  wrongKey.probes['focus-visible'].action.key = 'Enter';
+  wrongKey.probes["focus-visible"].action.key = "Enter";
   errorFor([wrongKey]);
 
   const unordered = structuredClone(controlled());
-  unordered.probes['responsive-below'].viewport.width = desktop.width;
+  unordered.probes["responsive-below"].viewport.width = desktop.width;
   errorFor([unordered]);
 });
 
-test('rejects invalid manifests before execution', () => {
-  errorFor([controlled(), controlled({ style: 'scss' })]);
+test("rejects invalid manifests before execution", () => {
+  errorFor([controlled(), controlled({ style: "scss" })]);
   errorFor([controlled({ extra: true })]);
-  errorFor([controlled(), controlled({ id: 'same-cell' })]);
-  errorFor([external({ revision: 'abc123' })]);
+  errorFor([controlled(), controlled({ id: "same-cell" })]);
+  errorFor([external({ revision: "abc123" })]);
   errorFor([
     controlled({
       probes: {
         ...controlled().probes,
-        base: probe({ selector: { type: 'class', value: '.ready' } }),
+        base: probe({ selector: { type: "class", value: ".ready" } }),
       },
     }),
   ]);
@@ -238,257 +256,383 @@ test('rejects invalid manifests before execution', () => {
   errorFor([missingSource]);
 });
 
-test('migration source paths must stay relative and inside the driver', () => {
-  for (const path of ['../outside.css', 'src/../../outside.css', '/outside.css', 'C:\\outside.css']) {
+test("migration source paths must stay relative and inside the driver", () => {
+  for (const path of [
+    "../outside.css",
+    "src/../../outside.css",
+    "/outside.css",
+    "C:\\outside.css",
+  ]) {
     errorFor([controlled({ source: { ...controlled().source, path } })]);
   }
 });
 
-test('external commands must be argument arrays rather than shell strings', () => {
-  errorFor([external({ installs: [{ cwd: '.', args: 'install --frozen-lockfile' }] })]);
-  errorFor([external({ start: 'run dev' })]);
+test("external commands must be argument arrays rather than shell strings", () => {
+  errorFor([external({ installs: [{ cwd: ".", args: "install --frozen-lockfile" }] })]);
+  errorFor([external({ start: "run dev" })]);
 });
 
-test('external installs admit a reviewed pnpm workspace build and nothing looser', () => {
-  assert.doesNotThrow(() => validateManifest(manifest(external({
-    installs: [
-      { cwd: '.', args: ['install', '--frozen-lockfile', '--ignore-scripts'] },
-      { cwd: '.', args: ['--filter', '@scope/pkg', 'run', 'build:tokens'] },
-    ],
-  }))));
-  errorFor([external({ installs: [{ cwd: '.', args: ['--filter', '../escape', 'run', 'build'] }] })]);
-  errorFor([external({ installs: [{ cwd: '.', args: ['--filter', '@scope/pkg', 'run', 'build && touch pwned'] }] })]);
-  errorFor([external({ installs: [{ cwd: '.', args: ['--filter', '@scope/pkg', 'exec', 'build'] }] })]);
-  errorFor([external({
-    packageManager: 'npm@11.0.0',
-    lockfile: 'package-lock.json',
-    installs: [{ cwd: '.', args: ['--filter', '@scope/pkg', 'run', 'build'] }],
-  })]);
+test("external installs admit a reviewed pnpm workspace build and nothing looser", () => {
+  assert.doesNotThrow(() =>
+    validateManifest(
+      manifest(
+        external({
+          installs: [
+            { cwd: ".", args: ["install", "--frozen-lockfile", "--ignore-scripts"] },
+            { cwd: ".", args: ["--filter", "@scope/pkg", "run", "build:tokens"] },
+          ],
+        }),
+      ),
+    ),
+  );
+  errorFor([
+    external({ installs: [{ cwd: ".", args: ["--filter", "../escape", "run", "build"] }] }),
+  ]);
+  errorFor([
+    external({
+      installs: [{ cwd: ".", args: ["--filter", "@scope/pkg", "run", "build && touch pwned"] }],
+    }),
+  ]);
+  errorFor([
+    external({ installs: [{ cwd: ".", args: ["--filter", "@scope/pkg", "exec", "build"] }] }),
+  ]);
+  errorFor([
+    external({
+      packageManager: "npm@11.0.0",
+      lockfile: "package-lock.json",
+      installs: [{ cwd: ".", args: ["--filter", "@scope/pkg", "run", "build"] }],
+    }),
+  ]);
 });
 
-test('external commands receive only the explicit non-secret environment', () => {
-  process.env.ECOSYSTEM_SENTINEL_SECRET = 'must-not-leak';
+test("external commands receive only the explicit non-secret environment", () => {
+  process.env.ECOSYSTEM_SENTINEL_SECRET = "must-not-leak";
   try {
     const env = externalEnvironment();
     assert.equal(env.ECOSYSTEM_SENTINEL_SECRET, undefined);
-    assert.equal(env.CI, 'true');
+    assert.equal(env.CI, "true");
     assert.equal(env.PATH, process.env.PATH);
   } finally {
     delete process.env.ECOSYSTEM_SENTINEL_SECRET;
   }
 });
 
-test('post-migration server phases preserve the expected tracked diff', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'tw-migrate-external-diff-'));
+test("post-migration server phases preserve the expected tracked diff", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "tw-migrate-external-diff-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const git = (args: string[]) => execFileSync('git', args, { cwd: root, stdio: 'pipe' });
-  git(['init', '-q']);
-  git(['config', 'user.email', 'test@example.com']);
-  git(['config', 'user.name', 'Test']);
+  const git = (args: string[]) => execFileSync("git", args, { cwd: root, stdio: "pipe" });
+  git(["init", "-q"]);
+  git(["config", "user.email", "test@example.com"]);
+  git(["config", "user.name", "Test"]);
   await Promise.all([
-    writeFile(join(root, 'src.css'), 'original\n'),
-    writeFile(join(root, 'tsconfig.json'), 'original\n'),
+    writeFile(join(root, "src.css"), "original\n"),
+    writeFile(join(root, "tsconfig.json"), "original\n"),
   ]);
-  git(['add', '.']);
-  git(['commit', '-qm', 'fixture']);
+  git(["add", "."]);
+  git(["commit", "-qm", "fixture"]);
 
-  await writeFile(join(root, 'src.css'), 'migrated\n');
-  const expectedDiff = git(['diff', 'HEAD', '--binary', '--no-ext-diff', '--no-textconv', '--']);
-  const originals = { 'tsconfig.json': Buffer.from('original\n') };
-  await writeFile(join(root, 'tsconfig.json'), 'framework update\n');
-  await assert.doesNotReject(restoreRuntimeWrites(root, originals, 'post', expectedDiff));
-  assert.equal(await readFile(join(root, 'tsconfig.json'), 'utf8'), 'original\n');
+  await writeFile(join(root, "src.css"), "migrated\n");
+  const expectedDiff = git(["diff", "HEAD", "--binary", "--no-ext-diff", "--no-textconv", "--"]);
+  const originals = { "tsconfig.json": Buffer.from("original\n") };
+  await writeFile(join(root, "tsconfig.json"), "framework update\n");
+  await assert.doesNotReject(restoreRuntimeWrites(root, originals, "post", expectedDiff));
+  assert.equal(await readFile(join(root, "tsconfig.json"), "utf8"), "original\n");
 
-  await writeFile(join(root, 'src.css'), 'server regression\n');
-  await assert.rejects(restoreRuntimeWrites(root, originals, 'post', expectedDiff), /unreviewed tracked files/);
+  await writeFile(join(root, "src.css"), "server regression\n");
+  await assert.rejects(
+    restoreRuntimeWrites(root, originals, "post", expectedDiff),
+    /unreviewed tracked files/,
+  );
 });
 
-test('external repositories and paths stay inside the CI checkout trust boundary', () => {
+test("external repositories and paths stay inside the CI checkout trust boundary", () => {
   for (const repository of [
-    'http://example.test/project.git',
-    'ssh://git@example.test/project.git',
-    'file:///tmp/project',
-    'https://user@example.test/project.git',
-    'https://example.test/project.git?ref=main',
-  ]) errorFor([external({ repository })]);
-  for (const field of ['packageRoot', 'tailwindCss']) errorFor([external({ [field]: '../outside' })]);
-  errorFor([external({ installs: [{ cwd: '../outside', args: ['install', '--frozen-lockfile', '--ignore-scripts'] }] })]);
-  errorFor([external({ installs: Array.from({ length: 5 }, () => ({ cwd: '.', args: ['install', '--frozen-lockfile', '--ignore-scripts'] })) })]);
-  for (const args of [['exec', 'sh'], ['run', 'dev'], ['install', '--frozen-lockfile']]) {
-    errorFor([external({ installs: [{ cwd: '.', args }] })]);
+    "http://example.test/project.git",
+    "ssh://git@example.test/project.git",
+    "file:///tmp/project",
+    "https://user@example.test/project.git",
+    "https://example.test/project.git?ref=main",
+  ])
+    errorFor([external({ repository })]);
+  for (const field of ["packageRoot", "tailwindCss"])
+    errorFor([external({ [field]: "../outside" })]);
+  errorFor([
+    external({
+      installs: [{ cwd: "../outside", args: ["install", "--frozen-lockfile", "--ignore-scripts"] }],
+    }),
+  ]);
+  errorFor([
+    external({
+      installs: Array.from({ length: 5 }, () => ({
+        cwd: ".",
+        args: ["install", "--frozen-lockfile", "--ignore-scripts"],
+      })),
+    }),
+  ]);
+  for (const args of [
+    ["exec", "sh"],
+    ["run", "dev"],
+    ["install", "--frozen-lockfile"],
+  ]) {
+    errorFor([external({ installs: [{ cwd: ".", args }] })]);
   }
-  for (const start of [['exec', 'sh'], ['run', 'dev', '--', '--host']]) errorFor([external({ start })]);
-  errorFor([external({ runtimeWrites: ['src/App.module.css'] })]);
-  errorFor([external({ runtimeWrites: ['a', 'b', 'c', 'd'] })]);
-  for (const selector of [{ type: 'tag', value: '.card' }, { type: 'css', value: '.card' }, { type: 'css', value: '#card' }]) {
+  for (const start of [
+    ["exec", "sh"],
+    ["run", "dev", "--", "--host"],
+  ])
+    errorFor([external({ start })]);
+  errorFor([external({ runtimeWrites: ["src/App.module.css"] })]);
+  errorFor([external({ runtimeWrites: ["a", "b", "c", "d"] })]);
+  for (const selector of [
+    { type: "tag", value: ".card" },
+    { type: "css", value: ".card" },
+    { type: "css", value: "#card" },
+  ]) {
     errorFor([external({ probes: { base: probe({ selector }) } })]);
   }
 });
 
-test('package script exposes the focused ecosystem harness entrypoint', () => {
-  const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.scripts['test:ecosystem'], 'node ecosystem-ci/run.ts');
+test("package script exposes the focused ecosystem harness entrypoint", () => {
+  const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(packageJson.scripts["test:ecosystem"], "node ecosystem-ci/run.ts");
 });
 
-test('stages concrete optional dependency versions without changing the tracked manifest', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'tw-migrate-stage-test-'));
+test("stages concrete optional dependency versions without changing the tracked manifest", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "tw-migrate-stage-test-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const repoRoot = join(root, 'repo');
-  const stageRoot = join(root, 'stage');
+  const repoRoot = join(root, "repo");
+  const stageRoot = join(root, "stage");
   await mkdir(repoRoot);
-  const tracked = `${JSON.stringify({
-    name: 'tw-migrate',
-    version: '1.2.3',
-    files: ['index.js'],
-    optionalDependencies: {
-      'tw-migrate-darwin-arm64': 'workspace:1.2.3',
-      'tw-migrate-linux-x64-gnu': 'workspace:1.2.3',
+  const tracked = `${JSON.stringify(
+    {
+      name: "tw-migrate",
+      version: "1.2.3",
+      files: ["index.js"],
+      optionalDependencies: {
+        "tw-migrate-darwin-arm64": "workspace:1.2.3",
+        "tw-migrate-linux-x64-gnu": "workspace:1.2.3",
+      },
     },
-  }, null, 2)}\n`;
+    null,
+    2,
+  )}\n`;
   await Promise.all([
-    writeFile(join(repoRoot, 'package.json'), tracked),
-    writeFile(join(repoRoot, 'index.js'), 'export const migrate = () => {};\n'),
-    writeFile(join(repoRoot, 'README.md'), 'readme\n'),
-    writeFile(join(repoRoot, 'LICENSE'), 'license\n'),
+    writeFile(join(repoRoot, "package.json"), tracked),
+    writeFile(join(repoRoot, "index.js"), "export const migrate = () => {};\n"),
+    writeFile(join(repoRoot, "README.md"), "readme\n"),
+    writeFile(join(repoRoot, "LICENSE"), "license\n"),
   ]);
 
   await stageRootPackage({ repoRoot, stageRoot });
 
-  assert.equal(await readFile(join(repoRoot, 'package.json'), 'utf8'), tracked);
-  const staged = JSON.parse(await readFile(join(stageRoot, 'package.json'), 'utf8'));
-  assert.deepEqual(Object.values(staged.optionalDependencies), ['1.2.3', '1.2.3']);
+  assert.equal(await readFile(join(repoRoot, "package.json"), "utf8"), tracked);
+  const staged = JSON.parse(await readFile(join(stageRoot, "package.json"), "utf8"));
+  assert.deepEqual(Object.values(staged.optionalDependencies), ["1.2.3", "1.2.3"]);
 });
 
-test('package stage CLI creates the exact upload tree consumed by the workflow', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'tw-migrate-package-upload-test-'));
+test("package stage CLI creates the exact upload tree consumed by the workflow", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "tw-migrate-package-upload-test-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const artifactRoot = join(root, 'package-artifacts');
+  const artifactRoot = join(root, "package-artifacts");
   const target = currentTarget();
   const provenance = {
     packages: {
-      root: { tarball: 'tarballs/root.tgz' },
-      native: { tarball: 'tarballs/native.tgz' },
+      root: { tarball: "tarballs/root.tgz" },
+      native: { tarball: "tarballs/native.tgz" },
     },
     addon: { file: `staging/native/${target.addon}` },
   } as unknown as Provenance;
   await Promise.all([
-    mkdir(join(artifactRoot, 'tarballs'), { recursive: true }),
-    mkdir(join(artifactRoot, 'staging', 'native'), { recursive: true }),
+    mkdir(join(artifactRoot, "tarballs"), { recursive: true }),
+    mkdir(join(artifactRoot, "staging", "native"), { recursive: true }),
   ]);
   await Promise.all([
-    writeFile(join(artifactRoot, 'provenance.json'), '{}\n'),
-    writeFile(join(artifactRoot, provenance.packages.root.tarball), 'root'),
-    writeFile(join(artifactRoot, provenance.packages.native.tarball), 'native'),
-    writeFile(join(artifactRoot, provenance.addon.file), 'addon'),
+    writeFile(join(artifactRoot, "provenance.json"), "{}\n"),
+    writeFile(join(artifactRoot, provenance.packages.root.tarball), "root"),
+    writeFile(join(artifactRoot, provenance.packages.native.tarball), "native"),
+    writeFile(join(artifactRoot, provenance.addon.file), "addon"),
   ]);
 
   const uploadRoot = packageUploadRoot(artifactRoot);
   await preparePackageUpload(provenance, artifactRoot, uploadRoot);
 
   assert.equal(uploadRoot, `${artifactRoot}-upload`);
-  assert.deepEqual((await readdir(uploadRoot)).sort(), ['provenance.json', 'staging', 'tarballs']);
-  assert.deepEqual((await readdir(join(uploadRoot, 'tarballs'))).sort(), ['native.tgz', 'root.tgz']);
-  assert.deepEqual(await readdir(join(uploadRoot, 'staging')), ['native']);
-  assert.deepEqual(await readdir(join(uploadRoot, 'staging', 'native')), [target.addon]);
+  assert.deepEqual((await readdir(uploadRoot)).sort(), ["provenance.json", "staging", "tarballs"]);
+  assert.deepEqual((await readdir(join(uploadRoot, "tarballs"))).sort(), [
+    "native.tgz",
+    "root.tgz",
+  ]);
+  assert.deepEqual(await readdir(join(uploadRoot, "staging")), ["native"]);
+  assert.deepEqual(await readdir(join(uploadRoot, "staging", "native")), [target.addon]);
   const workflow = await readEcosystemWorkflow();
   assert.match(workflow, /packages\.ts stage --artifact-root ecosystem-ci\/package-artifacts/);
   assert.match(workflow, /path: ecosystem-ci\/package-artifacts-upload\//);
 });
 
-test('provenance rejects altered tarballs, commits, platforms, and package identities', async (t) => {
-  const artifactRoot = await mkdtemp(join(tmpdir(), 'tw-migrate-provenance-test-'));
+test("provenance rejects altered tarballs, commits, platforms, and package identities", async (t) => {
+  const artifactRoot = await mkdtemp(join(tmpdir(), "tw-migrate-provenance-test-"));
   t.after(() => rm(artifactRoot, { recursive: true, force: true }));
   await Promise.all([
-    writeFile(join(artifactRoot, 'root.tgz'), 'root'),
-    writeFile(join(artifactRoot, 'native.tgz'), 'native'),
-    writeFile(join(artifactRoot, currentTarget().addon), 'addon'),
+    writeFile(join(artifactRoot, "root.tgz"), "root"),
+    writeFile(join(artifactRoot, "native.tgz"), "native"),
+    writeFile(join(artifactRoot, currentTarget().addon), "addon"),
   ]);
   const target = currentTarget();
   const provenance = {
-    commit: '0123456789abcdef0123456789abcdef01234567',
+    commit: "0123456789abcdef0123456789abcdef01234567",
     platform: target.platform,
     packages: {
-      root: { name: 'tw-migrate', version: '1.2.3', tarball: 'root.tgz', sha256: '4813494d137e1631bba301d5acab6e7bb7aa74ce1185d456565ef51d737677b2' },
-      native: { name: target.packageName, version: '1.2.3', tarball: 'native.tgz', sha256: 'bef32d2c315a289576f2a6828d27edb16bb316a4d85c271f2d794045f3ea668d' },
+      root: {
+        name: "tw-migrate",
+        version: "1.2.3",
+        tarball: "root.tgz",
+        sha256: "4813494d137e1631bba301d5acab6e7bb7aa74ce1185d456565ef51d737677b2",
+      },
+      native: {
+        name: target.packageName,
+        version: "1.2.3",
+        tarball: "native.tgz",
+        sha256: "bef32d2c315a289576f2a6828d27edb16bb316a4d85c271f2d794045f3ea668d",
+      },
     },
-    addon: { file: target.addon, sha256: '613c3abf0f077f31505d3c8cc0fed9a94a49cf025af3e604c4d38259c1cdf4c7' },
+    addon: {
+      file: target.addon,
+      sha256: "613c3abf0f077f31505d3c8cc0fed9a94a49cf025af3e604c4d38259c1cdf4c7",
+    },
   };
-  await assert.doesNotReject(validateProvenance(provenance, { artifactRoot, expectedCommit: provenance.commit }));
+  await assert.doesNotReject(
+    validateProvenance(provenance, { artifactRoot, expectedCommit: provenance.commit }),
+  );
 
   for (const invalid of [
-    { ...provenance, commit: 'f'.repeat(40) },
-    { ...provenance, platform: 'wrong-platform' },
-    { ...provenance, packages: { ...provenance.packages, native: { ...provenance.packages.native, name: 'tw-migrate-wrong' } } },
+    { ...provenance, commit: "f".repeat(40) },
+    { ...provenance, platform: "wrong-platform" },
+    {
+      ...provenance,
+      packages: {
+        ...provenance.packages,
+        native: { ...provenance.packages.native, name: "tw-migrate-wrong" },
+      },
+    },
   ]) {
-    await assert.rejects(validateProvenance(invalid, { artifactRoot, expectedCommit: provenance.commit }));
+    await assert.rejects(
+      validateProvenance(invalid, { artifactRoot, expectedCommit: provenance.commit }),
+    );
   }
-  await writeFile(join(artifactRoot, 'native.tgz'), 'altered');
-  await assert.rejects(validateProvenance(provenance, { artifactRoot, expectedCommit: provenance.commit }), /digest/);
+  await writeFile(join(artifactRoot, "native.tgz"), "altered");
+  await assert.rejects(
+    validateProvenance(provenance, { artifactRoot, expectedCommit: provenance.commit }),
+    /digest/,
+  );
 });
 
-test('installed layout rejects checkout, symlink, wrong platform, and unexpected package paths', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'tw-migrate-layout-test-'));
+test("installed layout rejects checkout, symlink, wrong platform, and unexpected package paths", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "tw-migrate-layout-test-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const checkout = join(root, 'checkout');
-  const driverRoot = join(root, 'driver');
+  const checkout = join(root, "checkout");
+  const driverRoot = join(root, "driver");
   const target = currentTarget();
-  const rootPackage = join(driverRoot, 'node_modules', 'tw-migrate');
-  const nativePackage = join(driverRoot, 'node_modules', target.packageName);
-  await Promise.all([mkdir(checkout), mkdir(rootPackage, { recursive: true }), mkdir(nativePackage, { recursive: true })]);
+  const rootPackage = join(driverRoot, "node_modules", "tw-migrate");
+  const nativePackage = join(driverRoot, "node_modules", target.packageName);
   await Promise.all([
-    writeFile(join(rootPackage, 'package.json'), JSON.stringify({ name: 'tw-migrate', version: '1.2.3' })),
-    writeFile(join(nativePackage, 'package.json'), JSON.stringify({ name: target.packageName, version: '1.2.3' })),
-    writeFile(join(nativePackage, target.addon), 'addon'),
+    mkdir(checkout),
+    mkdir(rootPackage, { recursive: true }),
+    mkdir(nativePackage, { recursive: true }),
   ]);
-  const expected = { version: '1.2.3', platform: target.platform, addonSha256: '613c3abf0f077f31505d3c8cc0fed9a94a49cf025af3e604c4d38259c1cdf4c7' };
-  await assert.doesNotReject(assertInstalledLayout({ driverRoot, checkoutRoot: checkout, expected }));
-  await assert.rejects(assertInstalledLayout({ driverRoot, checkoutRoot: root, expected }), /checkout/);
-  await assert.rejects(assertInstalledLayout({ driverRoot, checkoutRoot: checkout, expected: { ...expected, platform: 'wrong-platform' } }));
+  await Promise.all([
+    writeFile(
+      join(rootPackage, "package.json"),
+      JSON.stringify({ name: "tw-migrate", version: "1.2.3" }),
+    ),
+    writeFile(
+      join(nativePackage, "package.json"),
+      JSON.stringify({ name: target.packageName, version: "1.2.3" }),
+    ),
+    writeFile(join(nativePackage, target.addon), "addon"),
+  ]);
+  const expected = {
+    version: "1.2.3",
+    platform: target.platform,
+    addonSha256: "613c3abf0f077f31505d3c8cc0fed9a94a49cf025af3e604c4d38259c1cdf4c7",
+  };
+  await assert.doesNotReject(
+    assertInstalledLayout({ driverRoot, checkoutRoot: checkout, expected }),
+  );
+  await assert.rejects(
+    assertInstalledLayout({ driverRoot, checkoutRoot: root, expected }),
+    /checkout/,
+  );
+  await assert.rejects(
+    assertInstalledLayout({
+      driverRoot,
+      checkoutRoot: checkout,
+      expected: { ...expected, platform: "wrong-platform" },
+    }),
+  );
 
   await rm(nativePackage, { recursive: true });
   await mkdir(join(checkout, target.packageName));
-  await writeFile(join(checkout, target.packageName, 'package.json'), JSON.stringify({ name: target.packageName, version: '1.2.3' }));
-  await writeFile(join(checkout, target.packageName, target.addon), 'addon');
-  await mkdir(join(driverRoot, 'node_modules'), { recursive: true });
+  await writeFile(
+    join(checkout, target.packageName, "package.json"),
+    JSON.stringify({ name: target.packageName, version: "1.2.3" }),
+  );
+  await writeFile(join(checkout, target.packageName, target.addon), "addon");
+  await mkdir(join(driverRoot, "node_modules"), { recursive: true });
   await symlink(join(checkout, target.packageName), nativePackage);
-  await assert.rejects(assertInstalledLayout({ driverRoot, checkoutRoot: checkout, expected }), /checkout|node_modules|workspace/);
+  await assert.rejects(
+    assertInstalledLayout({ driverRoot, checkoutRoot: checkout, expected }),
+    /checkout|node_modules|workspace/,
+  );
 });
 
-test('publisher credential response body is bounded by the registry startup timeout', async (t) => {
+test("publisher credential response body is bounded by the registry startup timeout", async (t) => {
   let requested = false;
   const server = createServer((_request, response) => {
     requested = true;
-    response.writeHead(200, { 'content-type': 'application/json' });
+    response.writeHead(200, { "content-type": "application/json" });
     response.write('{"token":"');
   });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
   const { port } = server.address() as AddressInfo;
-  await assert.rejects(publisherToken(`http://127.0.0.1:${port}`, 250), { name: 'TimeoutError' });
+  await assert.rejects(publisherToken(`http://127.0.0.1:${port}`, 250), { name: "TimeoutError" });
   assert.equal(requested, true);
 });
 
-test('sealed registry config proxies dependencies but never product packages or mutations', () => {
-  const config = registryConfig({ storage: '/tmp/storage', allowPublish: false });
+test("sealed registry config proxies dependencies but never product packages or mutations", () => {
+  const config = registryConfig({ storage: "/tmp/storage", allowPublish: false });
   assert.match(config, /tw-migrate-\*/);
   assert.match(config, /proxy: false/);
   assert.match(config, /publish: nobody/);
   assert.match(config, /'\*\*':[\s\S]*proxy: npmjs/);
 });
 
-test('--case selects exactly one project and maps it to a Vitest project filter', async () => {
+test("--case selects exactly one project and maps it to a Vitest project filter", async () => {
   const loaded = await loadManifest();
   const calls: string[][] = [];
-  const selected = runHarness(['--case', 'react-vite-css'], loaded, (args) => calls.push(args));
-  assert.deepEqual(selected.map(({ id }) => id), ['react-vite-css']);
-  assert.deepEqual(calls, [['run', '--config', 'ecosystem-ci/vitest.config.ts', '--project', 'react-vite-css']]);
+  const selected = runHarness(["--case", "react-vite-css"], loaded, (args) => calls.push(args));
+  assert.deepEqual(
+    selected.map(({ id }) => id),
+    ["react-vite-css"],
+  );
+  assert.deepEqual(calls, [
+    ["run", "--config", "ecosystem-ci/vitest.config.ts", "--project", "react-vite-css"],
+  ]);
 });
 
-test('Vitest and the lifecycle omit external projects unless the CI-only gate is active', async () => {
+test("Vitest and the lifecycle omit external projects unless the CI-only gate is active", async () => {
   const projects = (await loadManifest()).projects;
-  assert.equal(vitestProjects(projects, {}).some(({ kind }) => kind === 'external'), false);
-  assert.equal(vitestProjects(projects, { CI: 'true', ECOSYSTEM_EXTERNAL: '1' }).filter(({ kind }) => kind === 'external').length, 2);
+  assert.equal(
+    vitestProjects(projects, {}).some(({ kind }) => kind === "external"),
+    false,
+  );
+  assert.equal(
+    vitestProjects(projects, { CI: "true", ECOSYSTEM_EXTERNAL: "1" }).filter(
+      ({ kind }) => kind === "external",
+    ).length,
+    2,
+  );
   const previous = { CI: process.env.CI, external: process.env.ECOSYSTEM_EXTERNAL };
   delete process.env.CI;
   delete process.env.ECOSYSTEM_EXTERNAL;
@@ -498,38 +642,73 @@ test('Vitest and the lifecycle omit external projects unless the CI-only gate is
       /require CI=true/,
     );
   } finally {
-    if (previous.CI === undefined) delete process.env.CI; else process.env.CI = previous.CI;
-    if (previous.external === undefined) delete process.env.ECOSYSTEM_EXTERNAL; else process.env.ECOSYSTEM_EXTERNAL = previous.external;
+    if (previous.CI === undefined) delete process.env.CI;
+    else process.env.CI = previous.CI;
+    if (previous.external === undefined) delete process.env.ECOSYSTEM_EXTERNAL;
+    else process.env.ECOSYSTEM_EXTERNAL = previous.external;
   }
 });
 
-test('external cases require the explicit CI-only entrypoint', async () => {
+test("external cases require the explicit CI-only entrypoint", async () => {
   const loaded = await loadManifest();
-  assert.throws(() => runHarness(['--case', 'external-stylized-components'], loaded, () => assert.fail('must not execute')), /CI-only/);
-  assert.throws(() => runHarness(['--external-case', 'external-stylized-components'], loaded, () => assert.fail('must not execute')), /CI-only/);
+  assert.throws(
+    () =>
+      runHarness(["--case", "external-stylized-components"], loaded, () =>
+        assert.fail("must not execute"),
+      ),
+    /CI-only/,
+  );
+  assert.throws(
+    () =>
+      runHarness(["--external-case", "external-stylized-components"], loaded, () =>
+        assert.fail("must not execute"),
+      ),
+    /CI-only/,
+  );
   const previous = { CI: process.env.CI, external: process.env.ECOSYSTEM_EXTERNAL };
-  process.env.CI = 'true';
-  process.env.ECOSYSTEM_EXTERNAL = '1';
+  process.env.CI = "true";
+  process.env.ECOSYSTEM_EXTERNAL = "1";
   try {
     const calls: string[][] = [];
-    const selected = runHarness(['--external-case', 'external-stylized-components'], loaded, (args) => calls.push(args));
-    assert.deepEqual(selected.map(({ id }) => id), ['external-stylized-components']);
-    assert.deepEqual(calls, [['run', '--config', 'ecosystem-ci/vitest.config.ts', '--project', 'external-stylized-components']]);
+    const selected = runHarness(
+      ["--external-case", "external-stylized-components"],
+      loaded,
+      (args) => calls.push(args),
+    );
+    assert.deepEqual(
+      selected.map(({ id }) => id),
+      ["external-stylized-components"],
+    );
+    assert.deepEqual(calls, [
+      [
+        "run",
+        "--config",
+        "ecosystem-ci/vitest.config.ts",
+        "--project",
+        "external-stylized-components",
+      ],
+    ]);
   } finally {
-    if (previous.CI === undefined) delete process.env.CI; else process.env.CI = previous.CI;
-    if (previous.external === undefined) delete process.env.ECOSYSTEM_EXTERNAL; else process.env.ECOSYSTEM_EXTERNAL = previous.external;
+    if (previous.CI === undefined) delete process.env.CI;
+    else process.env.CI = previous.CI;
+    if (previous.external === undefined) delete process.env.ECOSYSTEM_EXTERNAL;
+    else process.env.ECOSYSTEM_EXTERNAL = previous.external;
   }
 });
 
-test('unknown case prints the available ids without executing Vitest', async () => {
+test("unknown case prints the available ids without executing Vitest", async () => {
   const loaded = await loadManifest();
   const message = /Unknown case "missing".*react-vite-css.*next-css.*vite-html-css/;
   assert.throws(
-    () => runHarness(['--case', 'missing'], loaded, () => assert.fail('must not execute')),
+    () => runHarness(["--case", "missing"], loaded, () => assert.fail("must not execute")),
     message,
   );
   assert.throws(
-    () => execFileSync(process.execPath, ['ecosystem-ci/run.ts', '--case', 'missing'], { encoding: 'utf8', stdio: 'pipe' }),
+    () =>
+      execFileSync(process.execPath, ["ecosystem-ci/run.ts", "--case", "missing"], {
+        encoding: "utf8",
+        stdio: "pipe",
+      }),
     (error: unknown) => {
       const failure = error as ExecFailure;
       return failure.status === 1 && message.test(failure.stderr);
@@ -537,74 +716,97 @@ test('unknown case prints the available ids without executing Vitest', async () 
   );
 });
 
-test('no arguments print usage and --all is the only full-run selection', async () => {
+test("no arguments print usage and --all is the only full-run selection", async () => {
   const loaded = await loadManifest();
-  assert.throws(() => runHarness([], loaded, () => assert.fail('must not execute')), /Usage:/);
+  assert.throws(() => runHarness([], loaded, () => assert.fail("must not execute")), /Usage:/);
   const calls: string[][] = [];
-  const selected = runHarness(['--all'], loaded, (args) => calls.push(args));
-  assert.equal(selected.length, 12);
-  assert.deepEqual(calls, [[
-    'run',
-    '--config',
-    'ecosystem-ci/vitest.config.ts',
-    ...selected.flatMap(({ id }) => ['--project', id]),
-  ]]);
+  const selected = runHarness(["--all"], loaded, (args) => calls.push(args));
+  assert.equal(selected.length, 13);
+  assert.deepEqual(calls, [
+    [
+      "run",
+      "--config",
+      "ecosystem-ci/vitest.config.ts",
+      ...selected.flatMap(({ id }) => ["--project", id]),
+    ],
+  ]);
 });
 
-test('the browser oracle sorts every standard computed property and excludes only custom properties', () => {
-  assert.deepEqual(normalizeStyleEntries([
-    ['z-index', 'auto'],
-    ['--fixture-token', 'secret'],
-    ['-webkit-font-smoothing', 'auto'],
-    ['color', 'rgb(1, 2, 3)'],
-  ]), {
-    '-webkit-font-smoothing': 'auto',
-    color: 'rgb(1, 2, 3)',
-    'z-index': 'auto',
-  });
+test("the browser oracle sorts every standard computed property and excludes only custom properties", () => {
+  assert.deepEqual(
+    normalizeStyleEntries([
+      ["z-index", "auto"],
+      ["--fixture-token", "secret"],
+      ["-webkit-font-smoothing", "auto"],
+      ["color", "rgb(1, 2, 3)"],
+    ]),
+    {
+      "-webkit-font-smoothing": "auto",
+      color: "rgb(1, 2, 3)",
+      "z-index": "auto",
+    },
+  );
 });
 
-test('the causal witness requires a standard computed-property change for every probe', () => {
+test("the causal witness requires a standard computed-property change for every probe", () => {
   const capture = (color: string, token: string) =>
-    ({ elements: [{ identity: 'card', styles: { color, '--fixture-token': token } }] }) as unknown as ProbeCapture;
-  const baseline: CaptureSet = { base: capture('red', 'one'), hover: capture('red', 'one') };
-  assert.throws(() => assertOracle({
-    baseline,
-    post: structuredClone(baseline),
-    withheld: { base: capture('black', 'two'), hover: capture('red', 'two') },
-    candidateTokens: ['text-red'],
-  }), /standard computed property for probe "hover"/);
+    ({
+      elements: [{ identity: "card", styles: { color, "--fixture-token": token } }],
+    }) as unknown as ProbeCapture;
+  const baseline: CaptureSet = { base: capture("red", "one"), hover: capture("red", "one") };
+  assert.throws(
+    () =>
+      assertOracle({
+        baseline,
+        post: structuredClone(baseline),
+        withheld: { base: capture("black", "two"), hover: capture("red", "two") },
+        candidateTokens: ["text-red"],
+      }),
+    /standard computed property for probe "hover"/,
+  );
 });
 
-test('capture retry permits initial plus three retries and creates fresh attempts', async () => {
+test("capture retry permits initial plus three retries and creates fresh attempts", async () => {
   const attempts: number[] = [];
   const result = await retryCapture(async (attempt) => {
     attempts.push(attempt);
-    if (attempt < 4) throw new Error('navigation failed');
-    return 'captured';
+    if (attempt < 4) throw new Error("navigation failed");
+    return "captured";
   });
-  assert.equal(result, 'captured');
+  assert.equal(result, "captured");
   assert.deepEqual(attempts, [1, 2, 3, 4]);
-  assert.deepEqual(captureAttemptArtifactNames('baseline', 'base', 3), [
-    'baseline-base-attempt-3-browser.json',
-    'baseline-base-attempt-3.png',
+  assert.deepEqual(captureAttemptArtifactNames("baseline", "base", 3), [
+    "baseline-base-attempt-3-browser.json",
+    "baseline-base-attempt-3.png",
   ]);
-  await assert.rejects(retryCapture(async () => { throw new Error('still broken'); }), /still broken/);
+  await assert.rejects(
+    retryCapture(async () => {
+      throw new Error("still broken");
+    }),
+    /still broken/,
+  );
 });
 
-test('capture attempt timeout rejects a stalled operation', async () => {
-  await assert.rejects(withTimeout(() => new Promise(() => {}), 10), /timed out after 10ms/);
+test("capture attempt timeout rejects a stalled operation", async () => {
+  await assert.rejects(
+    withTimeout(() => new Promise(() => {}), 10),
+    /timed out after 10ms/,
+  );
 });
 
-test('page-creation failures keep diagnostics for all four attempts', async () => {
+test("page-creation failures keep diagnostics for all four attempts", async () => {
   const diagnostics: { attempt: number; error: string }[] = [];
   await assert.rejects(
     captureProbe(
-      { newPage: async () => { throw new Error('browser unavailable'); } } as unknown as Browser,
-      'http://127.0.0.1/',
+      {
+        newPage: async () => {
+          throw new Error("browser unavailable");
+        },
+      } as unknown as Browser,
+      "http://127.0.0.1/",
       probe() as Probe,
       (attempt) => ({
-        screenshot: '',
+        screenshot: "",
         writeDiagnostics: async (value: unknown) => {
           diagnostics.push({ attempt, ...(value as { error: string }) });
         },
@@ -612,172 +814,294 @@ test('page-creation failures keep diagnostics for all four attempts', async () =
     ),
     /browser unavailable/,
   );
-  assert.deepEqual(diagnostics.map(({ attempt }) => attempt), [1, 2, 3, 4]);
-  assert.ok(diagnostics.every(({ error }) => error.includes('browser unavailable')));
+  assert.deepEqual(
+    diagnostics.map(({ attempt }) => attempt),
+    [1, 2, 3, 4],
+  );
+  assert.ok(diagnostics.every(({ error }) => error.includes("browser unavailable")));
 });
 
-test('contributor lifecycle defaults keep case and package artifacts under one OS temporary root', () => {
-  const root = join(tmpdir(), 'tw-migrate-test-root');
-  assert.deepEqual(temporaryLifecyclePaths('react-vite-css', root), {
-    artifactRoot: join(root, 'artifacts', 'react-vite-css'),
-    packageArtifactRoot: join(root, 'packages'),
+test("contributor lifecycle defaults keep case and package artifacts under one OS temporary root", () => {
+  const root = join(tmpdir(), "tw-migrate-test-root");
+  assert.deepEqual(temporaryLifecyclePaths("react-vite-css", root), {
+    artifactRoot: join(root, "artifacts", "react-vite-css"),
+    packageArtifactRoot: join(root, "packages"),
   });
 });
 
-test('migration contract checks the exact report/source and no-op second run without retries', () => {
-  const first = { changedFiles: ['src/a.css'], diff: 'diff', candidates: ['p-[13px]'], warnings: [] } as unknown as MigrationReport;
-  assert.doesNotThrow(() => assertMigrationContract({
-    first,
-    expectedFirst: first,
-    actualSource: 'after\n',
-    expectedSource: 'after\n',
-    second: { changedFiles: [], diff: '' } as unknown as MigrationReport,
-    treeBeforeSecond: { 'src/a.css': 'abc' },
-    treeAfterSecond: { 'src/a.css': 'abc' },
-  }));
-  assert.throws(() => assertMigrationContract({
-    first,
-    expectedFirst: first,
-    actualSource: 'wrong',
-    expectedSource: 'after\n',
-    second: { changedFiles: [], diff: '' } as unknown as MigrationReport,
-    treeBeforeSecond: {},
-    treeAfterSecond: {},
-  }), /source/);
+test("migration contract checks the exact report/source and no-op second run without retries", () => {
+  const first = {
+    changedFiles: ["src/a.css"],
+    diff: "diff",
+    candidates: ["p-[13px]"],
+    warnings: [],
+  } as unknown as MigrationReport;
+  assert.doesNotThrow(() =>
+    assertMigrationContract({
+      first,
+      expectedFirst: first,
+      actualSource: "after\n",
+      expectedSource: "after\n",
+      second: { changedFiles: [], diff: "" } as unknown as MigrationReport,
+      treeBeforeSecond: { "src/a.css": "abc" },
+      treeAfterSecond: { "src/a.css": "abc" },
+    }),
+  );
+  assert.throws(
+    () =>
+      assertMigrationContract({
+        first,
+        expectedFirst: first,
+        actualSource: "wrong",
+        expectedSource: "after\n",
+        second: { changedFiles: [], diff: "" } as unknown as MigrationReport,
+        treeBeforeSecond: {},
+        treeAfterSecond: {},
+      }),
+    /source/,
+  );
 });
 
-test('source-wide idempotency catches an unreported extra source mutation', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'tw-migrate-source-tree-'));
+test("source-wide idempotency catches an unreported extra source mutation", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "tw-migrate-source-tree-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  await mkdir(join(root, 'src'));
+  await mkdir(join(root, "src"));
   await Promise.all([
-    writeFile(join(root, 'src', 'reported.css'), 'reported\n'),
-    writeFile(join(root, 'src', 'unreported.tsx'), 'before\n'),
+    writeFile(join(root, "src", "reported.css"), "reported\n"),
+    writeFile(join(root, "src", "unreported.tsx"), "before\n"),
   ]);
   const before = await snapshotMigrationSources(root);
-  await writeFile(join(root, 'src', 'unreported.tsx'), 'after\n');
+  await writeFile(join(root, "src", "unreported.tsx"), "after\n");
   const after = await snapshotMigrationSources(root);
-  assert.throws(() => assertMigrationContract({
-    first: { changedFiles: ['src/reported.css'] } as unknown as MigrationReport,
-    expectedFirst: { changedFiles: ['src/reported.css'] } as unknown as MigrationReport,
-    actualSource: 'reported\n',
-    expectedSource: 'reported\n',
-    second: { changedFiles: [], diff: '' } as unknown as MigrationReport,
-    treeBeforeSecond: before,
-    treeAfterSecond: after,
-  }), /source-scoped tree/);
+  assert.throws(
+    () =>
+      assertMigrationContract({
+        first: { changedFiles: ["src/reported.css"] } as unknown as MigrationReport,
+        expectedFirst: { changedFiles: ["src/reported.css"] } as unknown as MigrationReport,
+        actualSource: "reported\n",
+        expectedSource: "reported\n",
+        second: { changedFiles: [], diff: "" } as unknown as MigrationReport,
+        treeBeforeSecond: before,
+        treeAfterSecond: after,
+      }),
+    /source-scoped tree/,
+  );
 });
 
-test('source snapshots exclude generated trees and reject non-regular paths', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'tw-migrate-source-safety-'));
+test("source snapshots exclude generated trees and reject non-regular paths", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "tw-migrate-source-safety-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  await mkdir(join(root, 'node_modules'));
-  await writeFile(join(root, 'node_modules', 'generated.js'), 'ignored\n');
+  await mkdir(join(root, "node_modules"));
+  await writeFile(join(root, "node_modules", "generated.js"), "ignored\n");
   assert.deepEqual(await snapshotMigrationSources(root), {});
-  await symlink(join(root, 'node_modules', 'generated.js'), join(root, 'linked.js'));
+  await symlink(join(root, "node_modules", "generated.js"), join(root, "linked.js"));
   await assert.rejects(snapshotMigrationSources(root), /not regular/);
 });
 
-test('exact changed-file validation requires complete paths and bytes', () => {
-  const changedFiles = ['src/App.jsx', 'src/App.css'];
-  const files = { 'src/App.jsx': 'consumer\n', 'src/App.css': 'style\n' };
+test("exact changed-file validation requires complete paths and bytes", () => {
+  const changedFiles = ["src/App.jsx", "src/App.css"];
+  const files = { "src/App.jsx": "consumer\n", "src/App.css": "style\n" };
   assert.doesNotThrow(() => assertExpectedChangedFiles(changedFiles, files, files));
-  assert.throws(() => assertExpectedChangedFiles(changedFiles, { 'src/App.css': 'style\n' }, files), /cover changedFiles/);
-  assert.throws(() => assertExpectedChangedFiles(changedFiles, files, { ...files, 'src/App.jsx': 'wrong\n' }), /exact post-migration bytes/);
+  assert.throws(
+    () => assertExpectedChangedFiles(changedFiles, { "src/App.css": "style\n" }, files),
+    /cover changedFiles/,
+  );
+  assert.throws(
+    () => assertExpectedChangedFiles(changedFiles, files, { ...files, "src/App.jsx": "wrong\n" }),
+    /exact post-migration bytes/,
+  );
 });
 
-test('controlled expectations cover every reported changed file with exact bytes', async () => {
-  for (const runtime of ['react-vite', 'next', 'vite-html']) {
-    for (const style of ['css', 'scss', 'sass', 'less']) {
-      const expected = JSON.parse(await readFile(new URL(`../ecosystem-ci/fixtures/controlled/${runtime}/${style}/expected.json`, import.meta.url), 'utf8'));
-      assert.deepEqual(Object.keys(expected.changedFiles).sort(), [...expected.first.changedFiles].sort());
-      assert.ok(Object.values(expected.changedFiles).every((contents) => typeof contents === 'string'));
+test("controlled expectations cover every reported changed file with exact bytes", async () => {
+  for (const runtime of ["react-vite", "next", "vite-html"]) {
+    for (const style of ["css", "scss", "sass", "less"]) {
+      const expected = JSON.parse(
+        await readFile(
+          new URL(
+            `../ecosystem-ci/fixtures/controlled/${runtime}/${style}/expected.json`,
+            import.meta.url,
+          ),
+          "utf8",
+        ),
+      );
+      assert.deepEqual(
+        Object.keys(expected.changedFiles).sort(),
+        [...expected.first.changedFiles].sort(),
+      );
+      assert.ok(
+        Object.values(expected.changedFiles).every((contents) => typeof contents === "string"),
+      );
     }
   }
 });
 
-test('command timeout awaits and bounds teardown failures', async () => {
-  await assert.rejects(waitForChild(new EventEmitter() as ChildProcess, {
-    timeoutMs: 1,
-    terminate: async () => { throw new Error('kill failed'); },
-  }), /timed out.*teardown failed: kill failed/);
-  await assert.rejects(waitForChild(new EventEmitter() as ChildProcess, {
-    timeoutMs: 1,
-    teardownTimeoutMs: 5,
-    terminate: () => new Promise(() => {}),
-  }), /teardown timed out after 5ms/);
+test("command timeout awaits and bounds teardown failures", async () => {
+  await assert.rejects(
+    waitForChild(new EventEmitter() as ChildProcess, {
+      timeoutMs: 1,
+      terminate: async () => {
+        throw new Error("kill failed");
+      },
+    }),
+    /timed out.*teardown failed: kill failed/,
+  );
+  await assert.rejects(
+    waitForChild(new EventEmitter() as ChildProcess, {
+      timeoutMs: 1,
+      teardownTimeoutMs: 5,
+      terminate: () => new Promise(() => {}),
+    }),
+    /teardown timed out after 5ms/,
+  );
 });
 
-test('final server teardown records and propagates only when lifecycle otherwise succeeded', async () => {
-  const failure = new Error('stop failed');
+test("final server teardown records and propagates only when lifecycle otherwise succeeded", async () => {
+  const failure = new Error("stop failed");
   const recorded: unknown[] = [];
-  const server = { url: '', stop: async () => { throw failure; } };
-  await assert.rejects(teardownLifecycleServer(server, undefined, async (error) => { recorded.push(error); }), failure);
+  const server = {
+    url: "",
+    stop: async () => {
+      throw failure;
+    },
+  };
+  await assert.rejects(
+    teardownLifecycleServer(server, undefined, async (error) => {
+      recorded.push(error);
+    }),
+    failure,
+  );
   assert.deepEqual(recorded, [failure]);
-  await assert.doesNotReject(teardownLifecycleServer(server, new Error('primary'), async () => assert.fail('must preserve primary')));
+  await assert.doesNotReject(
+    teardownLifecycleServer(server, new Error("primary"), async () =>
+      assert.fail("must preserve primary"),
+    ),
+  );
 });
 
-test('workflow artifact allowlist rejects traversal, symlinks, directories, and undeclared files', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'tw-migrate-artifacts-'));
+test("workflow artifact allowlist rejects traversal, symlinks, directories, and undeclared files", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "tw-migrate-artifacts-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  await writeFile(join(root, 'phase-ledger.json'), '{}');
-  assert.deepEqual(await artifactAllowlist(root, ['phase-ledger.json']), [join(root, 'phase-ledger.json')]);
-  await assert.rejects(artifactAllowlist(root, ['../outside']), /escapes/);
-  await mkdir(join(root, 'directory'));
-  await assert.rejects(artifactAllowlist(root, ['directory']), /regular file/);
-  await symlink(join(root, 'phase-ledger.json'), join(root, 'link'));
-  await assert.rejects(artifactAllowlist(root, ['link']), /regular file|symlink/);
+  await writeFile(join(root, "phase-ledger.json"), "{}");
+  assert.deepEqual(await artifactAllowlist(root, ["phase-ledger.json"]), [
+    join(root, "phase-ledger.json"),
+  ]);
+  await assert.rejects(artifactAllowlist(root, ["../outside"]), /escapes/);
+  await mkdir(join(root, "directory"));
+  await assert.rejects(artifactAllowlist(root, ["directory"]), /regular file/);
+  await symlink(join(root, "phase-ledger.json"), join(root, "link"));
+  await assert.rejects(artifactAllowlist(root, ["link"]), /regular file|symlink/);
 });
 
-test('case failure uploads preserve package publication logs', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'tw-migrate-publish-log-'));
+test("case failure uploads preserve package publication logs", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "tw-migrate-publish-log-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const uploadRoot = `${root}-upload`;
   await Promise.all([
-    writeFile(join(root, 'phase-ledger.json'), `${JSON.stringify({ case: 'react-vite-css', phases: [], failure: 'publish failed', failureFiles: ['publish.log'] })}\n`),
-    writeFile(join(root, 'publish.log'), 'npm publish failed\n'),
+    writeFile(
+      join(root, "phase-ledger.json"),
+      `${JSON.stringify({ case: "react-vite-css", phases: [], failure: "publish failed", failureFiles: ["publish.log"] })}\n`,
+    ),
+    writeFile(join(root, "publish.log"), "npm publish failed\n"),
   ]);
 
   await prepareCaseUpload(controlled() as ControlledProject, root, uploadRoot);
-  assert.equal(await readFile(join(uploadRoot, 'publish.log'), 'utf8'), 'npm publish failed\n');
+  assert.equal(await readFile(join(uploadRoot, "publish.log"), "utf8"), "npm publish failed\n");
 });
 
-test('workflow matrices match every manifest kind across all required OSes', async () => {
+test("workflow matrices match every manifest kind across all required OSes", async () => {
   const manifest = await loadManifest();
   const workflow = await readEcosystemWorkflow();
-  const matrices = [...workflow.matchAll(/^      matrix:\n        os: \[([a-z, ]+)\]\n        case: \[([a-z0-9-, ]+)\]\n        include:$/gm)];
-  assert.equal(matrices.length, 3, 'expected literal controlled, smoke, and external workflow matrices');
-  for (const matrix of matrices) assert.deepEqual(matrix[1].split(', '), ['linux', 'macos', 'windows']);
-  for (const [index, kind] of ['controlled', 'smoke', 'external'].entries()) {
-    assert.deepEqual(matrices[index][2].split(', '), manifest.projects.filter((project) => project.kind === kind).map(({ id }) => id));
+  const matrices = [
+    ...workflow.matchAll(
+      /^      matrix:\n        os: \[([a-z, ]+)\]\n        case: \[([a-z0-9-, ]+)\]\n        include:$/gm,
+    ),
+  ];
+  assert.equal(
+    matrices.length,
+    3,
+    "expected literal controlled, smoke, and external workflow matrices",
+  );
+  for (const matrix of matrices)
+    assert.deepEqual(matrix[1].split(", "), ["linux", "macos", "windows"]);
+  for (const [index, kind] of ["controlled", "smoke", "external"].entries()) {
+    assert.deepEqual(
+      matrices[index][2].split(", "),
+      manifest.projects.filter((project) => project.kind === kind).map(({ id }) => id),
+    );
   }
 });
 
-test('case jobs run after non-cancelled partial package failure while preserving label gating', async () => {
+test("case jobs run after non-cancelled partial package failure while preserving label gating", async () => {
   const workflow = await readEcosystemWorkflow();
-  assert.match(workflow, /^  case:\n    needs: package\n    if: \$\{\{ !cancelled\(\) && \(github\.event_name != 'pull_request' \|\| github\.event\.label\.name == 'test:e2e'\) \}\}$/m);
+  assert.match(
+    workflow,
+    /^  case:\n    needs: package\n    if: \$\{\{ !cancelled\(\) && \(github\.event_name != 'pull_request' \|\| github\.event\.label\.name == 'test:e2e'\) \}\}$/m,
+  );
 });
 
-test('fixture integration dependencies use the required exact pins', async () => {
+test("fixture integration dependencies use the required exact pins", async () => {
+  const allStyles = ["css", "scss", "sass", "less"];
   const expected = {
-    'react-vite': { '@tailwindcss/vite': '4.3.3', tailwindcss: '4.3.3', vite: '8.1.5', react: '19.2.8', 'react-dom': '19.2.8' },
-    next: { '@tailwindcss/postcss': '4.3.3', tailwindcss: '4.3.3', next: '15.5.21', react: '19.2.8', 'react-dom': '19.2.8' },
-    'vite-html': { '@tailwindcss/vite': '4.3.3', tailwindcss: '4.3.3', vite: '8.1.5' },
+    "react-vite": {
+      styles: allStyles,
+      pins: {
+        "@tailwindcss/vite": "4.3.3",
+        tailwindcss: "4.3.3",
+        vite: "8.1.5",
+        react: "19.2.8",
+        "react-dom": "19.2.8",
+      },
+    },
+    next: {
+      styles: allStyles,
+      pins: {
+        "@tailwindcss/postcss": "4.3.3",
+        tailwindcss: "4.3.3",
+        next: "15.5.21",
+        react: "19.2.8",
+        "react-dom": "19.2.8",
+      },
+    },
+    "vite-html": {
+      styles: allStyles,
+      pins: { "@tailwindcss/vite": "4.3.3", tailwindcss: "4.3.3", vite: "8.1.5" },
+    },
+    "vue-vite": {
+      styles: ["css"],
+      pins: {
+        "@tailwindcss/vite": "4.3.3",
+        tailwindcss: "4.3.3",
+        vite: "8.1.5",
+        vue: "3.5.40",
+        "@vitejs/plugin-vue": "6.0.8",
+      },
+    },
   };
-  for (const [runtime, pins] of Object.entries(expected)) {
-    for (const style of ['css', 'scss', 'sass', 'less']) {
-      const fixture = JSON.parse(await readFile(new URL(`../ecosystem-ci/fixtures/controlled/${runtime}/${style}/package.json`, import.meta.url), 'utf8'));
-      for (const [name, version] of Object.entries(pins)) assert.equal(fixture.dependencies[name], version);
-      if (style === 'scss' || style === 'sass') assert.equal(fixture.dependencies.sass, '1.101.3');
-      if (style === 'less') assert.equal(fixture.dependencies.less, '4.7.0');
-      if (runtime === 'next' && style === 'less') assert.equal(fixture.dependencies['next-with-less'], '3.0.1');
+  for (const [runtime, { styles, pins }] of Object.entries(expected)) {
+    for (const style of styles) {
+      const fixture = JSON.parse(
+        await readFile(
+          new URL(
+            `../ecosystem-ci/fixtures/controlled/${runtime}/${style}/package.json`,
+            import.meta.url,
+          ),
+          "utf8",
+        ),
+      );
+      for (const [name, version] of Object.entries(pins))
+        assert.equal(fixture.dependencies[name], version);
+      if (style === "scss" || style === "sass") assert.equal(fixture.dependencies.sass, "1.101.3");
+      if (style === "less") assert.equal(fixture.dependencies.less, "4.7.0");
+      if (runtime === "next" && style === "less")
+        assert.equal(fixture.dependencies["next-with-less"], "3.0.1");
     }
   }
 });
 
-test('the no-argument CLI stays browser-free and returns usage', () => {
+test("the no-argument CLI stays browser-free and returns usage", () => {
   assert.throws(
-    () => execFileSync(process.execPath, ['ecosystem-ci/run.ts'], { encoding: 'utf8', stdio: 'pipe' }),
+    () =>
+      execFileSync(process.execPath, ["ecosystem-ci/run.ts"], { encoding: "utf8", stdio: "pipe" }),
     (error: unknown) => {
       const failure = error as ExecFailure;
       return failure.status === 1 && /Usage:/.test(failure.stderr);

@@ -6,7 +6,7 @@ Use this file to find the owning layer and choose focused validation. Prefer the
 
 ## Project Overview
 
-`tw-migrate` previews and applies migrations from static React, Next.js, and HTML stylesheet usage to Tailwind CSS v4 utilities. It supports CSS, SCSS, Sass, and Less, with conservative retention when a rewrite cannot be proven safe.
+`tw-migrate` previews and applies migrations from static React, Next.js, Vue 3 SFC, and HTML stylesheet usage to Tailwind CSS v4 utilities. It supports CSS, SCSS, Sass, and Less, with conservative retention when a rewrite cannot be proven safe.
 
 ### Key Technologies
 
@@ -28,6 +28,7 @@ tw-migrate/
 ├── native.js                  # Native addon resolution and NAPI exports
 ├── html.js                    # HTML parsing and byte-offset extraction
 ├── style-compiler.js          # Project-local Sass/Less loading and source maps
+├── vue.js                     # Project-local Vue compiler loading and SFC lowering
 ├── crates/tw_migrate/         # Rust planner and NAPI addon
 │   └── src/
 │       ├── planner.rs         # Single/batch planning entrypoints
@@ -73,6 +74,7 @@ tw-migrate/
 - **Public API shape**: `index.d.ts` and the top-level exports in `index.js`.
 - **Sass, SCSS, Less, or source maps**: `style-compiler.js` and `crates/tw_migrate/src/lib.rs`.
 - **HTML links, attributes, entities, or byte offsets**: `html.js` and `crates/tw_migrate/src/html_rewrite.rs`.
+- **Vue SFC blocks, template class sites, or scoped retention**: `vue.js` and the Vue paths in `crates/tw_migrate/src/planner.rs`.
 - **CSS parsing and migration decisions**: `crates/tw_migrate/src/planner.rs` and `css_plan.rs`.
 - **JSX usage and selector relationships**: `js_rewrite.rs` and `jsx_graph.rs`.
 - **Utility generation and value encoding**: `utilities.rs`, `arbitrary.rs`, `theme.rs`, `at_rules.rs`, and `animations.rs`.
