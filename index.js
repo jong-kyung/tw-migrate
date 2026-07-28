@@ -48,8 +48,8 @@ const STYLESHEET_SYNTAX = new Map([
 ]);
 const IGNORED_DIRECTORIES = new Set([".git", ".next", "build", "dist", "node_modules"]);
 // Extensions that cannot carry or consume class names, for the closed-world
-// unscoped proof. Anything else (unknown template formats, SVG with class
-// attributes) defeats the proof.
+// unscoped proof. Anything else (unknown template formats, Markdown pages
+// rendered into DOM, SVG with class attributes) defeats the proof.
 const PROOF_INERT_EXTENSIONS = new Set([
   ...SOURCE_EXTENSIONS,
   ...STYLESHEET_SYNTAX.keys(),
@@ -63,7 +63,6 @@ const PROOF_INERT_EXTENSIONS = new Set([
   ".json",
   ".lock",
   ".map",
-  ".md",
   ".otf",
   ".png",
   ".ttf",
@@ -830,6 +829,14 @@ function isLocalVueReference(reference) {
   );
 }
 
+// An unresolved local reference only threatens the caller proof when it
+// could actually name a Vue file: `.vue` spellings, extensionless paths, and
+// aliases. An explicit foreign extension (`./utils.ts`) cannot.
+function couldResolveToVue(reference) {
+  const path = reference.split(/[?#]/, 1)[0];
+  return path.endsWith(".vue") || extension(path) === "";
+}
+
 function vueReferenceTarget(importer, reference, vuePaths) {
   if (!reference.startsWith(".")) return undefined;
   const target = resolve(dirname(importer), reference);
@@ -929,6 +936,7 @@ function buildVueComponentGraph(
         (reference) =>
           !stylesheetReference.test(reference) &&
           isLocalVueReference(reference) &&
+          couldResolveToVue(reference) &&
           !vueReferenceTarget(file.path, reference, vuePaths),
       )
     ) {
@@ -1255,11 +1263,16 @@ async function preparePackageVue({
     if (analysis.retained) continue;
     for (const edge of analysis.resolvedComponents) {
       const childAnalysis = analyses.get(edge.child);
+      // Vue only inherits call-site attributes onto a single-root child;
+      // htmlElements holds class-bearing hosts only, so the total root count
+      // must gate the rewrite, not the classed-root count.
+      const singleRoot = childAnalysis?.rootStarts.length === 1;
       const childRoots = childAnalysis?.htmlElements.filter((element) =>
         childAnalysis.rootStarts.includes(element.nodeStart),
       );
       if (
         selectedPaths.has(parent.path) &&
+        singleRoot &&
         childRoots?.length === 1 &&
         !childAnalysis.fallthroughUnverifiable
       ) {
@@ -1267,6 +1280,7 @@ async function preparePackageVue({
       }
       if (
         selectedPaths.has(edge.child) &&
+        singleRoot &&
         // A self-recursive edge is already covered by the parent-style site
         // above; adding the same span twice would produce overlapping edits.
         edge.parent !== edge.child &&

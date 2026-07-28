@@ -1115,6 +1115,76 @@ test("bare stylesheet specifiers never bind coincidental local files", async () 
   }
 });
 
+test("a Markdown page defeats the unscoped sole-source proof", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, "Button.module.css")),
+      rm(join(cwd, "Button.tsx")),
+      writeFile(
+        join(cwd, "Card.vue"),
+        '<template>\n  <div class="shared">Card</div>\n  <span>Leaf</span>\n</template>\n<style>\n.shared { margin: 7px; }\n</style>\n',
+      ),
+      writeFile(join(cwd, "page.md"), '# Doc\n\n<div class="shared">md</div>\n'),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "unscoped-style-block"));
+    assert.equal(report.convertedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("explicit non-Vue local imports do not open proven caller surfaces", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div class="passed">Child</div>\n</template>\n<style scoped>\n.passed { padding: 13px; }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "App.vue"),
+        '<template>\n  <Child class="passed" />\n  <main>App</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\nimport { helper } from "./utils.ts";\nvoid helper;\n</script>\n',
+      ),
+      writeFile(join(cwd, "utils.ts"), "export const helper = 1;\n"),
+    ]);
+    const report = await migrate({ cwd, write: true });
+    assert.deepEqual(
+      report.warnings.filter((entry) => entry.code === "open-root-fallthrough"),
+      [],
+    );
+    assert.match(await readFile(join(cwd, "Child.vue"), "utf8"), /class="passed p-\[13px\]"/);
+    assert.doesNotMatch(await readFile(join(cwd, "Child.vue"), "utf8"), /<style/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a multi-root child never receives call-site rewrites", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div class="leaf">A</div>\n  <span>B</span>\n</template>\n<style scoped>\n.leaf { padding: 13px; }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Child class="leaf" />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd, write: true });
+    // Vue cannot inherit attributes onto a multi-root child, so the call
+    // site stays untouched while the internal usage migrates.
+    assert.doesNotMatch(await readFile(join(cwd, "Parent.vue"), "utf8"), /p-\[13px\]/);
+    assert.match(await readFile(join(cwd, "Child.vue"), "utf8"), /class="leaf p-\[13px\]"/);
+    assert.ok(!report.failures.length);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("checks effective child roots when retaining child scoped rules", async () => {
   const cwd = await fixture();
   try {
@@ -1549,14 +1619,14 @@ test("retains competing cross-file scoped rules with styles after templates", as
       ),
       writeFile(
         join(cwd, "ZChild.vue"),
-        '<template>\n  <div class="child own">Child</div>\n  <span>Leaf</span>\n</template>\n<style scoped>\n.own { padding: 13px; }\n</style>\n',
+        '<template>\n  <div class="child own">Child</div>\n</template>\n<style scoped>\n.own { padding: 13px; }\n</style>\n',
       ),
     ]);
     const report = await migrate({ cwd, write: true });
     assert.equal(report.convertedRules, 0);
     assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
     const childRuleStart = Buffer.byteLength(
-      '<template>\n  <div class="child own">Child</div>\n  <span>Leaf</span>\n</template>\n<style scoped>\n',
+      '<template>\n  <div class="child own">Child</div>\n</template>\n<style scoped>\n',
     );
     const childRule = report.rules.find(
       (rule) => rule.file === "ZChild.vue" && rule.selector === ".own",
@@ -1566,7 +1636,9 @@ test("retains competing cross-file scoped rules with styles after templates", as
       end: childRuleStart + ".own { padding: 13px; }".length,
     });
     assert.doesNotMatch(await readFile(join(cwd, "ZChild.vue"), "utf8"), /p-\[13px\]/);
-    assert.match(await readFile(join(cwd, "AParent.vue"), "utf8"), /m-\[7px\]/);
+    // Mutually competing rules freeze without appends: deleting or
+    // duplicating either side could flip the cascade.
+    assert.doesNotMatch(await readFile(join(cwd, "AParent.vue"), "utf8"), /m-\[7px\]/);
   } finally {
     await cleanup(cwd);
   }
@@ -1580,7 +1652,7 @@ test("retains competing cross-file scoped rules with styles before templates", a
       rm(join(cwd, "Button.tsx")),
       writeFile(
         join(cwd, "AChild.vue"),
-        '<style scoped>\n.own { padding: 13px; }\n</style>\n<template>\n  <div class="child own">Child</div>\n  <span>Leaf</span>\n</template>\n',
+        '<style scoped>\n.own { padding: 13px; }\n</style>\n<template>\n  <div class="child own">Child</div>\n</template>\n',
       ),
       writeFile(
         join(cwd, "ZParent.vue"),
@@ -1591,7 +1663,7 @@ test("retains competing cross-file scoped rules with styles before templates", a
     assert.equal(report.convertedRules, 0);
     assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
     assert.doesNotMatch(await readFile(join(cwd, "AChild.vue"), "utf8"), /p-\[13px\]/);
-    assert.match(await readFile(join(cwd, "ZParent.vue"), "utf8"), /m-\[7px\]/);
+    assert.doesNotMatch(await readFile(join(cwd, "ZParent.vue"), "utf8"), /m-\[7px\]/);
   } finally {
     await cleanup(cwd);
   }
