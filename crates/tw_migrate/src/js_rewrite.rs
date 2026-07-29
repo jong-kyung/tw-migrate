@@ -29,6 +29,9 @@ use crate::{
 pub(crate) struct CandidateMatch {
     pub(crate) start: usize,
     pub(crate) end: usize,
+    /// Rendered-element identity for cross-stylesheet conflict grouping.
+    /// Authored warning and edit spans remain `start..end`.
+    pub(crate) element_start: Option<usize>,
     pub(crate) key: SelectorKey,
     pub(crate) candidate: String,
     pub(crate) origin_candidate: String,
@@ -706,6 +709,7 @@ impl UsageCollector<'_> {
                 self.matches.push(CandidateMatch {
                     start: insertion,
                     end: insertion,
+                    element_start: None,
                     key: key.clone(),
                     candidate: candidate.clone(),
                     origin_candidate: candidate.clone(),
@@ -747,6 +751,7 @@ impl UsageCollector<'_> {
                     self.matches.push(CandidateMatch {
                         start: span.start as usize,
                         end: span.end as usize,
+                        element_start: None,
                         key: key.clone(),
                         candidate: candidate.clone(),
                         origin_candidate: candidate.clone(),
@@ -762,6 +767,7 @@ impl UsageCollector<'_> {
             self.matches.push(CandidateMatch {
                 start: span.start as usize,
                 end: span.end as usize,
+                element_start: None,
                 key: key.clone(),
                 candidate: candidate.clone(),
                 origin_candidate: candidate.clone(),
@@ -963,6 +969,7 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
                     self.matches.push(CandidateMatch {
                         start: container.span.start as usize,
                         end: container.span.end as usize,
+                        element_start: None,
                         key: key.clone(),
                         candidate: candidate.clone(),
                         origin_candidate: candidate.clone(),

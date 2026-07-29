@@ -61,6 +61,10 @@ pub(crate) struct RulePlan {
     pub(crate) selector: String,
     pub(crate) related_classes: Vec<String>,
     pub(crate) contains_selectors: bool,
+    /// Static constraints from the selector's rightmost compound. Ancestor
+    /// compounds are deliberately ignored for conservative reachability.
+    pub(crate) target_tag: Option<String>,
+    pub(crate) target_ids: Vec<String>,
     pub(crate) key: Option<SelectorKey>,
     pub(crate) relationship: Option<ModuleRelationship>,
     pub(crate) candidates: Vec<String>,
@@ -167,6 +171,7 @@ pub(crate) fn parse_css_rules(
             Some((key, variant))
         });
         let key = selector_match.as_ref().map(|(key, _)| key.clone());
+        let (target_tag, target_ids) = selector_target_constraints(rule);
         let mut variants = outer_variants;
         if let Some(variant) = selector_match.and_then(|(_, variant)| variant) {
             variants.push(variant);
@@ -199,6 +204,8 @@ pub(crate) fn parse_css_rules(
             selector,
             related_classes: selector_classes(rule),
             contains_selectors: true,
+            target_tag,
+            target_ids,
             key,
             relationship,
             candidates,
@@ -621,6 +628,8 @@ fn retained_at_rule(
         selector: source[at_rule.span.start..end].trim().to_string(),
         related_classes: related_classes.into_iter().collect(),
         contains_selectors,
+        target_tag: None,
+        target_ids: Vec::new(),
         key: None,
         relationship: None,
         candidates: Vec::new(),
@@ -652,6 +661,36 @@ fn collect_statement_classes(statements: &[Statement<'_>], classes: &mut BTreeSe
             _ => {}
         }
     }
+}
+
+fn selector_target_constraints(
+    rule: &oxc_css_parser::ast::QualifiedRule<'_>,
+) -> (Option<String>, Vec<String>) {
+    let Some(selector) = rule.selector.selectors.first() else {
+        return (None, Vec::new());
+    };
+    let Some(compound) = selector.children.iter().rev().find_map(|child| match child {
+        ComplexSelectorChild::CompoundSelector(compound) => Some(compound),
+        ComplexSelectorChild::Combinator(_) => None,
+    }) else {
+        return (None, Vec::new());
+    };
+    let mut tag = None;
+    let mut ids = Vec::new();
+    for simple in &compound.children {
+        match simple {
+            SimpleSelector::Type(TypeSelector::TagName(name)) => {
+                tag = literal_ident(&name.name.name).map(|name| name.to_ascii_lowercase());
+            }
+            SimpleSelector::Id(id) => {
+                if let Some(name) = literal_ident(&id.name) {
+                    ids.push(name.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    (tag, ids)
 }
 
 fn selector_classes(rule: &oxc_css_parser::ast::QualifiedRule<'_>) -> Vec<String> {
