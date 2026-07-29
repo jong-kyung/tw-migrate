@@ -3,8 +3,8 @@
     "changedFiles": [
       "src/App.vue"
     ],
-    "diff": "--- a/src/App.vue\n+++ b/src/App.vue\n@@ -1,32 +1,17 @@\n-<template>\n-  <article class=\"card\" data-probe=\"card\" data-identity=\"card\">Card</article>\n-  <button class=\"action\" data-identity=\"action\">Toggle details</button>\n-  <section class=\"responsive\" data-probe=\"responsive-layout\" data-identity=\"responsive\">Responsive</section>\n-</template>\n-<style scoped>\n-.card {\n-  padding: 13px;\n-  color: rgb(20, 30, 40);\n-}\n-.card:hover {\n-  background-color: rgb(210, 220, 230);\n-}\n-.action:focus {\n-  outline: 2px solid rgb(30, 90, 150);\n-}\n-.action:focus-visible {\n-  outline-offset: 3px;\n-}\n-.responsive {\n-  width: 100px;\n-}\n-@media (min-width: 700px) {\n-  .responsive {\n-    width: 200px;\n-  }\n-}\n-.retained {\n-  display: block;\n-}\n-</style>\n \n+<template>\n+  <article class=\"card hover:bg-[rgb(210,_220,_230)] p-[13px] text-[rgb(20,_30,_40)]\" data-probe=\"card\" data-identity=\"card\">Card</article>\n+  <button class=\"action focus-visible:[outline-offset:3px] focus:[outline:2px_solid_rgb(30,_90,_150)]\" data-identity=\"action\">Toggle details</button>\n+  <section class=\"responsive [@media_(min-width:700px)]:w-[200px] w-[100px]\" data-probe=\"responsive-layout\" data-identity=\"responsive\">Responsive</section>\n+</template>\n+<style scoped>\n+\n+\n+\n+\n+\n+\n+.retained {\n+  display: block;\n+}\n+</style>\n \n",
-    "convertedRules": 6,
+    "diff": "--- a/src/App.vue\n+++ b/src/App.vue\n@@ -1,40 +1,23 @@\n-<script setup>\n-import { ref } from \"vue\";\n-\n-const active = ref(false);\n-</script>\n-<template>\n-  <article :class=\"['card', { active }]\" data-probe=\"card\" data-identity=\"card\">Card</article>\n-  <button class=\"action\" data-identity=\"action\" @focus=\"active = true\">Toggle details</button>\n-  <section class=\"responsive\" data-probe=\"responsive-layout\" data-identity=\"responsive\">Responsive</section>\n-</template>\n-<style scoped>\n-.card {\n-  padding: 13px;\n-  color: rgb(20, 30, 40);\n-}\n-.card:hover {\n-  background-color: rgb(210, 220, 230);\n-}\n-.active {\n-  margin-left: 19px;\n-}\n-.action:focus {\n-  outline: 2px solid rgb(30, 90, 150);\n-}\n-.action:focus-visible {\n-  outline-offset: 3px;\n-}\n-.responsive {\n-  width: 100px;\n-}\n-@media (min-width: 700px) {\n-  .responsive {\n-    width: 200px;\n-  }\n-}\n-.retained {\n-  display: block;\n-}\n-</style>\n \n+<script setup>\n+import { ref } from \"vue\";\n+\n+const active = ref(false);\n+</script>\n+<template>\n+  <article :class=\"['card hover:bg-[rgb(210,_220,_230)] p-[13px] text-[rgb(20,_30,_40)]', { 'active ml-[19px]': active }]\" data-probe=\"card\" data-identity=\"card\">Card</article>\n+  <button class=\"action focus-visible:[outline-offset:3px] focus:[outline:2px_solid_rgb(30,_90,_150)]\" data-identity=\"action\" @focus=\"active = true\">Toggle details</button>\n+  <section class=\"responsive [@media_(min-width:700px)]:w-[200px] w-[100px]\" data-probe=\"responsive-layout\" data-identity=\"responsive\">Responsive</section>\n+</template>\n+<style scoped>\n+\n+\n+\n+\n+\n+\n+\n+.retained {\n+  display: block;\n+}\n+</style>\n \n",
+    "convertedRules": 7,
     "retainedRules": 1,
     "rules": [
       {
@@ -20,8 +20,8 @@
           "end": 53
         },
         "authoredSpan": {
-          "start": 297,
-          "end": 349
+          "start": 417,
+          "end": 469
         }
       },
       {
@@ -36,8 +36,24 @@
           "end": 109
         },
         "authoredSpan": {
-          "start": 350,
-          "end": 405
+          "start": 470,
+          "end": 525
+        }
+      },
+      {
+        "selector": ".active",
+        "status": "converted",
+        "candidates": [
+          "ml-[19px]"
+        ],
+        "file": "src/App.vue",
+        "ruleId": {
+          "start": 110,
+          "end": 142
+        },
+        "authoredSpan": {
+          "start": 526,
+          "end": 558
         }
       },
       {
@@ -48,12 +64,12 @@
         ],
         "file": "src/App.vue",
         "ruleId": {
-          "start": 110,
-          "end": 166
+          "start": 143,
+          "end": 199
         },
         "authoredSpan": {
-          "start": 406,
-          "end": 462
+          "start": 559,
+          "end": 615
         }
       },
       {
@@ -64,12 +80,12 @@
         ],
         "file": "src/App.vue",
         "ruleId": {
-          "start": 167,
-          "end": 215
+          "start": 200,
+          "end": 248
         },
         "authoredSpan": {
-          "start": 463,
-          "end": 511
+          "start": 616,
+          "end": 664
         }
       },
       {
@@ -80,12 +96,12 @@
         ],
         "file": "src/App.vue",
         "ruleId": {
-          "start": 216,
-          "end": 247
+          "start": 249,
+          "end": 280
         },
         "authoredSpan": {
-          "start": 512,
-          "end": 543
+          "start": 665,
+          "end": 696
         }
       },
       {
@@ -96,12 +112,12 @@
         ],
         "file": "src/App.vue",
         "ruleId": {
-          "start": 278,
-          "end": 313
+          "start": 311,
+          "end": 346
         },
         "authoredSpan": {
-          "start": 574,
-          "end": 609
+          "start": 727,
+          "end": 762
         }
       },
       {
@@ -112,12 +128,12 @@
         ],
         "file": "src/App.vue",
         "ruleId": {
-          "start": 316,
-          "end": 347
+          "start": 349,
+          "end": 380
         },
         "authoredSpan": {
-          "start": 612,
-          "end": 643
+          "start": 765,
+          "end": 796
         }
       }
     ],
@@ -126,6 +142,7 @@
       "focus-visible:[outline-offset:3px]",
       "focus:[outline:2px_solid_rgb(30,_90,_150)]",
       "hover:bg-[rgb(210,_220,_230)]",
+      "ml-[19px]",
       "p-[13px]",
       "text-[rgb(20,_30,_40)]",
       "w-[100px]"
@@ -134,15 +151,15 @@
       {
         "code": "unresolved-selector-target",
         "file": "src/App.vue",
-        "start": 612,
-        "end": 643,
+        "start": 765,
+        "end": 796,
         "message": "No exclusively supported className references were found."
       }
     ],
     "failures": []
   },
-  "source": "<template>\n  <article class=\"card hover:bg-[rgb(210,_220,_230)] p-[13px] text-[rgb(20,_30,_40)]\" data-probe=\"card\" data-identity=\"card\">Card</article>\n  <button class=\"action focus-visible:[outline-offset:3px] focus:[outline:2px_solid_rgb(30,_90,_150)]\" data-identity=\"action\">Toggle details</button>\n  <section class=\"responsive [@media_(min-width:700px)]:w-[200px] w-[100px]\" data-probe=\"responsive-layout\" data-identity=\"responsive\">Responsive</section>\n</template>\n<style scoped>\n\n\n\n\n\n\n.retained {\n  display: block;\n}\n</style>\n",
+  "source": "<script setup>\nimport { ref } from \"vue\";\n\nconst active = ref(false);\n</script>\n<template>\n  <article :class=\"['card hover:bg-[rgb(210,_220,_230)] p-[13px] text-[rgb(20,_30,_40)]', { 'active ml-[19px]': active }]\" data-probe=\"card\" data-identity=\"card\">Card</article>\n  <button class=\"action focus-visible:[outline-offset:3px] focus:[outline:2px_solid_rgb(30,_90,_150)]\" data-identity=\"action\" @focus=\"active = true\">Toggle details</button>\n  <section class=\"responsive [@media_(min-width:700px)]:w-[200px] w-[100px]\" data-probe=\"responsive-layout\" data-identity=\"responsive\">Responsive</section>\n</template>\n<style scoped>\n\n\n\n\n\n\n\n.retained {\n  display: block;\n}\n</style>\n",
   "changedFiles": {
-    "src/App.vue": "<template>\n  <article class=\"card hover:bg-[rgb(210,_220,_230)] p-[13px] text-[rgb(20,_30,_40)]\" data-probe=\"card\" data-identity=\"card\">Card</article>\n  <button class=\"action focus-visible:[outline-offset:3px] focus:[outline:2px_solid_rgb(30,_90,_150)]\" data-identity=\"action\">Toggle details</button>\n  <section class=\"responsive [@media_(min-width:700px)]:w-[200px] w-[100px]\" data-probe=\"responsive-layout\" data-identity=\"responsive\">Responsive</section>\n</template>\n<style scoped>\n\n\n\n\n\n\n.retained {\n  display: block;\n}\n</style>\n"
+    "src/App.vue": "<script setup>\nimport { ref } from \"vue\";\n\nconst active = ref(false);\n</script>\n<template>\n  <article :class=\"['card hover:bg-[rgb(210,_220,_230)] p-[13px] text-[rgb(20,_30,_40)]', { 'active ml-[19px]': active }]\" data-probe=\"card\" data-identity=\"card\">Card</article>\n  <button class=\"action focus-visible:[outline-offset:3px] focus:[outline:2px_solid_rgb(30,_90,_150)]\" data-identity=\"action\" @focus=\"active = true\">Toggle details</button>\n  <section class=\"responsive [@media_(min-width:700px)]:w-[200px] w-[100px]\" data-probe=\"responsive-layout\" data-identity=\"responsive\">Responsive</section>\n</template>\n<style scoped>\n\n\n\n\n\n\n\n.retained {\n  display: block;\n}\n</style>\n"
   }
 }

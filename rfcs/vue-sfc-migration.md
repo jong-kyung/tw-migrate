@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (Phases 1–2 implemented)
+Accepted (Phases 1–3 implemented)
 
 ## Summary
 
@@ -11,10 +11,10 @@ consumed by JS/TS JSX and static HTML. This RFC extends the pipeline to Vue 3
 single-file components (`.vue`), where one file is both a stylesheet source
 (`<style>` blocks) and a consumer (`<template>` class usage).
 
-Support ships in staged phases. Phases 1–2 cover literal `class` attributes,
-inline scoped CSS/SCSS/Sass/Less, static external stylesheet edges, and direct
-`<script setup>` component relationships. Later phases add literal `:class`
-bindings and `<style module>`/`$style`.
+Support ships in staged phases. Phases 1–3 cover literal `class` attributes,
+expression-local literal `:class` bindings, inline scoped CSS/SCSS/Sass/Less,
+static external stylesheet edges, and direct `<script setup>` component
+relationships. A later phase adds `<style module>`/`$style`.
 
 SFC parsing uses the official `@vue/compiler-sfc`, resolved from the target
 project like Sass and Less. The unofficial Rust toolchain `vize` was evaluated
@@ -55,7 +55,7 @@ if vize reaches a stable release or official adoption.
 5. Migrating `<style>` blocks without `scoped` in Phase 1; they are global CSS
    and require cross-file proof.
 6. Runtime component-tree analysis or evaluation of dynamic `:class`
-   expressions beyond the literal forms scheduled for Phase 3.
+   expressions beyond the expression-local literal forms supported in Phase 3.
 7. In-DOM templates, render functions, JSX-in-Vue, or `template` options in
    plain JS files.
 8. Editing compiled SFC output; all edits target authored `.vue` bytes.
@@ -198,8 +198,14 @@ the rule to retain-with-append or retain-only:
    Phase 1. Literal class attributes beside a dynamic binding remain proven
    sites and still receive appended utilities. Runtime class mutation through
    scripts, event handlers, refs, or custom directives is outside the supported
-   scope, matching the React/JSX path. Phase 3 narrows dynamic bindings to
-   literal object/array forms.
+   scope, matching the React/JSX path. Phase 3 proves expression-local string
+   and static template literals, object keys and shorthand, nested arrays and
+   objects, conditional branches, `&&`, statically enumerable computed string
+   keys, and inline literal spreads. Proven spans migrate independently, while
+   an opaque fragment retains only rules whose selector can reach its element.
+   Class-producing script variables and helper calls, dynamic template
+   interpolation, string concatenation, and numeric computed keys remain
+   opaque.
 4. **Escape hatches.** Rules containing `:deep()`, `:global()`, `>>>`,
    `/deep/`, or declarations using `v-bind()` have no utility representation
    and retain through the existing selector/declaration support codes
@@ -303,13 +309,15 @@ mirroring a missing Sass compiler.
 - Add cross-file caller analysis to close the root-fallthrough surface and to
   admit unscoped block migration where project-wide usage is proven.
 
-### Phase 3: Literal `:class` Bindings
+### Phase 3: Literal `:class` Bindings (implemented)
 
-- Prove object literal (`:class="{ btn: cond }"`) and array literal forms,
-  parsing embedded expressions with the existing oxc path at corrected
-  offsets.
-- Narrow the dynamic-binding retention from template-wide to element-wise for
-  proven literal forms.
+- Prove expression-local string/static-template, object, nested array,
+  conditional, `&&`, computed-string-key, and inline literal spread forms with
+  OXC at corrected authored offsets.
+- Rewrite host and component call-site literals without changing their
+  conditions, preserving authored quote style and untouched bytes.
+- Narrow opaque retention to selector-reachable rules per element while still
+  appending utilities to independently proven sibling spans.
 
 ### Phase 4: CSS Modules (`<style module>` / `$style`)
 
@@ -370,7 +378,9 @@ phases.
 1. Cross-file closure recognizes direct local component imports from
    `<script setup>`. Normal-script registration, aliases outside that graph,
    publishable package roots, and components without known callers retain.
-2. Any dynamic class binding retains all scoped class rules until Phase 3.
+2. Opaque Phase 3 class fragments retain selector-reachable scoped rules;
+   class-producing script variables/helper calls, dynamic template
+   interpolation or concatenation, and numeric computed keys are not followed.
 3. Inline preprocessors rely on source maps from the target project's
    compiler; ambiguous or dependency-owned rule origins retain. Build-tool
    preprocessor injection (Vite `additionalData`, webpack loader options) is
