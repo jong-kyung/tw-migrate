@@ -284,12 +284,16 @@ and a second run produces no diff.
   attribute; the module is retained instead. A direct member that names a
   class no module rule defines retains the whole module: deleting sibling
   rules could empty the block and drop the runtime `$style` injection the
-  remaining access depends on. The module entry plans before the scoped
-  entry, and a binding that survives module planning (a retained module
-  rule, a preserved sibling, or a retained module) is an opaque cascade
-  surface for scoped planning — scoped rules matching that element retain
-  with `shadowed-scoped-rule`, because the retained module rule competes
-  unlayered with a replacement utility.
+  remaining access depends on. A rule whose class shares a binding with a
+  retained sibling (compile failure, batch conflict) also retains — the
+  retained rule stays unlayered on the same element, so converting the
+  sibling would flip the cascade. The same gate covers a resolved caller's
+  fallthrough classes: they land on the module-bound child root, so package
+  CSS targeting them retains the module rule. The module entry plans before
+  the scoped entry, and a binding that survives module planning is an opaque
+  cascade surface for scoped planning — scoped rules matching that element
+  retain with `shadowed-scoped-rule`, because the retained module rule
+  competes unlayered with a replacement utility.
 - `<style src="…">` contributes a stylesheet consumer edge; module `src`
   forms retain.
 - `<script>` contents and languages do not participate in template closure.

@@ -1558,18 +1558,20 @@ test("a module compile failure never blocks the sibling scoped entry", async () 
 
 test("a blocked sibling rule keeps the shared $style binding alive", async () => {
   const cwd = await fixture();
-  // The second rule fails Tailwind candidate compilation, so the first may
-  // convert only by appending utilities next to the preserved binding.
+  // The second rule fails Tailwind candidate compilation; the retained rule
+  // stays unlayered, so converting the sibling would flip the cascade -- the
+  // whole class retains and the binding survives untouched.
   const vue =
     '<template>\n  <p :class="$style.card">A</p>\n  <p class="etc">B</p>\n</template>\n<style module>\n.card { padding: 13px; }\n.card { COLOR: red; }\n</style>\n';
   try {
     await writeFile(join(cwd, "Blocked.vue"), vue);
-    await migrate({ cwd, styleFile: "Blocked.vue", write: true });
-    const output = await readFile(join(cwd, "Blocked.vue"), "utf8");
-    assert.match(output, /class="p-\[13px\]" :class="\$style\.card"/);
-    assert.match(output, /\.card \{ COLOR: red; \}/);
-    const second = await migrate({ cwd, styleFile: "Blocked.vue", write: true });
-    assert.deepEqual(second.changedFiles, []);
+    const report = await migrate({ cwd, styleFile: "Blocked.vue", write: true });
+    assert.deepEqual(report.changedFiles, []);
+    assert.ok(
+      report.rules.every((rule) => rule.selector === ".card" && rule.status === "retained"),
+    );
+    assert.ok(report.warnings.some((entry) => entry.code === "candidate-compilation-failure"));
+    assert.match(await readFile(join(cwd, "Blocked.vue"), "utf8"), /:class="\$style\.card"/);
   } finally {
     await cleanup(cwd);
   }
@@ -1661,6 +1663,42 @@ test("a $style member without a module rule retains the whole module", async () 
       ),
     );
     assert.match(await readFile(join(cwd, "Missing.vue"), "utf8"), /<style module>/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("caller classes on a module-bound child root join the cascade gate", async () => {
+  const cwd = await fixture();
+  const child =
+    '<template>\n  <p :class="$style.card">Child root</p>\n</template>\n<style module>\n.card { padding: 13px; }\n</style>\n';
+  const parent =
+    '<template>\n  <Child class="danger" />\n  <main>App</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n';
+  const clean =
+    '<template>\n  <p :class="$style.pad">Plain root</p>\n</template>\n<style module>\n.pad { margin: 7px; }\n</style>\n';
+  const cleanParent =
+    '<template>\n  <Clean class="plain" />\n  <main>App2</main>\n</template>\n<script setup>\nimport Clean from "./Clean.vue";\n</script>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Child.vue"), child),
+      writeFile(join(cwd, "Parent.vue"), parent),
+      writeFile(join(cwd, "Clean.vue"), clean),
+      writeFile(join(cwd, "CleanParent.vue"), cleanParent),
+      writeFile(join(cwd, "extra.css"), ".danger { padding: 20px; }\n"),
+    ]);
+    const report = await migrate({ cwd });
+    const status = new Map(
+      report.rules.map((rule) => [`${rule.file}:${rule.selector}`, rule.status]),
+    );
+    // `.danger` competes with the module rule on the fallthrough root, so it
+    // retains; the sibling component without a competing corpus rule converts.
+    assert.equal(status.get("Child.vue:.card"), "retained");
+    assert.equal(status.get("Clean.vue:.pad"), "converted");
+    assert.ok(
+      report.warnings.some(
+        (entry) => entry.code === "shadowed-scoped-rule" && entry.file === "Child.vue",
+      ),
+    );
   } finally {
     await cleanup(cwd);
   }

@@ -262,7 +262,6 @@ pub(crate) fn plan_vue_module_file(
     file: &SourceFile,
     css_path: &str,
     candidates: &HashMap<SelectorKey, Vec<String>>,
-    preserved_module_classes: &BTreeSet<String>,
     module_rule_classes: Option<&BTreeSet<String>>,
     utility_prefix: Option<&str>,
 ) -> SourcePlan {
@@ -284,13 +283,15 @@ pub(crate) fn plan_vue_module_file(
         let unresolved = file
             .html_elements
             .iter()
-            .filter(|element| element_has_module_context(element, css_path))
+            .filter(|element| {
+                element_has_module_context(element, css_path) && !is_shadow_only(element)
+            })
             .filter_map(|element| element.module_binding.as_ref())
             .any(|binding| !rule_classes.contains(&binding.name));
         if unresolved {
             let mut plan = empty_plan();
             for element in &file.html_elements {
-                if !element_has_module_context(element, css_path) {
+                if !element_has_module_context(element, css_path) || is_shadow_only(element) {
                     continue;
                 }
                 let Some(binding) = &element.module_binding else {
@@ -322,7 +323,7 @@ pub(crate) fn plan_vue_module_file(
     let mut matched_module_refs = HashMap::new();
     let mut warnings = Vec::new();
     for element in &file.html_elements {
-        if !element_has_module_context(element, css_path) {
+        if !element_has_module_context(element, css_path) || is_shadow_only(element) {
             continue;
         }
         let Some(binding) = &element.module_binding else {
@@ -335,10 +336,6 @@ pub(crate) fn plan_vue_module_file(
         if !candidates.contains_key(&key) {
             continue;
         }
-        // A retained sibling rule (compile failure, batch conflict) still
-        // matches through this binding at runtime, so the binding must stay;
-        // utilities are appended alongside it, mirroring the JS path.
-        let preserved = preserved_module_classes.contains(&binding.name);
         let Some(binding_span) = rebase_span(binding.start, binding.end, &file.prior_edits)
         else {
             continue;
@@ -387,13 +384,11 @@ pub(crate) fn plan_vue_module_file(
                         replacement,
                     });
                 }
-                if !preserved {
-                    edits.push(Edit {
-                        start: binding_span.0,
-                        end: binding_span.1,
-                        replacement: String::new(),
-                    });
-                }
+                edits.push(Edit {
+                    start: binding_span.0,
+                    end: binding_span.1,
+                    replacement: String::new(),
+                });
                 (class_attribute.start, class_attribute.end)
             }
             None => {
@@ -409,14 +404,10 @@ pub(crate) fn plan_vue_module_file(
                     continue;
                 }
                 // The removal span starts at the attribute's leading
-                // whitespace, so the rewritten attribute restores it. A
-                // preserved binding is kept: the attribute is inserted in
-                // front of it instead (a later run merges through the then-
-                // literal class attribute).
-                let end = if preserved { binding_span.0 } else { binding_span.1 };
+                // whitespace, so the rewritten attribute restores it.
                 edits.push(Edit {
                     start: binding_span.0,
-                    end,
+                    end: binding_span.1,
                     replacement: format!(" class=\"{}\"", additions.join(" ")),
                 });
                 (binding_span.0, binding_span.1)
@@ -477,6 +468,16 @@ pub(crate) fn plan_vue_module_file(
 /// when an earlier entry edited inside it.
 fn element_has_module_context(element: &crate::planner::HtmlElement, css_path: &str) -> bool {
     element.css_paths.is_empty() || element.css_paths.iter().any(|path| path == css_path)
+}
+
+/// An effective child-root shadow record mirrors a binding that is counted
+/// on its own element; it exists only so cascade checks can see the caller's
+/// merged classes, marked by its read-only class attribute.
+fn is_shadow_only(element: &crate::planner::HtmlElement) -> bool {
+    element
+        .class_attribute
+        .as_ref()
+        .is_some_and(|attribute| !attribute.writable)
 }
 
 pub(crate) fn rebase_span(

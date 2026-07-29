@@ -1294,7 +1294,14 @@ async function preparePackageVue({
       ) {
         addElement(parent.path, edge.site, [edge.child]);
         if (childRoots?.length === 1) {
-          const shadowSite = componentRootSite(edge.site, childRoots[0]);
+          // The caller's classes land on the child root, so module planning
+          // must see them next to the root's binding; the read-only class
+          // attribute marks the record as shadow-only (never rewritten, never
+          // counted as a reference).
+          const shadowSite = {
+            ...componentRootSite(edge.site, childRoots[0]),
+            moduleBinding: childRoots[0].moduleBinding,
+          };
           if (shadowSite.classAttribute) {
             shadowSite.classAttribute = { ...shadowSite.classAttribute, writable: false };
             addElement(parent.path, shadowSite, [edge.child]);

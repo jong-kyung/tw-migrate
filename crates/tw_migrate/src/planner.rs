@@ -270,6 +270,13 @@ fn stamp_in_file_shadow(
                             || element_ids(element)
                                 .iter()
                                 .any(|id| retained.ids.contains(*id))
+                            // A module site carries its retained sibling's
+                            // hashed class through the binding, not through
+                            // a literal class.
+                            || (vue_module
+                                && element.module_binding.as_ref().is_some_and(|binding| {
+                                    retained.classes.contains(binding.name.as_str())
+                                }))
                     })
                 });
             if shadowed {
@@ -828,7 +835,6 @@ fn plan_consumer_file(
                 file,
                 css_path,
                 candidates,
-                preserved_module_classes,
                 module_rule_classes,
                 utility_prefix,
             ));
