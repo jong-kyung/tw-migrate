@@ -8,6 +8,7 @@ mod jsx_graph;
 mod planner;
 mod theme;
 mod utilities;
+mod vue_class;
 
 use napi_derive::napi;
 use serde::Serialize;
@@ -62,6 +63,14 @@ pub fn static_import_bindings(
     source: String,
 ) -> napi::Result<Vec<js_rewrite::StaticImportBinding>> {
     js_rewrite::static_import_bindings(&path, &source).map_err(napi::Error::from_reason)
+}
+
+#[napi]
+pub fn analyze_vue_class_expression(
+    path: String,
+    source: String,
+) -> napi::Result<vue_class::VueClassExpression> {
+    vue_class::analyze_vue_class_expression(&path, &source).map_err(napi::Error::from_reason)
 }
 
 const RECOVERABLE_INPUT_ERROR: &str = "TW_MIGRATE_RECOVERABLE_INPUT:";
