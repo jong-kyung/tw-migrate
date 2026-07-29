@@ -1417,12 +1417,12 @@ test("scoped and module blocks migrate together in either order", async () => {
     await migrate({ cwd, write: true });
     assert.match(
       await readFile(join(cwd, "AMixed.vue"), "utf8"),
-      /class="card p-\[13px\] m-\[3px\]">A/,
+      /class="card m-\[3px\] p-\[13px\]">A/,
     );
     assert.doesNotMatch(await readFile(join(cwd, "AMixed.vue"), "utf8"), /<style/);
     assert.match(
       await readFile(join(cwd, "ZMixed.vue"), "utf8"),
-      /class="tone text-\[red\] p-\[5px\]">A/,
+      /class="tone p-\[5px\] text-\[red\]">A/,
     );
     assert.doesNotMatch(await readFile(join(cwd, "ZMixed.vue"), "utf8"), /<style/);
   } finally {
@@ -1543,7 +1543,7 @@ test("a module compile failure never blocks the sibling scoped entry", async () 
   // Both rules occupy the same block-local span, so path-level attribution
   // would block the healthy scoped rule too.
   const vue =
-    '<template>\n  <p class="a" :class="$style.bb">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.a { margin: 7px; }\n</style>\n<style module>\n.bb { COLOR: red; }\n</style>\n';
+    '<template>\n  <p class="a">A</p>\n  <p :class="$style.bb">B</p>\n</template>\n<style scoped>\n.a { margin: 7px; }\n</style>\n<style module>\n.bb { COLOR: red; }\n</style>\n';
   try {
     await writeFile(join(cwd, "Split.vue"), vue);
     const report = await migrate({ cwd, styleFile: "Split.vue" });
@@ -1603,6 +1603,64 @@ test("an unsupported module sibling block retains the whole $style module", asyn
     assert.ok(report.warnings.some((entry) => entry.code === "preprocessor-style-block"));
     assert.ok(report.warnings.some((entry) => entry.code === "unsupported-css-module-reference"));
     assert.match(await readFile(join(cwd, "Sibling.vue"), "utf8"), /\$style\.card/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a surviving $style binding shadows scoped rules on its element", async () => {
+  const cwd = await fixture();
+  // The retained module rule competes unlayered with a replacement utility,
+  // so the scoped rule on the shared element must retain; other elements
+  // keep converting.
+  const vue =
+    '<template>\n  <p class="card" :class="$style.mod">A</p>\n  <p class="free">B</p>\n</template>\n<script setup>\nconst c = "blue";\n</script>\n<style scoped>\n.card { color: red; }\n.free { margin: 3px; }\n</style>\n<style module>\n.mod { color: v-bind(c); }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Shared.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Shared.vue" });
+    const status = new Map(report.rules.map((rule) => [rule.selector, rule.status]));
+    assert.equal(status.get(".card"), "retained");
+    assert.equal(status.get(".free"), "converted");
+    assert.equal(status.get(".mod"), "retained");
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a retained module keeps co-located scoped rules retained", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card" :class="$style.mod">A</p>\n  <p class="etc">B</p>\n</template>\n<script setup>\nimport { useCssModule } from "vue";\nconst s = useCssModule();\nvoid s;\n</script>\n<style scoped>\n.card { color: red; }\n</style>\n<style module>\n.mod { color: blue; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Closure.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Closure.vue", write: true });
+    assert.deepEqual(report.changedFiles, []);
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.ok(report.warnings.some((entry) => entry.code === "unsupported-css-module-reference"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a $style member without a module rule retains the whole module", async () => {
+  const cwd = await fixture();
+  // Deleting the only rule would empty the block, drop the runtime `$style`
+  // injection, and crash the remaining member access.
+  const vue =
+    '<template>\n  <p :class="$style.card">A</p>\n  <p :class="$style.missing">B</p>\n</template>\n<style module>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Missing.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Missing.vue", write: true });
+    assert.deepEqual(report.changedFiles, []);
+    assert.ok(
+      report.warnings.some(
+        (entry) =>
+          entry.code === "unsupported-css-module-reference" &&
+          entry.message.includes("$style.missing"),
+      ),
+    );
+    assert.match(await readFile(join(cwd, "Missing.vue"), "utf8"), /<style module>/);
   } finally {
     await cleanup(cwd);
   }

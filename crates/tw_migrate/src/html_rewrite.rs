@@ -263,6 +263,7 @@ pub(crate) fn plan_vue_module_file(
     css_path: &str,
     candidates: &HashMap<SelectorKey, Vec<String>>,
     preserved_module_classes: &BTreeSet<String>,
+    module_rule_classes: Option<&BTreeSet<String>>,
     utility_prefix: Option<&str>,
 ) -> SourcePlan {
     let contexts = file
@@ -274,6 +275,45 @@ pub(crate) fn plan_vue_module_file(
         return empty_plan();
     }
 
+    // A direct member naming a class no module rule defines still needs the
+    // runtime `$style` injection, which only survives while the block itself
+    // has content; converting sibling rules could empty the block, drop the
+    // injection, and turn the remaining access into a render error. Retain
+    // the whole module instead.
+    if let Some(rule_classes) = module_rule_classes {
+        let unresolved = file
+            .html_elements
+            .iter()
+            .filter(|element| element_has_module_context(element, css_path))
+            .filter_map(|element| element.module_binding.as_ref())
+            .any(|binding| !rule_classes.contains(&binding.name));
+        if unresolved {
+            let mut plan = empty_plan();
+            for element in &file.html_elements {
+                if !element_has_module_context(element, css_path) {
+                    continue;
+                }
+                let Some(binding) = &element.module_binding else {
+                    continue;
+                };
+                *plan.module_refs.entry(binding.name.clone()).or_default() += 1;
+                if !rule_classes.contains(&binding.name) {
+                    plan.warnings.push(Warning {
+                        code: "unsupported-css-module-reference",
+                        file: file.path.clone(),
+                        start: binding.start,
+                        end: binding.end,
+                        message: format!(
+                            "`$style.{}` names a class the module does not define, so the module is retained.",
+                            binding.name
+                        ),
+                    });
+                }
+            }
+            return plan;
+        }
+    }
+
     let live_attributes = rebased_attributes(file);
     let mut edits = Vec::new();
     let mut emitted = BTreeSet::new();
@@ -282,19 +322,19 @@ pub(crate) fn plan_vue_module_file(
     let mut matched_module_refs = HashMap::new();
     let mut warnings = Vec::new();
     for element in &file.html_elements {
-        if !element.css_paths.is_empty()
-            && !element.css_paths.iter().any(|path| path == css_path)
-        {
+        if !element_has_module_context(element, css_path) {
             continue;
         }
         let Some(binding) = &element.module_binding else {
             continue;
         };
+        // Every proven binding is a module reference, matched or not; the
+        // deletion machinery must see unmatched ones.
+        *module_refs.entry(binding.name.clone()).or_default() += 1;
         let key = SelectorKey::Class(binding.name.clone());
         if !candidates.contains_key(&key) {
             continue;
         }
-        *module_refs.entry(binding.name.clone()).or_default() += 1;
         // A retained sibling rule (compile failure, batch conflict) still
         // matches through this binding at runtime, so the binding must stay;
         // utilities are appended alongside it, mirroring the JS path.
@@ -435,7 +475,15 @@ pub(crate) fn plan_vue_module_file(
 
 /// Rebase an arbitrary span through the prior sequential edit rounds; `None`
 /// when an earlier entry edited inside it.
-fn rebase_span(start: usize, end: usize, prior_edits: &[Vec<Edit>]) -> Option<(usize, usize)> {
+fn element_has_module_context(element: &crate::planner::HtmlElement, css_path: &str) -> bool {
+    element.css_paths.is_empty() || element.css_paths.iter().any(|path| path == css_path)
+}
+
+pub(crate) fn rebase_span(
+    start: usize,
+    end: usize,
+    prior_edits: &[Vec<Edit>],
+) -> Option<(usize, usize)> {
     let mut span = HtmlAttribute {
         value: String::new(),
         start,

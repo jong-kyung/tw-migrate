@@ -17,6 +17,7 @@ use crate::{
     },
     html_rewrite::{
         candidates_fit_attribute, empty_source_plan, plan_html_file, plan_vue_module_file,
+        rebase_span,
     },
     js_rewrite::{
         SourcePlan, opaque_reference_plan, plan_batch_source_file, plan_source_file, validate_js,
@@ -797,12 +798,14 @@ struct BatchMatch {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn plan_consumer_file(
     file: &SourceFile,
     css_path: &str,
     is_module: bool,
     candidates: &HashMap<SelectorKey, Vec<String>>,
     preserved_module_classes: &BTreeSet<String>,
+    module_rule_classes: Option<&BTreeSet<String>>,
     utility_prefix: Option<&str>,
     batch_mode: bool,
     vue_unscoped: bool,
@@ -826,6 +829,7 @@ fn plan_consumer_file(
                 css_path,
                 candidates,
                 preserved_module_classes,
+                module_rule_classes,
                 utility_prefix,
             ));
         }
@@ -910,6 +914,9 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
                     .unwrap_or_else(|| is_stylesheet_module(&stylesheet.css_path)),
                 &candidate_maps.candidates,
                 &BTreeSet::new(),
+                // The conflict pass must keep collecting matches; the main
+                // pass applies the unresolved-member retention itself.
+                None,
                 request.utility_prefix.as_deref(),
                 true,
                 stylesheet.vue_unscoped,
@@ -1236,6 +1243,29 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
                             || element_ids(element)
                                 .iter()
                                 .any(|id| shadow.ids.contains(*id))
+                            // A module binding the module entry (planned
+                            // first) did not replace stays live: its hashed
+                            // class lands on this site at runtime and the
+                            // retained module rule is an unlayered
+                            // competitor the shadow index cannot name. An
+                            // exact replacement rebases in place, so check
+                            // the current text; a span an edit only touched
+                            // (preserved-binding insertion) rebases to None
+                            // and counts as live conservatively.
+                            || (!request.vue_module
+                                && element.module_binding.as_ref().is_some_and(|binding| {
+                                    match rebase_span(
+                                        binding.start,
+                                        binding.end,
+                                        &file.prior_edits,
+                                    ) {
+                                        None => true,
+                                        Some((start, end)) => file
+                                            .source
+                                            .get(start..end)
+                                            .is_some_and(|text| text.contains("$style")),
+                                    }
+                                }))
                         },
                     )
                 });
@@ -1739,6 +1769,12 @@ fn plan_request(
         }
     }
 
+    let module_rule_classes = request.vue_module.then(|| {
+        rules
+            .iter()
+            .flat_map(|rule| rule.related_classes.iter().cloned())
+            .collect::<BTreeSet<_>>()
+    });
     for file in &request.files {
         let mut result = plan_consumer_file(
             file,
@@ -1746,6 +1782,7 @@ fn plan_request(
             is_module,
             &candidate_map,
             &preserved_module_classes,
+            module_rule_classes.as_ref(),
             request.utility_prefix.as_deref(),
             batch_mode,
             request.vue_unscoped,

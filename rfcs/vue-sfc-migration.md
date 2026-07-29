@@ -281,7 +281,15 @@ and a second run produces no diff.
   never carry the hashed class, because a `$style` binding on a component tag
   is already an opaque surface.) A binding whose element carries an
   uneditable literal `class` attribute is never rewritten into a duplicate
-  attribute; the module is retained instead.
+  attribute; the module is retained instead. A direct member that names a
+  class no module rule defines retains the whole module: deleting sibling
+  rules could empty the block and drop the runtime `$style` injection the
+  remaining access depends on. The module entry plans before the scoped
+  entry, and a binding that survives module planning (a retained module
+  rule, a preserved sibling, or a retained module) is an opaque cascade
+  surface for scoped planning — scoped rules matching that element retain
+  with `shadowed-scoped-rule`, because the retained module rule competes
+  unlayered with a replacement utility.
 - `<style src="…">` contributes a stylesheet consumer edge; module `src`
   forms retain.
 - `<script>` contents and languages do not participate in template closure.

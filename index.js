@@ -1420,6 +1420,26 @@ async function preparePackageVue({
           (!entry.scoped && !(migrateUnscoped && entry.migratingUnscoped)),
       )
       .map((entry) => entry.source);
+    if (migrateModule) {
+      // Module classes are hashed, so this entry is always a closed world;
+      // its own block text remains in the module shadow channel, which can
+      // only over-retain. It plans before the scoped entry so scoped
+      // planning can see which `$style` bindings survived: a live binding
+      // is an opaque cascade surface (its retained module rule competes
+      // unlayered with a replacement utility).
+      stylesheets.push({
+        cssPath: file.path,
+        cssSource: file.source,
+        cssModuleId: normalizedRelativePath(packageRoot, file.path),
+        syntax: "css",
+        isModule: true,
+        vueBlocks: analysis.moduleBlocks,
+        vueModule: true,
+        vueShadowCss: shadowCss,
+        vueShadowModuleCss,
+        vueShadowUnverifiable,
+      });
+    }
     if (vueBlocks.length > 0) {
       stylesheets.push({
         cssPath: file.path,
@@ -1433,23 +1453,6 @@ async function preparePackageVue({
         vueShadowCss: vueRetention ? undefined : shadowCss,
         vueShadowModuleCss: vueRetention ? undefined : vueShadowModuleCss,
         vueShadowUnverifiable: vueRetention ? undefined : vueShadowUnverifiable,
-      });
-    }
-    if (migrateModule) {
-      // Module classes are hashed, so this entry is always a closed world;
-      // its own block text remains in the module shadow channel, which can
-      // only over-retain.
-      stylesheets.push({
-        cssPath: file.path,
-        cssSource: file.source,
-        cssModuleId: normalizedRelativePath(packageRoot, file.path),
-        syntax: "css",
-        isModule: true,
-        vueBlocks: analysis.moduleBlocks,
-        vueModule: true,
-        vueShadowCss: shadowCss,
-        vueShadowModuleCss,
-        vueShadowUnverifiable,
       });
     }
   }

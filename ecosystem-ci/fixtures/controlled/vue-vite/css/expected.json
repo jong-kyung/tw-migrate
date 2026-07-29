@@ -8,6 +8,23 @@
   "retainedRules": 1,
   "rules": [
    {
+    "selector": ".panel",
+    "status": "converted",
+    "candidates": [
+     "[border-left:4px_solid_rgb(60,_120,_60)]",
+     "m-[6px]"
+    ],
+    "file": "src/App.vue",
+    "ruleId": {
+     "start": 1,
+     "end": 69
+    },
+    "authoredSpan": {
+     "start": 761,
+     "end": 829
+    }
+   },
+   {
     "selector": ".card",
     "status": "converted",
     "candidates": [
@@ -118,23 +135,6 @@
     "authoredSpan": {
      "start": 705,
      "end": 736
-    }
-   },
-   {
-    "selector": ".panel",
-    "status": "converted",
-    "candidates": [
-     "[border-left:4px_solid_rgb(60,_120,_60)]",
-     "m-[6px]"
-    ],
-    "file": "src/App.vue",
-    "ruleId": {
-     "start": 1,
-     "end": 69
-    },
-    "authoredSpan": {
-     "start": 761,
-     "end": 829
     }
    }
   ],
