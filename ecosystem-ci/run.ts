@@ -452,13 +452,13 @@ export function runHarness(
 }
 
 function executeVitest(args: string[]): void {
-  const pnpm = platformCommand("pnpm");
-  const result = spawnSync(pnpm, ["exec", "vitest", ...args], {
-    shell: pnpm.endsWith(".cmd"),
+  const vp = platformCommand("vp");
+  const result = spawnSync(vp, ["test", ...args], {
+    shell: vp.endsWith(".cmd"),
     stdio: "inherit",
   });
   if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`Vitest exited with status ${result.status}`);
+  if (result.status !== 0) throw new Error(`Vite+ test exited with status ${result.status}`);
 }
 
 async function withLocalPackageArtifacts<T>(operation: () => T | Promise<T>): Promise<T> {
