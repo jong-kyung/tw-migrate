@@ -1590,6 +1590,24 @@ test("module conflict warnings anchor to authored bytes after scoped edits", asy
   }
 });
 
+test("an unsupported module sibling block retains the whole $style module", async () => {
+  const cwd = await fixture();
+  // Both unnamed blocks feed the same `$style` object, so deleting the
+  // supported rule's binding would orphan the retained sibling's class.
+  const vue =
+    '<template>\n  <p :class="$style.card">A</p>\n  <p class="etc">B</p>\n</template>\n<style module>\n.card { padding: 13px; }\n</style>\n<style module lang="postcss">\n.card { color: red; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Sibling.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Sibling.vue", write: true });
+    assert.deepEqual(report.changedFiles, []);
+    assert.ok(report.warnings.some((entry) => entry.code === "preprocessor-style-block"));
+    assert.ok(report.warnings.some((entry) => entry.code === "unsupported-css-module-reference"));
+    assert.match(await readFile(join(cwd, "Sibling.vue"), "utf8"), /\$style\.card/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("checks effective child roots when retaining child scoped rules", async () => {
   const cwd = await fixture();
   try {

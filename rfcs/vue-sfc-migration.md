@@ -267,7 +267,9 @@ and a second run produces no diff.
   merged into) a static `class` attribute and the emptied block is removed.
   Any other `$style` or `useCssModule` appearance — template expressions,
   interpolations, dynamic directive arguments, script text, or an unreadable
-  script — retains the whole module with `unsupported-css-module-reference`.
+  script — retains the whole module with `unsupported-css-module-reference`,
+  as does an unsupported unnamed module sibling block (every unnamed
+  `<style module>` feeds the same `$style` object).
   Named modules (`<style module="cls">`) retain with `unsupported-sfc-block`.
   Module class and id names are localized at build time, so cascade-shadow
   checks apply only to their global (type/attribute/`:global`) selector

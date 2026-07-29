@@ -97,6 +97,7 @@ export function analyzeVueSource(compiler, path, source) {
   const shadowPreprocessorTexts = [];
   const unscopedShadowPreprocessorTexts = [];
   let escapeUnverifiable = false;
+  let moduleSiblingUnsupported = false;
   for (const style of descriptor.styles) {
     const start = style.loc.start.offset;
     const end = style.loc.end.offset;
@@ -130,6 +131,10 @@ export function analyzeVueSource(compiler, path, source) {
       continue;
     }
     if (!SUPPORTED_STYLE_LANGUAGES.has(style.lang)) {
+      // Every unnamed module block feeds the same `$style` object, so an
+      // unsupported sibling supplies classes the closure cannot see; the
+      // whole module must retain.
+      if (style.module === true) moduleSiblingUnsupported = true;
       warn(
         "preprocessor-style-block",
         start,
@@ -296,6 +301,7 @@ export function analyzeVueSource(compiler, path, source) {
     // interpolation, or script text) makes the module's consumers
     // unprovable.
     moduleClosureBroken:
+      moduleSiblingUnsupported ||
       // An unreadable script could reference `$style` invisibly.
       scriptImportsUnverifiable ||
       /\$style|useCssModule/.test([...state.expressionTexts, scriptText].join("\n")),
