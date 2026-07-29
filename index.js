@@ -1083,7 +1083,9 @@ async function preparePackageVue({
   };
   for (const file of selected) {
     const analysis = analyses.get(file.path);
-    if (!analysis.retained) await compileBlocks(file, analysis.blocks);
+    if (!analysis.retained) {
+      await compileBlocks(file, [...analysis.blocks, ...analysis.moduleBlocks]);
+    }
   }
   const vueGraph = buildVueComponentGraph(ownedVue, sourceFiles, analyses, {
     styleSources,
@@ -1157,7 +1159,10 @@ async function preparePackageVue({
         scoped: true,
       })),
     );
-    vueShadowModuleCss.push(...analysis.shadowModuleCssTexts);
+    vueShadowModuleCss.push(
+      ...analysis.shadowModuleCssTexts,
+      ...analysis.moduleBlocks.map((block) => block.analysisSource ?? block.content),
+    );
   }
 
   const packageIsPrivate =
@@ -1187,7 +1192,7 @@ async function preparePackageVue({
     ownedVue.every((file) => !analyses.get(file.path).retained);
   const elementsByFile = new Map();
   const addElement = (path, element, cssPaths) => {
-    if (!element.classAttribute || cssPaths.length === 0) return;
+    if ((!element.classAttribute && !element.moduleBinding) || cssPaths.length === 0) return;
     const elements = elementsByFile.get(path) ?? [];
     elements.push({ ...element, cssPaths: [...new Set(cssPaths)] });
     elementsByFile.set(path, elements);
@@ -1233,7 +1238,11 @@ async function preparePackageVue({
       }
     }
     const ownContexts = [
-      ...(analysis.blocks.length > 0 || analysis.unscopedBlocks.length > 0 ? [file.path] : []),
+      ...(analysis.blocks.length > 0 ||
+      analysis.unscopedBlocks.length > 0 ||
+      (analysis.moduleBlocks.length > 0 && !analysis.moduleClosureBroken)
+        ? [file.path]
+        : []),
       ...[...importedStyles].filter((path) => !isStylesheetModule(path)),
     ];
     for (const element of analysis.htmlElements) {
@@ -1352,8 +1361,22 @@ async function preparePackageVue({
         });
       }
     }
+    const migrateModule = analysis.moduleBlocks.length > 0 && !analysis.moduleClosureBroken;
+    if (analysis.moduleBlocks.length > 0 && analysis.moduleClosureBroken) {
+      for (const block of analysis.moduleBlocks) {
+        warnings.push({
+          code: "unsupported-css-module-reference",
+          file: file.path,
+          start: block.contentStart,
+          end: block.contentEnd,
+          message:
+            "`$style` is referenced outside provable direct member accesses, so the module is retained.",
+        });
+      }
+    }
+    if (migrateModule) await compileBlocks(file, analysis.moduleBlocks);
     const vueBlocks = migrateUnscoped ? analysis.unscopedBlocks : analysis.blocks;
-    if (vueBlocks.length === 0) continue;
+    if (vueBlocks.length === 0 && !migrateModule) continue;
     const vueRetention = migrateUnscoped ? undefined : retention;
     const shadowCss = vueShadowCss
       .filter(
@@ -1362,19 +1385,38 @@ async function preparePackageVue({
           (!entry.scoped && !(migrateUnscoped && entry.migratingUnscoped)),
       )
       .map((entry) => entry.source);
-    stylesheets.push({
-      cssPath: file.path,
-      cssSource: file.source,
-      cssModuleId: normalizedRelativePath(packageRoot, file.path),
-      syntax: "css",
-      isModule: !vueRetention,
-      vueBlocks,
-      vueRetention,
-      vueUnscoped: migrateUnscoped,
-      vueShadowCss: vueRetention ? undefined : shadowCss,
-      vueShadowModuleCss: vueRetention ? undefined : vueShadowModuleCss,
-      vueShadowUnverifiable: vueRetention ? undefined : vueShadowUnverifiable,
-    });
+    if (vueBlocks.length > 0) {
+      stylesheets.push({
+        cssPath: file.path,
+        cssSource: file.source,
+        cssModuleId: normalizedRelativePath(packageRoot, file.path),
+        syntax: "css",
+        isModule: !vueRetention,
+        vueBlocks,
+        vueRetention,
+        vueUnscoped: migrateUnscoped,
+        vueShadowCss: vueRetention ? undefined : shadowCss,
+        vueShadowModuleCss: vueRetention ? undefined : vueShadowModuleCss,
+        vueShadowUnverifiable: vueRetention ? undefined : vueShadowUnverifiable,
+      });
+    }
+    if (migrateModule) {
+      // Module classes are hashed, so this entry is always a closed world;
+      // its own block text remains in the module shadow channel, which can
+      // only over-retain.
+      stylesheets.push({
+        cssPath: file.path,
+        cssSource: file.source,
+        cssModuleId: normalizedRelativePath(packageRoot, file.path),
+        syntax: "css",
+        isModule: true,
+        vueBlocks: analysis.moduleBlocks,
+        vueModule: true,
+        vueShadowCss: shadowCss,
+        vueShadowModuleCss,
+        vueShadowUnverifiable,
+      });
+    }
   }
 
   for (const file of ownedVue) {

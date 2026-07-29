@@ -1362,6 +1362,124 @@ test("CSS v-bind declarations retain across plain and preprocessor blocks", asyn
   }
 });
 
+test("rewrites proven $style bindings and deletes the emptied module block", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p :class="$style.card">A</p>\n  <p class="plain" :class="$style.note">B</p>\n</template>\n<style module>\n.card { padding: 13px; }\n.note { margin: 7px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    await migrate({ cwd, styleFile: "Card.vue", write: true });
+    assert.deepEqual(
+      await readFile(join(cwd, "Card.vue"), "utf8"),
+      '<template>\n  <p class="p-[13px]">A</p>\n  <p class="plain m-[7px]">B</p>\n</template>\n',
+    );
+    const second = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.deepEqual(second.changedFiles, []);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("$style outside proven member sites retains the module", async () => {
+  const cwd = await fixture();
+  const conditional =
+    '<template>\n  <p :class="$style.tone">A</p>\n  <p :class="cond ? $style.tone : \'\'">B</p>\n</template>\n<script setup>\nconst cond = true;\n</script>\n<style module>\n.tone { color: red; }\n</style>\n';
+  const scripted =
+    '<template>\n  <p :class="$style.pad">A</p>\n</template>\n<script setup>\nimport { useCssModule } from "vue";\nconst style = useCssModule();\nvoid style;\n</script>\n<style module>\n.pad { padding: 5px; }\n</style>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Conditional.vue"), conditional),
+      writeFile(join(cwd, "Scripted.vue"), scripted),
+    ]);
+    const report = await migrate({ cwd });
+    assert.equal(
+      report.warnings.filter((entry) => entry.code === "unsupported-css-module-reference").length,
+      2,
+    );
+    assert.ok(!report.changedFiles.includes("Conditional.vue"));
+    assert.ok(!report.changedFiles.includes("Scripted.vue"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("scoped and module blocks migrate together in either order", async () => {
+  const cwd = await fixture();
+  const moduleFirst =
+    '<template>\n  <p class="card" :class="$style.boxed">A</p>\n  <p class="etc">B</p>\n</template>\n<style module>\n.boxed { margin: 3px; }\n</style>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  const scopedFirst =
+    '<template>\n  <p class="tone" :class="$style.pad">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.tone { color: red; }\n</style>\n<style module>\n.pad { padding: 5px; }\n</style>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "AMixed.vue"), moduleFirst),
+      writeFile(join(cwd, "ZMixed.vue"), scopedFirst),
+    ]);
+    await migrate({ cwd, write: true });
+    assert.match(
+      await readFile(join(cwd, "AMixed.vue"), "utf8"),
+      /class="card p-\[13px\] m-\[3px\]">A/,
+    );
+    assert.doesNotMatch(await readFile(join(cwd, "AMixed.vue"), "utf8"), /<style/);
+    assert.match(
+      await readFile(join(cwd, "ZMixed.vue"), "utf8"),
+      /class="tone text-\[red\] p-\[5px\]">A/,
+    );
+    assert.doesNotMatch(await readFile(join(cwd, "ZMixed.vue"), "utf8"), /<style/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("named module blocks retain with a warning", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p :class="classes.card">A</p>\n</template>\n<style module="classes">\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Named.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Named.vue" });
+    assert.deepEqual(report.changedFiles, []);
+    assert.ok(report.warnings.some((entry) => entry.code === "unsupported-sfc-block"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("preprocessor module blocks compile before conversion", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p :class="$style.card">A</p>\n</template>\n<style module lang="scss">\n$pad: 13px;\n.card { padding: $pad; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    await migrate({ cwd, styleFile: "Card.vue", write: true });
+    const output = await readFile(join(cwd, "Card.vue"), "utf8");
+    assert.match(output, /class="p-\[13px\]"/);
+    // The variable declaration is not part of the deleted rule, so the
+    // block stays behind with it -- matching scoped preprocessor behavior.
+    assert.doesNotMatch(output, /\.card\s*[{\n]/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("module :global escapes retain individually while siblings convert", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p :class="$style.card">A</p>\n</template>\n<style module>\n.card { padding: 13px; }\n:global(.free) { color: blue; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.ok(
+      report.rules.some((rule) => rule.selector === ".card" && rule.status === "converted"),
+    );
+    assert.ok(
+      report.rules.some((rule) => rule.selector.includes(":global") && rule.status === "retained"),
+    );
+    assert.match(report.diff, /:global\(\.free\)/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("checks effective child roots when retaining child scoped rules", async () => {
   const cwd = await fixture();
   try {

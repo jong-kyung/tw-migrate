@@ -1,0 +1,31 @@
+---
+source: crates/snapshots/tests/cli_snapshots/styles.rs
+expression: document
+---
+case: style_vue_module
+
+--- step: preview ---
+status: 0
+stdout: "--- a/Mixed.vue\n+++ b/Mixed.vue\n@@ -1,15 +1,5 @@\n-<template>\n-  <p class=\"frame\" :class=\"$style.boxed\">Mixed</p>\n-  <p class=\"etc\">Other</p>\n-</template>\n-<style scoped>\n-.frame {\n-  padding: 11px;\n-}\n-</style>\n-<style module>\n-.boxed {\n-  margin: 3px;\n-}\n-</style>\n \n+<template>\n+  <p class=\"frame p-[11px] m-[3px]\">Mixed</p>\n+  <p class=\"etc\">Other</p>\n+</template>\n \n--- a/Panel.vue\n+++ b/Panel.vue\n@@ -1,13 +1,5 @@\n-<template>\n-  <p :class=\"$style.card\">First</p>\n-  <p class=\"plain\" :class=\"$style.note\">Second</p>\n-</template>\n-<style module>\n-.card {\n-  padding: 13px;\n-}\n-.note {\n-  margin: 7px;\n-}\n-</style>\n \n+<template>\n+  <p class=\"p-[13px]\">First</p>\n+  <p class=\"plain m-[7px]\">Second</p>\n+</template>\n \nPreviewed 2 file(s); 4 rule(s) converted, 0 retained.\n"
+stderr: "warning[unsupported-css-module-reference] Broken.vue:166-191 `$style` is referenced outside provable direct member accesses, so the module is retained.\nwarning[unsupported-sfc-block] Named.vue:84-107 Named <style module> blocks are not supported.\n"
+workspace delta:
+  unchanged
+
+--- step: write ---
+status: 0
+stdout: "--- a/Mixed.vue\n+++ b/Mixed.vue\n@@ -1,15 +1,5 @@\n-<template>\n-  <p class=\"frame\" :class=\"$style.boxed\">Mixed</p>\n-  <p class=\"etc\">Other</p>\n-</template>\n-<style scoped>\n-.frame {\n-  padding: 11px;\n-}\n-</style>\n-<style module>\n-.boxed {\n-  margin: 3px;\n-}\n-</style>\n \n+<template>\n+  <p class=\"frame p-[11px] m-[3px]\">Mixed</p>\n+  <p class=\"etc\">Other</p>\n+</template>\n \n--- a/Panel.vue\n+++ b/Panel.vue\n@@ -1,13 +1,5 @@\n-<template>\n-  <p :class=\"$style.card\">First</p>\n-  <p class=\"plain\" :class=\"$style.note\">Second</p>\n-</template>\n-<style module>\n-.card {\n-  padding: 13px;\n-}\n-.note {\n-  margin: 7px;\n-}\n-</style>\n \n+<template>\n+  <p class=\"p-[13px]\">First</p>\n+  <p class=\"plain m-[7px]\">Second</p>\n+</template>\n \nApplied 2 file(s); 4 rule(s) converted, 0 retained.\n"
+stderr: "warning[unsupported-css-module-reference] Broken.vue:166-191 `$style` is referenced outside provable direct member accesses, so the module is retained.\nwarning[unsupported-sfc-block] Named.vue:84-107 Named <style module> blocks are not supported.\n"
+workspace delta:
+  modified Mixed.vue
+    before: "<template>\n  <p class=\"frame\" :class=\"$style.boxed\">Mixed</p>\n  <p class=\"etc\">Other</p>\n</template>\n<style scoped>\n.frame {\n  padding: 11px;\n}\n</style>\n<style module>\n.boxed {\n  margin: 3px;\n}\n</style>\n"
+    after: "<template>\n  <p class=\"frame p-[11px] m-[3px]\">Mixed</p>\n  <p class=\"etc\">Other</p>\n</template>\n"
+  modified Panel.vue
+    before: "<template>\n  <p :class=\"$style.card\">First</p>\n  <p class=\"plain\" :class=\"$style.note\">Second</p>\n</template>\n<style module>\n.card {\n  padding: 13px;\n}\n.note {\n  margin: 7px;\n}\n</style>\n"
+    after: "<template>\n  <p class=\"p-[13px]\">First</p>\n  <p class=\"plain m-[7px]\">Second</p>\n</template>\n"
+
+--- step: second run ---
+status: 0
+stdout: "Applied 0 file(s); 0 rule(s) converted, 0 retained.\n"
+stderr: "warning[unsupported-css-module-reference] Broken.vue:166-191 `$style` is referenced outside provable direct member accesses, so the module is retained.\nwarning[unsupported-sfc-block] Named.vue:84-107 Named <style module> blocks are not supported.\n"
+workspace delta:
+  unchanged

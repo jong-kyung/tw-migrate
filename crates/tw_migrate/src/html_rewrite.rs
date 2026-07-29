@@ -254,6 +254,176 @@ fn attribute_quote(source: &str, attribute: &HtmlAttribute) -> Option<u8> {
         .filter(|byte| matches!(byte, b'"' | b'\''))
 }
 
+/// Plan the `<style module>` entry of an SFC: proven `$style` binding sites
+/// are rewritten to static classes so fully-referenced module rules can be
+/// deleted. Literal class sites belong to the scoped and unscoped entries
+/// and are ignored here.
+pub(crate) fn plan_vue_module_file(
+    file: &SourceFile,
+    css_path: &str,
+    candidates: &HashMap<SelectorKey, Vec<String>>,
+    utility_prefix: Option<&str>,
+) -> SourcePlan {
+    let contexts = file
+        .html_stylesheets
+        .iter()
+        .filter(|context| context.analyzable && context.css_path == css_path)
+        .collect::<Vec<_>>();
+    if contexts.is_empty() {
+        return empty_plan();
+    }
+
+    let live_attributes = rebased_attributes(file);
+    let mut edits = Vec::new();
+    let mut emitted = BTreeSet::new();
+    let mut matches = Vec::new();
+    let mut module_refs = HashMap::new();
+    let mut matched_module_refs = HashMap::new();
+    let mut warnings = Vec::new();
+    for element in &file.html_elements {
+        if !element.css_paths.is_empty()
+            && !element.css_paths.iter().any(|path| path == css_path)
+        {
+            continue;
+        }
+        let Some(binding) = &element.module_binding else {
+            continue;
+        };
+        let key = SelectorKey::Class(binding.name.clone());
+        if !candidates.contains_key(&key) {
+            continue;
+        }
+        *module_refs.entry(binding.name.clone()).or_default() += 1;
+        let Some(binding_span) = rebase_span(binding.start, binding.end, &file.prior_edits)
+        else {
+            continue;
+        };
+        let mut additions = Vec::new();
+        for origin_candidate in &candidates[&key] {
+            for context in &contexts {
+                let candidate =
+                    contextual_candidate(origin_candidate, &context.variants, utility_prefix);
+                if !additions.contains(&candidate) {
+                    additions.push(candidate);
+                }
+            }
+        }
+
+        let merge_target = element
+            .class_attribute
+            .as_ref()
+            .filter(|attribute| attribute.writable)
+            .and_then(|attribute| live_attributes.get(&attribute.start));
+        let (site_start, site_end) = match merge_target {
+            Some(class_attribute) => {
+                if !candidates_fit_attribute(&file.source, class_attribute, &additions) {
+                    continue;
+                }
+                let mut classes = class_attribute
+                    .value
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .collect::<Vec<_>>();
+                for candidate in &additions {
+                    if !classes.contains(candidate) {
+                        classes.push(candidate.clone());
+                    }
+                }
+                let value = classes.join(" ");
+                let replacement = if class_attribute.synthetic {
+                    format!(" class=\"{value}\"")
+                } else {
+                    value
+                };
+                if replacement != class_attribute.value {
+                    edits.push(Edit {
+                        start: class_attribute.start,
+                        end: class_attribute.end,
+                        replacement,
+                    });
+                }
+                edits.push(Edit {
+                    start: binding_span.0,
+                    end: binding_span.1,
+                    replacement: String::new(),
+                });
+                (class_attribute.start, class_attribute.end)
+            }
+            None => {
+                // The rewritten attribute is double-quoted.
+                if additions.iter().any(|candidate| candidate.contains('"')) {
+                    continue;
+                }
+                // The removal span starts at the attribute's leading
+                // whitespace, so the rewritten attribute restores it.
+                edits.push(Edit {
+                    start: binding_span.0,
+                    end: binding_span.1,
+                    replacement: format!(" class=\"{}\"", additions.join(" ")),
+                });
+                (binding_span.0, binding_span.1)
+            }
+        };
+        for candidate in &additions {
+            emitted.insert(candidate.clone());
+            matches.push(CandidateMatch {
+                start: site_start,
+                end: site_end,
+                key: key.clone(),
+                candidate: candidate.clone(),
+                origin_candidate: candidate.clone(),
+            });
+        }
+        // Parity with the other rewrite paths: warn when a generated utility
+        // overlaps a Tailwind class already on the element.
+        let existing_classes = element_classes(element);
+        if let Some((generated, existing)) = additions.iter().find_map(|candidate| {
+            existing_classes
+                .iter()
+                .find(|existing| tailwind_utilities_conflict(candidate, existing))
+                .map(|existing| (candidate.clone(), (*existing).to_string()))
+        }) {
+            warnings.push(Warning {
+                code: "existing-tailwind-conflict",
+                file: file.path.clone(),
+                start: site_start,
+                end: site_end,
+                message: format!(
+                    "Generated utility `{generated}` may conflict with existing `{existing}`."
+                ),
+            });
+        }
+        *matched_module_refs.entry(binding.name.clone()).or_default() += 1;
+    }
+
+    SourcePlan {
+        edits,
+        removable_import_edits: Vec::new(),
+        candidates: emitted.into_iter().collect(),
+        matches,
+        module_refs,
+        matched_module_refs,
+        module_references_safe: true,
+        warnings,
+    }
+}
+
+/// Rebase an arbitrary span through the prior sequential edit rounds; `None`
+/// when an earlier entry edited inside it.
+fn rebase_span(start: usize, end: usize, prior_edits: &[Vec<Edit>]) -> Option<(usize, usize)> {
+    let mut span = HtmlAttribute {
+        value: String::new(),
+        start,
+        end,
+        synthetic: false,
+        writable: true,
+    };
+    for edits in prior_edits {
+        span = rebase_attribute(span, edits)?;
+    }
+    Some((span.start, span.end))
+}
+
 pub(crate) fn candidates_fit_attribute(
     source: &str,
     attribute: &HtmlAttribute,
@@ -472,6 +642,7 @@ mod tests {
                 match_ids: None,
                 match_tag: None,
                 tag: None,
+                module_binding: None,
                 css_paths: Vec::new(),
             }],
             html_stylesheets: vec![HtmlStylesheet {
@@ -559,6 +730,7 @@ mod tests {
                 match_ids: None,
                 match_tag: None,
                 tag: None,
+                module_binding: None,
                 css_paths: Vec::new(),
             }],
             html_stylesheets: vec![HtmlStylesheet {

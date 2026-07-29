@@ -85,6 +85,7 @@ export function analyzeVueSource(compiler, path, source) {
   }
   const blocks = [];
   const unscopedBlocks = [];
+  const moduleBlocks = [];
   const styleBlockImports = [];
   // Retained blocks are still real CSS that can win the cascade against the
   // utilities replacing a deleted scoped rule. Plain-CSS text feeds the
@@ -121,11 +122,10 @@ export function analyzeVueSource(compiler, path, source) {
       }
       continue;
     }
-    if (style.module !== undefined) {
-      // Module class and id names are localized at build time, but type and
-      // attribute selectors (and `:global` escapes) stay global, so the
-      // block feeds the module shadow channel.
-      warn("unsupported-sfc-block", start, end, "<style module> blocks are not supported yet.");
+    if (style.module !== undefined && style.module !== true) {
+      // Named module bindings are rare and unproven; the block still feeds
+      // the module shadow channel (type selectors stay global).
+      warn("unsupported-sfc-block", start, end, "Named <style module> blocks are not supported.");
       shadowModuleCssTexts.push(style.content);
       continue;
     }
@@ -154,6 +154,14 @@ export function analyzeVueSource(compiler, path, source) {
       syntax: style.lang ?? "css",
       content: style.content,
     };
+    if (style.module === true) {
+      // Module class and id names are localized at build time, but type and
+      // attribute selectors (and `:global` escapes) stay global. The caller
+      // feeds these blocks into the module shadow channel after compiling
+      // preprocessor content, so they are not pushed as raw text here.
+      moduleBlocks.push(block);
+      continue;
+    }
     if (!style.scoped) {
       unscopedBlocks.push(block);
       if (style.lang && style.lang !== "css") {
@@ -177,7 +185,14 @@ export function analyzeVueSource(compiler, path, source) {
     blocks.push(block);
   }
 
-  const state = { elements: [], components: [], dynamic: false, vHtml: false, hasSlot: false };
+  const state = {
+    elements: [],
+    components: [],
+    dynamic: false,
+    vHtml: false,
+    hasSlot: false,
+    expressionTexts: [],
+  };
   visitTemplateNode(source, template.ast, state);
   const alwaysRenderedRoots = template.ast.children.filter(
     (node) =>
@@ -234,7 +249,7 @@ export function analyzeVueSource(compiler, path, source) {
 
   const offsets = utf8OffsetMap(source, [
     ...warnings.flatMap((warning) => [warning.start, warning.end]),
-    ...[...blocks, ...unscopedBlocks].flatMap((block) => [
+    ...[...blocks, ...unscopedBlocks, ...moduleBlocks].flatMap((block) => [
       block.outerStart,
       block.outerEnd,
       block.contentStart,
@@ -242,7 +257,7 @@ export function analyzeVueSource(compiler, path, source) {
     ]),
     ...styleBlockImports.flatMap((entry) => [entry.start, entry.end]),
     ...[...state.elements, ...state.components].flatMap((element) =>
-      [element.nodeStart, element.classAttribute, element.idAttribute]
+      [element.nodeStart, element.classAttribute, element.idAttribute, element.moduleBinding]
         .filter((value) => value !== undefined)
         .flatMap((value) => (typeof value === "number" ? [value] : [value.start, value.end])),
     ),
@@ -270,12 +285,31 @@ export function analyzeVueSource(compiler, path, source) {
       contentStart: offset(block.contentStart),
       contentEnd: offset(block.contentEnd),
     })),
+    moduleBlocks: moduleBlocks.map((block) => ({
+      ...block,
+      outerStart: offset(block.outerStart),
+      outerEnd: offset(block.outerEnd),
+      contentStart: offset(block.contentStart),
+      contentEnd: offset(block.contentEnd),
+    })),
+    // `$style` outside the proven direct member sites (any expression,
+    // interpolation, or script text) makes the module's consumers
+    // unprovable.
+    moduleClosureBroken:
+      // An unreadable script could reference `$style` invisibly.
+      scriptImportsUnverifiable ||
+      /\$style|useCssModule/.test([...state.expressionTexts, scriptText].join("\n")),
     htmlElements: state.elements.map((element) => ({
       tag: element.tag,
       nodeStart: offset(element.nodeStart),
       classAttribute: attribute(element.classAttribute),
       idAttribute: attribute(element.idAttribute),
       matchClasses: element.matchClasses,
+      moduleBinding: element.moduleBinding && {
+        name: element.moduleBinding.name,
+        start: offset(element.moduleBinding.start),
+        end: offset(element.moduleBinding.end),
+      },
     })),
     componentSites: state.components.map((element) => ({
       tag: element.tag,
@@ -342,8 +376,8 @@ export function verifyVueSource(compiler, path, source, includeUnscoped = false)
     .filter(
       (style) =>
         style.src === undefined &&
-        style.module === undefined &&
-        (style.scoped || includeUnscoped) &&
+        (style.module === undefined || style.module === true) &&
+        (style.scoped || style.module === true || includeUnscoped) &&
         SUPPORTED_STYLE_LANGUAGES.has(style.lang),
     )
     .map((style) => ({ content: style.content, syntax: style.lang ?? "css" }));
@@ -354,18 +388,40 @@ function visitTemplateNode(source, node, state) {
     if (node.tagType === TAG_SLOT) state.hasSlot = true;
     const bindingClasses = [];
     let classOpaque = false;
+    let moduleBinding;
     for (const prop of node.props ?? []) {
       if (prop.type !== PROP_DIRECTIVE) continue;
+      let provenModuleExpression = false;
       if (prop.name === "bind") {
         if (!prop.arg || !prop.arg.isStatic) {
           classOpaque = true;
         } else if (prop.arg.content === "class") {
-          const value = staticClassBinding(prop);
-          if (value === undefined) classOpaque = true;
-          else bindingClasses.push(...value.split(/[\t\n\f\r ]+/).filter(Boolean));
+          const member =
+            node.tagType === TAG_ELEMENT && prop.exp
+              ? /^\s*\$style\s*\.\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*$/.exec(prop.exp.content)
+              : undefined;
+          if (member && !moduleBinding) {
+            // A proven `$style` member yields a hashed class that literal
+            // and scoped analysis never see, so it is not an opaque surface.
+            moduleBinding = {
+              name: member[1],
+              start: attributeRemovalStart(source, node, prop),
+              end: prop.loc.end.offset,
+            };
+            provenModuleExpression = true;
+          } else {
+            const value = staticClassBinding(prop);
+            if (value === undefined) classOpaque = true;
+            else bindingClasses.push(...value.split(/[\t\n\f\r ]+/).filter(Boolean));
+          }
         } else if (prop.arg.content === "id") {
           classOpaque = true;
         }
+      }
+      // Every unproven expression joins the module closure scan: `$style`
+      // escaping the proven form anywhere retains the module.
+      if (!provenModuleExpression && prop.exp?.content) {
+        state.expressionTexts.push(prop.exp.content);
       }
       // Injected markup carries no scope attribute, so scoped proofs are
       // unaffected -- but it can use any class an unscoped rule targets.
@@ -373,11 +429,22 @@ function visitTemplateNode(source, node, state) {
     }
     if (classOpaque) state.dynamic = true;
     const site = templateSite(source, node, bindingClasses, classOpaque, state);
-    const element = { tag: node.tag, nodeStart: node.loc.start.offset, ...site };
+    const element = { tag: node.tag, nodeStart: node.loc.start.offset, moduleBinding, ...site };
     if (node.tagType === TAG_COMPONENT) state.components.push(element);
     else if (node.tagType === TAG_ELEMENT) state.elements.push(element);
   }
+  if (node.type === NODE_INTERPOLATION && node.content?.content) {
+    state.expressionTexts.push(node.content.content);
+  }
   for (const child of node.children ?? []) visitTemplateNode(source, child, state);
+}
+
+// The removal span of an attribute starts before its leading whitespace so
+// deleting it leaves no double space behind.
+function attributeRemovalStart(source, node, prop) {
+  let start = prop.loc.start.offset;
+  while (start > node.loc.start.offset + 1 && /\s/.test(source[start - 1])) start -= 1;
+  return start;
 }
 
 function staticClassBinding(prop) {
