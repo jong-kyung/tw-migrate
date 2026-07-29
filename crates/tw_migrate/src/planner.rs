@@ -821,7 +821,13 @@ fn plan_consumer_file(
                 .iter()
                 .any(|context| context.analyzable && context.css_path == css_path)
         {
-            return Ok(plan_vue_module_file(file, css_path, candidates, utility_prefix));
+            return Ok(plan_vue_module_file(
+                file,
+                css_path,
+                candidates,
+                preserved_module_classes,
+                utility_prefix,
+            ));
         }
         return Ok(empty_source_plan());
     }

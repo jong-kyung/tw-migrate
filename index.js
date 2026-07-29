@@ -1408,7 +1408,8 @@ async function preparePackageVue({
         });
       }
     }
-    if (migrateModule) await compileBlocks(file, analysis.moduleBlocks);
+    // Module blocks were already compiled alongside the scoped blocks for
+    // the shadow corpus; recompiling here would double the preprocessor work.
     const vueBlocks = migrateUnscoped ? analysis.unscopedBlocks : analysis.blocks;
     if (vueBlocks.length === 0 && !migrateModule) continue;
     const vueRetention = migrateUnscoped ? undefined : retention;

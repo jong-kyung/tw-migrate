@@ -262,6 +262,7 @@ pub(crate) fn plan_vue_module_file(
     file: &SourceFile,
     css_path: &str,
     candidates: &HashMap<SelectorKey, Vec<String>>,
+    preserved_module_classes: &BTreeSet<String>,
     utility_prefix: Option<&str>,
 ) -> SourcePlan {
     let contexts = file
@@ -294,6 +295,10 @@ pub(crate) fn plan_vue_module_file(
             continue;
         }
         *module_refs.entry(binding.name.clone()).or_default() += 1;
+        // A retained sibling rule (compile failure, batch conflict) still
+        // matches through this binding at runtime, so the binding must stay;
+        // utilities are appended alongside it, mirroring the JS path.
+        let preserved = preserved_module_classes.contains(&binding.name);
         let Some(binding_span) = rebase_span(binding.start, binding.end, &file.prior_edits)
         else {
             continue;
@@ -342,11 +347,13 @@ pub(crate) fn plan_vue_module_file(
                         replacement,
                     });
                 }
-                edits.push(Edit {
-                    start: binding_span.0,
-                    end: binding_span.1,
-                    replacement: String::new(),
-                });
+                if !preserved {
+                    edits.push(Edit {
+                        start: binding_span.0,
+                        end: binding_span.1,
+                        replacement: String::new(),
+                    });
+                }
                 (class_attribute.start, class_attribute.end)
             }
             None => {
@@ -362,10 +369,14 @@ pub(crate) fn plan_vue_module_file(
                     continue;
                 }
                 // The removal span starts at the attribute's leading
-                // whitespace, so the rewritten attribute restores it.
+                // whitespace, so the rewritten attribute restores it. A
+                // preserved binding is kept: the attribute is inserted in
+                // front of it instead (a later run merges through the then-
+                // literal class attribute).
+                let end = if preserved { binding_span.0 } else { binding_span.1 };
                 edits.push(Edit {
                     start: binding_span.0,
-                    end: binding_span.1,
+                    end,
                     replacement: format!(" class=\"{}\"", additions.join(" ")),
                 });
                 (binding_span.0, binding_span.1)
@@ -382,7 +393,9 @@ pub(crate) fn plan_vue_module_file(
             });
         }
         // Parity with the other rewrite paths: warn when a generated utility
-        // overlaps a Tailwind class already on the element.
+        // overlaps a Tailwind class already on the element. Warnings anchor
+        // to authored coordinates, so use the element's analysis-time spans
+        // rather than the rebased live site.
         let existing_classes = element_classes(element);
         if let Some((generated, existing)) = additions.iter().find_map(|candidate| {
             existing_classes
@@ -390,11 +403,16 @@ pub(crate) fn plan_vue_module_file(
                 .find(|existing| tailwind_utilities_conflict(candidate, existing))
                 .map(|existing| (candidate.clone(), (*existing).to_string()))
         }) {
+            let (authored_start, authored_end) = element
+                .class_attribute
+                .as_ref()
+                .map(|attribute| (attribute.start, attribute.end))
+                .unwrap_or((binding.start, binding.end));
             warnings.push(Warning {
                 code: "existing-tailwind-conflict",
                 file: file.path.clone(),
-                start: site_start,
-                end: site_end,
+                start: authored_start,
+                end: authored_end,
                 message: format!(
                     "Generated utility `{generated}` may conflict with existing `{existing}`."
                 ),

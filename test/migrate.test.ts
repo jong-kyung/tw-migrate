@@ -1556,6 +1556,40 @@ test("a module compile failure never blocks the sibling scoped entry", async () 
   }
 });
 
+test("a blocked sibling rule keeps the shared $style binding alive", async () => {
+  const cwd = await fixture();
+  // The second rule fails Tailwind candidate compilation, so the first may
+  // convert only by appending utilities next to the preserved binding.
+  const vue =
+    '<template>\n  <p :class="$style.card">A</p>\n  <p class="etc">B</p>\n</template>\n<style module>\n.card { padding: 13px; }\n.card { COLOR: red; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Blocked.vue"), vue);
+    await migrate({ cwd, styleFile: "Blocked.vue", write: true });
+    const output = await readFile(join(cwd, "Blocked.vue"), "utf8");
+    assert.match(output, /class="p-\[13px\]" :class="\$style\.card"/);
+    assert.match(output, /\.card \{ COLOR: red; \}/);
+    const second = await migrate({ cwd, styleFile: "Blocked.vue", write: true });
+    assert.deepEqual(second.changedFiles, []);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("module conflict warnings anchor to authored bytes after scoped edits", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="frame">A</p>\n  <p class="etc">C</p>\n  <p class="p-[10px]" :class="$style.boxed">B</p>\n</template>\n<style scoped>\n.frame { padding: 11px; }\n</style>\n<style module>\n.boxed { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Anchored.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Anchored.vue" });
+    const warning = report.warnings.find((entry) => entry.code === "existing-tailwind-conflict");
+    assert.ok(warning);
+    assert.equal(vue.slice(warning.start, warning.end), "p-[10px]");
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("checks effective child roots when retaining child scoped rules", async () => {
   const cwd = await fixture();
   try {
