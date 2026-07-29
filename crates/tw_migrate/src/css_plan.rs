@@ -174,7 +174,11 @@ pub(crate) fn parse_css_rules(
                 Some((key, variant))
             });
         let key = selector_match.as_ref().map(|(key, _)| key.clone());
-        let (target_tag, target_ids) = selector_target_constraints(rule);
+        let (target_tag, target_ids) = if allow_arbitrary_selectors {
+            selector_target_constraints(rule)
+        } else {
+            (None, Vec::new())
+        };
         let mut variants = outer_variants;
         if let Some(variant) = selector_match.and_then(|(_, variant)| variant) {
             variants.push(variant);

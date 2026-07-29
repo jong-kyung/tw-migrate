@@ -228,9 +228,7 @@ fn collect_candidates(
         for context in contexts {
             let candidate =
                 contextual_candidate(origin_candidate, &context.variants, utility_prefix);
-            if candidate_breaks_attribute(&candidate, quote)
-                || (directive && candidate.contains('&'))
-            {
+            if !candidate_fits_site(&candidate, quote, directive) {
                 appended_all = false;
                 continue;
             }
@@ -311,18 +309,19 @@ pub(crate) fn candidates_fit_attribute(
         let Some((_js_quote, _raw)) = directive_site(source, attribute) else {
             return false;
         };
-        return candidates.iter().all(|candidate| {
-            !candidate.contains('&')
-                && !candidate_breaks_attribute(
-                    candidate,
-                    attribute.html_quote.as_deref().and_then(single_quote_byte),
-                )
-        });
+        let quote = attribute.html_quote.as_deref().and_then(single_quote_byte);
+        return candidates
+            .iter()
+            .all(|candidate| candidate_fits_site(candidate, quote, true));
     }
     let quote = attribute_quote(source, attribute);
     candidates
         .iter()
         .all(|candidate| !candidate_breaks_attribute(candidate, quote))
+}
+
+fn candidate_fits_site(candidate: &str, quote: Option<u8>, directive: bool) -> bool {
+    !candidate_breaks_attribute(candidate, quote) && (!directive || !candidate.contains('&'))
 }
 
 fn has_directive_metadata(attribute: &HtmlAttribute) -> bool {
@@ -1161,37 +1160,38 @@ mod tests {
     }
 
     #[test]
-    fn canonicalizes_numeric_object_keys_before_rebasing() {
-        let source = r#"<p :class="{ [0x10]: on }"></p>"#;
-        let start = source.find("0x10").unwrap();
-        let mut file = quoted_fixture(source, start, "16");
+    fn canonicalizes_escaped_shorthand_keys_before_rebasing() {
+        let source = r#"<p :class="{ \u0061 }"></p>"#;
+        let start = source.find("\\u0061").unwrap();
+        let mut file = quoted_fixture(source, start, "a");
         file.html_elements[0].class_attribute = Some(HtmlAttribute {
-            value: "16".to_string(),
+            value: "a".to_string(),
             start,
-            end: start + "0x10".len(),
+            end: start + "\\u0061".len(),
             synthetic: false,
             writable: true,
-            raw_value: Some("0x10".to_string()),
+            raw_value: Some("\\u0061".to_string()),
             js_quote: Some("'".to_string()),
             html_quote: Some("\"".to_string()),
             quote_key: true,
-            object_shorthand: false,
+            object_shorthand: true,
         });
-        file.html_elements[0].write_classes = Some(vec!["16".to_string()]);
+        file.html_elements[0].write_classes = Some(vec!["a".to_string()]);
         let candidates = HashMap::from([(
-            SelectorKey::Class("16".to_string()),
+            SelectorKey::Class("a".to_string()),
             vec!["m-2".to_string()],
         )]);
 
         let plan = plan_html_file(&file, "/project/site.css", &candidates, None);
-        assert_eq!(plan.edits[0].replacement, "'16 m-2'");
+        assert_eq!(plan.edits[0].replacement, "'a m-2': \\u0061");
         let rebased = rebase_attribute(
             file.html_elements[0].class_attribute.clone().unwrap(),
             &plan.edits,
         )
         .unwrap();
-        assert_eq!(rebased.value, "16 m-2");
-        assert_eq!(rebased.raw_value.as_deref(), Some("16 m-2"));
+        assert_eq!(rebased.value, "a m-2");
+        assert_eq!(rebased.raw_value.as_deref(), Some("a m-2"));
+        assert!(!rebased.object_shorthand);
     }
 
     #[test]
