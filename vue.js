@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { staticImportBindings, staticImports } from "./native.js";
+import { staticImportBindings, staticImports, staticStringExpression } from "./native.js";
 
 const ESCAPE_SELECTOR = /(?:::v-|:)(?:deep|global|slotted)\(([^)]*)\)/g;
 const ESCAPE_RESIDUE = /(?:>>>|\/deep\/|::v-deep|:deep|::v-slotted|:slotted|::v-global|:global)/;
@@ -275,12 +275,14 @@ export function analyzeVueSource(compiler, path, source) {
       nodeStart: offset(element.nodeStart),
       classAttribute: attribute(element.classAttribute),
       idAttribute: attribute(element.idAttribute),
+      matchClasses: element.matchClasses,
     })),
     componentSites: state.components.map((element) => ({
       tag: element.tag,
       nodeStart: offset(element.nodeStart),
       classAttribute: attribute(element.classAttribute),
       idAttribute: attribute(element.idAttribute),
+      matchClasses: element.matchClasses,
     })),
     rootStarts: template.ast.children
       .filter((node) => node.type === NODE_ELEMENT)
@@ -350,43 +352,45 @@ export function verifyVueSource(compiler, path, source, includeUnscoped = false)
 function visitTemplateNode(source, node, state) {
   if (node.type === NODE_ELEMENT) {
     if (node.tagType === TAG_SLOT) state.hasSlot = true;
-    let classBound = false;
+    const bindingClasses = [];
+    let classOpaque = false;
     for (const prop of node.props ?? []) {
       if (prop.type !== PROP_DIRECTIVE) continue;
-      // `:class`, `:id`, a spread `v-bind="..."`, or a dynamic argument
-      // opens the selector surface used by migration proofs.
-      if (
-        prop.name === "bind" &&
-        (!prop.arg || !prop.arg.isStatic || ["class", "id"].includes(prop.arg.content))
-      ) {
-        state.dynamic = true;
-        classBound = true;
+      if (prop.name === "bind") {
+        if (!prop.arg || !prop.arg.isStatic) {
+          classOpaque = true;
+        } else if (prop.arg.content === "class") {
+          const value = staticClassBinding(prop);
+          if (value === undefined) classOpaque = true;
+          else bindingClasses.push(...value.split(/[\t\n\f\r ]+/).filter(Boolean));
+        } else if (prop.arg.content === "id") {
+          classOpaque = true;
+        }
       }
       // Injected markup carries no scope attribute, so scoped proofs are
       // unaffected -- but it can use any class an unscoped rule targets.
       if (prop.name === "html") state.vHtml = true;
     }
-    if (node.tagType === TAG_COMPONENT) {
-      const site = templateSite(source, node, classBound, state);
-      if (!site.classAttribute && !classBound) {
-        const insertion = classInsertionOffset(source, node);
-        if (insertion === undefined) {
-          state.dynamic = true;
-        } else {
-          site.classAttribute = { value: "", start: insertion, end: insertion, synthetic: true };
-        }
-      }
-      state.components.push({ tag: node.tag, nodeStart: node.loc.start.offset, ...site });
-    } else if (node.tagType === TAG_ELEMENT) {
-      const site = templateSite(source, node, classBound, state);
-      state.elements.push({ tag: node.tag, nodeStart: node.loc.start.offset, ...site });
-    }
+    if (classOpaque) state.dynamic = true;
+    const site = templateSite(source, node, bindingClasses, classOpaque, state);
+    const element = { tag: node.tag, nodeStart: node.loc.start.offset, ...site };
+    if (node.tagType === TAG_COMPONENT) state.components.push(element);
+    else if (node.tagType === TAG_ELEMENT) state.elements.push(element);
   }
   for (const child of node.children ?? []) visitTemplateNode(source, child, state);
 }
 
-function templateSite(source, node, classBound, state) {
-  const classAttribute = literalAttribute(source, node, "class");
+function staticClassBinding(prop) {
+  if (!prop.exp) return undefined;
+  try {
+    return staticStringExpression("Component.js", prop.exp.content) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function templateSite(source, node, bindingClasses, classOpaque, state) {
+  let classAttribute = literalAttribute(source, node, "class");
   const idAttribute = literalAttribute(source, node, "id");
   const hasClassAttr = node.props?.some(
     (prop) => prop.type === PROP_ATTRIBUTE && prop.name === "class",
@@ -396,17 +400,19 @@ function templateSite(source, node, classBound, state) {
     state.dynamic = true;
     return { idAttribute };
   }
-  if (classAttribute) return { classAttribute, idAttribute };
-  if (!idAttribute || classBound) return { idAttribute };
-  const insertion = classInsertionOffset(source, node);
-  if (insertion === undefined) {
-    state.dynamic = true;
-    return { idAttribute };
+
+  const matchClasses = bindingClasses.length
+    ? [...(classAttribute?.value.split(/[\t\n\f\r ]+/).filter(Boolean) ?? []), ...bindingClasses]
+    : undefined;
+  if (
+    !classAttribute &&
+    (bindingClasses.length > 0 || (!classOpaque && (node.tagType === TAG_COMPONENT || idAttribute)))
+  ) {
+    const insertion = classInsertionOffset(source, node);
+    if (insertion === undefined) state.dynamic = true;
+    else classAttribute = { value: "", start: insertion, end: insertion, synthetic: true };
   }
-  return {
-    classAttribute: { value: "", start: insertion, end: insertion, synthetic: true },
-    idAttribute,
-  };
+  return { classAttribute, idAttribute, matchClasses };
 }
 
 // The inner span of a quoted, entity-free, literal attribute value, or

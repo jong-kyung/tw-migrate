@@ -1192,11 +1192,11 @@ async function preparePackageVue({
     elements.push({ ...element, cssPaths: [...new Set(cssPaths)] });
     elementsByFile.set(path, elements);
   };
+  const elementClasses = (element) =>
+    element.matchClasses ?? element.classAttribute?.value.split(/\s+/).filter(Boolean) ?? [];
   const componentRootSite = (site, root) => ({
     ...site,
-    matchClasses: [site.classAttribute, root.classAttribute].flatMap(
-      (attribute) => attribute?.value.split(/\s+/).filter(Boolean) ?? [],
-    ),
+    matchClasses: [...elementClasses(site), ...elementClasses(root)],
     matchIds: [site.idAttribute?.value ?? root.idAttribute?.value].filter(Boolean),
     matchTag: root.tag,
   });

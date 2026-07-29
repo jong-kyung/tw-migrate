@@ -380,6 +380,93 @@ test("treats a dynamic v-bind argument as an open class surface", async () => {
   }
 });
 
+test("migrates static Vue class bindings on hosts and component calls", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        "<template>\n  <div>Child</div>\n</template>\n<style scoped>\n.passed { padding: 13px; }\n</style>\n",
+      ),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Child :class="\'passed\'" />\n  <main :class="`local`">Parent</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n<style scoped>\n.local { margin: 7px; }\n</style>\n',
+      ),
+    ]);
+    const child = await migrate({ cwd, styleFile: "Child.vue", write: true });
+    const parent = await migrate({ cwd, styleFile: "Parent.vue", write: true });
+    const output = await readFile(join(cwd, "Parent.vue"), "utf8");
+    assert.equal(child.convertedRules, 1);
+    assert.equal(parent.convertedRules, 1);
+    assert.match(output, /<Child :class="'passed'" class="p-\[13px\]" \/>/);
+    assert.match(output, /<main :class="`local`" class="m-\[7px\]">/);
+    assert.doesNotMatch(await readFile(join(cwd, "Child.vue"), "utf8"), /<style/);
+    assert.doesNotMatch(output, /<style/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("keeps non-static Vue class bindings opaque", async () => {
+  for (const binding of [
+    "{ card: active }",
+    "['card']",
+    "active ? 'card' : 'other'",
+    "active && 'card'",
+    "`card-${size}`",
+    "'card' + suffix",
+    "classes",
+    "pick()",
+  ]) {
+    const cwd = await fixture();
+    const vue = `<template>\n  <p :class="${binding}">Bound</p>\n  <p>Sibling</p>\n</template>\n<script setup>\nconst active = true;\nconst size = 1;\nconst suffix = "";\nconst classes = "card";\nconst pick = () => "card";\n</script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n`;
+    try {
+      await writeFile(join(cwd, "Card.vue"), vue);
+      const report = await migrate({ cwd, styleFile: "Card.vue" });
+      assert.deepEqual(report.changedFiles, [], binding);
+      assert.equal(report.convertedRules, 0, binding);
+      assert.equal(report.retainedRules, 1, binding);
+      assert.ok(
+        report.warnings.some((entry) => entry.code === "dynamic-template-class"),
+        binding,
+      );
+    } finally {
+      await cleanup(cwd);
+    }
+  }
+});
+
+test("uses DOM ASCII whitespace for static Vue class bindings", async () => {
+  const cwd = await fixture();
+  const vue =
+    "<template>\n  <p :class=\"'a b'\">Bound</p>\n  <p>Sibling</p>\n</template>\n<style scoped>\n.a { padding: 13px; }\n</style>\n";
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.deepEqual(report.changedFiles, []);
+    assert.equal(report.convertedRules, 0);
+    assert.equal(report.retainedRules, 1);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("does not synthesize classes beside unsafe Vue attributes", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="a&amp;b" :class="\'card\'">Bound</p>\n  <p>Sibling</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.deepEqual(report.changedFiles, []);
+    assert.equal(report.convertedRules, 0);
+    assert.equal(report.retainedRules, 1);
+    assert.ok(report.warnings.some((entry) => entry.code === "dynamic-template-class"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("retains a scoped rule whose class other package CSS also targets", async () => {
   const cwd = await fixture();
   const vue =
