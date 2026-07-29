@@ -456,6 +456,21 @@ test("preserves object shorthand conditions in literal Vue class bindings", asyn
   }
 });
 
+test("keeps Vue __proto__ object setters opaque", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <div :class="{ __proto__: enabled }">A</div>\n  <span>B</span>\n</template>\n<script setup>\nconst enabled = true;\n</script>\n<style scoped>\n.__proto__ { margin: 7px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Proto.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Proto.vue", write: true });
+    assert.equal(report.convertedRules, 0);
+    assert.ok(report.warnings.some((entry) => entry.code === "dynamic-template-class"));
+    assert.equal(await readFile(join(cwd, "Proto.vue"), "utf8"), vue);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("keeps numeric computed Vue class keys opaque", async () => {
   const cwd = await fixture();
   const vue =

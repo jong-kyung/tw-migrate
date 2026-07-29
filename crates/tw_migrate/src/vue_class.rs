@@ -2,7 +2,7 @@ use napi_derive::napi;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     ArrayExpression, ArrayExpressionElement, Expression, ObjectExpression, ObjectPropertyKind,
-    PropertyKey, TemplateLiteral,
+    PropertyKey, PropertyKind, TemplateLiteral,
 };
 use oxc_parser::Parser;
 use oxc_span::Span;
@@ -109,7 +109,16 @@ impl Analyzer<'_> {
         for property in &object.properties {
             match property {
                 ObjectPropertyKind::ObjectProperty(property) => {
-                    self.property_key(&property.key, property.shorthand)
+                    if !property.computed
+                        && !property.method
+                        && !property.shorthand
+                        && property.kind == PropertyKind::Init
+                        && property_name(&property.key) == Some("__proto__")
+                    {
+                        self.opaque = true;
+                    } else {
+                        self.property_key(&property.key, property.shorthand);
+                    }
                 }
                 ObjectPropertyKind::SpreadProperty(spread) => self.object_spread(&spread.argument),
             }
@@ -198,6 +207,16 @@ impl Analyzer<'_> {
     }
 }
 
+fn property_name<'a>(key: &'a PropertyKey<'a>) -> Option<&'a str> {
+    match key {
+        PropertyKey::StaticIdentifier(identifier) => Some(identifier.name.as_str()),
+        key => match key.as_expression()? {
+            Expression::StringLiteral(literal) => Some(literal.value.as_str()),
+            _ => None,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::analyze_vue_class_expression;
@@ -246,6 +265,19 @@ mod tests {
         assert_eq!(analysis.sites.len(), 2);
         assert!(analysis.sites[0].shorthand);
         assert!(!analysis.sites[1].shorthand);
+    }
+
+    #[test]
+    fn keeps_proto_setters_opaque_without_hiding_real_proto_keys() {
+        let source =
+            r#"[{ __proto__: enabled }, { "__proto__": enabled }, { ["__proto__"]: enabled }, { __proto__ }]"#;
+        let analysis = analyze_vue_class_expression("Component.js", source).unwrap();
+
+        assert!(analysis.opaque);
+        assert_eq!(analysis.sites.len(), 2);
+        assert!(analysis.sites.iter().all(|site| site.value == "__proto__"));
+        assert!(!analysis.sites[0].shorthand);
+        assert!(analysis.sites[1].shorthand);
     }
 
     #[test]
