@@ -41,9 +41,8 @@ node /path/to/tw-migrate/bin/tw-migrate.js --write
 - SCSS/Sass/Less values evaluated with the target project's installed compiler; ambiguous mixin and partial origins are retained
 - `.js`, `.jsx`, `.ts`, and `.tsx` source files
 - static `.html` literal `class`/`id` attributes scoped by local external stylesheet links (link-level `print` media supported; other link media conditions are retained)
-- Vue 3 `.vue` files: literal template `class`/`id` attributes and expression-local literal `:class` bindings matched against inline CSS, SCSS, Sass, and Less `<style scoped>` blocks plus statically imported stylesheets, parsed and compiled with the target project's dependencies
-- Vue `:class` supports string and static template literals, object keys/shorthand, nested arrays/objects, conditional branches, `&&`, statically enumerable computed string keys, and inline literal spreads; opaque fragments retain only selector-reachable rules while proven sibling spans still migrate
-- direct `<script setup>` component imports can prove child-root and caller class surfaces across SFCs; unresolved components, exported roots, class-producing script variables/helper calls, dynamic template interpolation or concatenation, numeric computed keys, and callers outside that graph retain scoped rules
+- Vue 3 `.vue` files: literal template `class`/`id` attributes and static string/template `:class` bindings matched against inline CSS, SCSS, Sass, and Less `<style scoped>` blocks plus statically imported stylesheets, parsed and compiled with the target project's dependencies
+- direct `<script setup>` component imports can prove child-root and caller class surfaces across SFCs; unresolved components, exported roots, non-static bindings, and callers outside that graph retain scoped rules
 - unscoped Vue styles migrate only in private single-source packages where their global usage is closed; broader unscoped surfaces and `<style module>` blocks retain with warnings
 - direct CSS Module members, static template literals, and static expression literals
 - global `className` and `id` literals
@@ -70,7 +69,7 @@ Everything outside this subset is retained and reported with one of the warning 
 | `css-module-composes`                | The rule uses or is targeted by `composes`, so it is retained.                                                         |
 | `dynamic-class-name`                 | A `className` value is dynamic, so the element cannot be migrated.                                                     |
 | `dynamic-html-attribute`             | An HTML attribute is not a safely writable quoted literal, so the element cannot be migrated.                          |
-| `dynamic-template-class`             | An opaque Vue class fragment can contribute any class, so selector-reachable scoped rules are retained.                |
+| `dynamic-template-class`             | A dynamic class binding makes a Vue template's class set unprovable, so its scoped rules are retained.                 |
 | `existing-tailwind-conflict`         | A generated utility may conflict with a Tailwind class already on the element.                                         |
 | `inferred-preprocessor-source`       | A linked CSS file was matched to a uniquely named preprocessor source file.                                            |
 | `module-utilities-conflict`          | Utilities generated from different module classes on one element overlap, so their rules are retained.                 |

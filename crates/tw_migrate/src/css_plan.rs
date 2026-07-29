@@ -61,10 +61,6 @@ pub(crate) struct RulePlan {
     pub(crate) selector: String,
     pub(crate) related_classes: Vec<String>,
     pub(crate) contains_selectors: bool,
-    /// Static constraints from the selector's rightmost compound. Ancestor
-    /// compounds are deliberately ignored for conservative reachability.
-    pub(crate) target_tag: Option<String>,
-    pub(crate) target_ids: Vec<String>,
     pub(crate) key: Option<SelectorKey>,
     pub(crate) relationship: Option<ModuleRelationship>,
     pub(crate) candidates: Vec<String>,
@@ -81,7 +77,6 @@ pub(crate) struct ParsedCss {
 pub(crate) struct ParseOptions {
     pub(crate) syntax: Syntax,
     pub(crate) is_module: bool,
-    pub(crate) allow_arbitrary_selectors: bool,
     pub(crate) can_move_at_rules: bool,
     pub(crate) relative_urls_stable: bool,
 }
@@ -96,7 +91,6 @@ pub(crate) fn parse_css_rules(
     let ParseOptions {
         syntax,
         is_module,
-        allow_arbitrary_selectors,
         can_move_at_rules,
         relative_urls_stable,
     } = options;
@@ -164,21 +158,15 @@ pub(crate) fn parse_css_rules(
     for (rule, outer_variants) in qualified_rules {
         let selector = source[rule.selector.span.start..rule.selector.span.end].to_string();
         let mut relationship = None;
-        let selector_match = selector_match(rule, source, is_module, allow_arbitrary_selectors)
-            .or_else(|| {
-                if !is_module || allow_arbitrary_selectors {
-                    return None;
-                }
-                let (key, variant, decomposed) = module_relationship_match(rule)?;
-                relationship = Some(decomposed);
-                Some((key, variant))
-            });
+        let selector_match = selector_match(rule, source, is_module).or_else(|| {
+            if !is_module {
+                return None;
+            }
+            let (key, variant, decomposed) = module_relationship_match(rule)?;
+            relationship = Some(decomposed);
+            Some((key, variant))
+        });
         let key = selector_match.as_ref().map(|(key, _)| key.clone());
-        let (target_tag, target_ids) = if allow_arbitrary_selectors {
-            selector_target_constraints(rule)
-        } else {
-            (None, Vec::new())
-        };
         let mut variants = outer_variants;
         if let Some(variant) = selector_match.and_then(|(_, variant)| variant) {
             variants.push(variant);
@@ -211,8 +199,6 @@ pub(crate) fn parse_css_rules(
             selector,
             related_classes: selector_classes(rule),
             contains_selectors: true,
-            target_tag,
-            target_ids,
             key,
             relationship,
             candidates,
@@ -635,8 +621,6 @@ fn retained_at_rule(
         selector: source[at_rule.span.start..end].trim().to_string(),
         related_classes: related_classes.into_iter().collect(),
         contains_selectors,
-        target_tag: None,
-        target_ids: Vec::new(),
         key: None,
         relationship: None,
         candidates: Vec::new(),
@@ -668,36 +652,6 @@ fn collect_statement_classes(statements: &[Statement<'_>], classes: &mut BTreeSe
             _ => {}
         }
     }
-}
-
-fn selector_target_constraints(
-    rule: &oxc_css_parser::ast::QualifiedRule<'_>,
-) -> (Option<String>, Vec<String>) {
-    let Some(selector) = rule.selector.selectors.first() else {
-        return (None, Vec::new());
-    };
-    let Some(compound) = selector.children.iter().rev().find_map(|child| match child {
-        ComplexSelectorChild::CompoundSelector(compound) => Some(compound),
-        ComplexSelectorChild::Combinator(_) => None,
-    }) else {
-        return (None, Vec::new());
-    };
-    let mut tag = None;
-    let mut ids = Vec::new();
-    for simple in &compound.children {
-        match simple {
-            SimpleSelector::Type(TypeSelector::TagName(name)) => {
-                tag = literal_ident(&name.name.name).map(|name| name.to_ascii_lowercase());
-            }
-            SimpleSelector::Id(id) => {
-                if let Some(name) = literal_ident(&id.name) {
-                    ids.push(name.to_string());
-                }
-            }
-            _ => {}
-        }
-    }
-    (tag, ids)
 }
 
 fn selector_classes(rule: &oxc_css_parser::ast::QualifiedRule<'_>) -> Vec<String> {
@@ -912,7 +866,6 @@ fn selector_match(
     rule: &oxc_css_parser::ast::QualifiedRule<'_>,
     source: &str,
     is_module: bool,
-    allow_arbitrary_selectors: bool,
 ) -> Option<(SelectorKey, Option<String>)> {
     let selector = rule.selector.selectors.first()?;
     if rule.selector.selectors.len() != 1 {
@@ -928,7 +881,7 @@ fn selector_match(
         }
         // A key plus one argument-less pseudo-class was already rejected above
         // (unsupported state); it must not fall through to an arbitrary variant.
-        if (is_module && !allow_arbitrary_selectors)
+        if is_module
             || matches!(
                 compound.children.as_slice(),
                 [_, SimpleSelector::PseudoClass(pseudo)] if pseudo.arg.is_none()
@@ -936,20 +889,18 @@ fn selector_match(
         {
             return None;
         }
-        let key = compound.children.iter().find_map(selector_key)?;
+        let key = selector_key(compound.children.first()?)?;
         let variant = arbitrary_selector_variant(rule, source, compound)?;
         return Some((key, variant));
     }
 
-    // Vue scoped descendants carry a scope attribute on every compound;
-    // one Tailwind arbitrary variant on the target cannot represent that.
     if is_module {
         return None;
     }
     let ComplexSelectorChild::CompoundSelector(target) = selector.children.last()? else {
         return None;
     };
-    let key = target.children.iter().find_map(selector_key)?;
+    let key = selector_key(target.children.first()?)?;
     let variant = arbitrary_selector_variant(rule, source, target)?;
     Some((key, variant))
 }
@@ -1060,11 +1011,11 @@ fn arbitrary_selector_variant(
     // Replace the target simple selector by its parsed span. Searching the
     // selector text for ".name" matched the wrong occurrence when the name
     // recurred later (e.g. inside `:not(.abc)` for `.a:not(.abc)`).
-    let target_span = target.children.iter().find_map(|selector| match selector {
-        SimpleSelector::Class(class) if literal_ident(&class.name).is_some() => Some(class.span),
-        SimpleSelector::Id(id) if literal_ident(&id.name).is_some() => Some(id.span),
-        _ => None,
-    })?;
+    let target_span = match target.children.first()? {
+        SimpleSelector::Class(class) if literal_ident(&class.name).is_some() => class.span,
+        SimpleSelector::Id(id) if literal_ident(&id.name).is_some() => id.span,
+        _ => return None,
+    };
     let selector_span = rule.selector.span;
     let mut condition = source[selector_span.start..selector_span.end].to_string();
     condition.replace_range(

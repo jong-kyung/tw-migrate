@@ -1,11 +1,6 @@
-<script setup>
-import { ref } from "vue";
-
-const active = ref(false);
-</script>
 <template>
-  <article :class="['card', { active }]" data-probe="card" data-identity="card">Card</article>
-  <button class="action" data-identity="action" @focus="active = true">Toggle details</button>
+  <article class="card" data-probe="card" data-identity="card">Card</article>
+  <button class="action" data-identity="action">Toggle details</button>
   <section class="responsive" data-probe="responsive-layout" data-identity="responsive">Responsive</section>
 </template>
 <style scoped>
@@ -15,9 +10,6 @@ const active = ref(false);
 }
 .card:hover {
   background-color: rgb(210, 220, 230);
-}
-.active {
-  margin-left: 19px;
 }
 .action:focus {
   outline: 2px solid rgb(30, 90, 150);

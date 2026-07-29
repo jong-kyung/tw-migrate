@@ -8,7 +8,6 @@ mod jsx_graph;
 mod planner;
 mod theme;
 mod utilities;
-mod vue_class;
 
 use napi_derive::napi;
 use serde::Serialize;
@@ -58,19 +57,19 @@ pub fn static_imports(path: String, source: String) -> napi::Result<Vec<String>>
 }
 
 #[napi]
+pub fn static_string_expression(
+    path: String,
+    source: String,
+) -> napi::Result<Option<String>> {
+    js_rewrite::static_string_expression(&path, &source).map_err(napi::Error::from_reason)
+}
+
+#[napi]
 pub fn static_import_bindings(
     path: String,
     source: String,
 ) -> napi::Result<Vec<js_rewrite::StaticImportBinding>> {
     js_rewrite::static_import_bindings(&path, &source).map_err(napi::Error::from_reason)
-}
-
-#[napi]
-pub fn analyze_vue_class_expression(
-    path: String,
-    source: String,
-) -> napi::Result<vue_class::VueClassExpression> {
-    vue_class::analyze_vue_class_expression(&path, &source).map_err(napi::Error::from_reason)
 }
 
 const RECOVERABLE_INPUT_ERROR: &str = "TW_MIGRATE_RECOVERABLE_INPUT:";
@@ -97,6 +96,24 @@ mod tests {
         )
         .unwrap();
         assert_eq!(imports, ["./card.css", "./card.module.css"]);
+    }
+
+    #[test]
+    fn extracts_only_direct_static_string_expressions() {
+        assert_eq!(
+            crate::js_rewrite::static_string_expression("Component.js", "'card'").unwrap(),
+            Some("card".to_string())
+        );
+        assert_eq!(
+            crate::js_rewrite::static_string_expression("Component.js", "`card`").unwrap(),
+            Some("card".to_string())
+        );
+        for expression in ["['card']", "active ? 'card' : 'other'", "`card-${size}`"] {
+            assert_eq!(
+                crate::js_rewrite::static_string_expression("Component.js", expression).unwrap(),
+                None
+            );
+        }
     }
 
     #[test]

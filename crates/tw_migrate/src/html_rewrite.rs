@@ -3,10 +3,7 @@ use std::collections::{BTreeSet, HashMap};
 use crate::{
     css_plan::SelectorKey,
     js_rewrite::{CandidateMatch, SourcePlan},
-    planner::{
-        class_tokens, element_classes, element_ids, writable_element_classes, Edit, HtmlAttribute,
-        SourceFile, Warning,
-    },
+    planner::{element_classes, element_ids, Edit, HtmlAttribute, SourceFile, Warning},
     utilities::tailwind_utilities_conflict,
 };
 
@@ -65,23 +62,15 @@ pub(crate) fn plan_html_file(
             }
             continue;
         };
-        let writable_classes = writable_element_classes(element);
-        let js_site = directive_site(&file.source, class_attribute);
-        if has_directive_metadata(class_attribute) && js_site.is_none() {
-            for class in writable_classes {
-                if candidates.contains_key(&SelectorKey::Class(class.to_string())) {
-                    *module_refs.entry(class.to_string()).or_default() += 1;
-                }
-            }
-            continue;
-        }
-        let mut classes = class_tokens(&class_attribute.value)
+        let mut classes = class_attribute
+            .value
+            .split_whitespace()
             .map(str::to_string)
             .collect::<Vec<_>>();
         let mut additions = Vec::new();
 
-        let quote = attribute_outer_quote(&file.source, class_attribute);
-        for class in writable_classes {
+        let quote = attribute_quote(&file.source, class_attribute);
+        for class in element_classes(element) {
             let class = class.to_string();
             let key = SelectorKey::Class(class.clone());
             let matched = candidates.contains_key(&key);
@@ -95,8 +84,6 @@ pub(crate) fn plan_html_file(
                 &contexts,
                 candidates,
                 utility_prefix,
-                element.node_start,
-                js_site.is_some(),
                 &mut additions,
                 &mut emitted,
                 &mut matches,
@@ -107,26 +94,18 @@ pub(crate) fn plan_html_file(
                 *matched_module_refs.entry(class).or_default() += 1;
             }
         }
-        if element
-            .write_classes
-            .as_ref()
-            .is_none_or(Vec::is_empty)
-        {
-            for id in element_ids(element) {
-                collect_candidates(
-                    SelectorKey::Id(id.to_string()),
-                    class_attribute,
-                    quote,
-                    &contexts,
-                    candidates,
-                    utility_prefix,
-                    element.node_start,
-                    js_site.is_some(),
-                    &mut additions,
-                    &mut emitted,
-                    &mut matches,
-                );
-            }
+        for id in element_ids(element) {
+            collect_candidates(
+                SelectorKey::Id(id.to_string()),
+                class_attribute,
+                quote,
+                &contexts,
+                candidates,
+                utility_prefix,
+                &mut additions,
+                &mut emitted,
+                &mut matches,
+            );
         }
         // Parity with the JS rewrite path: a generated utility that overlaps
         // an existing Tailwind class on the rendered element is appended with
@@ -156,30 +135,18 @@ pub(crate) fn plan_html_file(
                 ),
             });
         }
-        let mut new_candidates = Vec::new();
         for candidate in additions {
-            if !classes.contains(&candidate) && !new_candidates.contains(&candidate) {
-                new_candidates.push(candidate);
+            if !classes.contains(&candidate) {
+                classes.push(candidate);
             }
         }
-        classes.extend(new_candidates.iter().cloned());
         let value = classes.join(" ");
         let replacement = if class_attribute.synthetic {
             format!(" class=\"{value}\"")
-        } else if let Some((js_quote, raw)) = js_site {
-            render_js_site(
-                raw,
-                &class_attribute.value,
-                js_quote,
-                class_attribute.quote_key,
-                class_attribute.object_shorthand,
-                &new_candidates,
-            )
         } else {
             value
         };
         if (!class_attribute.synthetic || !classes.is_empty())
-            && (!new_candidates.is_empty() || class_attribute.js_quote.is_none())
             && replacement != class_attribute.value
         {
             edits.push(Edit {
@@ -214,8 +181,6 @@ fn collect_candidates(
     contexts: &[&crate::planner::HtmlStylesheet],
     candidates: &HashMap<SelectorKey, Vec<String>>,
     utility_prefix: Option<&str>,
-    element_start: Option<usize>,
-    directive: bool,
     additions: &mut Vec<String>,
     emitted: &mut BTreeSet<String>,
     matches: &mut Vec<CandidateMatch>,
@@ -228,7 +193,7 @@ fn collect_candidates(
         for context in contexts {
             let candidate =
                 contextual_candidate(origin_candidate, &context.variants, utility_prefix);
-            if !candidate_fits_site(&candidate, quote, directive) {
+            if candidate_breaks_attribute(&candidate, quote) {
                 appended_all = false;
                 continue;
             }
@@ -237,7 +202,6 @@ fn collect_candidates(
             matches.push(CandidateMatch {
                 start: attribute.start,
                 end: attribute.end,
-                element_start,
                 key: key.clone(),
                 candidate,
                 origin_candidate: origin_candidate.clone(),
@@ -278,16 +242,6 @@ fn readonly_conflict(
     None
 }
 
-fn attribute_outer_quote(source: &str, attribute: &HtmlAttribute) -> Option<u8> {
-    if let Some(quote) = attribute.html_quote.as_deref() {
-        return single_quote_byte(quote);
-    }
-    if attribute.js_quote.is_some() {
-        return None;
-    }
-    attribute_quote(source, attribute)
-}
-
 fn attribute_quote(source: &str, attribute: &HtmlAttribute) -> Option<u8> {
     if attribute.synthetic {
         return Some(b'"');
@@ -305,129 +259,10 @@ pub(crate) fn candidates_fit_attribute(
     attribute: &HtmlAttribute,
     candidates: &[String],
 ) -> bool {
-    if has_directive_metadata(attribute) {
-        let Some((_js_quote, _raw)) = directive_site(source, attribute) else {
-            return false;
-        };
-        let quote = attribute.html_quote.as_deref().and_then(single_quote_byte);
-        return candidates
-            .iter()
-            .all(|candidate| candidate_fits_site(candidate, quote, true));
-    }
     let quote = attribute_quote(source, attribute);
     candidates
         .iter()
         .all(|candidate| !candidate_breaks_attribute(candidate, quote))
-}
-
-fn candidate_fits_site(candidate: &str, quote: Option<u8>, directive: bool) -> bool {
-    !candidate_breaks_attribute(candidate, quote) && (!directive || !candidate.contains('&'))
-}
-
-fn has_directive_metadata(attribute: &HtmlAttribute) -> bool {
-    attribute.js_quote.is_some()
-        || attribute.html_quote.is_some()
-        || attribute.raw_value.is_some()
-        || attribute.quote_key
-        || attribute.object_shorthand
-}
-
-fn directive_site<'a>(source: &str, attribute: &'a HtmlAttribute) -> Option<(u8, &'a str)> {
-    let js_quote = single_quote_byte(attribute.js_quote.as_deref()?)?;
-    let html_quote = single_quote_byte(attribute.html_quote.as_deref()?)?;
-    if !matches!(html_quote, b'\'' | b'"') || js_quote == html_quote {
-        return None;
-    }
-    let raw = attribute.raw_value.as_deref()?;
-    (source.get(attribute.start..attribute.end) == Some(raw)).then_some((js_quote, raw))
-}
-
-fn single_quote_byte(value: &str) -> Option<u8> {
-    let bytes = value.as_bytes();
-    (bytes.len() == 1 && matches!(bytes[0], b'\'' | b'"' | b'`')).then_some(bytes[0])
-}
-
-fn render_js_site(
-    raw: &str,
-    runtime_value: &str,
-    quote: u8,
-    quote_key: bool,
-    object_shorthand: bool,
-    additions: &[String],
-) -> String {
-    let mut value = if quote_key { runtime_value } else { raw }.to_string();
-    for candidate in additions {
-        value.push(' ');
-        value.push_str(&escape_js_content(candidate, quote));
-    }
-    if !quote_key {
-        return value;
-    }
-    let quoted = format!("{}{}{}", char::from(quote), value, char::from(quote));
-    if object_shorthand {
-        format!("{quoted}: {raw}")
-    } else {
-        quoted
-    }
-}
-
-fn escape_js_content(value: &str, quote: u8) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    let mut chars = value.chars().peekable();
-    while let Some(character) = chars.next() {
-        if character == '\\'
-            || character as u32 == u32::from(quote)
-            || (quote == b'`' && character == '$' && chars.peek() == Some(&'{'))
-        {
-            escaped.push('\\');
-        }
-        escaped.push(character);
-    }
-    escaped
-}
-
-fn appended_runtime_value(
-    attribute: &HtmlAttribute,
-    replacement: &str,
-    quote: u8,
-) -> Option<String> {
-    let raw = attribute.raw_value.as_deref()?;
-    let prefix = if attribute.quote_key {
-        attribute.value.as_str()
-    } else {
-        raw
-    };
-    let suffix = replacement.strip_prefix(prefix)?;
-    if suffix.is_empty() {
-        return Some(attribute.value.clone());
-    }
-    let mut value = attribute.value.clone();
-    for candidate in suffix.strip_prefix(' ')?.split(' ') {
-        value.push(' ');
-        value.push_str(&unescape_js_content(candidate, quote)?);
-    }
-    Some(value)
-}
-
-fn unescape_js_content(value: &str, quote: u8) -> Option<String> {
-    let mut output = String::with_capacity(value.len());
-    let mut chars = value.chars();
-    while let Some(character) = chars.next() {
-        if character != '\\' {
-            output.push(character);
-            continue;
-        }
-        let escaped = chars.next()?;
-        if escaped == '\\'
-            || escaped as u32 == u32::from(quote)
-            || (quote == b'`' && matches!(escaped, '`' | '$'))
-        {
-            output.push(escaped);
-        } else {
-            return None;
-        }
-    }
-    Some(output)
 }
 
 fn candidate_breaks_attribute(candidate: &str, quote: Option<u8>) -> bool {
@@ -475,23 +310,11 @@ fn rebased_attributes(file: &SourceFile) -> HashMap<usize, HtmlAttribute> {
             rebased.insert(original_start, live);
             continue;
         }
-        let end = if attribute.js_quote.is_some() {
-            start.checked_add(attribute.end - attribute.start)
-        } else {
-            live_attribute_end(&file.source, start)
-        };
-        let Some(end) = end.filter(|end| *end <= file.source.len()) else {
+        let Some(end) = live_attribute_end(&file.source, start) else {
             continue;
         };
-        let Some(raw) = file.source.get(start..end).map(str::to_string) else {
-            continue;
-        };
+        let value = file.source[start..end].to_string();
         delta += (end - start) as isize - (attribute.end - attribute.start) as isize;
-        let value = if attribute.js_quote.is_some() {
-            attribute.value.clone()
-        } else {
-            raw.clone()
-        };
         rebased.insert(
             original_start,
             HtmlAttribute {
@@ -500,11 +323,6 @@ fn rebased_attributes(file: &SourceFile) -> HashMap<usize, HtmlAttribute> {
                 end,
                 synthetic: false,
                 writable: true,
-                raw_value: attribute.raw_value,
-                js_quote: attribute.js_quote,
-                html_quote: attribute.html_quote,
-                quote_key: attribute.quote_key,
-                object_shorthand: attribute.object_shorthand,
             },
         );
     }
@@ -541,41 +359,6 @@ fn rebase_attribute(mut attribute: HtmlAttribute, edits: &[Edit]) -> Option<Html
             attribute.end = attribute.start + value.len();
             attribute.value = value.to_string();
             attribute.synthetic = false;
-        } else if let Some(quote) = attribute
-            .js_quote
-            .as_deref()
-            .and_then(single_quote_byte)
-        {
-            let replacement = if attribute.quote_key {
-                let shorthand_suffix = if attribute.object_shorthand {
-                    Some(format!(": {}", attribute.raw_value.as_deref()?))
-                } else {
-                    None
-                };
-                let quoted = shorthand_suffix
-                    .as_deref()
-                    .map_or(edit.replacement.as_str(), |suffix| {
-                        edit.replacement.strip_suffix(suffix).unwrap_or("")
-                    });
-                let quoted = quoted.as_bytes();
-                if quoted.first() != Some(&quote) || quoted.last() != Some(&quote) {
-                    return None;
-                }
-                let content_end = edit.replacement.len()
-                    - shorthand_suffix.as_deref().map_or(0, str::len)
-                    - 1;
-                &edit.replacement[1..content_end]
-            } else {
-                edit.replacement.as_str()
-            };
-            attribute.value = appended_runtime_value(&attribute, replacement, quote)?;
-            if attribute.quote_key {
-                attribute.start += 1;
-                attribute.quote_key = false;
-                attribute.object_shorthand = false;
-            }
-            attribute.raw_value = Some(replacement.to_string());
-            attribute.end = attribute.start + replacement.len();
         } else {
             attribute.end = attribute.start + edit.replacement.len();
             attribute.value.clone_from(&edit.replacement);
@@ -594,11 +377,6 @@ fn live_synthetic_class(source: &str, start: usize) -> Option<(HtmlAttribute, us
                 end: start,
                 synthetic: true,
                 writable: true,
-                raw_value: None,
-                js_quote: None,
-                html_quote: None,
-                quote_key: false,
-                object_shorthand: false,
             },
             0,
         ));
@@ -612,11 +390,6 @@ fn live_synthetic_class(source: &str, start: usize) -> Option<(HtmlAttribute, us
             end: value_end,
             synthetic: false,
             writable: true,
-            raw_value: None,
-            js_quote: None,
-            html_quote: None,
-            quote_key: false,
-            object_shorthand: false,
         },
         value_end + 1 - start,
     ))
@@ -693,21 +466,13 @@ mod tests {
                     end: value_start + value.len(),
                     synthetic: false,
                     writable: true,
-                    raw_value: None,
-                    js_quote: None,
-                    html_quote: None,
-                    quote_key: false,
-                    object_shorthand: false,
                 }),
                 id_attribute: None,
-                node_start: None,
                 match_classes: None,
-                write_classes: None,
                 match_ids: None,
                 match_tag: None,
                 tag: None,
                 css_paths: Vec::new(),
-                class_opaque: false,
             }],
             html_stylesheets: vec![HtmlStylesheet {
                 css_path: "/project/site.css".to_string(),
@@ -737,22 +502,6 @@ mod tests {
         // The reference stays partially unmigrated, so removal must stay blocked.
         assert_eq!(plan.module_refs.get("card"), Some(&1));
         assert_eq!(plan.matched_module_refs.get("card"), None);
-    }
-
-    #[test]
-    fn treats_only_dom_ascii_whitespace_as_class_separators() {
-        let source = "<div class=\"a\u{a0}b\"></div>";
-        let value = "a\u{a0}b";
-        let file = quoted_fixture(source, source.find(value).unwrap(), value);
-        let candidates = HashMap::from([(
-            SelectorKey::Class("a".to_string()),
-            vec!["m-2".to_string()],
-        )]);
-
-        let plan = plan_html_file(&file, "/project/site.css", &candidates, None);
-
-        assert!(plan.edits.is_empty());
-        assert!(plan.module_refs.is_empty());
     }
 
     #[test]
@@ -786,456 +535,6 @@ mod tests {
     }
 
     #[test]
-    fn keeps_conditional_class_candidates_on_their_own_sites() {
-        let source = r#"<p :class="{ first: a, second: b }"></p>"#;
-        let first = source.find("first").unwrap();
-        let second = source.find("second").unwrap();
-        let site = |value: &str, start| HtmlElement {
-            class_attribute: Some(HtmlAttribute {
-                value: value.to_string(),
-                start,
-                end: start + value.len(),
-                synthetic: false,
-                writable: true,
-                raw_value: Some(value.to_string()),
-                js_quote: Some("'".to_string()),
-                html_quote: Some("\"".to_string()),
-                quote_key: true,
-                object_shorthand: false,
-            }),
-            id_attribute: None,
-            node_start: Some(source.find("<p").unwrap()),
-            match_classes: Some(vec!["first".to_string(), "second".to_string()]),
-            write_classes: Some(vec![value.to_string()]),
-            match_ids: None,
-            match_tag: None,
-            tag: Some("p".to_string()),
-            css_paths: Vec::new(),
-            class_opaque: false,
-        };
-        let mut file = quoted_fixture(source, first, "first");
-        file.html_elements = vec![site("first", first), site("second", second)];
-        let candidates = HashMap::from([
-            (SelectorKey::Class("first".to_string()), vec!["p-4".to_string()]),
-            (SelectorKey::Class("second".to_string()), vec!["m-2".to_string()]),
-        ]);
-
-        let plan = plan_html_file(&file, "/project/site.css", &candidates, None);
-
-        assert_eq!(plan.edits.len(), 2);
-        assert_eq!(plan.edits[0].replacement, "'first p-4'");
-        assert_eq!(plan.edits[1].replacement, "'second m-2'");
-        assert_eq!(plan.matches[0].start, first);
-        assert_eq!(plan.matches[0].end, first + "first".len());
-        assert_eq!(plan.matches[0].element_start, Some(source.find("<p").unwrap()));
-        assert_eq!(plan.matches[1].start, second);
-        assert_eq!(plan.matches[1].end, second + "second".len());
-        assert_eq!(plan.matches[1].element_start, Some(source.find("<p").unwrap()));
-    }
-
-    #[test]
-    fn rejects_object_key_quotes_that_match_the_html_attribute() {
-        let source = r#"<p :class="{ btn: ok }"></p>"#;
-        let btn = source.find("btn").unwrap();
-        let mut file = quoted_fixture(source, btn, "btn");
-        file.html_elements = vec![HtmlElement {
-            class_attribute: Some(HtmlAttribute {
-                value: "btn".to_string(),
-                start: btn,
-                end: btn + "btn".len(),
-                synthetic: false,
-                writable: true,
-                raw_value: Some("btn".to_string()),
-                js_quote: Some("\"".to_string()),
-                html_quote: Some("\"".to_string()),
-                quote_key: true,
-                object_shorthand: false,
-            }),
-            id_attribute: None,
-            node_start: None,
-            match_classes: None,
-            write_classes: Some(vec!["btn".to_string()]),
-            match_ids: None,
-            match_tag: None,
-            tag: Some("p".to_string()),
-            css_paths: Vec::new(),
-            class_opaque: false,
-        }];
-        let candidates = HashMap::from([(
-            SelectorKey::Class("btn".to_string()),
-            vec!["p-4".to_string()],
-        )]);
-
-        let plan = plan_html_file(&file, "/project/site.css", &candidates, None);
-
-        assert!(plan.edits.is_empty());
-        assert!(plan.matches.is_empty());
-        assert_eq!(plan.module_refs.get("btn"), Some(&1));
-        assert_eq!(plan.matched_module_refs.get("btn"), None);
-    }
-
-    #[test]
-    fn rejects_html_entity_candidates_inside_directive_expressions() {
-        let source = r#"<p :class="['btn']"></p>"#;
-        let btn = source.find("btn").unwrap();
-        let mut file = quoted_fixture(source, btn, "btn");
-        file.html_elements = vec![HtmlElement {
-            class_attribute: Some(HtmlAttribute {
-                value: "btn".to_string(),
-                start: btn,
-                end: btn + "btn".len(),
-                synthetic: false,
-                writable: true,
-                raw_value: Some("btn".to_string()),
-                js_quote: Some("'".to_string()),
-                html_quote: Some("\"".to_string()),
-                quote_key: false,
-                object_shorthand: false,
-            }),
-            id_attribute: None,
-            node_start: None,
-            match_classes: None,
-            write_classes: Some(vec!["btn".to_string()]),
-            match_ids: None,
-            match_tag: None,
-            tag: Some("p".to_string()),
-            css_paths: Vec::new(),
-            class_opaque: false,
-        }];
-        let candidates = HashMap::from([(
-            SelectorKey::Class("btn".to_string()),
-            vec!["content-['&quot;']".to_string()],
-        )]);
-
-        let plan = plan_html_file(&file, "/project/site.css", &candidates, None);
-
-        assert!(plan.edits.is_empty());
-        assert!(plan.matches.is_empty());
-        assert_eq!(plan.module_refs.get("btn"), Some(&1));
-        assert_eq!(plan.matched_module_refs.get("btn"), None);
-    }
-
-    #[test]
-    fn invalid_directive_metadata_never_counts_as_a_matched_reference() {
-        let source = r#"<p :class="['btn']"></p>"#;
-        let btn = source.find("btn").unwrap();
-        let mut file = quoted_fixture(source, btn, "btn");
-        file.html_elements = vec![HtmlElement {
-            class_attribute: Some(HtmlAttribute {
-                value: "btn".to_string(),
-                start: btn,
-                end: btn + "btn".len(),
-                synthetic: false,
-                writable: true,
-                raw_value: None,
-                js_quote: Some("'".to_string()),
-                html_quote: Some("\"".to_string()),
-                quote_key: false,
-                object_shorthand: false,
-            }),
-            id_attribute: None,
-            node_start: None,
-            match_classes: None,
-            write_classes: Some(vec!["btn".to_string()]),
-            match_ids: None,
-            match_tag: None,
-            tag: Some("p".to_string()),
-            css_paths: Vec::new(),
-            class_opaque: false,
-        }];
-        let candidates = HashMap::from([(
-            SelectorKey::Class("btn".to_string()),
-            vec!["p-4".to_string()],
-        )]);
-
-        let plan = plan_html_file(&file, "/project/site.css", &candidates, None);
-
-        assert!(plan.edits.is_empty());
-        assert!(plan.matches.is_empty());
-        assert_eq!(plan.module_refs.get("btn"), Some(&1));
-        assert_eq!(plan.matched_module_refs.get("btn"), None);
-    }
-
-    #[test]
-    fn a_distinct_unconditional_site_receives_id_candidates_only() {
-        let source = r#"<p id="hero" :class="{ btn: ok }"></p>"#;
-        let hero = source.find("hero").unwrap();
-        let btn = source.find("btn").unwrap();
-        let insertion = source.find(" :class").unwrap();
-        let id = HtmlAttribute {
-            value: "hero".to_string(),
-            start: hero,
-            end: hero + "hero".len(),
-            synthetic: false,
-            writable: true,
-            raw_value: None,
-            js_quote: None,
-            html_quote: None,
-            quote_key: false,
-            object_shorthand: false,
-        };
-        let conditional = HtmlElement {
-            class_attribute: Some(HtmlAttribute {
-                value: "btn".to_string(),
-                start: btn,
-                end: btn + "btn".len(),
-                synthetic: false,
-                writable: true,
-                raw_value: Some("btn".to_string()),
-                js_quote: Some("'".to_string()),
-                html_quote: Some("\"".to_string()),
-                quote_key: true,
-                object_shorthand: false,
-            }),
-            id_attribute: Some(id.clone()),
-            node_start: Some(source.find("<p").unwrap()),
-            match_classes: Some(vec!["btn".to_string()]),
-            write_classes: Some(vec!["btn".to_string()]),
-            match_ids: Some(vec!["hero".to_string()]),
-            match_tag: None,
-            tag: Some("p".to_string()),
-            css_paths: Vec::new(),
-            class_opaque: false,
-        };
-        let unconditional = HtmlElement {
-            class_attribute: Some(HtmlAttribute {
-                value: String::new(),
-                start: insertion,
-                end: insertion,
-                synthetic: true,
-                writable: true,
-                raw_value: None,
-                js_quote: None,
-                html_quote: None,
-                quote_key: false,
-                object_shorthand: false,
-            }),
-            id_attribute: Some(id),
-            node_start: Some(source.find("<p").unwrap()),
-            match_classes: Some(vec!["btn".to_string()]),
-            write_classes: Some(Vec::new()),
-            match_ids: Some(vec!["hero".to_string()]),
-            match_tag: None,
-            tag: Some("p".to_string()),
-            css_paths: Vec::new(),
-            class_opaque: false,
-        };
-        let mut file = quoted_fixture(source, btn, "btn");
-        file.html_elements = vec![conditional, unconditional];
-        let candidates = HashMap::from([
-            (SelectorKey::Class("btn".to_string()), vec!["p-4".to_string()]),
-            (SelectorKey::Id("hero".to_string()), vec!["m-2".to_string()]),
-        ]);
-
-        let plan = plan_html_file(&file, "/project/site.css", &candidates, None);
-
-        assert_eq!(plan.edits.len(), 2);
-        assert_eq!(
-            plan.edits
-                .iter()
-                .find(|edit| edit.start == insertion)
-                .unwrap()
-                .replacement,
-            " class=\"m-2\""
-        );
-        assert_eq!(
-            plan.edits.iter().find(|edit| edit.start == btn).unwrap().replacement,
-            "'btn p-4'"
-        );
-        assert!(plan
-            .edits
-            .iter()
-            .all(|edit| !edit.replacement.contains("p-4 m-2")));
-    }
-
-    #[test]
-    fn escapes_javascript_literal_delimiters_without_touching_authored_content() {
-        let source = r#"<p :class="['card\\x', `tick`] "></p>"#;
-        let card = source.find("card").unwrap();
-        let tick = source.find("tick").unwrap();
-        let mut file = quoted_fixture(source, card, "card\\x");
-        file.html_elements = vec![
-            HtmlElement {
-                class_attribute: Some(HtmlAttribute {
-                    value: "card\\x".to_string(),
-                    start: card,
-                    end: card + r"card\\x".len(),
-                    synthetic: false,
-                    writable: true,
-                    raw_value: Some(r"card\\x".to_string()),
-                    js_quote: Some("'".to_string()),
-                    html_quote: Some("\"".to_string()),
-                    quote_key: false,
-                    object_shorthand: false,
-                }),
-                id_attribute: None,
-                node_start: None,
-                match_classes: None,
-                write_classes: Some(vec!["card\\x".to_string()]),
-                match_ids: None,
-                match_tag: None,
-                tag: Some("p".to_string()),
-                css_paths: Vec::new(),
-                class_opaque: false,
-            },
-            HtmlElement {
-                class_attribute: Some(HtmlAttribute {
-                    value: "tick".to_string(),
-                    start: tick,
-                    end: tick + "tick".len(),
-                    synthetic: false,
-                    writable: true,
-                    raw_value: Some("tick".to_string()),
-                    js_quote: Some("`".to_string()),
-                    html_quote: Some("\"".to_string()),
-                    quote_key: false,
-                    object_shorthand: false,
-                }),
-                id_attribute: None,
-                node_start: None,
-                match_classes: None,
-                write_classes: Some(vec!["tick".to_string()]),
-                match_ids: None,
-                match_tag: None,
-                tag: Some("p".to_string()),
-                css_paths: Vec::new(),
-                class_opaque: false,
-            },
-        ];
-        let candidates = HashMap::from([
-            (
-                SelectorKey::Class("card\\x".to_string()),
-                vec![
-                    "content-['x']".to_string(),
-                    "content-[\"blocked\"]".to_string(),
-                ],
-            ),
-            (
-                SelectorKey::Class("tick".to_string()),
-                vec!["content-[`${x}`]".to_string()],
-            ),
-        ]);
-
-        let plan = plan_html_file(&file, "/project/site.css", &candidates, None);
-
-        assert_eq!(plan.edits[0].replacement, r"card\\x content-[\'x\']");
-        assert!(!plan.edits[0].replacement.contains("blocked"));
-        assert_eq!(plan.edits[1].replacement, r"tick content-[\`\${x}\`]" );
-        assert_eq!(plan.matched_module_refs.get("card\\x"), None);
-    }
-
-    #[test]
-    fn preserves_object_shorthand_values_when_quoting_keys() {
-        let source = r#"<p :class="{ active }"></p>"#;
-        let start = source.find("active").unwrap();
-        let mut file = quoted_fixture(source, start, "active");
-        file.html_elements[0].class_attribute = Some(HtmlAttribute {
-            value: "active".to_string(),
-            start,
-            end: start + "active".len(),
-            synthetic: false,
-            writable: true,
-            raw_value: Some("active".to_string()),
-            js_quote: Some("'".to_string()),
-            html_quote: Some("\"".to_string()),
-            quote_key: true,
-            object_shorthand: true,
-        });
-        file.html_elements[0].write_classes = Some(vec!["active".to_string()]);
-        let candidates = HashMap::from([(
-            SelectorKey::Class("active".to_string()),
-            vec!["m-2".to_string()],
-        )]);
-
-        let plan = plan_html_file(&file, "/project/site.css", &candidates, None);
-        assert_eq!(plan.edits[0].replacement, "'active m-2': active");
-        let rebased = rebase_attribute(
-            file.html_elements[0].class_attribute.clone().unwrap(),
-            &plan.edits,
-        )
-        .unwrap();
-        assert_eq!(rebased.value, "active m-2");
-        assert_eq!(rebased.raw_value.as_deref(), Some("active m-2"));
-        assert!(!rebased.object_shorthand);
-    }
-
-    #[test]
-    fn canonicalizes_escaped_shorthand_keys_before_rebasing() {
-        let source = r#"<p :class="{ \u0061 }"></p>"#;
-        let start = source.find("\\u0061").unwrap();
-        let mut file = quoted_fixture(source, start, "a");
-        file.html_elements[0].class_attribute = Some(HtmlAttribute {
-            value: "a".to_string(),
-            start,
-            end: start + "\\u0061".len(),
-            synthetic: false,
-            writable: true,
-            raw_value: Some("\\u0061".to_string()),
-            js_quote: Some("'".to_string()),
-            html_quote: Some("\"".to_string()),
-            quote_key: true,
-            object_shorthand: true,
-        });
-        file.html_elements[0].write_classes = Some(vec!["a".to_string()]);
-        let candidates = HashMap::from([(
-            SelectorKey::Class("a".to_string()),
-            vec!["m-2".to_string()],
-        )]);
-
-        let plan = plan_html_file(&file, "/project/site.css", &candidates, None);
-        assert_eq!(plan.edits[0].replacement, "'a m-2': \\u0061");
-        let rebased = rebase_attribute(
-            file.html_elements[0].class_attribute.clone().unwrap(),
-            &plan.edits,
-        )
-        .unwrap();
-        assert_eq!(rebased.value, "a m-2");
-        assert_eq!(rebased.raw_value.as_deref(), Some("a m-2"));
-        assert!(!rebased.object_shorthand);
-    }
-
-    #[test]
-    fn rebases_quoted_object_keys_without_losing_runtime_classes_or_spans() {
-        let attribute = HtmlAttribute {
-            value: "btn".to_string(),
-            start: 10,
-            end: 13,
-            synthetic: false,
-            writable: true,
-            raw_value: Some("btn".to_string()),
-            js_quote: Some("'".to_string()),
-            html_quote: Some("\"".to_string()),
-            quote_key: true,
-            object_shorthand: false,
-        };
-        let first = rebase_attribute(
-            attribute,
-            &[Edit {
-                start: 10,
-                end: 13,
-                replacement: "'btn p-4'".to_string(),
-            }],
-        )
-        .unwrap();
-        assert_eq!((first.start, first.end), (11, 18));
-        assert_eq!(first.value, "btn p-4");
-        assert_eq!(first.raw_value.as_deref(), Some("btn p-4"));
-        assert!(!first.quote_key);
-
-        let second = rebase_attribute(
-            first,
-            &[Edit {
-                start: 11,
-                end: 18,
-                replacement: "btn p-4 m-2".to_string(),
-            }],
-        )
-        .unwrap();
-        assert_eq!((second.start, second.end), (11, 22));
-        assert_eq!(second.value, "btn p-4 m-2");
-    }
-
-    #[test]
     fn preserves_html_bytes_around_literal_value_edits() {
         let file = SourceFile {
             path: "/project/index.html".to_string(),
@@ -1248,11 +547,6 @@ mod tests {
                     end: 26,
                     synthetic: false,
                     writable: true,
-                    raw_value: None,
-                    js_quote: None,
-                    html_quote: None,
-                    quote_key: false,
-                    object_shorthand: false,
                 }),
                 id_attribute: Some(HtmlAttribute {
                     value: "hero".to_string(),
@@ -1260,20 +554,12 @@ mod tests {
                     end: 35,
                     synthetic: false,
                     writable: true,
-                    raw_value: None,
-                    js_quote: None,
-                    html_quote: None,
-                    quote_key: false,
-                    object_shorthand: false,
                 }),
-                node_start: None,
                 match_classes: None,
-                write_classes: None,
                 match_ids: None,
                 match_tag: None,
                 tag: None,
                 css_paths: Vec::new(),
-                class_opaque: false,
             }],
             html_stylesheets: vec![HtmlStylesheet {
                 css_path: "/project/site.css".to_string(),

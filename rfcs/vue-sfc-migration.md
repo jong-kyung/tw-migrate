@@ -12,9 +12,9 @@ single-file components (`.vue`), where one file is both a stylesheet source
 (`<style>` blocks) and a consumer (`<template>` class usage).
 
 Support ships in staged phases. Phases 1–3 cover literal `class` attributes,
-expression-local literal `:class` bindings, inline scoped CSS/SCSS/Sass/Less,
-static external stylesheet edges, and direct `<script setup>` component
-relationships. A later phase adds `<style module>`/`$style`.
+static string and interpolation-free template `:class` bindings, inline scoped
+CSS/SCSS/Sass/Less, static external stylesheet edges, and direct `<script setup>`
+component relationships. A later phase adds `<style module>`/`$style`.
 
 SFC parsing uses the official `@vue/compiler-sfc`, resolved from the target
 project like Sass and Less. The unofficial Rust toolchain `vize` was evaluated
@@ -27,8 +27,9 @@ if vize reaches a stable release or official adoption.
 1. Accept `.vue` files as discovered inputs and as explicit `styleFile`
    targets in Vue 3 packages.
 2. Parse SFCs with the target project's own `@vue/compiler-sfc`.
-3. Rewrite literal `<template>` `class` attributes to Tailwind utilities using
-   rules proven from the same file's plain-CSS `<style scoped>` blocks.
+3. Rewrite literal `<template>` `class` attributes and static `:class` values to
+   Tailwind utilities using rules proven from the same file's plain-CSS
+   `<style scoped>` blocks.
 4. Remove a scoped rule only when every element it can match is proven inside
    the file, including injection surfaces (component tags, root fallthrough,
    dynamic bindings).
@@ -54,8 +55,8 @@ if vize reaches a stable release or official adoption.
    expressions into utilities.
 5. Migrating `<style>` blocks without `scoped` in Phase 1; they are global CSS
    and require cross-file proof.
-6. Runtime component-tree analysis or evaluation of dynamic `:class`
-   expressions beyond the expression-local literal forms supported in Phase 3.
+6. Runtime component-tree analysis or evaluation of `:class` expressions beyond
+   direct string literals and interpolation-free template literals.
 7. In-DOM templates, render functions, JSX-in-Vue, or `template` options in
    plain JS files.
 8. Editing compiled SFC output; all edits target authored `.vue` bytes.
@@ -198,14 +199,10 @@ the rule to retain-with-append or retain-only:
    Phase 1. Literal class attributes beside a dynamic binding remain proven
    sites and still receive appended utilities. Runtime class mutation through
    scripts, event handlers, refs, or custom directives is outside the supported
-   scope, matching the React/JSX path. Phase 3 proves expression-local string
-   and static template literals, object keys and shorthand, nested arrays and
-   objects, conditional branches, `&&`, statically enumerable computed string
-   keys, and inline literal spreads. Proven spans migrate independently, while
-   an opaque fragment retains only rules whose selector can reach its element.
-   Class-producing script variables and helper calls, dynamic template
-   interpolation, string concatenation, and numeric computed keys remain
-   opaque.
+   scope, matching the React/JSX path. Phase 3 recognizes only direct string
+   literals and interpolation-free template literals. Object, array,
+   conditional, logical, concatenated, interpolated, variable, and helper-call
+   forms remain opaque, matching React's current static `className` boundary.
 4. **Escape hatches.** Rules containing `:deep()`, `:global()`, `>>>`,
    `/deep/`, or declarations using `v-bind()` have no utility representation
    and retain through the existing selector/declaration support codes
@@ -309,15 +306,17 @@ mirroring a missing Sass compiler.
 - Add cross-file caller analysis to close the root-fallthrough surface and to
   admit unscoped block migration where project-wide usage is proven.
 
-### Phase 3: Literal `:class` Bindings (implemented)
+### Phase 3: Static `:class` Bindings (implemented)
 
-- Prove expression-local string/static-template, object, nested array,
-  conditional, `&&`, computed-string-key, and inline literal spread forms with
-  OXC at corrected authored offsets.
-- Rewrite host and component call-site literals without changing their
-  conditions, preserving authored quote style and untouched bytes.
-- Narrow opaque retention to selector-reachable rules per element while still
-  appending utilities to independently proven sibling spans.
+- Prove direct string literals (`:class="'btn'"`) and interpolation-free
+  template literals (``:class="`btn`"``) with the same OXC expression parser
+  used by the React/JSX path.
+- Append generated utilities through a separate static `class` attribute,
+  preserving the authored binding unchanged on host elements and component
+  call sites.
+- Keep object, array, conditional, logical, interpolated, concatenated,
+  variable, and helper-call forms opaque with `dynamic-template-class`, matching
+  React's current static `className` support boundary.
 
 ### Phase 4: CSS Modules (`<style module>` / `$style`)
 
@@ -336,6 +335,8 @@ phases.
 - Compiler resolution is package-relative; a repository-installed Vue must
   never satisfy a target project.
 - Parse errors, Vue 2 sources, and unsupported blocks retain the file.
+- Static string/template `:class` bindings migrate; all other binding forms
+  remain opaque.
 
 ### Rust
 
@@ -363,7 +364,8 @@ phases.
 
 1. `.vue` files are discovered and selectable in Vue 3 packages, parsed by
    the target project's `@vue/compiler-sfc`.
-2. Literal template classes gain utilities only from same-file scoped proof.
+2. Literal template classes and static `:class` values gain utilities only from
+   proven stylesheet contexts.
 3. No scoped rule is removed while any injection surface remains open.
 4. Every unproven construct retains with one of the stable warning codes.
 5. Untouched `.vue` bytes are preserved exactly; edited files reparse with
@@ -378,9 +380,8 @@ phases.
 1. Cross-file closure recognizes direct local component imports from
    `<script setup>`. Normal-script registration, aliases outside that graph,
    publishable package roots, and components without known callers retain.
-2. Opaque Phase 3 class fragments retain selector-reachable scoped rules;
-   class-producing script variables/helper calls, dynamic template
-   interpolation or concatenation, and numeric computed keys are not followed.
+2. Any non-static class binding retains all scoped class rules. Phase 3 only
+   closes direct string and interpolation-free template literal bindings.
 3. Inline preprocessors rely on source maps from the target project's
    compiler; ambiguous or dependency-owned rule origins retain. Build-tool
    preprocessor injection (Vite `additionalData`, webpack loader options) is

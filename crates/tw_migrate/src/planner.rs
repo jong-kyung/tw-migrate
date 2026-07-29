@@ -178,28 +178,15 @@ fn vue_retention_warning(code: &str) -> Result<(&'static str, &'static str), Str
     }
 }
 
-pub(crate) fn class_tokens(value: &str) -> impl Iterator<Item = &str> {
-    value
-        .split([' ', '\t', '\n', '\r', '\u{000c}'])
-        .filter(|token| !token.is_empty())
-}
-
 pub(crate) fn element_classes(element: &HtmlElement) -> Vec<&str> {
     element.match_classes.as_ref().map_or_else(
         || {
             element
                 .class_attribute
                 .as_ref()
-                .map(|attribute| class_tokens(&attribute.value).collect())
+                .map(|attribute| attribute.value.split_whitespace().collect())
                 .unwrap_or_default()
         },
-        |classes| classes.iter().map(String::as_str).collect(),
-    )
-}
-
-pub(crate) fn writable_element_classes(element: &HtmlElement) -> Vec<&str> {
-    element.write_classes.as_ref().map_or_else(
-        || element_classes(element),
         |classes| classes.iter().map(String::as_str).collect(),
     )
 }
@@ -231,19 +218,6 @@ fn element_has_context(element: &HtmlElement, css_path: &str) -> bool {
 /// Whether one of `rule`'s template sites (elements carrying the rule's
 /// class or id) satisfies `reachable`, which receives the site's class list
 /// and element.
-fn opaque_rule_reachable(rule: &RulePlan, file: &SourceFile, css_path: &str) -> bool {
-    matches!(rule.key, Some(SelectorKey::Class(_)))
-        && file
-            .html_elements
-            .iter()
-            .filter(|element| element.class_opaque && element_has_context(element, css_path))
-            .any(|element| {
-                rule.target_tag.as_ref().is_none_or(|tag| {
-                    element_tag(element).is_some_and(|actual| actual.eq_ignore_ascii_case(tag))
-                }) && rule.target_ids.iter().all(|id| element_ids(element).contains(&id.as_str()))
-            })
-}
-
 fn rule_site_reachable(
     rule: &RulePlan,
     file: &SourceFile,
@@ -492,21 +466,6 @@ pub(crate) struct HtmlAttribute {
     pub(crate) synthetic: bool,
     #[serde(default = "default_writable")]
     pub(crate) writable: bool,
-    /// Raw authored JS string content for a Vue `:class` literal site.
-    #[serde(default)]
-    pub(crate) raw_value: Option<String>,
-    /// JS string delimiter used by a Vue expression site.
-    #[serde(default)]
-    pub(crate) js_quote: Option<String>,
-    /// Outer HTML attribute delimiter; JS escapes cannot protect this byte.
-    #[serde(default)]
-    pub(crate) html_quote: Option<String>,
-    /// The authored span is an unquoted object key and needs delimiters.
-    #[serde(default)]
-    pub(crate) quote_key: bool,
-    /// The key is object shorthand and needs its original value restored.
-    #[serde(default)]
-    pub(crate) object_shorthand: bool,
 }
 
 #[derive(Clone, Deserialize)]
@@ -514,18 +473,10 @@ pub(crate) struct HtmlAttribute {
 pub(crate) struct HtmlElement {
     pub(crate) class_attribute: Option<HtmlAttribute>,
     pub(crate) id_attribute: Option<HtmlAttribute>,
-    /// Authored start of the rendered element. Multiple conditional class
-    /// sites on one Vue node share this identity for batch conflict checks.
-    #[serde(default)]
-    pub(crate) node_start: Option<usize>,
     /// Selector surface to match when the writable site is a Vue component
     /// call whose attributes fall through to a different root element.
     #[serde(default)]
     pub(crate) match_classes: Option<Vec<String>>,
-    /// Classes whose candidates may be written at this specific site. When
-    /// absent, preserve the legacy effective-root behavior.
-    #[serde(default)]
-    pub(crate) write_classes: Option<Vec<String>>,
     #[serde(default)]
     pub(crate) match_ids: Option<Vec<String>>,
     #[serde(default)]
@@ -537,9 +488,6 @@ pub(crate) struct HtmlElement {
     /// component proofs. Empty means every file-level HTML context applies.
     #[serde(default)]
     pub(crate) css_paths: Vec<String>,
-    /// An opaque `:class` fragment can contribute any class to this element.
-    #[serde(default)]
-    pub(crate) class_opaque: bool,
 }
 
 #[derive(Clone, Deserialize)]
@@ -948,11 +896,8 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
                     .origins
                     .get(&(matched.key, matched.origin_candidate.clone()))
                 {
-                    let group = matched
-                        .element_start
-                        .map_or((matched.start, matched.end), |start| (start, start));
                     match_groups
-                        .entry((file.path.clone(), group.0, group.1))
+                        .entry((file.path.clone(), matched.start, matched.end))
                         .or_default()
                         .extend(origins.iter().map(|origin| BatchMatch {
                             stylesheet: index,
@@ -1194,7 +1139,6 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
             ParseOptions {
                 syntax: analysis_syntax,
                 is_module,
-                allow_arbitrary_selectors: !request.vue_blocks.is_empty(),
                 can_move_at_rules,
                 relative_urls_stable,
             },
@@ -1305,7 +1249,6 @@ fn parse_vue_rules(
                     block.syntax.parser_syntax()
                 },
                 is_module,
-                allow_arbitrary_selectors: true,
                 can_move_at_rules: false,
                 relative_urls_stable,
             },
@@ -1663,18 +1606,6 @@ fn plan_request(
         &computed_unproven
     };
     stamp_unproven_rules(&mut rules, unproven_rules);
-    if vue_mode {
-        for rule in &mut rules {
-            if rule.warning.is_none()
-                && request
-                    .files
-                    .iter()
-                    .any(|file| opaque_rule_reachable(rule, file, &request.css_path))
-            {
-                rule.warning = Some("dynamic-template-class");
-            }
-        }
-    }
     // Late retention stamps (blocked candidates, unproven relationships) can
     // expose in-file cascade competitors the parse-time pass could not see.
     if vue_mode {
@@ -1699,7 +1630,7 @@ fn plan_request(
                         .iter()
                         .filter(|element| element_has_context(element, &request.css_path))
                         .any(|element| {
-                            writable_element_classes(element).contains(&class.as_str())
+                            element_classes(element).contains(&class.as_str())
                                 && element.class_attribute.as_ref().is_some_and(|attribute| {
                                     attribute.writable
                                         && !candidates_fit_attribute(
@@ -1728,17 +1659,13 @@ fn plan_request(
         .collect::<BTreeSet<_>>();
     let blocked_classes = rules
         .iter()
-        .filter(|rule| {
-            rule.warning.is_some()
-                && rule.warning != Some("dynamic-template-class")
-                && !(batch_mode && is_batch_retained(rule.warning))
-        })
+        .filter(|rule| rule.warning.is_some() && !(batch_mode && is_batch_retained(rule.warning)))
         .flat_map(|rule| rule.related_classes.iter().cloned())
         .collect::<BTreeSet<_>>();
     let mut candidate_map: HashMap<SelectorKey, Vec<String>> = HashMap::new();
     for rule in &rules {
         if let Some(key) = &rule.key
-            && (rule.warning.is_none() || rule.warning == Some("dynamic-template-class"))
+            && rule.warning.is_none()
             && !matches!(key, SelectorKey::Class(name) if blocked_classes.contains(name))
         {
             candidate_map
@@ -1793,12 +1720,7 @@ fn plan_request(
         let unsafe_html_link = file.html_stylesheets.iter().any(|context| {
             context.direct && !context.analyzable && context.css_path == request.css_path
         });
-        if is_module
-            && (unsafe_html_link
-                || (request.vue_blocks.is_empty()
-                    && direct_html_link
-                    && !file.html_references_safe))
-        {
+        if is_module && (unsafe_html_link || (direct_html_link && !file.html_references_safe)) {
             module_references_safe = false;
         }
         // Inline scripts are never analyzed, so a script that names one of the
@@ -1808,7 +1730,6 @@ fn plan_request(
             .iter()
             .any(|context| context.css_path == request.css_path);
         if is_module
-            && request.vue_blocks.is_empty()
             && any_html_context
             && !file.html_script_text.is_empty()
             && rules.iter().any(|rule| {
@@ -1965,9 +1886,6 @@ fn plan_request(
                     "Other package CSS also targets a class this scoped rule matches, so deleting it could change the cascade; the rule is retained."
                         .to_string(),
                 )
-            } else if rule.warning == Some("dynamic-template-class") {
-                let (code, message) = vue_retention_warning("dynamic-template-class")?;
-                (code, message.to_string())
             } else if let Some(code) = rule.warning {
                 (
                     code,
@@ -4214,43 +4132,6 @@ mod tests {
     }
 
     #[test]
-    fn vue_opaque_classes_retain_only_selector_reachable_rules() {
-        let source = "<template>\n  <span :class=\"external\"></span>\n  <div class=\"safe\"></div>\n</template>\n<style scoped>\n.foo { padding: 13px; }\ndiv.safe { margin: 7px; }\n</style>\n";
-        let mut request = vue_batch_request(source, true, None);
-        let safe = source.find("\"safe\"").unwrap() + 1;
-        request["files"][0]["htmlElements"] = serde_json::json!([{
-            "tag": "span",
-            "classOpaque": true,
-        }, {
-            "tag": "div",
-            "classAttribute": {
-                "value": "safe",
-                "start": safe,
-                "end": safe + "safe".len(),
-            },
-        }]);
-
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
-
-        assert_eq!(response["convertedRules"], 1);
-        assert_eq!(response["retainedRules"], 1);
-        let warning = response["warnings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|warning| warning["code"] == "dynamic-template-class")
-            .unwrap();
-        let start = source.find(".foo { padding: 13px; }").unwrap();
-        assert_eq!(warning["start"], start);
-        assert_eq!(warning["end"], start + ".foo { padding: 13px; }".len());
-        assert!(response["files"][0]["source"]
-            .as_str()
-            .unwrap()
-            .contains("class=\"safe [div&]:m-[7px]\""));
-    }
-
-    #[test]
     fn vue_shadowed_scoped_rule_is_retained_without_template_edits() {
         let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n";
         let mut request = vue_batch_request(source, true, None);
@@ -5013,69 +4894,6 @@ mod tests {
                 .iter()
                 .any(|warning| warning["code"] == "dynamic-class-name")
         );
-    }
-
-    #[test]
-    fn batch_groups_conditional_literals_by_rendered_element_for_conflicts() {
-        let source = r#"<p :class="{ first: a, second: b }"></p>"#;
-        let first = source.find("first").unwrap();
-        let second = source.find("second").unwrap();
-        let node_start = source.find("<p").unwrap();
-        let site = |value: &str, start| serde_json::json!({
-            "nodeStart": node_start,
-            "tag": "p",
-            "classAttribute": {
-                "value": value,
-                "start": start,
-                "end": start + value.len(),
-                "rawValue": value,
-                "jsQuote": "'",
-                "htmlQuote": "\"",
-                "quoteKey": true,
-            },
-            "matchClasses": ["first", "second"],
-            "writeClasses": [value],
-        });
-        let request = serde_json::json!({
-            "stylesheets": [{
-                "cssPath": "/project/a.css",
-                "cssSource": ".first { padding: 8px; }\n",
-            }, {
-                "cssPath": "/project/b.css",
-                "cssSource": ".second { padding: 16px; }\n",
-            }],
-            "files": [{
-                "path": "/project/App.vue",
-                "source": source,
-                "htmlElements": [site("first", first), site("second", second)],
-                "htmlStylesheets": [{
-                    "cssPath": "/project/a.css",
-                    "variants": [],
-                    "direct": true,
-                    "analyzable": true,
-                }, {
-                    "cssPath": "/project/b.css",
-                    "variants": [],
-                    "direct": true,
-                    "analyzable": true,
-                }],
-                "htmlReferencesSafe": true,
-            }],
-        });
-
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
-
-        assert_eq!(
-            response["warnings"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|warning| warning["code"] == "batch-stylesheet-conflict")
-                .count(),
-            2
-        );
-        assert!(response["files"].as_array().unwrap().is_empty());
     }
 
     #[test]

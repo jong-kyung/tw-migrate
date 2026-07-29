@@ -29,9 +29,6 @@ use crate::{
 pub(crate) struct CandidateMatch {
     pub(crate) start: usize,
     pub(crate) end: usize,
-    /// Rendered-element identity for cross-stylesheet conflict grouping.
-    /// Authored warning and edit spans remain `start..end`.
-    pub(crate) element_start: Option<usize>,
     pub(crate) key: SelectorKey,
     pub(crate) candidate: String,
     pub(crate) origin_candidate: String,
@@ -52,6 +49,26 @@ pub(crate) struct SourcePlan {
 pub struct StaticImportBinding {
     pub source: String,
     pub local: String,
+}
+
+pub(crate) fn static_string_expression(
+    path: &str,
+    source: &str,
+) -> Result<Option<String>, String> {
+    let allocator = Allocator::default();
+    let source_type = source_type_for_path(path)?;
+    let expression = Parser::new(&allocator, source, source_type)
+        .parse_expression()
+        .map_err(|diagnostics| format!("Failed to parse {path}: {diagnostics:?}"))?;
+    Ok(match expression {
+        Expression::StringLiteral(literal) => Some(literal.value.to_string()),
+        Expression::TemplateLiteral(template) if template.expressions.is_empty() => template
+            .quasis
+            .first()
+            .and_then(|quasi| quasi.value.cooked.as_ref())
+            .map(ToString::to_string),
+        _ => None,
+    })
 }
 
 pub(crate) fn static_import_bindings(
@@ -709,7 +726,6 @@ impl UsageCollector<'_> {
                 self.matches.push(CandidateMatch {
                     start: insertion,
                     end: insertion,
-                    element_start: None,
                     key: key.clone(),
                     candidate: candidate.clone(),
                     origin_candidate: candidate.clone(),
@@ -751,7 +767,6 @@ impl UsageCollector<'_> {
                     self.matches.push(CandidateMatch {
                         start: span.start as usize,
                         end: span.end as usize,
-                        element_start: None,
                         key: key.clone(),
                         candidate: candidate.clone(),
                         origin_candidate: candidate.clone(),
@@ -767,7 +782,6 @@ impl UsageCollector<'_> {
             self.matches.push(CandidateMatch {
                 start: span.start as usize,
                 end: span.end as usize,
-                element_start: None,
                 key: key.clone(),
                 candidate: candidate.clone(),
                 origin_candidate: candidate.clone(),
@@ -969,7 +983,6 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
                     self.matches.push(CandidateMatch {
                         start: container.span.start as usize,
                         end: container.span.end as usize,
-                        element_start: None,
                         key: key.clone(),
                         candidate: candidate.clone(),
                         origin_candidate: candidate.clone(),

@@ -876,7 +876,8 @@ function buildVueComponentGraph(
       if (matches.length !== 1) return [];
       const edge = { parent: file.path, child: matches[0].target, site };
       callers.get(edge.child).push(edge);
-      if (site.idAttribute || site.idOpaque) {
+      if (site.idAttribute || analysis.dynamic) {
+        callerOpen.add(edge.child);
         analyses.get(edge.child).rootIdsOverridden = true;
       }
       // A component rendered as a single-root parent's root chains the
@@ -1185,55 +1186,19 @@ async function preparePackageVue({
     ownedSources.every((file) => targetable.has(file.path)) &&
     ownedVue.every((file) => !analyses.get(file.path).retained);
   const elementsByFile = new Map();
-  const attributeClasses = (attribute) =>
-    attribute?.value.split(/[ \t\n\f\r]+/).filter(Boolean) ?? [];
-  const elementClasses = (element) =>
-    [element.classAttribute, ...(element.classSites ?? [])].flatMap(attributeClasses);
   const addElement = (path, element, cssPaths) => {
-    if (cssPaths.length === 0) return;
-    const contexts = [...new Set(cssPaths)];
+    if (!element.classAttribute || cssPaths.length === 0) return;
     const elements = elementsByFile.get(path) ?? [];
-    const classSites = element.classSites ?? [];
-    const allClasses = [...new Set([...(element.matchClasses ?? []), ...elementClasses(element)])];
-    if (element.classAttribute) {
-      elements.push({
-        ...element,
-        classSites: undefined,
-        classOpaque: false,
-        cssPaths: contexts,
-        matchClasses: element.matchClasses,
-      });
-    }
-    for (const classAttribute of classSites) {
-      elements.push({
-        ...element,
-        classAttribute,
-        classSites: undefined,
-        classOpaque: false,
-        cssPaths: contexts,
-        matchClasses: allClasses,
-        writeClasses: attributeClasses(classAttribute),
-      });
-    }
-    if (element.classOpaque) {
-      elements.push({
-        ...element,
-        classAttribute: undefined,
-        classSites: undefined,
-        cssPaths: contexts,
-        matchClasses: allClasses,
-      });
-    }
+    elements.push({ ...element, cssPaths: [...new Set(cssPaths)] });
     elementsByFile.set(path, elements);
   };
+  const elementClasses = (element) =>
+    element.matchClasses ?? element.classAttribute?.value.split(/\s+/).filter(Boolean) ?? [];
   const componentRootSite = (site, root) => ({
     ...site,
-    matchClasses: [site.classAttribute, root.classAttribute].flatMap(attributeClasses),
-    matchIds: site.idOpaque
-      ? []
-      : [site.idAttribute?.value ?? root.idAttribute?.value].filter(Boolean),
+    matchClasses: [...elementClasses(site), ...elementClasses(root)],
+    matchIds: [site.idAttribute?.value ?? root.idAttribute?.value].filter(Boolean),
     matchTag: root.tag,
-    classOpaque: site.classOpaque,
   });
 
   for (const file of selected) {
@@ -1313,15 +1278,10 @@ async function preparePackageVue({
         addElement(parent.path, edge.site, [edge.child]);
         if (childRoots?.length === 1) {
           const shadowSite = componentRootSite(edge.site, childRoots[0]);
-          shadowSite.classAttribute = shadowSite.classAttribute && {
-            ...shadowSite.classAttribute,
-            writable: false,
-          };
-          shadowSite.classSites = shadowSite.classSites.map((attribute) => ({
-            ...attribute,
-            writable: false,
-          }));
-          addElement(parent.path, shadowSite, [edge.child]);
+          if (shadowSite.classAttribute) {
+            shadowSite.classAttribute = { ...shadowSite.classAttribute, writable: false };
+            addElement(parent.path, shadowSite, [edge.child]);
+          }
         }
       }
     }
@@ -1336,19 +1296,15 @@ async function preparePackageVue({
       analysis.componentsOpen ||
       analysis.resolvedComponents.some((edge) => {
         const child = analyses.get(edge.child);
-        const root = child?.htmlElements.find(
-          (element) => element.nodeStart === child.rootStarts[0],
-        );
         return (
           !child ||
           child.retained ||
+          child.dynamic ||
           child.fallthroughUnverifiable ||
           child.rootVFor ||
           child.rootFragment ||
           child.rootStarts.length !== 1 ||
-          !root ||
-          root.classOpaque ||
-          root.classSites.length > 0
+          !child.htmlElements.some((element) => element.nodeStart === child.rootStarts[0])
         );
       });
     const callers = vueGraph.callers.get(file.path);
@@ -1356,8 +1312,10 @@ async function preparePackageVue({
       !packageIsPrivate ||
       callers.length === 0 ||
       vueGraph.callerOpen.has(file.path) ||
-      callers.some((edge) => analyses.get(edge.parent)?.retained);
-    const retention = analysis.idOpaque
+      callers.some(
+        (edge) => analyses.get(edge.parent)?.dynamic || analyses.get(edge.parent)?.retained,
+      );
+    const retention = analysis.dynamic
       ? "dynamic-template-class"
       : componentOpen
         ? "component-class-target"

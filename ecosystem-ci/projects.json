@@ -2003,11 +2003,12 @@
             }
           },
           "selector": {
-            "type": "data",
-            "value": "card"
+            "type": "role",
+            "value": "button",
+            "name": "Toggle details"
           },
           "cardinality": 1,
-          "identity": ["card"]
+          "identity": ["action"]
         },
         "focus-visible": {
           "route": "/",
