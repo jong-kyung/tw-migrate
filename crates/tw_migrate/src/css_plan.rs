@@ -81,6 +81,7 @@ pub(crate) struct ParsedCss {
 pub(crate) struct ParseOptions {
     pub(crate) syntax: Syntax,
     pub(crate) is_module: bool,
+    pub(crate) allow_arbitrary_selectors: bool,
     pub(crate) can_move_at_rules: bool,
     pub(crate) relative_urls_stable: bool,
 }
@@ -95,6 +96,7 @@ pub(crate) fn parse_css_rules(
     let ParseOptions {
         syntax,
         is_module,
+        allow_arbitrary_selectors,
         can_move_at_rules,
         relative_urls_stable,
     } = options;
@@ -162,14 +164,15 @@ pub(crate) fn parse_css_rules(
     for (rule, outer_variants) in qualified_rules {
         let selector = source[rule.selector.span.start..rule.selector.span.end].to_string();
         let mut relationship = None;
-        let selector_match = selector_match(rule, source, is_module).or_else(|| {
-            if !is_module {
-                return None;
-            }
-            let (key, variant, decomposed) = module_relationship_match(rule)?;
-            relationship = Some(decomposed);
-            Some((key, variant))
-        });
+        let selector_match = selector_match(rule, source, is_module, allow_arbitrary_selectors)
+            .or_else(|| {
+                if !is_module || allow_arbitrary_selectors {
+                    return None;
+                }
+                let (key, variant, decomposed) = module_relationship_match(rule)?;
+                relationship = Some(decomposed);
+                Some((key, variant))
+            });
         let key = selector_match.as_ref().map(|(key, _)| key.clone());
         let (target_tag, target_ids) = selector_target_constraints(rule);
         let mut variants = outer_variants;
@@ -905,6 +908,7 @@ fn selector_match(
     rule: &oxc_css_parser::ast::QualifiedRule<'_>,
     source: &str,
     is_module: bool,
+    allow_arbitrary_selectors: bool,
 ) -> Option<(SelectorKey, Option<String>)> {
     let selector = rule.selector.selectors.first()?;
     if rule.selector.selectors.len() != 1 {
@@ -920,7 +924,7 @@ fn selector_match(
         }
         // A key plus one argument-less pseudo-class was already rejected above
         // (unsupported state); it must not fall through to an arbitrary variant.
-        if is_module
+        if (is_module && !allow_arbitrary_selectors)
             || matches!(
                 compound.children.as_slice(),
                 [_, SimpleSelector::PseudoClass(pseudo)] if pseudo.arg.is_none()
@@ -928,18 +932,20 @@ fn selector_match(
         {
             return None;
         }
-        let key = selector_key(compound.children.first()?)?;
+        let key = compound.children.iter().find_map(selector_key)?;
         let variant = arbitrary_selector_variant(rule, source, compound)?;
         return Some((key, variant));
     }
 
+    // Vue scoped descendants carry a scope attribute on every compound;
+    // one Tailwind arbitrary variant on the target cannot represent that.
     if is_module {
         return None;
     }
     let ComplexSelectorChild::CompoundSelector(target) = selector.children.last()? else {
         return None;
     };
-    let key = selector_key(target.children.first()?)?;
+    let key = target.children.iter().find_map(selector_key)?;
     let variant = arbitrary_selector_variant(rule, source, target)?;
     Some((key, variant))
 }
@@ -1050,11 +1056,11 @@ fn arbitrary_selector_variant(
     // Replace the target simple selector by its parsed span. Searching the
     // selector text for ".name" matched the wrong occurrence when the name
     // recurred later (e.g. inside `:not(.abc)` for `.a:not(.abc)`).
-    let target_span = match target.children.first()? {
-        SimpleSelector::Class(class) if literal_ident(&class.name).is_some() => class.span,
-        SimpleSelector::Id(id) if literal_ident(&id.name).is_some() => id.span,
-        _ => return None,
-    };
+    let target_span = target.children.iter().find_map(|selector| match selector {
+        SimpleSelector::Class(class) if literal_ident(&class.name).is_some() => Some(class.span),
+        SimpleSelector::Id(id) if literal_ident(&id.name).is_some() => Some(id.span),
+        _ => None,
+    })?;
     let selector_span = rule.selector.span;
     let mut condition = source[selector_span.start..selector_span.end].to_string();
     condition.replace_range(

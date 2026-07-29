@@ -417,6 +417,215 @@ test("appends utilities to a literal class site beside a dynamic binding", async
   }
 });
 
+test("migrates expression-local Vue class literals without changing their conditions", async () => {
+  const cwd = await fixture();
+  const vue =
+    "<template>\n  <div :class=\"['base', { active: on, [wide ? 'wide' : 'narrow']: choose }, ok && ['nested'], ...[{ spread: yes }]]\">A</div>\n  <span>B</span>\n</template>\n<script setup lang=\"ts\">\nconst on = true; const wide = true; const choose = true; const ok = true; const yes = true;\n</script>\n<style scoped>\n.base { padding: 1px; }\n.active { margin: 2px; }\n.wide { gap: 3px; }\n.narrow { top: 4px; }\n.nested { left: 5px; }\n.spread { right: 6px; }\n</style>\n";
+  try {
+    await writeFile(join(cwd, "Literal.vue"), vue);
+    const first = await migrate({ cwd, styleFile: "Literal.vue", write: true });
+    const output = await readFile(join(cwd, "Literal.vue"), "utf8");
+    assert.equal(first.convertedRules, 6);
+    assert.ok(!first.warnings.some((entry) => entry.code === "dynamic-template-class"));
+    assert.match(output, /'base p-\[1px\]'/);
+    assert.match(output, /'active m-\[2px\]': on/);
+    assert.match(output, /wide \? 'wide gap-\[3px\]' : 'narrow top-\[4px\]'/);
+    assert.match(output, /ok && \['nested left-\[5px\]'\]/);
+    assert.match(output, /\.\.\.\[\{ 'spread right-\[6px\]': yes \}\]/);
+    assert.doesNotMatch(output, /<style/);
+    const second = await migrate({ cwd, styleFile: "Literal.vue", write: true });
+    assert.deepEqual(second.changedFiles, []);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("preserves object shorthand conditions in literal Vue class bindings", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <div :class="{ active }">A</div>\n  <span>B</span>\n</template>\n<script setup>\nconst active = true;\n</script>\n<style scoped>\n.active { margin: 7px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Shorthand.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Shorthand.vue", write: true });
+    const output = await readFile(join(cwd, "Shorthand.vue"), "utf8");
+    assert.equal(report.convertedRules, 1);
+    assert.match(output, /:class="\{ 'active m-\[7px\]': active \}"/);
+    assert.doesNotMatch(output, /<style/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("keeps numeric computed Vue class keys opaque", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <div :class="{ [0x10]: on, [1e21]: huge }">A</div>\n  <span>B</span>\n</template>\n<script setup>\nconst on = true;\nconst huge = true;\n</script>\n<style scoped>\n.\\31 6 { margin: 7px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Numeric.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Numeric.vue", write: true });
+    assert.equal(report.convertedRules, 0);
+    assert.ok(report.warnings.some((entry) => entry.code === "dynamic-template-class"));
+    assert.equal(await readFile(join(cwd, "Numeric.vue"), "utf8"), vue);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("retains multi-compound Vue scoped selectors", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <div class="outer"><span class="inner">A</span></div>\n  <p>B</p>\n</template>\n<style scoped>\n.outer .inner { margin: 7px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Descendant.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Descendant.vue", write: true });
+    const output = await readFile(join(cwd, "Descendant.vue"), "utf8");
+    assert.equal(report.convertedRules, 0);
+    assert.match(output, /\.outer \.inner \{ margin: 7px; \}/);
+    assert.doesNotMatch(output, /\[\.outer_&\]:m-\[7px\]/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("uses DOM ASCII whitespace for Vue class binding tokens", async () => {
+  const cwd = await fixture();
+  const vue =
+    "<template>\n  <div :class=\"['a b']\">A</div>\n  <span>B</span>\n</template>\n<style scoped>\n.a { margin: 7px; }\n</style>\n";
+  try {
+    await writeFile(join(cwd, "Whitespace.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Whitespace.vue", write: true });
+    const output = await readFile(join(cwd, "Whitespace.vue"), "utf8");
+    assert.equal(report.convertedRules, 0);
+    assert.match(output, /'a b'/);
+    assert.match(output, /\.a \{ margin: 7px; \}/);
+    assert.doesNotMatch(output, /m-\[7px\]/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("preserves Vue binding quotes and multibyte authored offsets beside static classes", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <div title="한글" class="always" v-bind:class=\'["conditional"]\'>A</div>\n  <span>B</span>\n</template>\n<style scoped>\n.always { padding: 13px; }\n.conditional { margin: 7px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Quotes.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Quotes.vue", write: true });
+    const output = await readFile(join(cwd, "Quotes.vue"), "utf8");
+    assert.match(
+      output,
+      /title="한글" class="always p-\[13px\]" v-bind:class='\["conditional m-\[7px\]"\]'/,
+    );
+    const ruleStart = Buffer.byteLength(vue.slice(0, vue.indexOf(".conditional")));
+    assert.deepEqual(report.rules.find((rule) => rule.selector === ".conditional")?.authoredSpan, {
+      start: ruleStart,
+      end: ruleStart + ".conditional { margin: 7px; }".length,
+    });
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("keeps entity-encoded Vue class expressions opaque", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <div :class="[&quot;card&quot;]">A</div>\n  <span>B</span>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Entity.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Entity.vue" });
+    assert.equal(report.convertedRules, 0);
+    assert.ok(report.warnings.some((entry) => entry.code === "dynamic-template-class"));
+    assert.doesNotMatch(report.diff, /p-\[13px\]/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("appends proven Vue class fragments while retaining only selector-reachable opaque rules", async () => {
+  const cwd = await fixture();
+  const vue =
+    "<template>\n  <span :class=\"['known', external, call(), `btn-${size}`, 'x' + suffix]\">A</span>\n  <div class=\"box\">B</div>\n</template>\n<style scoped>\n.known { margin: 7px; }\ndiv.box { padding: 13px; }\n</style>\n";
+  try {
+    await writeFile(join(cwd, "Partial.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Partial.vue", write: true });
+    const output = await readFile(join(cwd, "Partial.vue"), "utf8");
+    assert.equal(report.convertedRules, 1);
+    assert.equal(report.retainedRules, 1);
+    assert.ok(report.warnings.some((entry) => entry.code === "dynamic-template-class"));
+    assert.match(output, /'known m-\[7px\]'/);
+    assert.match(output, /\.known \{ margin: 7px; \}/);
+    assert.match(output, /class="box \[div&\]:p-\[13px\]"/);
+    assert.doesNotMatch(output, /div\.box \{ padding: 13px; \}/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("migrates literal Vue component call-site classes through root fallthrough", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        "<template>\n  <div>Child</div>\n</template>\n<style scoped>\n.passed { padding: 13px; }\n</style>\n",
+      ),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Child :class="{ passed: enabled }" />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\nconst enabled = true;\n</script>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Child.vue", write: true });
+    assert.equal(report.convertedRules, 1);
+    assert.match(
+      await readFile(join(cwd, "Parent.vue"), "utf8"),
+      /:class="\{ 'passed p-\[13px\]': enabled \}"/,
+    );
+    assert.doesNotMatch(await readFile(join(cwd, "Child.vue"), "utf8"), /<style/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("does not leak parent scoped utilities through conditional child-root classes", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "ConditionalChild.vue"),
+        '<template>\n  <div :class="{ leaf: enabled }">Child</div>\n</template>\n',
+      ),
+      writeFile(
+        join(cwd, "ScopedParent.vue"),
+        '<template>\n  <ConditionalChild />\n  <main>Parent</main>\n</template>\n<script setup>\nimport ConditionalChild from "./ConditionalChild.vue";\n</script>\n<style scoped>\n.leaf { margin: 7px; }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd, styleFile: "ScopedParent.vue", write: true });
+    assert.equal(report.convertedRules, 0);
+    assert.ok(report.warnings.some((entry) => entry.code === "component-class-target"));
+    assert.doesNotMatch(await readFile(join(cwd, "ConditionalChild.vue"), "utf8"), /m-\[7px\]/);
+    assert.doesNotMatch(await readFile(join(cwd, "ScopedParent.vue"), "utf8"), /m-\[7px\]/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("keeps unconditional id utilities outside conditional Vue class branches", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <div id="hero" :class="{ active: on }">한글</div>\n  <span>Leaf</span>\n</template>\n<style scoped>\n#hero { padding: 13px; }\n.active { margin: 7px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Id.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Id.vue", write: true });
+    const output = await readFile(join(cwd, "Id.vue"), "utf8");
+    assert.match(output, /id="hero" :class="\{ 'active m-\[7px\]': on \}" class="p-\[13px\]"/);
+    assert.match(output, /#hero \{ padding: 13px; \}/);
+    assert.doesNotMatch(output, /\.active \{ margin: 7px; \}/);
+    assert.ok(report.rules.some((rule) => rule.selector === "#hero" && rule.status === "retained"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("ignores custom directive runtime mutations outside static template scope", async () => {
   const cwd = await fixture();
   const vue =

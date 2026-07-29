@@ -178,13 +178,19 @@ fn vue_retention_warning(code: &str) -> Result<(&'static str, &'static str), Str
     }
 }
 
+pub(crate) fn class_tokens(value: &str) -> impl Iterator<Item = &str> {
+    value
+        .split([' ', '\t', '\n', '\r', '\u{000c}'])
+        .filter(|token| !token.is_empty())
+}
+
 pub(crate) fn element_classes(element: &HtmlElement) -> Vec<&str> {
     element.match_classes.as_ref().map_or_else(
         || {
             element
                 .class_attribute
                 .as_ref()
-                .map(|attribute| attribute.value.split_whitespace().collect())
+                .map(|attribute| class_tokens(&attribute.value).collect())
                 .unwrap_or_default()
         },
         |classes| classes.iter().map(String::as_str).collect(),
@@ -498,6 +504,9 @@ pub(crate) struct HtmlAttribute {
     /// The authored span is an unquoted object key and needs delimiters.
     #[serde(default)]
     pub(crate) quote_key: bool,
+    /// The key is object shorthand and needs its original value restored.
+    #[serde(default)]
+    pub(crate) object_shorthand: bool,
 }
 
 #[derive(Clone, Deserialize)]
@@ -1185,6 +1194,7 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
             ParseOptions {
                 syntax: analysis_syntax,
                 is_module,
+                allow_arbitrary_selectors: !request.vue_blocks.is_empty(),
                 can_move_at_rules,
                 relative_urls_stable,
             },
@@ -1295,6 +1305,7 @@ fn parse_vue_rules(
                     block.syntax.parser_syntax()
                 },
                 is_module,
+                allow_arbitrary_selectors: true,
                 can_move_at_rules: false,
                 relative_urls_stable,
             },
@@ -1717,13 +1728,17 @@ fn plan_request(
         .collect::<BTreeSet<_>>();
     let blocked_classes = rules
         .iter()
-        .filter(|rule| rule.warning.is_some() && !(batch_mode && is_batch_retained(rule.warning)))
+        .filter(|rule| {
+            rule.warning.is_some()
+                && rule.warning != Some("dynamic-template-class")
+                && !(batch_mode && is_batch_retained(rule.warning))
+        })
         .flat_map(|rule| rule.related_classes.iter().cloned())
         .collect::<BTreeSet<_>>();
     let mut candidate_map: HashMap<SelectorKey, Vec<String>> = HashMap::new();
     for rule in &rules {
         if let Some(key) = &rule.key
-            && rule.warning.is_none()
+            && (rule.warning.is_none() || rule.warning == Some("dynamic-template-class"))
             && !matches!(key, SelectorKey::Class(name) if blocked_classes.contains(name))
         {
             candidate_map
@@ -1778,7 +1793,12 @@ fn plan_request(
         let unsafe_html_link = file.html_stylesheets.iter().any(|context| {
             context.direct && !context.analyzable && context.css_path == request.css_path
         });
-        if is_module && (unsafe_html_link || (direct_html_link && !file.html_references_safe)) {
+        if is_module
+            && (unsafe_html_link
+                || (request.vue_blocks.is_empty()
+                    && direct_html_link
+                    && !file.html_references_safe))
+        {
             module_references_safe = false;
         }
         // Inline scripts are never analyzed, so a script that names one of the
@@ -1788,6 +1808,7 @@ fn plan_request(
             .iter()
             .any(|context| context.css_path == request.css_path);
         if is_module
+            && request.vue_blocks.is_empty()
             && any_html_context
             && !file.html_script_text.is_empty()
             && rules.iter().any(|rule| {
@@ -4212,8 +4233,8 @@ mod tests {
         let response: serde_json::Value =
             serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
 
-        assert_eq!(response["convertedRules"], 0);
-        assert_eq!(response["retainedRules"], 2);
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(response["retainedRules"], 1);
         let warning = response["warnings"]
             .as_array()
             .unwrap()
@@ -4223,14 +4244,10 @@ mod tests {
         let start = source.find(".foo { padding: 13px; }").unwrap();
         assert_eq!(warning["start"], start);
         assert_eq!(warning["end"], start + ".foo { padding: 13px; }".len());
-        let safe_start = source.find("div.safe { margin: 7px; }").unwrap();
-        let safe_warning = response["warnings"]
-            .as_array()
+        assert!(response["files"][0]["source"]
+            .as_str()
             .unwrap()
-            .iter()
-            .find(|warning| warning["start"] == safe_start)
-            .unwrap();
-        assert_eq!(safe_warning["code"], "unsupported-selector");
+            .contains("class=\"safe [div&]:m-[7px]\""));
     }
 
     #[test]

@@ -4,8 +4,8 @@ use crate::{
     css_plan::SelectorKey,
     js_rewrite::{CandidateMatch, SourcePlan},
     planner::{
-        element_classes, element_ids, writable_element_classes, Edit, HtmlAttribute, SourceFile,
-        Warning,
+        class_tokens, element_classes, element_ids, writable_element_classes, Edit, HtmlAttribute,
+        SourceFile, Warning,
     },
     utilities::tailwind_utilities_conflict,
 };
@@ -75,9 +75,7 @@ pub(crate) fn plan_html_file(
             }
             continue;
         }
-        let mut classes = class_attribute
-            .value
-            .split_whitespace()
+        let mut classes = class_tokens(&class_attribute.value)
             .map(str::to_string)
             .collect::<Vec<_>>();
         let mut additions = Vec::new();
@@ -169,7 +167,14 @@ pub(crate) fn plan_html_file(
         let replacement = if class_attribute.synthetic {
             format!(" class=\"{value}\"")
         } else if let Some((js_quote, raw)) = js_site {
-            render_js_site(raw, js_quote, class_attribute.quote_key, &new_candidates)
+            render_js_site(
+                raw,
+                &class_attribute.value,
+                js_quote,
+                class_attribute.quote_key,
+                class_attribute.object_shorthand,
+                &new_candidates,
+            )
         } else {
             value
         };
@@ -325,6 +330,7 @@ fn has_directive_metadata(attribute: &HtmlAttribute) -> bool {
         || attribute.html_quote.is_some()
         || attribute.raw_value.is_some()
         || attribute.quote_key
+        || attribute.object_shorthand
 }
 
 fn directive_site<'a>(source: &str, attribute: &'a HtmlAttribute) -> Option<(u8, &'a str)> {
@@ -342,16 +348,27 @@ fn single_quote_byte(value: &str) -> Option<u8> {
     (bytes.len() == 1 && matches!(bytes[0], b'\'' | b'"' | b'`')).then_some(bytes[0])
 }
 
-fn render_js_site(raw: &str, quote: u8, quote_key: bool, additions: &[String]) -> String {
-    let mut value = raw.to_string();
+fn render_js_site(
+    raw: &str,
+    runtime_value: &str,
+    quote: u8,
+    quote_key: bool,
+    object_shorthand: bool,
+    additions: &[String],
+) -> String {
+    let mut value = if quote_key { runtime_value } else { raw }.to_string();
     for candidate in additions {
         value.push(' ');
         value.push_str(&escape_js_content(candidate, quote));
     }
-    if quote_key {
-        format!("{}{}{}", char::from(quote), value, char::from(quote))
+    if !quote_key {
+        return value;
+    }
+    let quoted = format!("{}{}{}", char::from(quote), value, char::from(quote));
+    if object_shorthand {
+        format!("{quoted}: {raw}")
     } else {
-        value
+        quoted
     }
 }
 
@@ -376,7 +393,12 @@ fn appended_runtime_value(
     quote: u8,
 ) -> Option<String> {
     let raw = attribute.raw_value.as_deref()?;
-    let suffix = replacement.strip_prefix(raw)?;
+    let prefix = if attribute.quote_key {
+        attribute.value.as_str()
+    } else {
+        raw
+    };
+    let suffix = replacement.strip_prefix(prefix)?;
     if suffix.is_empty() {
         return Some(attribute.value.clone());
     }
@@ -483,6 +505,7 @@ fn rebased_attributes(file: &SourceFile) -> HashMap<usize, HtmlAttribute> {
                 js_quote: attribute.js_quote,
                 html_quote: attribute.html_quote,
                 quote_key: attribute.quote_key,
+                object_shorthand: attribute.object_shorthand,
             },
         );
     }
@@ -525,17 +548,33 @@ fn rebase_attribute(mut attribute: HtmlAttribute, edits: &[Edit]) -> Option<Html
             .and_then(single_quote_byte)
         {
             let replacement = if attribute.quote_key {
-                let quoted = edit.replacement.as_bytes();
+                let shorthand_suffix = if attribute.object_shorthand {
+                    Some(format!(": {}", attribute.raw_value.as_deref()?))
+                } else {
+                    None
+                };
+                let quoted = shorthand_suffix
+                    .as_deref()
+                    .map_or(edit.replacement.as_str(), |suffix| {
+                        edit.replacement.strip_suffix(suffix).unwrap_or("")
+                    });
+                let quoted = quoted.as_bytes();
                 if quoted.first() != Some(&quote) || quoted.last() != Some(&quote) {
                     return None;
                 }
-                attribute.start += 1;
-                attribute.quote_key = false;
-                &edit.replacement[1..edit.replacement.len() - 1]
+                let content_end = edit.replacement.len()
+                    - shorthand_suffix.as_deref().map_or(0, str::len)
+                    - 1;
+                &edit.replacement[1..content_end]
             } else {
                 edit.replacement.as_str()
             };
             attribute.value = appended_runtime_value(&attribute, replacement, quote)?;
+            if attribute.quote_key {
+                attribute.start += 1;
+                attribute.quote_key = false;
+                attribute.object_shorthand = false;
+            }
             attribute.raw_value = Some(replacement.to_string());
             attribute.end = attribute.start + replacement.len();
         } else {
@@ -560,6 +599,7 @@ fn live_synthetic_class(source: &str, start: usize) -> Option<(HtmlAttribute, us
                 js_quote: None,
                 html_quote: None,
                 quote_key: false,
+                object_shorthand: false,
             },
             0,
         ));
@@ -577,6 +617,7 @@ fn live_synthetic_class(source: &str, start: usize) -> Option<(HtmlAttribute, us
             js_quote: None,
             html_quote: None,
             quote_key: false,
+            object_shorthand: false,
         },
         value_end + 1 - start,
     ))
@@ -657,6 +698,7 @@ mod tests {
                     js_quote: None,
                     html_quote: None,
                     quote_key: false,
+                    object_shorthand: false,
                 }),
                 id_attribute: None,
                 node_start: None,
@@ -696,6 +738,22 @@ mod tests {
         // The reference stays partially unmigrated, so removal must stay blocked.
         assert_eq!(plan.module_refs.get("card"), Some(&1));
         assert_eq!(plan.matched_module_refs.get("card"), None);
+    }
+
+    #[test]
+    fn treats_only_dom_ascii_whitespace_as_class_separators() {
+        let source = "<div class=\"a\u{a0}b\"></div>";
+        let value = "a\u{a0}b";
+        let file = quoted_fixture(source, source.find(value).unwrap(), value);
+        let candidates = HashMap::from([(
+            SelectorKey::Class("a".to_string()),
+            vec!["m-2".to_string()],
+        )]);
+
+        let plan = plan_html_file(&file, "/project/site.css", &candidates, None);
+
+        assert!(plan.edits.is_empty());
+        assert!(plan.module_refs.is_empty());
     }
 
     #[test]
@@ -744,6 +802,7 @@ mod tests {
                 js_quote: Some("'".to_string()),
                 html_quote: Some("\"".to_string()),
                 quote_key: true,
+                object_shorthand: false,
             }),
             id_attribute: None,
             node_start: Some(source.find("<p").unwrap()),
@@ -791,6 +850,7 @@ mod tests {
                 js_quote: Some("\"".to_string()),
                 html_quote: Some("\"".to_string()),
                 quote_key: true,
+                object_shorthand: false,
             }),
             id_attribute: None,
             node_start: None,
@@ -831,6 +891,7 @@ mod tests {
                 js_quote: Some("'".to_string()),
                 html_quote: Some("\"".to_string()),
                 quote_key: false,
+                object_shorthand: false,
             }),
             id_attribute: None,
             node_start: None,
@@ -871,6 +932,7 @@ mod tests {
                 js_quote: Some("'".to_string()),
                 html_quote: Some("\"".to_string()),
                 quote_key: false,
+                object_shorthand: false,
             }),
             id_attribute: None,
             node_start: None,
@@ -911,6 +973,7 @@ mod tests {
             js_quote: None,
             html_quote: None,
             quote_key: false,
+            object_shorthand: false,
         };
         let conditional = HtmlElement {
             class_attribute: Some(HtmlAttribute {
@@ -923,6 +986,7 @@ mod tests {
                 js_quote: Some("'".to_string()),
                 html_quote: Some("\"".to_string()),
                 quote_key: true,
+                object_shorthand: false,
             }),
             id_attribute: Some(id.clone()),
             node_start: Some(source.find("<p").unwrap()),
@@ -945,6 +1009,7 @@ mod tests {
                 js_quote: None,
                 html_quote: None,
                 quote_key: false,
+                object_shorthand: false,
             }),
             id_attribute: Some(id),
             node_start: Some(source.find("<p").unwrap()),
@@ -1002,6 +1067,7 @@ mod tests {
                     js_quote: Some("'".to_string()),
                     html_quote: Some("\"".to_string()),
                     quote_key: false,
+                    object_shorthand: false,
                 }),
                 id_attribute: None,
                 node_start: None,
@@ -1024,6 +1090,7 @@ mod tests {
                     js_quote: Some("`".to_string()),
                     html_quote: Some("\"".to_string()),
                     quote_key: false,
+                    object_shorthand: false,
                 }),
                 id_attribute: None,
                 node_start: None,
@@ -1059,6 +1126,75 @@ mod tests {
     }
 
     #[test]
+    fn preserves_object_shorthand_values_when_quoting_keys() {
+        let source = r#"<p :class="{ active }"></p>"#;
+        let start = source.find("active").unwrap();
+        let mut file = quoted_fixture(source, start, "active");
+        file.html_elements[0].class_attribute = Some(HtmlAttribute {
+            value: "active".to_string(),
+            start,
+            end: start + "active".len(),
+            synthetic: false,
+            writable: true,
+            raw_value: Some("active".to_string()),
+            js_quote: Some("'".to_string()),
+            html_quote: Some("\"".to_string()),
+            quote_key: true,
+            object_shorthand: true,
+        });
+        file.html_elements[0].write_classes = Some(vec!["active".to_string()]);
+        let candidates = HashMap::from([(
+            SelectorKey::Class("active".to_string()),
+            vec!["m-2".to_string()],
+        )]);
+
+        let plan = plan_html_file(&file, "/project/site.css", &candidates, None);
+        assert_eq!(plan.edits[0].replacement, "'active m-2': active");
+        let rebased = rebase_attribute(
+            file.html_elements[0].class_attribute.clone().unwrap(),
+            &plan.edits,
+        )
+        .unwrap();
+        assert_eq!(rebased.value, "active m-2");
+        assert_eq!(rebased.raw_value.as_deref(), Some("active m-2"));
+        assert!(!rebased.object_shorthand);
+    }
+
+    #[test]
+    fn canonicalizes_numeric_object_keys_before_rebasing() {
+        let source = r#"<p :class="{ [0x10]: on }"></p>"#;
+        let start = source.find("0x10").unwrap();
+        let mut file = quoted_fixture(source, start, "16");
+        file.html_elements[0].class_attribute = Some(HtmlAttribute {
+            value: "16".to_string(),
+            start,
+            end: start + "0x10".len(),
+            synthetic: false,
+            writable: true,
+            raw_value: Some("0x10".to_string()),
+            js_quote: Some("'".to_string()),
+            html_quote: Some("\"".to_string()),
+            quote_key: true,
+            object_shorthand: false,
+        });
+        file.html_elements[0].write_classes = Some(vec!["16".to_string()]);
+        let candidates = HashMap::from([(
+            SelectorKey::Class("16".to_string()),
+            vec!["m-2".to_string()],
+        )]);
+
+        let plan = plan_html_file(&file, "/project/site.css", &candidates, None);
+        assert_eq!(plan.edits[0].replacement, "'16 m-2'");
+        let rebased = rebase_attribute(
+            file.html_elements[0].class_attribute.clone().unwrap(),
+            &plan.edits,
+        )
+        .unwrap();
+        assert_eq!(rebased.value, "16 m-2");
+        assert_eq!(rebased.raw_value.as_deref(), Some("16 m-2"));
+    }
+
+    #[test]
     fn rebases_quoted_object_keys_without_losing_runtime_classes_or_spans() {
         let attribute = HtmlAttribute {
             value: "btn".to_string(),
@@ -1070,6 +1206,7 @@ mod tests {
             js_quote: Some("'".to_string()),
             html_quote: Some("\"".to_string()),
             quote_key: true,
+            object_shorthand: false,
         };
         let first = rebase_attribute(
             attribute,
@@ -1115,6 +1252,7 @@ mod tests {
                     js_quote: None,
                     html_quote: None,
                     quote_key: false,
+                    object_shorthand: false,
                 }),
                 id_attribute: Some(HtmlAttribute {
                     value: "hero".to_string(),
@@ -1126,6 +1264,7 @@ mod tests {
                     js_quote: None,
                     html_quote: None,
                     quote_key: false,
+                    object_shorthand: false,
                 }),
                 node_start: None,
                 match_classes: None,

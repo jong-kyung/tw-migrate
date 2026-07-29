@@ -19,6 +19,8 @@ pub struct VueClassSite {
     /// The authored JS quote delimiter, or `None` for a key that must be quoted
     /// when utilities make it cease to be a valid identifier.
     pub quote: Option<String>,
+    /// An object shorthand key needs its original value restored after quoting.
+    pub shorthand: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -106,7 +108,9 @@ impl Analyzer<'_> {
     fn object(&mut self, object: &ObjectExpression<'_>) {
         for property in &object.properties {
             match property {
-                ObjectPropertyKind::ObjectProperty(property) => self.property_key(&property.key),
+                ObjectPropertyKind::ObjectProperty(property) => {
+                    self.property_key(&property.key, property.shorthand)
+                }
                 ObjectPropertyKind::SpreadProperty(spread) => self.object_spread(&spread.argument),
             }
         }
@@ -123,13 +127,14 @@ impl Analyzer<'_> {
         }
     }
 
-    fn property_key(&mut self, key: &PropertyKey<'_>) {
+    fn property_key(&mut self, key: &PropertyKey<'_>, shorthand: bool) {
         match key {
             PropertyKey::StaticIdentifier(identifier) => self.sites.push(VueClassSite {
                 value: identifier.name.to_string(),
                 start: identifier.span.start,
                 end: identifier.span.end,
                 quote: None,
+                shorthand,
             }),
             key if key.as_expression().is_some() => {
                 self.computed_key(key.as_expression().expect("expression key"))
@@ -144,12 +149,9 @@ impl Analyzer<'_> {
                 self.quoted_site(literal.span, literal.value.as_str())
             }
             Expression::TemplateLiteral(template) => self.template(template),
-            Expression::NumericLiteral(literal) => self.sites.push(VueClassSite {
-                value: literal.value.to_string(),
-                start: literal.span.start,
-                end: literal.span.end,
-                quote: None,
-            }),
+            // Rust's numeric formatting does not match JavaScript's property-key
+            // coercion for every finite f64, so numeric keys stay opaque.
+            Expression::NumericLiteral(_) => self.opaque = true,
             Expression::ConditionalExpression(conditional) => {
                 self.computed_key(&conditional.consequent);
                 self.computed_key(&conditional.alternate);
@@ -191,6 +193,7 @@ impl Analyzer<'_> {
             start: span.start + 1,
             end: span.end - 1,
             quote: Some(char::from(quote).to_string()),
+            shorthand: false,
         });
     }
 }
@@ -236,6 +239,16 @@ mod tests {
     }
 
     #[test]
+    fn marks_object_shorthand_sites_for_semantics_preserving_rewrites() {
+        let analysis = analyze_vue_class_expression("Component.js", "{ active, fixed: cond }").unwrap();
+
+        assert!(!analysis.opaque);
+        assert_eq!(analysis.sites.len(), 2);
+        assert!(analysis.sites[0].shorthand);
+        assert!(!analysis.sites[1].shorthand);
+    }
+
+    #[test]
     fn keeps_proven_siblings_when_fragments_are_opaque() {
         let source =
             "['btn', external, call(), { fixed: cond, [name]: cond }, [...['nested'], ...other]]";
@@ -269,8 +282,8 @@ mod tests {
     }
 
     #[test]
-    fn marks_dynamic_templates_and_concatenation_opaque() {
-        let source = "['fixed', `btn-${size}`, 'a' + suffix]";
+    fn marks_unserializable_expressions_opaque() {
+        let source = "['fixed', `btn-${size}`, 'a' + suffix, { [1e21]: on }]";
         let analysis = analyze_vue_class_expression("Component.js", source).unwrap();
 
         assert!(analysis.opaque);
