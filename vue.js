@@ -419,9 +419,14 @@ function visitTemplateNode(source, node, state) {
         }
       }
       // Every unproven expression joins the module closure scan: `$style`
-      // escaping the proven form anywhere retains the module.
+      // escaping the proven form anywhere retains the module. A dynamic
+      // directive argument (`v-bind:[expr]`, `v-on:[expr]`) evaluates its
+      // expression at render time, so it joins the scan too.
       if (!provenModuleExpression && prop.exp?.content) {
         state.expressionTexts.push(prop.exp.content);
+      }
+      if (prop.arg && !prop.arg.isStatic && prop.arg.content) {
+        state.expressionTexts.push(prop.arg.content);
       }
       // Injected markup carries no scope attribute, so scoped proofs are
       // unaffected -- but it can use any class an unscoped rule targets.

@@ -555,6 +555,11 @@ struct RuleReport {
     /// Authored-domain rule span for anchoring caller-side warnings, or
     /// (0, 0) when the rule has no unique authored mapping.
     authored_span: RuleId,
+    /// Index of the owning batch stylesheet entry. Same-path entries (a Vue
+    /// SFC's scoped and module blocks) reuse local rule spans, so compile
+    /// failures must be attributed per entry, not per path; the JS caller
+    /// strips this before the public report.
+    stylesheet: usize,
 }
 
 #[derive(Serialize)]
@@ -1039,7 +1044,10 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
         candidates.extend(response.candidates);
         converted_rules += response.converted_rules;
         retained_rules += response.retained_rules;
-        rules.extend(response.rules);
+        rules.extend(response.rules.into_iter().map(|mut rule| {
+            rule.stylesheet = index;
+            rule
+        }));
         warnings.extend(response.warnings);
     }
 
@@ -1861,6 +1869,7 @@ fn plan_request(
                 file: request.css_path.clone(),
                 rule_id,
                 authored_span: report_authored_span,
+                stylesheet: 0,
             });
         } else if rule.warning == Some("candidate-compilation-failure") {
             // The caller blocked this rule after a Tailwind compilation
@@ -1873,6 +1882,7 @@ fn plan_request(
                 file: request.css_path.clone(),
                 rule_id,
                 authored_span: report_authored_span,
+                stylesheet: 0,
             });
         } else {
             retained_rules += 1;
@@ -1948,6 +1958,7 @@ fn plan_request(
                 file: request.css_path.clone(),
                 rule_id,
                 authored_span: report_authored_span,
+                stylesheet: 0,
             });
         }
     }

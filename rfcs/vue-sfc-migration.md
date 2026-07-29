@@ -266,11 +266,20 @@ and a second run produces no diff.
   (`:class="$style.x"` on a plain element): the binding is replaced by (or
   merged into) a static `class` attribute and the emptied block is removed.
   Any other `$style` or `useCssModule` appearance — template expressions,
-  interpolations, script text, or an unreadable script — retains the whole
-  module with `unsupported-css-module-reference`. Named modules
-  (`<style module="cls">`) retain with `unsupported-sfc-block`. Module class
-  and id names are localized at build time, so cascade-shadow checks apply
-  only to their global (type/attribute/`:global`) selector surface.
+  interpolations, dynamic directive arguments, script text, or an unreadable
+  script — retains the whole module with `unsupported-css-module-reference`.
+  Named modules (`<style module="cls">`) retain with `unsupported-sfc-block`.
+  Module class and id names are localized at build time, so cascade-shadow
+  checks apply only to their global (type/attribute/`:global`) selector
+  surface — but unknown classes can still land on a binding element and
+  compete for the same properties, so a dynamic template surface retains the
+  module with `dynamic-template-class` and an open single-root caller surface
+  retains it with `open-root-fallthrough`, mirroring the scoped gates.
+  (`component-class-target` does not apply: a child component's root can
+  never carry the hashed class, because a `$style` binding on a component tag
+  is already an opaque surface.) A binding whose element carries an
+  uneditable literal `class` attribute is never rewritten into a duplicate
+  attribute; the module is retained instead.
 - `<style src="…">` contributes a stylesheet consumer edge; module `src`
   forms retain.
 - `<script>` contents and languages do not participate in template closure.

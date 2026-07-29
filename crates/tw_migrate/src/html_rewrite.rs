@@ -350,6 +350,13 @@ pub(crate) fn plan_vue_module_file(
                 (class_attribute.start, class_attribute.end)
             }
             None => {
+                // A class attribute that exists but cannot be rewritten (not
+                // writable, or no longer live after prior edits) must not be
+                // duplicated by a second one; the unmatched reference retains
+                // the module instead.
+                if element.class_attribute.is_some() {
+                    continue;
+                }
                 // The rewritten attribute is double-quoted.
                 if additions.iter().any(|candidate| candidate.contains('"')) {
                     continue;

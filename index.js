@@ -175,7 +175,11 @@ export async function migrate(options = {}) {
     diff,
     convertedRules,
     retainedRules,
-    rules: rules.map((rule) => ({ ...rule, file: normalizedRelativePath(cwd, rule.file) })),
+    // `stylesheet` is internal compile-failure attribution, not public shape.
+    rules: rules.map(({ stylesheet: _, ...rule }) => ({
+      ...rule,
+      file: normalizedRelativePath(cwd, rule.file),
+    })),
     candidates: [...candidates].sort(),
     warnings: warnings.map((warning) => ({
       ...warning,
@@ -558,8 +562,11 @@ function replanCompileFailures(tailwind, request, initialPlan) {
     for (const rule of plan.rules) {
       const failed = rule.candidates.filter((candidate) => failing.includes(candidate));
       if (failed.length === 0) continue;
-      let blocked = blockedByStylesheet.get(rule.file);
-      if (!blocked) blockedByStylesheet.set(rule.file, (blocked = new Map()));
+      // Keyed by entry index, not cssPath: same-path Vue entries (scoped and
+      // module blocks) reuse local rule spans, so path-level attribution
+      // would block unrelated rules in the sibling entry.
+      let blocked = blockedByStylesheet.get(rule.stylesheet);
+      if (!blocked) blockedByStylesheet.set(rule.stylesheet, (blocked = new Map()));
       const key = `${rule.ruleId.start}-${rule.ruleId.end}`;
       let entry = blocked.get(key);
       if (!entry) {
@@ -578,9 +585,9 @@ function replanCompileFailures(tailwind, request, initialPlan) {
       planBatchMigration(
         JSON.stringify({
           ...request,
-          stylesheets: request.stylesheets.map((stylesheet) => ({
+          stylesheets: request.stylesheets.map((stylesheet, index) => ({
             ...stylesheet,
-            blockedRules: [...(blockedByStylesheet.get(stylesheet.cssPath)?.values() ?? [])].map(
+            blockedRules: [...(blockedByStylesheet.get(index)?.values() ?? [])].map(
               (entry) => entry.ruleId,
             ),
           })),
@@ -588,7 +595,8 @@ function replanCompileFailures(tailwind, request, initialPlan) {
       ),
     );
   }
-  for (const [cssPath, blocked] of blockedByStylesheet) {
+  for (const [index, blocked] of blockedByStylesheet) {
+    const cssPath = request.stylesheets[index].cssPath;
     for (const { authoredSpan, candidates } of blocked.values()) {
       const failed = [...candidates]
         .sort()
@@ -1361,16 +1369,42 @@ async function preparePackageVue({
         });
       }
     }
-    const migrateModule = analysis.moduleBlocks.length > 0 && !analysis.moduleClosureBroken;
-    if (analysis.moduleBlocks.length > 0 && analysis.moduleClosureBroken) {
+    // Module classes are hashed, so corpus CSS cannot target them directly --
+    // but unknown classes can still land on a binding element (a dynamic
+    // surface anywhere in the template, or parent fallthrough onto a single
+    // root) and compete for the same properties, so those surfaces must be
+    // closed exactly like the scoped ones. `componentOpen` is exempt: a child
+    // component's root can never carry the hashed class, because a `$style`
+    // binding on a component tag is already an opaque (dynamic) surface.
+    const moduleRetention = analysis.dynamic
+      ? "dynamic-template-class"
+      : analysis.alwaysRenderedRoots < 2 && callerOpen
+        ? "open-root-fallthrough"
+        : undefined;
+    const migrateModule =
+      analysis.moduleBlocks.length > 0 && !analysis.moduleClosureBroken && !moduleRetention;
+    if (analysis.moduleBlocks.length > 0 && !migrateModule) {
+      const [code, message] = analysis.moduleClosureBroken
+        ? [
+            "unsupported-css-module-reference",
+            "`$style` is referenced outside provable direct member accesses, so the module is retained.",
+          ]
+        : moduleRetention === "dynamic-template-class"
+          ? [
+              "dynamic-template-class",
+              "A dynamic class binding makes the template's class set unprovable, so the module is retained.",
+            ]
+          : [
+              "open-root-fallthrough",
+              "A parent component can merge classes onto the single root element, so the module is retained.",
+            ];
       for (const block of analysis.moduleBlocks) {
         warnings.push({
-          code: "unsupported-css-module-reference",
+          code,
           file: file.path,
           start: block.contentStart,
           end: block.contentEnd,
-          message:
-            "`$style` is referenced outside provable direct member accesses, so the module is retained.",
+          message,
         });
       }
     }

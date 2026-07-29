@@ -1447,7 +1447,7 @@ test("named module blocks retain with a warning", async () => {
 test("preprocessor module blocks compile before conversion", async () => {
   const cwd = await fixture();
   const vue =
-    '<template>\n  <p :class="$style.card">A</p>\n</template>\n<style module lang="scss">\n$pad: 13px;\n.card { padding: $pad; }\n</style>\n';
+    '<template>\n  <p :class="$style.card">A</p>\n  <p class="etc">B</p>\n</template>\n<style module lang="scss">\n$pad: 13px;\n.card { padding: $pad; }\n</style>\n';
   try {
     await writeFile(join(cwd, "Card.vue"), vue);
     await migrate({ cwd, styleFile: "Card.vue", write: true });
@@ -1464,7 +1464,7 @@ test("preprocessor module blocks compile before conversion", async () => {
 test("module :global escapes retain individually while siblings convert", async () => {
   const cwd = await fixture();
   const vue =
-    '<template>\n  <p :class="$style.card">A</p>\n</template>\n<style module>\n.card { padding: 13px; }\n:global(.free) { color: blue; }\n</style>\n';
+    '<template>\n  <p :class="$style.card">A</p>\n  <p class="etc">B</p>\n</template>\n<style module>\n.card { padding: 13px; }\n:global(.free) { color: blue; }\n</style>\n';
   try {
     await writeFile(join(cwd, "Card.vue"), vue);
     const report = await migrate({ cwd, styleFile: "Card.vue" });
@@ -1475,6 +1475,82 @@ test("module :global escapes retain individually while siblings convert", async 
       report.rules.some((rule) => rule.selector.includes(":global") && rule.status === "retained"),
     );
     assert.match(report.diff, /:global\(\.free\)/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a dynamic directive argument naming $style retains the module", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p :class="$style.card">A</p>\n  <p v-on:[$style.card]="go">B</p>\n</template>\n<script setup>\nconst go = () => {};\n</script>\n<style module>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Dyn.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Dyn.vue" });
+    assert.deepEqual(report.changedFiles, []);
+    assert.ok(report.warnings.some((entry) => entry.code === "unsupported-css-module-reference"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("an uneditable class attribute retains the module instead of duplicating it", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="plain&amp;x" :class="$style.card">A</p>\n  <p class="etc">B</p>\n</template>\n<style module>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Entity.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Entity.vue", write: true });
+    assert.deepEqual(report.changedFiles, []);
+    assert.ok(report.warnings.some((entry) => entry.code === "dynamic-template-class"));
+    assert.match(await readFile(join(cwd, "Entity.vue"), "utf8"), /\$style\.card/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("open caller and dynamic surfaces retain modules like scoped rules", async () => {
+  const cwd = await fixture();
+  const singleRoot =
+    '<template>\n  <p :class="$style.card">Single root</p>\n</template>\n<style module>\n.card { padding: 13px; }\n</style>\n';
+  const spread =
+    '<template>\n  <p v-bind="attrs" :class="$style.pad">A</p>\n  <p class="etc">B</p>\n</template>\n<script setup>\nconst attrs = { class: "danger" };\n</script>\n<style module>\n.pad { margin: 7px; }\n</style>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Root.vue"), singleRoot),
+      writeFile(join(cwd, "Spread.vue"), spread),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(!report.changedFiles.includes("Root.vue"));
+    assert.ok(!report.changedFiles.includes("Spread.vue"));
+    assert.ok(
+      report.warnings.some(
+        (entry) => entry.code === "open-root-fallthrough" && entry.file === "Root.vue",
+      ),
+    );
+    assert.ok(
+      report.warnings.some(
+        (entry) => entry.code === "dynamic-template-class" && entry.file === "Spread.vue",
+      ),
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a module compile failure never blocks the sibling scoped entry", async () => {
+  const cwd = await fixture();
+  // Both rules occupy the same block-local span, so path-level attribution
+  // would block the healthy scoped rule too.
+  const vue =
+    '<template>\n  <p class="a" :class="$style.bb">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.a { margin: 7px; }\n</style>\n<style module>\n.bb { COLOR: red; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Split.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Split.vue" });
+    assert.ok(report.rules.some((rule) => rule.selector === ".a" && rule.status === "converted"));
+    assert.ok(report.rules.some((rule) => rule.selector === ".bb" && rule.status === "retained"));
+    assert.ok(report.warnings.some((entry) => entry.code === "candidate-compilation-failure"));
+    assert.match(report.diff, /class="a m-\[7px\]"/);
   } finally {
     await cleanup(cwd);
   }
