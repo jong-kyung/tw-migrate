@@ -621,6 +621,23 @@ test("migrates a stylesheet statically imported by a Vue script", async () => {
   }
 });
 
+test("does not infer stylesheets from extensionless Vue script imports", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n</template>\n<script setup>\nimport helper from "./theme";\nvoid helper;\n</script>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "theme.js"), "export default 1;\n"),
+      writeFile(join(cwd, "theme.css"), ".card { margin: 7px; }\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.doesNotMatch(report.diff, /m-\[7px\]/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("propagates Vue consumer contexts through local CSS imports", async () => {
   const cwd = await fixture();
   const vue =
@@ -1426,6 +1443,29 @@ test("checks child-root sites before deleting parent scoped rules", async () => 
   }
 });
 
+test("keeps classless child roots in type-selector shadow checks", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        "<template>\n  <div>Child</div>\n</template>\n<style scoped>\n.passed { margin: 7px; }\n</style>\n",
+      ),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Child class="passed" />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+      ),
+      writeFile(join(cwd, "globals.css"), '@import "tailwindcss";\ndiv { margin: 0; }\n'),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Child.vue" });
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.ok(!report.changedFiles.includes("Child.vue"));
+    assert.doesNotMatch(report.diff, /m-\[7px\]/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("includes unselected child scoped rules in parent shadow checks", async () => {
   const cwd = await fixture();
   try {
@@ -1442,6 +1482,36 @@ test("includes unselected child scoped rules in parent shadow checks", async () 
     const report = await migrate({ cwd, styleFile: "Parent.vue" });
     assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
     assert.ok(!report.changedFiles.includes("Parent.vue"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("keeps caller proofs open when an owned SFC cannot be analyzed", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        "<template>\n  <div>Child</div>\n</template>\n<style scoped>\n.passed { margin: 7px; }\n</style>\n",
+      ),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Child class="passed" />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+      ),
+      writeFile(
+        join(cwd, "Hidden.vue"),
+        '<template>\n  <Child class="passed" />\n</template>\n<docs>unsupported</docs>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Child.vue" });
+    assert.ok(
+      report.rules.some(
+        (rule) =>
+          rule.file === "Child.vue" && rule.selector === ".passed" && rule.status === "retained",
+      ),
+    );
+    assert.ok(!report.changedFiles.includes("Child.vue"));
   } finally {
     await cleanup(cwd);
   }

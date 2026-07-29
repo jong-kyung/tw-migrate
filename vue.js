@@ -379,9 +379,7 @@ function visitTemplateNode(source, node, state) {
       state.components.push({ tag: node.tag, nodeStart: node.loc.start.offset, ...site });
     } else if (node.tagType === TAG_ELEMENT) {
       const site = templateSite(source, node, classBound, state);
-      if (site.classAttribute) {
-        state.elements.push({ tag: node.tag, nodeStart: node.loc.start.offset, ...site });
-      }
+      state.elements.push({ tag: node.tag, nodeStart: node.loc.start.offset, ...site });
     }
   }
   for (const child of node.children ?? []) visitTemplateNode(source, child, state);

@@ -859,7 +859,10 @@ function buildVueComponentGraph(
 
   for (const file of ownedVue) {
     const analysis = analyses.get(file.path);
-    if (analysis.retained) continue;
+    if (analysis.retained) {
+      for (const target of vuePaths) callerOpen.add(target);
+      continue;
+    }
     const bindings = analysis.componentImports
       .map((entry) => ({
         ...entry,
@@ -1206,7 +1209,11 @@ async function preparePackageVue({
         // A bare script specifier is a package import; resolving it against
         // the SFC directory could bind an unrelated local file.
         ...analysis.scriptStyleImports
-          .filter((reference) => reference.startsWith("."))
+          .filter(
+            (reference) =>
+              reference.startsWith(".") &&
+              STYLESHEET_SYNTAX.has(extension(reference.split(/[?#]/, 1)[0])),
+          )
           .flatMap((reference) => stylesheetReferenceTargets(file.path, reference, styleSources)),
         ...analysis.styleBlockImports.flatMap((entry) =>
           stylesheetReferenceTargets(file.path, entry.reference, styleSources),
@@ -1243,9 +1250,8 @@ async function preparePackageVue({
     if (analysis.retained) continue;
     for (const edge of analysis.resolvedComponents) {
       const childAnalysis = analyses.get(edge.child);
-      // Vue only inherits call-site attributes onto a single-root child;
-      // htmlElements holds class-bearing hosts only, so the total root count
-      // must gate the rewrite, not the classed-root count.
+      // Vue only inherits call-site attributes onto a single-root child, so
+      // the total root count must gate the rewrite independently of writable sites.
       const singleRoot =
         childAnalysis?.rootStarts.length === 1 &&
         !childAnalysis.rootVFor &&
