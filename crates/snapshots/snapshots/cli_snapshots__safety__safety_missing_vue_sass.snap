@@ -1,0 +1,26 @@
+---
+source: crates/snapshots/tests/cli_snapshots/safety.rs
+expression: document
+---
+case: safety_missing_vue_sass
+
+--- step: retained unscoped Sass ---
+status: 0
+stdout: "--- a/Card.vue\n+++ b/Card.vue\n@@ -1,11 +1,8 @@\n-<template>\n-  <main class=\"card\">Card</main>\n-  <span>Leaf</span>\n-</template>\n-<style scoped>\n-.card { margin: 7px; }\n-</style>\n-<style lang=\"scss\">\n-.note { color: red; }\n-</style>\n \n+<template>\n+  <main class=\"card m-[7px]\">Card</main>\n+  <span>Leaf</span>\n+</template>\n+<style lang=\"scss\">\n+.note { color: red; }\n+</style>\n \nPreviewed 1 file(s); 1 rule(s) converted, 0 retained.\n"
+stderr: "warning[unscoped-style-block] Card.vue:142-165 The global reach of this unscoped style block could not be proven.\n"
+workspace delta:
+  unchanged
+
+--- step: required without force ---
+status: 1
+stdout: ""
+stderr: "tw-migrate: Sass must be installed in the target project.\n"
+workspace delta:
+  unchanged
+
+--- step: required with force ---
+status: 0
+stdout: "Previewed 0 file(s); 0 rule(s) converted, 0 retained.\n"
+stderr: "skipped[.] Sass must be installed in the target project.\n"
+workspace delta:
+  unchanged

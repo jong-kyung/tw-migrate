@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
@@ -10,7 +10,7 @@ import { __unstable__loadDesignSystem as loadDesignSystem } from "tailwindcss";
 
 import { migrate } from "../index.js";
 import type { MigrateOptions } from "../index.d.ts";
-import { sourceMappings } from "../style-compiler.js";
+import { compileSassEntry, loadProjectSass, sourceMappings } from "../style-compiler.js";
 
 const initialCss = ".button { padding: 13px; }\n";
 const initialTsx =
@@ -301,18 +301,19 @@ test("retains a single-root Vue SFC scoped rule while appending its utilities", 
   }
 });
 
-test("warns and retains unsupported Vue style blocks", async () => {
+test("migrates supported preprocessors beside retained Vue style blocks", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped lang="scss">\n.card { padding: 13px; }\n</style>\n<style>\n.free { color: red; }\n</style>\n';
   try {
     await writeFile(join(cwd, "Card.vue"), vue);
     const report = await migrate({ cwd, styleFile: "Card.vue" });
-    assert.deepEqual(report.changedFiles, []);
-    assert.deepEqual(report.warnings.map((entry) => entry.code).sort(), [
-      "preprocessor-style-block",
-      "unscoped-style-block",
-    ]);
+    assert.deepEqual(report.changedFiles, ["Card.vue"]);
+    assert.deepEqual(
+      report.warnings.map((entry) => entry.code),
+      ["unscoped-style-block"],
+    );
+    assert.match(report.diff, /class="card p-\[13px\]"/);
   } finally {
     await cleanup(cwd);
   }
@@ -540,6 +541,25 @@ test("warns when a Vue element already carries a conflicting utility", async () 
   }
 });
 
+test("keeps rebased Vue conflict warnings on authored offsets", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <div class="card p-4">Card</div>\n</template>\n<script setup>\nimport "./a.css";\nimport "./b.css";\n</script>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "a.css"), ".card { margin: 7px; }\n"),
+      writeFile(join(cwd, "b.css"), ".card { padding: 13px; }\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    const warning = report.warnings.find((entry) => entry.code === "existing-tailwind-conflict")!;
+    const start = Buffer.byteLength(vue.slice(0, vue.indexOf("card p-4")));
+    assert.deepEqual([warning.start, warning.end], [start, start + Buffer.byteLength("card p-4")]);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("a :deep escape in another SFC shadows scoped deletion", async () => {
   const cwd = await fixture();
   const child =
@@ -578,7 +598,1306 @@ test("a paren-less deep combinator makes the shadow corpus unverifiable", async 
   }
 });
 
-test("migrates static template classes beside an external script block", async () => {
+test("migrates a stylesheet statically imported by a Vue script", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script setup lang="ts">\nimport type { Props } from "./props";\ndefineProps<Props>();\nimport "./card.css";\n</script>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "card.css"), ".card { padding: 13px; }\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue", write: true });
+    assert.deepEqual(report.changedFiles, ["Card.vue"]);
+    assert.equal(report.convertedRules, 0);
+    assert.equal(report.retainedRules, 1);
+    assert.match(report.diff, /class="card p-\[13px\]"/);
+    assert.match(report.diff, /import "\.\/card\.css";/);
+    assert.match(await readFile(join(cwd, "Card.vue"), "utf8"), /class="card p-\[13px\]"/);
+    const second = await migrate({ cwd, styleFile: "Card.vue", write: true });
+    assert.deepEqual(second.changedFiles, []);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("does not infer stylesheets from extensionless Vue script imports", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n</template>\n<script setup>\nimport helper from "./theme";\nvoid helper;\n</script>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "theme.js"), "export default 1;\n"),
+      writeFile(join(cwd, "theme.css"), ".card { margin: 7px; }\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.doesNotMatch(report.diff, /m-\[7px\]/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("propagates Vue consumer contexts through local CSS imports", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="nested">A</p>\n</template>\n<script setup>\nimport "./entry.css";\n</script>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "entry.css"), '@import "./nested.css";\n'),
+      writeFile(join(cwd, "nested.css"), ".nested { margin: 7px; }\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.match(report.diff, /class="nested m-\[7px\]"/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("routes a Vue script's imported preprocessor through the existing compiler", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script>\nimport "./card.scss";\nexport default {};\n</script>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "card.scss"), "$space: 13px;\n.card { padding: $space; }\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.deepEqual(report.changedFiles, ["Card.vue"]);
+    assert.match(report.diff, /class="card p-\[13px\]"/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("ignores dynamic and commented Vue stylesheet imports", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script setup>\n// import "./card.css";\nimport("./card.css");\n</script>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "card.css"), ".card { padding: 13px; }\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.deepEqual(report.changedFiles, []);
+    assert.equal(report.convertedRules, 0);
+    assert.equal(report.retainedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("keeps imported stylesheet candidates isolated per Vue element", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "One.vue"),
+        '<template>\n  <p class="shared">One</p>\n</template>\n<script setup>\nimport "./one.css";\n</script>\n',
+      ),
+      writeFile(
+        join(cwd, "Two.vue"),
+        '<template>\n  <p class="shared">Two</p>\n</template>\n<script setup>\nimport "./two.css";\n</script>\n',
+      ),
+      writeFile(join(cwd, "one.css"), ".shared { padding: 13px; }\n"),
+      writeFile(join(cwd, "two.css"), ".shared { margin: 7px; }\n"),
+    ]);
+    await migrate({ cwd, write: true });
+    assert.match(await readFile(join(cwd, "One.vue"), "utf8"), /class="shared p-\[13px\]"/);
+    assert.doesNotMatch(await readFile(join(cwd, "One.vue"), "utf8"), /m-\[7px\]/);
+    assert.match(await readFile(join(cwd, "Two.vue"), "utf8"), /class="shared m-\[7px\]"/);
+    assert.doesNotMatch(await readFile(join(cwd, "Two.vue"), "utf8"), /p-\[13px\]/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("follows external Vue style blocks as stylesheet consumer edges", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped src="./card.css"></style>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "card.css"), ".card { padding: 13px; }\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.deepEqual(report.changedFiles, ["Card.vue"]);
+    assert.match(report.diff, /class="card p-\[13px\]"/);
+    assert.ok(!report.warnings.some((entry) => entry.code === "unsupported-sfc-block"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("unresolved external Vue styles retain scoped deletions", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped src="@/theme.css"></style>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.ok(report.warnings.some((entry) => entry.code === "unsupported-sfc-block"));
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.equal(report.convertedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("does not require Tailwind for an explicitly selected Vue module import", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script setup>\nimport styles from "./card.module.css";\n</script>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "card.module.css"), ".card { padding: 13px; }\n"),
+      rm(join(cwd, "globals.css")),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.deepEqual(report.changedFiles, []);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("closes Vue root fallthrough through static component callers", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div class="passed">Child</div>\n</template>\n<style scoped>\n.passed { padding: 13px; }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "App.vue"),
+        '<template>\n  <Child class="passed" />\n  <main>App</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd, write: true });
+    assert.deepEqual(
+      report.warnings.filter((entry) => entry.code === "open-root-fallthrough"),
+      [],
+    );
+    assert.match(await readFile(join(cwd, "Child.vue"), "utf8"), /class="passed p-\[13px\]"/);
+    assert.match(await readFile(join(cwd, "App.vue"), "utf8"), /class="passed p-\[13px\]"/);
+    assert.doesNotMatch(await readFile(join(cwd, "Child.vue"), "utf8"), /<style/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("dynamic Vue import globs keep caller fallthrough open", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div class="passed">Child</div>\n</template>\n<style scoped>\n.passed { padding: 13px; }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "App.vue"),
+        '<template>\n  <Child />\n  <main>App</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+      ),
+      writeFile(
+        join(cwd, "registry.ts"),
+        'export const components = import.meta.glob("./*.{vue,js}");\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "open-root-fallthrough"));
+    assert.ok(
+      report.rules.some(
+        (rule) =>
+          rule.file === "Child.vue" && rule.selector === ".passed" && rule.status === "retained",
+      ),
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("extensionless local globs keep caller fallthrough open", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div class="passed">Child</div>\n</template>\n<style scoped>\n.passed { padding: 13px; }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "App.vue"),
+        '<template>\n  <Child />\n  <main>App</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+      ),
+      writeFile(
+        join(cwd, "registry.ts"),
+        'export const components = import.meta.glob("./components/*");\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "open-root-fallthrough"));
+    assert.ok(
+      report.rules.some(
+        (rule) =>
+          rule.file === "Child.vue" && rule.selector === ".passed" && rule.status === "retained",
+      ),
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a self-recursive component migrates without overlapping edits", async () => {
+  const cwd = await fixture();
+  const tree =
+    '<template>\n  <div class="node">\n    <Tree class="node" />\n  </div>\n</template>\n<script setup>\nimport Tree from "./Tree.vue";\n</script>\n<style scoped>\n.node { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Tree.vue"), tree);
+    const report = await migrate({ cwd });
+    // One call site, one appended utility -- never overlapping edits.
+    const appended = report.diff.match(/node p-\[13px\]/g) ?? [];
+    assert.ok(appended.length >= 1);
+    assert.ok(!report.failures.length);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a dependency vanishing during Vue block compilation stays fatal under force", async () => {
+  const cwd = await fixture();
+  const fakeSass = [
+    'import { pathToFileURL } from "node:url";',
+    "export const compileStringAsync = async () => ({",
+    '  css: ".card { padding: 13px; }",',
+    "  sourceMap: {",
+    "    version: 3,",
+    '    sources: [pathToFileURL("gone.scss").href],',
+    '    mappings: "AAAA",',
+    "    names: [],",
+    "  },",
+    '  loadedUrls: [new URL("../../gone.scss", import.meta.url)],',
+    "});",
+  ].join("\n");
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Card.vue"),
+        '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped lang="scss">\n.card { padding: 13px; }\n</style>\n',
+      ),
+      mkdir(join(cwd, "node_modules", "sass"), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(
+        join(cwd, "node_modules", "sass", "package.json"),
+        '{"name":"sass","version":"1.0.0","type":"module","main":"index.js"}',
+      ),
+      writeFile(join(cwd, "node_modules", "sass", "index.js"), fakeSass),
+    ]);
+    await assert.rejects(
+      migrate({ cwd, force: true }),
+      /Source changed during planning:.*gone\.scss/,
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("unresolved Vue aliases keep every possible caller surface open", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div class="passed">Child</div>\n</template>\n<style scoped>\n.passed { padding: 13px; }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "Direct.vue"),
+        '<template>\n  <Child class="passed" />\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+      ),
+      writeFile(join(cwd, "aliased.ts"), 'import Child from "@/Child.vue";\nvoid Child;\n'),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "open-root-fallthrough"));
+    assert.ok(
+      report.rules.some(
+        (rule) =>
+          rule.file === "Child.vue" && rule.selector === ".passed" && rule.status === "retained",
+      ),
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("dynamic aliased Vue imports keep caller fallthrough open", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div class="passed">Child</div>\n</template>\n<style scoped>\n.passed { padding: 13px; }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "Direct.vue"),
+        '<template>\n  <Child class="passed" />\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+      ),
+      writeFile(
+        join(cwd, "dynamic.ts"),
+        'void import(/* webpackChunkName: "child" */ "components/Child");\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "open-root-fallthrough"));
+    assert.ok(
+      report.rules.some(
+        (rule) =>
+          rule.file === "Child.vue" && rule.selector === ".passed" && rule.status === "retained",
+      ),
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("dynamic aliased imports in Vue scripts keep caller fallthrough open", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div class="passed">Child</div>\n</template>\n<style scoped>\n.passed { padding: 13px; }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "Direct.vue"),
+        '<template>\n  <Child class="passed" />\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+      ),
+      writeFile(
+        join(cwd, "Dynamic.vue"),
+        '<template>\n  <main>Dynamic</main>\n</template>\n<script setup>\nvoid import("@/Child");\n</script>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "open-root-fallthrough"));
+    assert.ok(
+      report.rules.some(
+        (rule) =>
+          rule.file === "Child.vue" && rule.selector === ".passed" && rule.status === "retained",
+      ),
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("does not rewrite symlinked Vue files reached by component proof", async (context) => {
+  if (process.platform === "win32") context.skip("symlink creation requires elevated privileges");
+  const cwd = await fixture();
+  try {
+    await writeFile(
+      join(cwd, "RealChild.vue"),
+      '<template>\n  <div class="leaf">Leaf</div>\n</template>\n',
+    );
+    await symlink("RealChild.vue", join(cwd, "Child.vue"));
+    await writeFile(
+      join(cwd, "Parent.vue"),
+      '<template>\n  <Child />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n<style scoped>\n.leaf { margin: 7px; }\n</style>\n',
+    );
+    await migrate({ cwd, styleFile: "Parent.vue", write: true });
+    assert.equal((await lstat(join(cwd, "Child.vue"))).isSymbolicLink(), true);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("writes parent scoped utilities at the proven component call site", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Leaf.vue"), '<template>\n  <div class="leaf">Leaf</div>\n</template>\n'),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Leaf />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Leaf from "./Leaf.vue";\n</script>\n<style scoped>\n.leaf { margin: 7px; }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "Other.vue"),
+        '<template>\n  <Leaf />\n  <main>Other</main>\n</template>\n<script setup>\nimport Leaf from "./Leaf.vue";\n</script>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd, write: true });
+    assert.deepEqual(
+      report.warnings.filter((entry) => entry.code === "component-class-target"),
+      [],
+    );
+    assert.match(await readFile(join(cwd, "Parent.vue"), "utf8"), /<Leaf class="m-\[7px\]" \/>/);
+    assert.doesNotMatch(await readFile(join(cwd, "Parent.vue"), "utf8"), /<style/);
+    assert.doesNotMatch(await readFile(join(cwd, "Leaf.vue"), "utf8"), /m-\[7px\]/);
+    assert.doesNotMatch(await readFile(join(cwd, "Other.vue"), "utf8"), /m-\[7px\]/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a component chained through a single-root parent stays open", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div class="item">Child</div>\n</template>\n<style scoped>\n.item { padding: 13px; }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "Wrapper.vue"),
+        '<template>\n  <Child />\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+      ),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Wrapper class="item" />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Wrapper from "./Wrapper.vue";\n</script>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    // Parent's class chains through Wrapper's component root to Child, so
+    // Child's scoped rule must not be deleted.
+    assert.ok(
+      report.rules.some(
+        (rule) =>
+          rule.file === "Child.vue" && rule.selector === ".item" && rule.status === "retained",
+      ),
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("v-html defeats the unscoped sole-source proof", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, "Button.module.css")),
+      rm(join(cwd, "Button.tsx")),
+      writeFile(
+        join(cwd, "Card.vue"),
+        '<template>\n  <div class="shared">Card</div>\n  <span v-html="raw"></span>\n</template>\n<script setup>\nconst raw = "<i>x</i>";\n</script>\n<style>\n.shared { margin: 7px; }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "unscoped-style-block"));
+    assert.equal(report.convertedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("an unresolved package stylesheet import shadows scoped deletion", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script setup>\nimport "bootstrap/dist/css/bootstrap.css";\n</script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.equal(report.convertedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("warns when a fallthrough utility conflicts with a child-root class", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div class="leaf p-2">Child</div>\n</template>\n<style scoped>\n.external { padding: 1rem; }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Child class="external" />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    const warning = report.warnings.find((entry) => entry.code === "existing-tailwind-conflict");
+    assert.ok(warning);
+    assert.match(warning.message, /p-2/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("bare stylesheet specifiers never bind coincidental local files", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card other">A</p>\n  <p class="etc">B</p>\n</template>\n<script setup>\nimport "theme/card.css";\n</script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await mkdir(join(cwd, "theme"), { recursive: true });
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "theme", "card.css"), ".other { margin: 3px; }\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    // The bare specifier is a package import: it must not consume the local
+    // decoy, and its unresolved global CSS retains the scoped rule.
+    assert.ok(!report.diff.includes("m-[3px]"));
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.equal(report.convertedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("explicit non-Vue local imports do not open proven caller surfaces", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div class="passed">Child</div>\n</template>\n<style scoped>\n.passed { padding: 13px; }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "App.vue"),
+        '<template>\n  <Child class="passed" />\n  <main>App</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\nimport { helper } from "./utils.ts";\nvoid helper;\n</script>\n',
+      ),
+      writeFile(join(cwd, "utils.ts"), "export const helper = 1;\n"),
+    ]);
+    const report = await migrate({ cwd, write: true });
+    assert.deepEqual(
+      report.warnings.filter((entry) => entry.code === "open-root-fallthrough"),
+      [],
+    );
+    assert.match(await readFile(join(cwd, "Child.vue"), "utf8"), /class="passed p-\[13px\]"/);
+    assert.doesNotMatch(await readFile(join(cwd, "Child.vue"), "utf8"), /<style/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a root v-for child renders a fragment and blocks call-site rewrites", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div v-for="item in items" class="leaf">{{ item }}</div>\n</template>\n<script setup>\nconst items = ["a"];\n</script>\n',
+      ),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Child class="leaf" />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n<style scoped>\n.leaf { margin: 7px; }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd, write: true });
+    // The fragment child never receives the call-site class, so the parent
+    // rule must be retained and the call site left alone.
+    const rule = report.rules.find(
+      (entry) => entry.file === "Parent.vue" && entry.selector === ".leaf",
+    )!;
+    assert.equal(rule.status, "retained");
+    assert.doesNotMatch(await readFile(join(cwd, "Parent.vue"), "utf8"), /m-\[7px\]/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a text root fragments the child and blocks call-site rewrites", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div class="leaf">A</div>\n  text tail\n</template>\n',
+      ),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Child class="leaf" />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n<style scoped>\n.leaf { margin: 7px; }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd, write: true });
+    const rule = report.rules.find(
+      (entry) => entry.file === "Parent.vue" && entry.selector === ".leaf",
+    )!;
+    assert.equal(rule.status, "retained");
+    assert.doesNotMatch(await readFile(join(cwd, "Parent.vue"), "utf8"), /m-\[7px\]/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a multi-root child never receives call-site rewrites", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div class="leaf">A</div>\n  <span>B</span>\n</template>\n<style scoped>\n.leaf { padding: 13px; }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Child class="leaf" />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd, write: true });
+    // Vue cannot inherit attributes onto a multi-root child, so the call
+    // site stays untouched while the internal usage migrates.
+    assert.doesNotMatch(await readFile(join(cwd, "Parent.vue"), "utf8"), /p-\[13px\]/);
+    assert.match(await readFile(join(cwd, "Child.vue"), "utf8"), /class="leaf p-\[13px\]"/);
+    assert.ok(!report.failures.length);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("CSS v-bind declarations retain across plain and preprocessor blocks", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Card.vue"),
+        '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { color: v-bind(theme); }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "Tone.vue"),
+        '<template>\n  <p class="tone">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped lang="scss">\n.tone { color: v-bind("theme.color"); }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    // Vue rewrites v-bind() only inside SFC style compilation; a migrated
+    // utility would lose the reactive value.
+    assert.ok(
+      report.rules
+        .filter((rule) => rule.file.endsWith(".vue"))
+        .every((rule) => rule.status === "retained"),
+    );
+    assert.ok(report.warnings.some((entry) => entry.code === "unsupported-value"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("checks effective child roots when retaining child scoped rules", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div class="foo">Child</div>\n</template>\n<style scoped>\n.foo { margin: 7px; }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        // Multi-root parent: the chained-root fallthrough gate must not
+        // fire, so the effective-root shadow check is what retains the rule.
+        '<template>\n  <Child class="extra" />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+      ),
+      writeFile(join(cwd, "globals.css"), '@import "tailwindcss";\n.extra { margin: 0; }\n'),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.ok(!report.changedFiles.includes("Child.vue"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("retains child ID rules when a caller overrides the root ID", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div id="root">Child</div>\n</template>\n<style scoped>\n#root { margin: 7px; }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Child id="override" />\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "open-root-fallthrough"));
+    assert.ok(!report.changedFiles.includes("Child.vue"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("retains parent scoped rules when child class fallthrough is disabled", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Leaf.vue"),
+        '<template>\n  <div class="leaf">Leaf</div>\n</template>\n<script setup>\ndefineOptions({ inheritAttrs: false });\n</script>\n',
+      ),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Leaf />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Leaf from "./Leaf.vue";\n</script>\n<style scoped>\n.leaf { margin: 7px; }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "component-class-target"));
+    assert.ok(!report.changedFiles.includes("Parent.vue"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("retains parent scoped rules when child props can consume classes", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Leaf.vue"),
+        '<template>\n  <div class="leaf">Leaf</div>\n</template>\n<script setup>\ndefineProps({ class: String });\n</script>\n',
+      ),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Leaf />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Leaf from "./Leaf.vue";\n</script>\n<style scoped>\n.leaf { margin: 7px; }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "component-class-target"));
+    assert.ok(!report.changedFiles.includes("Parent.vue"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("uses the caller ID as the effective child-root selector", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Leaf.vue"), '<template>\n  <div id="root">Leaf</div>\n</template>\n'),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Leaf id="override" />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Leaf from "./Leaf.vue";\n</script>\n<style scoped>\n#root { margin: 7px; }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(
+      report.rules.some(
+        (rule) =>
+          rule.file === "Parent.vue" && rule.selector === "#root" && rule.status === "retained",
+      ),
+    );
+    assert.ok(!report.changedFiles.includes("Parent.vue"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("opens component selector proofs for dynamic caller IDs", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Leaf.vue"), '<template>\n  <div id="root">Leaf</div>\n</template>\n'),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Leaf :id="override" />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Leaf from "./Leaf.vue";\n</script>\n<style scoped>\n#root { margin: 7px; }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "dynamic-template-class"));
+    assert.ok(!report.changedFiles.includes("Parent.vue"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("warns when a child-root utility conflicts at a rewritten call site", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Leaf.vue"),
+        '<template>\n  <div class="leaf m-0">Leaf</div>\n</template>\n',
+      ),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Leaf />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Leaf from "./Leaf.vue";\n</script>\n<style scoped>\n.leaf { margin: 7px; }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "existing-tailwind-conflict"));
+    assert.match(report.diff, /<Leaf class="m-\[7px\]" \/>/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("checks child-root sites before deleting parent scoped rules", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Leaf.vue"), '<template>\n  <div class="leaf">Leaf</div>\n</template>\n'),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Leaf />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Leaf from "./Leaf.vue";\n</script>\n<style scoped>\n.leaf { margin: 7px; }\n</style>\n',
+      ),
+      writeFile(join(cwd, "globals.css"), '@import "tailwindcss";\ndiv { margin: 0; }\n'),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.ok(!report.changedFiles.includes("Parent.vue"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("keeps classless child roots in type-selector shadow checks", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        "<template>\n  <div>Child</div>\n</template>\n<style scoped>\n.passed { margin: 7px; }\n</style>\n",
+      ),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Child class="passed" />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+      ),
+      writeFile(join(cwd, "globals.css"), '@import "tailwindcss";\ndiv { margin: 0; }\n'),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Child.vue" });
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.ok(!report.changedFiles.includes("Child.vue"));
+    assert.doesNotMatch(report.diff, /m-\[7px\]/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("includes unselected child scoped rules in parent shadow checks", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div class="leaf">Child</div>\n</template>\n<style scoped>\n.leaf { margin: 0; }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Child />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n<style scoped>\n.leaf { margin: 7px; }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Parent.vue" });
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.ok(!report.changedFiles.includes("Parent.vue"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("keeps caller proofs open when an owned SFC cannot be analyzed", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        "<template>\n  <div>Child</div>\n</template>\n<style scoped>\n.passed { margin: 7px; }\n</style>\n",
+      ),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Child class="passed" />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+      ),
+      writeFile(
+        join(cwd, "Hidden.vue"),
+        '<template>\n  <Child class="passed" />\n</template>\n<docs>unsupported</docs>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Child.vue" });
+    assert.ok(
+      report.rules.some(
+        (rule) =>
+          rule.file === "Child.vue" && rule.selector === ".passed" && rule.status === "retained",
+      ),
+    );
+    assert.ok(!report.changedFiles.includes("Child.vue"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("retains root fallthrough for callers outside script setup", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div class="passed">Child</div>\n</template>\n<style scoped>\n.passed { padding: 13px; }\n</style>\n',
+      ),
+      writeFile(join(cwd, "main.ts"), 'import Child from "./Child.vue";\nvoid Child;\n'),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "open-root-fallthrough"));
+    assert.match(report.diff, /class="passed p-\[13px\]"/);
+    assert.match(report.diff, /\.passed \{ padding: 13px; \}/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a vanished real Sass entry stays a fatal integrity error", async () => {
+  const sass = await loadProjectSass(process.cwd());
+  await mkdir(".tmp", { recursive: true });
+  const missing = join(process.cwd(), ".tmp", "missing-entry.scss");
+  await assert.rejects(compileSassEntry(sass, missing, ".a { padding: 1px; }"), /ENOENT/);
+  // Virtual SFC block entries never exist on disk and must keep compiling.
+  const virtual = await compileSassEntry(sass, missing, ".a { padding: 1px; }", {
+    virtualEntry: true,
+  });
+  assert.match(virtual.css, /padding: 1px/);
+});
+
+test("slots defeat the unscoped sole-source proof", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, "Button.module.css")),
+      rm(join(cwd, "Button.tsx")),
+      writeFile(
+        join(cwd, "Card.vue"),
+        '<template>\n  <div class="shared">Card</div>\n  <slot />\n</template>\n<style>\n.shared { margin: 7px; }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "unscoped-style-block"));
+    assert.equal(report.convertedRules, 0);
+    assert.ok(!report.changedFiles.includes("Card.vue"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a scan-excluded HTML shell defeats the unscoped sole-source proof", async () => {
+  const cwd = await fixture();
+  try {
+    execFileSync("git", ["init", "-q"], { cwd });
+    await Promise.all([
+      rm(join(cwd, "Button.module.css")),
+      rm(join(cwd, "Button.tsx")),
+      writeFile(join(cwd, ".gitignore"), "index.html\n"),
+      writeFile(
+        join(cwd, "Card.vue"),
+        '<template>\n  <div class="shared">Card</div>\n  <span>Leaf</span>\n</template>\n<style>\n.shared { margin: 7px; }\n</style>\n',
+      ),
+      writeFile(join(cwd, "index.html"), '<div id="app" class="shared"></div>\n'),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "unscoped-style-block"));
+    assert.equal(report.convertedRules, 0);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("caller template edits do not recompile untouched preprocessor blocks", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div class="passed">Child</div>\n</template>\n<style scoped>\n.passed { padding: 13px; }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "App.vue"),
+        '<template>\n  <Child class="passed" />\n  <main>App</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n<style scoped lang="scss">\n.app-box { margin: $undefined-size; }\n</style>\n',
+      ),
+    ]);
+    // The caller's broken SCSS block was never selected or edited; migrating
+    // the child must not force it through the compiler.
+    const report = await migrate({ cwd, styleFile: "Child.vue", write: true });
+    assert.deepEqual(
+      report.warnings.filter((entry) => entry.code === "open-root-fallthrough"),
+      [],
+    );
+    assert.match(await readFile(join(cwd, "App.vue"), "utf8"), /class="passed p-\[13px\]"/);
+    assert.doesNotMatch(await readFile(join(cwd, "Child.vue"), "utf8"), /<style/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("migrates unscoped Vue styles when the package has one source", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, "Button.module.css")),
+      rm(join(cwd, "Button.tsx")),
+      writeFile(
+        join(cwd, "Card.vue"),
+        '<template>\n  <div class="shared">Card</div>\n  <span>Leaf</span>\n</template>\n<style>\n.shared { margin: 7px; }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd, write: true });
+    assert.deepEqual(
+      report.warnings.filter((entry) => entry.code === "unscoped-style-block"),
+      [],
+    );
+    assert.match(await readFile(join(cwd, "Card.vue"), "utf8"), /class="shared m-\[7px\]"/);
+    assert.doesNotMatch(await readFile(join(cwd, "Card.vue"), "utf8"), /<style/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("retains unscoped Vue rules that can lose the unlayered cascade", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, "Button.module.css")),
+      rm(join(cwd, "Button.tsx")),
+      writeFile(
+        join(cwd, "Card.vue"),
+        '<template>\n  <div class="shared">Card</div>\n  <span>Leaf</span>\n</template>\n<style>\n.shared { margin: 7px; }\n</style>\n',
+      ),
+      writeFile(join(cwd, "globals.css"), '@import "tailwindcss";\ndiv { margin: 0; }\n'),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.ok(!report.changedFiles.includes("Card.vue"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("keeps retained same-file style blocks in unscoped shadow checks", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, "Button.module.css")),
+      rm(join(cwd, "Button.tsx")),
+      writeFile(
+        join(cwd, "Card.vue"),
+        '<template>\n  <div class="shared extra">Card</div>\n  <span>Leaf</span>\n</template>\n<style lang="stylus">\n.extra { margin: 0; }\n</style>\n<style>\n.shared { margin: 7px; }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "preprocessor-style-block"));
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.ok(!report.changedFiles.includes("Card.vue"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("retains unscoped Vue rules when another project source exists", async () => {
+  const cwd = await fixture();
+  try {
+    await writeFile(
+      join(cwd, "Card.vue"),
+      '<template>\n  <div class="shared">Card</div>\n  <span>Leaf</span>\n</template>\n<style>\n.shared { margin: 7px; }\n</style>\n',
+    );
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "unscoped-style-block"));
+    assert.ok(!report.changedFiles.includes("Card.vue"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("retains unscoped Vue rules when planning workspace packages", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, "Button.module.css")),
+      rm(join(cwd, "Button.tsx")),
+      rm(join(cwd, "globals.css")),
+      writeFile(join(cwd, "package.json"), '{"private":true,"workspaces":["packages/*"]}'),
+      mkdir(join(cwd, "packages", "lib"), { recursive: true }),
+      mkdir(join(cwd, "packages", "app"), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(cwd, "packages", "lib", "package.json"), '{"private":true}'),
+      writeFile(join(cwd, "packages", "lib", "globals.css"), '@import "tailwindcss";\n'),
+      writeFile(
+        join(cwd, "packages", "lib", "Card.vue"),
+        '<template>\n  <div class="shared">Card</div>\n</template>\n<style>\n.shared { margin: 7px; }\n</style>\n',
+      ),
+      writeFile(join(cwd, "packages", "app", "package.json"), '{"private":true}'),
+      writeFile(
+        join(cwd, "packages", "app", "App.vue"),
+        '<template>\n  <Card />\n  <div class="shared">App</div>\n</template>\n<script setup>\nimport Card from "../../lib/Card.vue";\n</script>\n',
+      ),
+    ]);
+    execFileSync("git", ["init", "-q"], { cwd });
+    const workspaceReport = await migrate({ cwd, workspaces: true });
+    assert.ok(workspaceReport.warnings.some((entry) => entry.code === "unscoped-style-block"));
+    assert.ok(!workspaceReport.changedFiles.includes("packages/lib/Card.vue"));
+    const packageReport = await migrate({ cwd: join(cwd, "packages", "lib") });
+    assert.ok(packageReport.warnings.some((entry) => entry.code === "unscoped-style-block"));
+    assert.ok(!packageReport.changedFiles.includes("Card.vue"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("unresolved component roots block unscoped Vue deletion", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, "Button.module.css")),
+      rm(join(cwd, "Button.tsx")),
+      writeFile(
+        join(cwd, "Card.vue"),
+        '<template>\n  <ThirdParty />\n  <div class="shared">Card</div>\n</template>\n<style>\n.shared { margin: 7px; }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "unscoped-style-block"));
+    assert.ok(!report.changedFiles.includes("Card.vue"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("unresolved external styles block unscoped Vue deletion", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, "Button.module.css")),
+      rm(join(cwd, "Button.tsx")),
+      writeFile(
+        join(cwd, "Card.vue"),
+        '<template>\n  <div class="shared">Card</div>\n  <span>Leaf</span>\n</template>\n<style module src="@/theme.css"></style>\n<style>\n.shared { margin: 7px; }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "unsupported-sfc-block"));
+    assert.ok(report.warnings.some((entry) => entry.code === "unscoped-style-block"));
+    assert.ok(!report.changedFiles.includes("Card.vue"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("retains competing cross-file scoped rules with styles after templates", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, "Button.module.css")),
+      rm(join(cwd, "Button.tsx")),
+      writeFile(
+        join(cwd, "AParent.vue"),
+        '<template>\n  <ZChild />\n  <main>Parent</main>\n</template>\n<script setup>\nimport ZChild from "./ZChild.vue";\n</script>\n<style scoped>\n.child { margin: 7px; }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "ZChild.vue"),
+        '<template>\n  <div class="child own">Child</div>\n</template>\n<style scoped>\n.own { padding: 13px; }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd, write: true });
+    assert.equal(report.convertedRules, 0);
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    const childRuleStart = Buffer.byteLength(
+      '<template>\n  <div class="child own">Child</div>\n</template>\n<style scoped>\n',
+    );
+    const childRule = report.rules.find(
+      (rule) => rule.file === "ZChild.vue" && rule.selector === ".own",
+    )!;
+    assert.deepEqual(childRule.authoredSpan, {
+      start: childRuleStart,
+      end: childRuleStart + ".own { padding: 13px; }".length,
+    });
+    assert.doesNotMatch(await readFile(join(cwd, "ZChild.vue"), "utf8"), /p-\[13px\]/);
+    // Mutually competing rules freeze without appends: deleting or
+    // duplicating either side could flip the cascade.
+    assert.doesNotMatch(await readFile(join(cwd, "AParent.vue"), "utf8"), /m-\[7px\]/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("retains competing cross-file scoped rules with styles before templates", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, "Button.module.css")),
+      rm(join(cwd, "Button.tsx")),
+      writeFile(
+        join(cwd, "AChild.vue"),
+        '<style scoped>\n.own { padding: 13px; }\n</style>\n<template>\n  <div class="child own">Child</div>\n</template>\n',
+      ),
+      writeFile(
+        join(cwd, "ZParent.vue"),
+        '<template>\n  <AChild />\n  <main>Parent</main>\n</template>\n<script setup>\nimport AChild from "./AChild.vue";\n</script>\n<style scoped>\n.child { margin: 7px; }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd, write: true });
+    assert.equal(report.convertedRules, 0);
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.doesNotMatch(await readFile(join(cwd, "AChild.vue"), "utf8"), /p-\[13px\]/);
+    assert.doesNotMatch(await readFile(join(cwd, "ZParent.vue"), "utf8"), /m-\[7px\]/);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("retains a parent rule when an unselected child shadow is unverifiable", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      writeFile(
+        join(cwd, "Child.vue"),
+        '<template>\n  <div class="leaf">Leaf</div>\n</template>\n<style scoped lang="scss">\n$color: red;\n.note { color: $color; }\n</style>\n',
+      ),
+      writeFile(
+        join(cwd, "Parent.vue"),
+        '<template>\n  <Child />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n<style scoped>\n.leaf { margin: 7px; }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Parent.vue" });
+    assert.equal(report.diff, "");
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+    assert.ok(!report.changedFiles.includes("Child.vue"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("migrates scoped Vue preprocessor blocks through project compilers", async () => {
+  for (const [lang, declaration, candidate] of [
+    ["scss", "$space: 13px;\n.card { padding: $space; }", "p-[13px]"],
+    ["sass", "$space: 13px\n.card\n  padding: $space", "p-[13px]"],
+    ["less", "@space: 13px;\n.card { padding: @space; }", "p-[13px]"],
+  ]) {
+    const cwd = await fixture();
+    const vue = `<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped lang="${lang}">\n${declaration}\n</style>\n`;
+    try {
+      await writeFile(join(cwd, "Card.vue"), vue);
+      const report = await migrate({ cwd, styleFile: "Card.vue", write: true });
+      assert.deepEqual(report.changedFiles, ["Card.vue"]);
+      assert.equal(report.convertedRules, 1);
+      assert.match(
+        await readFile(join(cwd, "Card.vue"), "utf8"),
+        new RegExp(`class="card ${candidate.replaceAll("[", "\\[").replaceAll("]", "\\]")}"`),
+      );
+      assert.doesNotMatch(await readFile(join(cwd, "Card.vue"), "utf8"), /\.card\s*[{\n]/);
+    } finally {
+      await cleanup(cwd);
+    }
+  }
+});
+
+test("maps partial Vue preprocessor edits to absolute authored bytes", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p title="한글" class="card">A</p>\n  <p class="keep">B</p>\n</template>\n<style scoped lang="scss">\n.card { padding: 13px; }\n.keep { animation: spin 1s; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    const first = await migrate({ cwd, styleFile: "Card.vue", write: true });
+    assert.deepEqual(first.changedFiles, ["Card.vue"]);
+    const output = await readFile(join(cwd, "Card.vue"), "utf8");
+    assert.match(output, /class="card p-\[13px\]"/);
+    assert.doesNotMatch(output, /\.card \{ padding: 13px; \}/);
+    assert.match(output, /\.keep \{ animation: spin 1s; \}/);
+    const second = await migrate({ cwd, styleFile: "Card.vue", write: true });
+    assert.deepEqual(second.changedFiles, []);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("an external script block leaves scoped rules shadow-retained", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script src="./behavior.js"></script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -588,9 +1907,10 @@ test("migrates static template classes beside an external script block", async (
       writeFile(join(cwd, "behavior.js"), "export default {};\n"),
     ]);
     const report = await migrate({ cwd, styleFile: "Card.vue" });
-    assert.equal(report.convertedRules, 1);
-    assert.equal(report.retainedRules, 0);
-    assert.match(report.diff, /class="card p-\[13px\]"/);
+    // The external script's imports are unreadable, so the global CSS it may
+    // load keeps the scoped rule from being deleted.
+    assert.equal(report.convertedRules, 0);
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
   } finally {
     await cleanup(cwd);
   }
@@ -664,16 +1984,16 @@ test("ignores handler runtime mutations outside static template scope", async ()
   }
 });
 
-test("migrates static template classes with an unsupported script language", async () => {
+test("an unsupported script language leaves scoped rules shadow-retained", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script lang="coffee">\nx = 1\n</script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
   try {
     await writeFile(join(cwd, "Card.vue"), vue);
     const report = await migrate({ cwd, styleFile: "Card.vue" });
-    assert.equal(report.convertedRules, 1);
-    assert.equal(report.retainedRules, 0);
-    assert.match(report.diff, /class="card p-\[13px\]"/);
+    // Unreadable script imports may load competing global CSS.
+    assert.equal(report.convertedRules, 0);
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
   } finally {
     await cleanup(cwd);
   }
@@ -713,7 +2033,7 @@ test("script blocks do not open the static template class surface", async () => 
   }
 });
 
-test("a style src block makes the shadow corpus unverifiable", async () => {
+test("an external style block participates in scoped cascade shadowing", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped src="./external.css"></style>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';

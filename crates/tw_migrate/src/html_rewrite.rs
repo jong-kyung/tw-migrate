@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap};
 use crate::{
     css_plan::SelectorKey,
     js_rewrite::{CandidateMatch, SourcePlan},
-    planner::{Edit, HtmlAttribute, SourceFile, Warning},
+    planner::{element_classes, element_ids, Edit, HtmlAttribute, SourceFile, Warning},
     utilities::tailwind_utilities_conflict,
 };
 
@@ -30,11 +30,36 @@ pub(crate) fn plan_html_file(
     let mut matched_module_refs = HashMap::new();
     let mut warnings = Vec::new();
     for element in &file.html_elements {
+        if !element.css_paths.is_empty()
+            && !element.css_paths.iter().any(|path| path == css_path)
+        {
+            continue;
+        }
         let Some(class_attribute) = element
             .class_attribute
             .as_ref()
+            .filter(|attribute| attribute.writable)
             .and_then(|attribute| live_attributes.get(&attribute.start))
         else {
+            // A read-only effective-root record receives the generated
+            // utility through fallthrough at runtime, so the promised
+            // conflict warning must still fire against its own classes.
+            if let Some((generated, existing)) = readonly_conflict(element, candidates) {
+                let span = element
+                    .class_attribute
+                    .as_ref()
+                    .map(|attribute| (attribute.start, attribute.end))
+                    .unwrap_or((0, 0));
+                warnings.push(Warning {
+                    code: "existing-tailwind-conflict",
+                    file: file.path.clone(),
+                    start: span.0,
+                    end: span.1,
+                    message: format!(
+                        "Generated utility `{generated}` may conflict with existing `{existing}`."
+                    ),
+                });
+            }
             continue;
         };
         let mut classes = class_attribute
@@ -45,7 +70,8 @@ pub(crate) fn plan_html_file(
         let mut additions = Vec::new();
 
         let quote = attribute_quote(&file.source, class_attribute);
-        for class in classes.clone() {
+        for class in element_classes(element) {
+            let class = class.to_string();
             let key = SelectorKey::Class(class.clone());
             let matched = candidates.contains_key(&key);
             if matched {
@@ -68,13 +94,9 @@ pub(crate) fn plan_html_file(
                 *matched_module_refs.entry(class).or_default() += 1;
             }
         }
-        if let Some(id) = element
-            .id_attribute
-            .as_ref()
-            .and_then(|attribute| live_attributes.get(&attribute.start))
-        {
+        for id in element_ids(element) {
             collect_candidates(
-                SelectorKey::Id(id.value.clone()),
+                SelectorKey::Id(id.to_string()),
                 class_attribute,
                 quote,
                 &contexts,
@@ -86,19 +108,28 @@ pub(crate) fn plan_html_file(
             );
         }
         // Parity with the JS rewrite path: a generated utility that overlaps
-        // an existing Tailwind class on the element is appended with a
-        // warning, and Tailwind's output order decides between them.
+        // an existing Tailwind class on the rendered element is appended with
+        // a warning, and Tailwind's output order decides between them.
+        let existing_classes = element_classes(element)
+            .into_iter()
+            .chain(classes.iter().map(String::as_str))
+            .collect::<BTreeSet<_>>();
         if let Some((generated, existing)) = additions.iter().find_map(|candidate| {
-            classes
+            existing_classes
                 .iter()
                 .find(|existing| tailwind_utilities_conflict(candidate, existing))
-                .map(|existing| (candidate.clone(), existing.clone()))
+                .map(|existing| (candidate.clone(), (*existing).to_string()))
         }) {
+            let authored = element
+                .class_attribute
+                .as_ref()
+                .map(|attribute| (attribute.start, attribute.end))
+                .unwrap_or((0, 0));
             warnings.push(Warning {
                 code: "existing-tailwind-conflict",
                 file: file.path.clone(),
-                start: class_attribute.start,
-                end: class_attribute.end,
+                start: authored.0,
+                end: authored.1,
                 message: format!(
                     "Generated utility `{generated}` may conflict with existing `{existing}`."
                 ),
@@ -115,7 +146,9 @@ pub(crate) fn plan_html_file(
         } else {
             value
         };
-        if replacement != class_attribute.value {
+        if (!class_attribute.synthetic || !classes.is_empty())
+            && replacement != class_attribute.value
+        {
             edits.push(Edit {
                 start: class_attribute.start,
                 end: class_attribute.end,
@@ -181,6 +214,34 @@ fn collect_candidates(
 /// The quote delimiter enclosing a live attribute value: the byte before the
 /// value span, or `"` for a synthetic attribute the planner itself inserts
 /// with double quotes.
+/// The first (generated, existing) utility conflict on a record whose
+/// classes cannot be edited but still receive fallthrough utilities.
+fn readonly_conflict(
+    element: &crate::planner::HtmlElement,
+    candidates: &HashMap<SelectorKey, Vec<String>>,
+) -> Option<(String, String)> {
+    let classes = element_classes(element);
+    let ids = element_ids(element);
+    let keys = classes
+        .iter()
+        .map(|class| SelectorKey::Class((*class).to_string()))
+        .chain(ids.iter().map(|id| SelectorKey::Id((*id).to_string())));
+    for key in keys {
+        let Some(generated) = candidates.get(&key) else {
+            continue;
+        };
+        for candidate in generated {
+            if let Some(existing) = classes
+                .iter()
+                .find(|existing| tailwind_utilities_conflict(candidate, existing))
+            {
+                return Some((candidate.clone(), (*existing).to_string()));
+            }
+        }
+    }
+    None
+}
+
 fn attribute_quote(source: &str, attribute: &HtmlAttribute) -> Option<u8> {
     if attribute.synthetic {
         return Some(b'"');
@@ -225,11 +286,19 @@ fn rebased_attributes(file: &SourceFile) -> HashMap<usize, HtmlAttribute> {
             .flatten()
             .filter(|attribute| attribute.writable)
         })
+        .filter_map(|attribute| {
+            let original_start = attribute.start;
+            let mut attribute = attribute.clone();
+            for edits in &file.prior_edits {
+                attribute = rebase_attribute(attribute, edits)?;
+            }
+            Some((original_start, attribute))
+        })
         .collect::<Vec<_>>();
-    attributes.sort_by_key(|attribute| attribute.start);
+    attributes.sort_by_key(|(_, attribute)| attribute.start);
     let mut delta = 0isize;
     let mut rebased = HashMap::new();
-    for attribute in attributes {
+    for (original_start, attribute) in attributes {
         let Some(start) = attribute.start.checked_add_signed(delta) else {
             continue;
         };
@@ -238,7 +307,7 @@ fn rebased_attributes(file: &SourceFile) -> HashMap<usize, HtmlAttribute> {
                 continue;
             };
             delta += inserted as isize;
-            rebased.insert(attribute.start, live);
+            rebased.insert(original_start, live);
             continue;
         }
         let Some(end) = live_attribute_end(&file.source, start) else {
@@ -247,7 +316,7 @@ fn rebased_attributes(file: &SourceFile) -> HashMap<usize, HtmlAttribute> {
         let value = file.source[start..end].to_string();
         delta += (end - start) as isize - (attribute.end - attribute.start) as isize;
         rebased.insert(
-            attribute.start,
+            original_start,
             HtmlAttribute {
                 value,
                 start,
@@ -258,6 +327,44 @@ fn rebased_attributes(file: &SourceFile) -> HashMap<usize, HtmlAttribute> {
         );
     }
     rebased
+}
+
+fn rebase_attribute(mut attribute: HtmlAttribute, edits: &[Edit]) -> Option<HtmlAttribute> {
+    let original_start = attribute.start;
+    let original_end = attribute.end;
+    let exact = edits
+        .iter()
+        .find(|edit| edit.start == original_start && edit.end == original_end);
+    if edits.iter().any(|edit| {
+        !(edit.start == original_start && edit.end == original_end)
+            && edit.start < original_end
+            && (edit.end > original_start || edit.start == edit.end)
+    }) {
+        return None;
+    }
+    let delta = edits
+        .iter()
+        .filter(|edit| {
+            !(edit.start == original_start && edit.end == original_end)
+                && edit.end <= original_start
+        })
+        .map(|edit| edit.replacement.len() as isize - (edit.end - edit.start) as isize)
+        .sum::<isize>();
+    attribute.start = original_start.checked_add_signed(delta)?;
+    attribute.end = original_end.checked_add_signed(delta)?;
+    if let Some(edit) = exact {
+        if attribute.synthetic {
+            let value = edit.replacement.strip_prefix(" class=\"")?.strip_suffix('"')?;
+            attribute.start += " class=\"".len();
+            attribute.end = attribute.start + value.len();
+            attribute.value = value.to_string();
+            attribute.synthetic = false;
+        } else {
+            attribute.end = attribute.start + edit.replacement.len();
+            attribute.value.clone_from(&edit.replacement);
+        }
+    }
+    Some(attribute)
 }
 
 fn live_synthetic_class(source: &str, start: usize) -> Option<(HtmlAttribute, usize)> {
@@ -361,7 +468,11 @@ mod tests {
                     writable: true,
                 }),
                 id_attribute: None,
+                match_classes: None,
+                match_ids: None,
+                match_tag: None,
                 tag: None,
+                css_paths: Vec::new(),
             }],
             html_stylesheets: vec![HtmlStylesheet {
                 css_path: "/project/site.css".to_string(),
@@ -371,6 +482,7 @@ mod tests {
             }],
             html_references_safe: true,
             html_script_text: String::new(),
+            prior_edits: Vec::new(),
         }
     }
 
@@ -443,7 +555,11 @@ mod tests {
                     synthetic: false,
                     writable: true,
                 }),
+                match_classes: None,
+                match_ids: None,
+                match_tag: None,
                 tag: None,
+                css_paths: Vec::new(),
             }],
             html_stylesheets: vec![HtmlStylesheet {
                 css_path: "/project/site.css".to_string(),
@@ -453,6 +569,7 @@ mod tests {
             }],
             html_references_safe: true,
             html_script_text: String::new(),
+            prior_edits: Vec::new(),
         };
         let candidates = HashMap::from([
             (

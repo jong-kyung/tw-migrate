@@ -1,12 +1,12 @@
-import { createRequire } from 'node:module';
+import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 const targets = {
-  'darwin-arm64': 'darwin-arm64',
-  'darwin-x64': 'darwin-x64',
-  'linux-arm64': 'linux-arm64-gnu',
-  'linux-x64': 'linux-x64-gnu',
-  'win32-x64': 'win32-x64-msvc',
+  "darwin-arm64": "darwin-arm64",
+  "darwin-x64": "darwin-x64",
+  "linux-arm64": "linux-arm64-gnu",
+  "linux-x64": "linux-x64-gnu",
+  "win32-x64": "win32-x64-msvc",
 };
 const target = targets[`${process.platform}-${process.arch}`];
 
@@ -21,14 +21,18 @@ for (const load of [
     binding = load();
     break;
   } catch (error) {
-    if (error.code !== 'MODULE_NOT_FOUND') throw error;
+    if (error.code !== "MODULE_NOT_FOUND") throw error;
   }
 }
 
 if (!binding) {
-  throw new Error(`No tw-migrate native addon was found for ${target}. Reinstall the package or build it locally.`);
+  throw new Error(
+    `No tw-migrate native addon was found for ${target}. Reinstall the package or build it locally.`,
+  );
 }
 
 export const decodeSourceMap = binding.decodeSourceMap;
 export const planBatchMigration = binding.planBatchMigration;
+export const staticImportBindings = binding.staticImportBindings;
+export const staticImports = binding.staticImports;
 export const validateCss = binding.validateCss;

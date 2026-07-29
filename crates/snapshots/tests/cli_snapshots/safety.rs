@@ -24,6 +24,7 @@ snapshot_cases! {
     safety_planning_mutation => setup_planning_mutation,
     safety_reference_mutation => setup_reference_mutation,
     safety_missing_sass => setup_missing_sass,
+    safety_missing_vue_sass => setup_missing_vue_sass,
     safety_post_edit_sass => setup_fake_sass,
     safety_missing_less => setup_missing_less,
     safety_missing_vue => setup_missing_vue,
@@ -103,6 +104,24 @@ fn install_tailwind_only(context: &CaseContext<'_>, missing: &str) -> Result<(),
 
 fn setup_missing_sass(context: &CaseContext<'_>) -> Result<(), String> {
     install_tailwind_only(context, "sass")
+}
+
+fn setup_missing_vue_sass(context: &CaseContext<'_>) -> Result<(), String> {
+    install_tailwind_only(context, "sass")?;
+    let modules = context.workspace.join("node_modules");
+    copy_tree(
+        &context.install_root.join("node_modules/vue"),
+        &modules.join("vue"),
+        None,
+    )?;
+    for dependency in ["@vue", "@babel", "@jridgewell", "estree-walker", "magic-string", "postcss", "source-map-js", "picocolors", "nanoid"] {
+        copy_tree(
+            &context.install_root.join("node_modules").join(dependency),
+            &modules.join(dependency),
+            None,
+        )?;
+    }
+    Ok(())
 }
 
 fn setup_missing_less(context: &CaseContext<'_>) -> Result<(), String> {

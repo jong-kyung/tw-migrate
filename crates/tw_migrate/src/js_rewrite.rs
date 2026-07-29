@@ -5,12 +5,14 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+use napi_derive::napi;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     Argument, CallExpression, ComputedMemberExpression, ExportAllDeclaration,
     ExportNamedDeclaration, Expression, ImportDeclaration, ImportDeclarationSpecifier,
-    ImportExpression, JSXAttribute, JSXAttributeItem, JSXAttributeName, JSXAttributeValue,
-    JSXExpression, JSXOpeningElement, StaticMemberExpression, TemplateLiteral, VariableDeclarator,
+    ImportExpression, ImportOrExportKind, JSXAttribute, JSXAttributeItem, JSXAttributeName,
+    JSXAttributeValue, JSXExpression, JSXOpeningElement, Statement, StaticMemberExpression,
+    TemplateLiteral, VariableDeclarator,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::Parser;
@@ -41,6 +43,85 @@ pub(crate) struct SourcePlan {
     pub(crate) matched_module_refs: HashMap<String, usize>,
     pub(crate) module_references_safe: bool,
     pub(crate) warnings: Vec<Warning>,
+}
+
+#[napi(object)]
+pub struct StaticImportBinding {
+    pub source: String,
+    pub local: String,
+}
+
+pub(crate) fn static_import_bindings(
+    path: &str,
+    source: &str,
+) -> Result<Vec<StaticImportBinding>, String> {
+    let allocator = Allocator::default();
+    let source_type = source_type_for_path(path)?;
+    let parsed = Parser::new(&allocator, source, source_type).parse();
+    if !parsed.diagnostics.is_empty() {
+        return Err(format!("Failed to parse {path}: {:?}", parsed.diagnostics));
+    }
+    Ok(parsed
+        .program
+        .body
+        .iter()
+        .filter_map(|statement| {
+            let Statement::ImportDeclaration(declaration) = statement else {
+                return None;
+            };
+            (declaration.import_kind == ImportOrExportKind::Value && declaration.phase.is_none())
+                .then_some(declaration)
+        })
+        .flat_map(|declaration| {
+            declaration
+                .specifiers
+                .iter()
+                .flatten()
+                .filter_map(|specifier| match specifier {
+                    ImportDeclarationSpecifier::ImportDefaultSpecifier(specifier) => {
+                        Some(specifier.local.name.as_str())
+                    }
+                    _ => None,
+                })
+                .map(|local| StaticImportBinding {
+                    source: declaration.source.value.to_string(),
+                    local: local.to_string(),
+                })
+        })
+        .collect())
+}
+
+pub(crate) fn static_imports(path: &str, source: &str) -> Result<Vec<String>, String> {
+    let allocator = Allocator::default();
+    let source_type = source_type_for_path(path)?;
+    let parsed = Parser::new(&allocator, source, source_type).parse();
+    if !parsed.diagnostics.is_empty() {
+        return Err(format!("Failed to parse {path}: {:?}", parsed.diagnostics));
+    }
+    Ok(parsed
+        .program
+        .body
+        .iter()
+        .filter_map(|statement| {
+            let Statement::ImportDeclaration(declaration) = statement else {
+                return None;
+            };
+            let has_runtime_specifier = declaration.specifiers.as_ref().is_none_or(|specifiers| {
+                specifiers.is_empty()
+                    || specifiers.iter().any(|specifier| {
+                        !matches!(
+                            specifier,
+                            ImportDeclarationSpecifier::ImportSpecifier(specifier)
+                                if specifier.import_kind == ImportOrExportKind::Type
+                        )
+                    })
+            });
+            (declaration.import_kind == ImportOrExportKind::Value
+                && declaration.phase.is_none()
+                && has_runtime_specifier)
+                .then(|| declaration.source.value.to_string())
+        })
+        .collect())
 }
 
 pub(crate) fn source_type_for_path(path: &str) -> Result<SourceType, String> {

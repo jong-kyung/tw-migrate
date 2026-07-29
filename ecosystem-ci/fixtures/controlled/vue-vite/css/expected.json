@@ -16,8 +16,8 @@
         ],
         "file": "src/App.vue",
         "ruleId": {
-          "start": 297,
-          "end": 349
+          "start": 1,
+          "end": 53
         },
         "authoredSpan": {
           "start": 297,
@@ -32,8 +32,8 @@
         ],
         "file": "src/App.vue",
         "ruleId": {
-          "start": 350,
-          "end": 405
+          "start": 54,
+          "end": 109
         },
         "authoredSpan": {
           "start": 350,
@@ -48,8 +48,8 @@
         ],
         "file": "src/App.vue",
         "ruleId": {
-          "start": 406,
-          "end": 462
+          "start": 110,
+          "end": 166
         },
         "authoredSpan": {
           "start": 406,
@@ -64,8 +64,8 @@
         ],
         "file": "src/App.vue",
         "ruleId": {
-          "start": 463,
-          "end": 511
+          "start": 167,
+          "end": 215
         },
         "authoredSpan": {
           "start": 463,
@@ -80,8 +80,8 @@
         ],
         "file": "src/App.vue",
         "ruleId": {
-          "start": 512,
-          "end": 543
+          "start": 216,
+          "end": 247
         },
         "authoredSpan": {
           "start": 512,
@@ -96,8 +96,8 @@
         ],
         "file": "src/App.vue",
         "ruleId": {
-          "start": 574,
-          "end": 609
+          "start": 278,
+          "end": 313
         },
         "authoredSpan": {
           "start": 574,
@@ -112,8 +112,8 @@
         ],
         "file": "src/App.vue",
         "ruleId": {
-          "start": 612,
-          "end": 643
+          "start": 316,
+          "end": 347
         },
         "authoredSpan": {
           "start": 612,

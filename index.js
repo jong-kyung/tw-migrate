@@ -16,7 +16,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 import { parseHtmlSource } from "./html.js";
-import { planBatchMigration, validateCss } from "./native.js";
+import { planBatchMigration, staticImports, validateCss } from "./native.js";
 import { analyzeVueSource, loadProjectVueCompiler, verifyVueSource } from "./vue.js";
 import {
   compileLessEntry,
@@ -272,6 +272,7 @@ async function planPackage(context, packageRoot) {
     pathOwners,
     targetable,
     writablePackages,
+    scannedPaths,
   } = context;
   let preparedHtml;
   try {
@@ -296,6 +297,10 @@ async function planPackage(context, packageRoot) {
       pathOwners,
       targetable,
       explicitStyle,
+      snapshots,
+      workspaceRoot,
+      workspaces: options.workspaces,
+      scannedPaths,
     });
   } catch (error) {
     if (!options.force || isIntegrityError(error)) throw error;
@@ -306,7 +311,8 @@ async function planPackage(context, packageRoot) {
   if (
     explicitStyle &&
     extension(explicitStyle) === ".vue" &&
-    preparedVue.stylesheets.length === 0
+    preparedVue.stylesheets.length === 0 &&
+    ![...preparedVue.stylePaths].some((path) => !isStylesheetModule(path))
   ) {
     return vueWarningsOnlyResult(preparedVue);
   }
@@ -319,7 +325,9 @@ async function planPackage(context, packageRoot) {
   const ownedStyles = [...styleSources.keys()].filter(
     (path) =>
       pathOwners.get(path) === packageRoot &&
-      (targetable.has(path) || preparedHtml.stylePaths.has(path)),
+      (targetable.has(path) ||
+        preparedHtml.stylePaths.has(path) ||
+        preparedVue.stylePaths.has(path)),
   );
   if (ownedStyles.length === 0 && preparedVue.stylesheets.length === 0) {
     return vueWarningsOnlyResult(preparedVue);
@@ -344,7 +352,9 @@ async function planPackage(context, packageRoot) {
   const targets = explicitCss
     ? [explicitCss]
     : explicitStyle
-      ? []
+      ? [...preparedVue.stylePaths].filter(
+          (path) => !isStylesheetModule(path) && !excludedEntries.has(path),
+        )
       : ownedStyles.filter(
           (path) =>
             !excludedEntries.has(path) &&
@@ -409,7 +419,7 @@ async function planPackage(context, packageRoot) {
         validateCss(compiled.css);
         for (const loadedPath of compiled.loadedPaths) {
           if (!isProjectInput(workspaceRoot, loadedPath)) continue;
-          const source = await snapshotFile(snapshots, loadedPath);
+          const source = await snapshotLoadedSource(snapshots, loadedPath);
           if (!styleSources.has(loadedPath)) styleSources.set(loadedPath, source);
           if (loadedPath !== stylePath) {
             const dependents = compilerDependents.get(loadedPath) ?? [];
@@ -460,25 +470,74 @@ async function planPackage(context, packageRoot) {
   removeMigratedHtmlLinks(plan, preparedHtml);
   plan.warnings.push(...preparedHtml.warnings);
   plan.warnings.push(...preparedVue.warnings);
-  for (const file of plan.files.filter((file) => extension(file.path) === ".html")) {
-    parseHtmlSource(file.path, file.source);
-  }
-  for (const file of plan.files.filter((file) => extension(file.path) === ".vue")) {
-    for (const block of verifyVueSource(preparedVue.compiler, file.path, file.source)) {
-      validateCss(block);
+  try {
+    for (const file of plan.files.filter((file) => extension(file.path) === ".html")) {
+      parseHtmlSource(file.path, file.source);
     }
-  }
-  for (const stylesheet of stylesheets.filter((stylesheet) =>
-    isPreprocessorPath(stylesheet.cssPath),
-  )) {
-    const changed = plan.files.find((file) => file.path === stylesheet.cssPath);
-    if (!changed && !plan.deletedFiles.includes(stylesheet.cssPath)) continue;
-    const source = changed?.source ?? "";
-    if (isSassPath(stylesheet.cssPath)) {
-      validateCss((await compileSassEntry(sass, stylesheet.cssPath, source)).css);
-    } else {
-      validateCss((await compileLessEntry(less, stylesheet.cssPath, source)).css);
+    for (const file of plan.files.filter((file) => extension(file.path) === ".vue")) {
+      const includeUnscoped = preparedVue.unscopedPaths.has(file.path);
+      const blocks = verifyVueSource(preparedVue.compiler, file.path, file.source, includeUnscoped);
+      // Blocks the migration never edited are byte-identical to the authored
+      // input and need no recompilation; a caller that only received a
+      // template edit must not suddenly require a preprocessor.
+      const untouched = new Map();
+      for (const block of verifyVueSource(
+        preparedVue.compiler,
+        file.path,
+        snapshots.get(file.path),
+        includeUnscoped,
+      )) {
+        const key = `${block.syntax}\0${block.content}`;
+        untouched.set(key, (untouched.get(key) ?? 0) + 1);
+      }
+      for (const [index, block] of blocks.entries()) {
+        const key = `${block.syntax}\0${block.content}`;
+        const remaining = untouched.get(key) ?? 0;
+        if (remaining > 0) {
+          untouched.set(key, remaining - 1);
+          continue;
+        }
+        if (block.syntax === "css") {
+          validateCss(block.content);
+        } else if (block.syntax === "less") {
+          validateCss(
+            (
+              await compileLessEntry(
+                (preparedVue.less ??= await loadProjectLess(packageRoot)),
+                `${file.path}.${index}.less`,
+                block.content,
+              )
+            ).css,
+          );
+        } else {
+          validateCss(
+            (
+              await compileSassEntry(
+                (preparedVue.sass ??= await loadProjectSass(packageRoot)),
+                `${file.path}.${index}.${block.syntax}`,
+                block.content,
+                { virtualEntry: true },
+              )
+            ).css,
+          );
+        }
+      }
     }
+    for (const stylesheet of stylesheets.filter((stylesheet) =>
+      isPreprocessorPath(stylesheet.cssPath),
+    )) {
+      const changed = plan.files.find((file) => file.path === stylesheet.cssPath);
+      if (!changed && !plan.deletedFiles.includes(stylesheet.cssPath)) continue;
+      const source = changed?.source ?? "";
+      if (isSassPath(stylesheet.cssPath)) {
+        validateCss((await compileSassEntry(sass, stylesheet.cssPath, source)).css);
+      } else {
+        validateCss((await compileLessEntry(less, stylesheet.cssPath, source)).css);
+      }
+    }
+  } catch (error) {
+    if (!options.force || !isMissingStyleCompilerError(error)) throw error;
+    return { failure: packageFailure(workspaceRoot, packageRoot, error) };
   }
   return { plan };
 }
@@ -734,6 +793,169 @@ function sourceReferencesStyle(file, stylePath) {
   );
 }
 
+function isLocalVueReference(reference) {
+  return (
+    reference.startsWith(".") ||
+    reference.startsWith("/") ||
+    reference.startsWith("@/") ||
+    reference.startsWith("~/") ||
+    reference.startsWith("#") ||
+    reference.includes("/") ||
+    reference.includes(".vue")
+  );
+}
+
+// An unresolved local reference only threatens the caller proof when it
+// could actually name a Vue file: `.vue` spellings, extensionless paths, and
+// aliases. An explicit foreign extension (`./utils.ts`) cannot.
+function couldResolveToVue(reference) {
+  const path = reference.split(/[?#]/, 1)[0];
+  return path.endsWith(".vue") || extension(path) === "";
+}
+
+function vueReferenceTarget(importer, reference, vuePaths) {
+  if (!reference.startsWith(".")) return undefined;
+  const target = resolve(dirname(importer), reference);
+  return [target, `${target}.vue`, join(target, "index.vue")].find((path) => vuePaths.has(path));
+}
+
+function vueLiteralTargets(file, vuePaths) {
+  return new Set(
+    [...file.source.matchAll(/(["'`])([^"'`\r\n]+)\1/g)].flatMap((match) => {
+      // A local glob can match `.vue` files without spelling the extension
+      // (`import.meta.glob("./components/*")`), so any glob-bearing local
+      // pattern conservatively opens every caller surface.
+      if (
+        /[?*[\]{}]/.test(match[2]) &&
+        (match[2].includes("vue") || isLocalVueReference(match[2]))
+      ) {
+        return [...vuePaths];
+      }
+      const target = vueReferenceTarget(file.path, match[2], vuePaths);
+      if (target) return [target];
+      return match[2].includes(".vue") ? [...vuePaths] : [];
+    }),
+  );
+}
+
+function normalizedVueTag(value) {
+  return value.replaceAll("-", "").toLowerCase();
+}
+
+function buildVueComponentGraph(
+  ownedVue,
+  sourceFiles,
+  analyses,
+  { styleSources, pathOwners, packageRoot },
+) {
+  const vuePaths = new Set(ownedVue.map((file) => file.path));
+  const callers = new Map([...vuePaths].map((path) => [path, []]));
+  const callerOpen = new Set();
+  // A stylesheet import that does not resolve to a package-owned file (a
+  // dependency or aliased stylesheet) still loads globally and can shadow
+  // scoped deletions, but its selectors cannot be analyzed.
+  let unresolvedStyleImport = false;
+  const stylesheetReference = /\.(?:css|scss|sass|less)(?:$|[?#])/;
+
+  for (const file of ownedVue) {
+    const analysis = analyses.get(file.path);
+    if (analysis.retained) {
+      for (const target of vuePaths) callerOpen.add(target);
+      continue;
+    }
+    const bindings = analysis.componentImports
+      .map((entry) => ({
+        ...entry,
+        target: vueReferenceTarget(file.path, entry.source, vuePaths),
+      }))
+      .filter((entry) => entry.target);
+    analysis.resolvedComponents = analysis.componentSites.flatMap((site) => {
+      const matches = bindings.filter(
+        (entry) => normalizedVueTag(entry.local) === normalizedVueTag(site.tag),
+      );
+      if (matches.length !== 1) return [];
+      const edge = { parent: file.path, child: matches[0].target, site };
+      callers.get(edge.child).push(edge);
+      if (site.idAttribute || analysis.dynamic) {
+        callerOpen.add(edge.child);
+        analyses.get(edge.child).rootIdsOverridden = true;
+      }
+      // A component rendered as a single-root parent's root chains the
+      // parent's own fallthrough surface down to this child; that chain is
+      // not modeled, so the child cannot be closed.
+      if (analysis.alwaysRenderedRoots < 2 && analysis.rootStarts.includes(site.nodeStart)) {
+        callerOpen.add(edge.child);
+      }
+      return [edge];
+    });
+    analysis.componentsOpen = analysis.resolvedComponents.length !== analysis.componentSites.length;
+    analysis.setupImports = new Set(bindings.map((entry) => entry.target));
+    if (analysis.componentsOpen) {
+      for (const target of vuePaths) callerOpen.add(target);
+    }
+  }
+
+  for (const file of sourceFiles) {
+    let references;
+    let blockReferences = [];
+    if (extension(file.path) === ".vue") {
+      const fileAnalysis = analyses.get(file.path);
+      references = fileAnalysis?.scriptStyleImports ?? [];
+      blockReferences = fileAnalysis?.styleBlockImports?.map((entry) => entry.reference) ?? [];
+    } else {
+      try {
+        references = staticImports(file.path, file.source);
+      } catch {
+        references = [];
+      }
+    }
+    if (
+      /\bimport\s*\(/.test(file.source) ||
+      references.some(
+        (reference) =>
+          !stylesheetReference.test(reference) &&
+          isLocalVueReference(reference) &&
+          couldResolveToVue(reference) &&
+          !vueReferenceTarget(file.path, reference, vuePaths),
+      )
+    ) {
+      for (const target of vuePaths) callerOpen.add(target);
+    }
+    const resolvesOwned = (reference) =>
+      stylesheetReferenceTargets(file.path, reference, styleSources).some(
+        (path) => pathOwners.get(path) === packageRoot,
+      );
+    if (
+      pathOwners.get(file.path) === packageRoot &&
+      (references.some(
+        (reference) =>
+          stylesheetReference.test(reference) &&
+          // Bare script specifiers load package CSS this analysis cannot see.
+          (!reference.startsWith(".") || !resolvesOwned(reference)),
+      ) ||
+        blockReferences.some((reference) => !resolvesOwned(reference)))
+    ) {
+      unresolvedStyleImport = true;
+    }
+    const imported = new Set(
+      references.flatMap((reference) => {
+        const target = vueReferenceTarget(file.path, reference, vuePaths);
+        return target ? [target] : [];
+      }),
+    );
+    for (const target of imported) {
+      if (extension(file.path) !== ".vue" || !analyses.get(file.path)?.setupImports?.has(target)) {
+        callerOpen.add(target);
+      }
+    }
+    for (const target of vueLiteralTargets(file, vuePaths)) {
+      if (!imported.has(target)) callerOpen.add(target);
+    }
+  }
+
+  return { callers, callerOpen, unresolvedStyleImport };
+}
+
 // Vue analysis can produce retention warnings even when nothing remains to
 // plan (all blocks unsupported, unsupported Vue version); surface them
 // through an otherwise empty plan instead of dropping them.
@@ -764,8 +986,19 @@ async function preparePackageVue({
   pathOwners,
   targetable,
   explicitStyle,
+  snapshots,
+  workspaceRoot,
+  workspaces,
+  scannedPaths,
 }) {
-  const none = { files: new Map(), stylesheets: [], warnings: [], compiler: undefined };
+  const none = {
+    files: new Map(),
+    stylesheets: [],
+    stylePaths: new Set(),
+    unscopedPaths: new Set(),
+    warnings: [],
+    compiler: undefined,
+  };
   // An explicit non-vue stylesheet selection plans only that stylesheet.
   if (explicitStyle && extension(explicitStyle) !== ".vue") return none;
   // Ignore filtering scopes what gets migrated, never what gets scanned: a
@@ -798,6 +1031,66 @@ async function preparePackageVue({
   const analyses = new Map(
     ownedVue.map((file) => [file.path, analyzeVueSource(loaded.compiler, file.path, file.source)]),
   );
+  const selectedPaths = new Set(selected.map((file) => file.path));
+  for (const file of ownedVue) {
+    const analysis = analyses.get(file.path);
+    if (analysis.retained) continue;
+    for (const edge of analysis.styleBlockImports) {
+      const local = stylesheetReferenceTargets(file.path, edge.reference, styleSources).some(
+        (path) => pathOwners.get(path) === packageRoot,
+      );
+      if (local) continue;
+      analysis.escapeUnverifiable = true;
+      if (selectedPaths.has(file.path)) {
+        warnings.push({
+          code: "unsupported-sfc-block",
+          file: file.path,
+          start: edge.start,
+          end: edge.end,
+          message: `The external style ${JSON.stringify(edge.reference)} could not be resolved inside the package.`,
+        });
+      }
+    }
+  }
+  let sass;
+  let less;
+  const compileBlocks = async (file, blocks) => {
+    for (const block of blocks.filter((block) => block.syntax !== "css")) {
+      const virtualPath = `${file.path}.${block.syntax}`;
+      const compiled = isSassPath(virtualPath)
+        ? await compileSassEntry(
+            (sass ??= await loadProjectSass(packageRoot)),
+            virtualPath,
+            block.content,
+            { virtualEntry: true },
+          )
+        : await compileLessEntry(
+            (less ??= await loadProjectLess(packageRoot)),
+            virtualPath,
+            block.content,
+          );
+      validateCss(compiled.css);
+      for (const loadedPath of compiled.loadedPaths) {
+        if (loadedPath === virtualPath || !isProjectInput(workspaceRoot, loadedPath)) continue;
+        const source = await snapshotLoadedSource(snapshots, loadedPath);
+        if (!styleSources.has(loadedPath)) styleSources.set(loadedPath, source);
+        if (!pathOwners.has(loadedPath)) pathOwners.set(loadedPath, packageRoot);
+      }
+      block.analysisSource = compiled.css;
+      block.sourcePath = virtualPath;
+      block.sourceMappings = compiled.sourceMappings;
+    }
+  };
+  for (const file of selected) {
+    const analysis = analyses.get(file.path);
+    if (!analysis.retained) await compileBlocks(file, analysis.blocks);
+  }
+  const vueGraph = buildVueComponentGraph(ownedVue, sourceFiles, analyses, {
+    styleSources,
+    pathOwners,
+    packageRoot,
+  });
+
   // Non-scoped CSS in the package is unlayered and can outrank the layered
   // utilities that replace a deleted scoped rule. The planner retains any
   // scoped rule whose classes this pool also targets, so collect every
@@ -811,7 +1104,7 @@ async function preparePackageVue({
   const generatesSelectors = (text) => /#\{|@\{|&[\w-]/.test(text);
   const vueShadowCss = [];
   const vueShadowModuleCss = [];
-  let vueShadowUnverifiable = false;
+  let vueShadowUnverifiable = vueGraph.unresolvedStyleImport;
   for (const [path, source] of styleSources) {
     if (pathOwners.get(path) !== packageRoot) continue;
     if (isPreprocessorPath(path) && generatesSelectors(source)) {
@@ -821,7 +1114,7 @@ async function preparePackageVue({
     // Module class and id names are localized at build time; the planner
     // indexes only their global (type/attribute/:global) selector surface.
     if (isStylesheetModule(path)) vueShadowModuleCss.push(source);
-    else vueShadowCss.push(source);
+    else vueShadowCss.push({ path, source });
   }
   for (const file of sourceFiles) {
     if (
@@ -838,45 +1131,282 @@ async function preparePackageVue({
       if (/<style/i.test(file.source)) vueShadowUnverifiable = true;
       continue;
     }
-    if (analysis.escapeUnverifiable) vueShadowUnverifiable = true;
+    if (analysis.escapeUnverifiable || analysis.scriptImportsUnverifiable) {
+      vueShadowUnverifiable = true;
+    }
     for (const text of analysis.shadowPreprocessorTexts) {
       if (generatesSelectors(text)) vueShadowUnverifiable = true;
-      else vueShadowCss.push(text);
+      else vueShadowCss.push({ path: file.path, source: text });
     }
-    vueShadowCss.push(...analysis.shadowCssTexts);
+    for (const text of analysis.unscopedShadowPreprocessorTexts) {
+      if (generatesSelectors(text)) vueShadowUnverifiable = true;
+      else {
+        vueShadowCss.push({ path: file.path, source: text, migratingUnscoped: true });
+      }
+    }
+    vueShadowCss.push(
+      ...analysis.shadowCssTexts.map((source) => ({ path: file.path, source })),
+      ...analysis.unscopedShadowCssTexts.map((source) => ({
+        path: file.path,
+        source,
+        migratingUnscoped: true,
+      })),
+      ...analysis.blocks.map((block) => ({
+        path: file.path,
+        source: block.analysisSource ?? block.content,
+        scoped: true,
+      })),
+    );
     vueShadowModuleCss.push(...analysis.shadowModuleCssTexts);
   }
 
+  const packageIsPrivate =
+    JSON.parse(await snapshotFile(snapshots, join(packageRoot, "package.json"))).private === true;
   const files = new Map();
   const stylesheets = [];
+  const stylePaths = new Set();
+  const unscopedPaths = new Set();
+  const ownedSources = sourceFiles.filter((file) => pathOwners.get(file.path) === packageRoot);
+  // A scanned HTML file without a stylesheet link never enters sourceFiles,
+  // but its class attributes are still a global usage surface (e.g. a
+  // gitignored mount shell), so its existence alone defeats the proof.
+  const sourcePathSet = new Set(sourceFiles.map((file) => file.path));
+  const hiddenHtml = scannedPaths.some(
+    (path) =>
+      extension(path) === ".html" &&
+      pathOwners.get(path) === packageRoot &&
+      !sourcePathSet.has(path),
+  );
+  const projectWideUsageProven =
+    packageIsPrivate &&
+    workspaceRoot === packageRoot &&
+    !workspaces &&
+    !explicitStyle &&
+    !hiddenHtml &&
+    ownedSources.every((file) => targetable.has(file.path)) &&
+    ownedVue.every((file) => !analyses.get(file.path).retained);
+  const elementsByFile = new Map();
+  const addElement = (path, element, cssPaths) => {
+    if (!element.classAttribute || cssPaths.length === 0) return;
+    const elements = elementsByFile.get(path) ?? [];
+    elements.push({ ...element, cssPaths: [...new Set(cssPaths)] });
+    elementsByFile.set(path, elements);
+  };
+  const componentRootSite = (site, root) => ({
+    ...site,
+    matchClasses: [site.classAttribute, root.classAttribute].flatMap(
+      (attribute) => attribute?.value.split(/\s+/).filter(Boolean) ?? [],
+    ),
+    matchIds: [site.idAttribute?.value ?? root.idAttribute?.value].filter(Boolean),
+    matchTag: root.tag,
+  });
+
+  for (const file of selected) {
+    const analysis = analyses.get(file.path);
+    if (analysis.retained) continue;
+    const importedStyles = new Set(
+      [
+        // A bare script specifier is a package import; resolving it against
+        // the SFC directory could bind an unrelated local file.
+        ...analysis.scriptStyleImports
+          .filter(
+            (reference) =>
+              reference.startsWith(".") &&
+              STYLESHEET_SYNTAX.has(extension(reference.split(/[?#]/, 1)[0])),
+          )
+          .flatMap((reference) => stylesheetReferenceTargets(file.path, reference, styleSources)),
+        ...analysis.styleBlockImports.flatMap((entry) =>
+          stylesheetReferenceTargets(file.path, entry.reference, styleSources),
+        ),
+      ].filter((path) => pathOwners.get(path) === packageRoot),
+    );
+    for (const path of importedStyles) {
+      stylePaths.add(path);
+      if (extension(path) !== ".css") continue;
+      for (const imported of cssImports(styleSources.get(path))) {
+        // Conditional imports need variant-aware contexts; retaining them is
+        // safer than attaching an unconditional utility.
+        if (imported.media) continue;
+        for (const target of stylesheetReferenceTargets(path, imported.href, styleSources)) {
+          if (pathOwners.get(target) === packageRoot) importedStyles.add(target);
+        }
+      }
+    }
+    const ownContexts = [
+      ...(analysis.blocks.length > 0 || analysis.unscopedBlocks.length > 0 ? [file.path] : []),
+      ...[...importedStyles].filter((path) => !isStylesheetModule(path)),
+    ];
+    for (const element of analysis.htmlElements) {
+      const ownElement =
+        analysis.rootIdsOverridden && analysis.rootStarts.includes(element.nodeStart)
+          ? { ...element, matchIds: [] }
+          : element;
+      addElement(file.path, ownElement, ownContexts);
+    }
+  }
+
+  for (const parent of ownedVue) {
+    const analysis = analyses.get(parent.path);
+    if (analysis.retained) continue;
+    for (const edge of analysis.resolvedComponents) {
+      const childAnalysis = analyses.get(edge.child);
+      // Vue only inherits call-site attributes onto a single-root child, so
+      // the total root count must gate the rewrite independently of writable sites.
+      const singleRoot =
+        childAnalysis?.rootStarts.length === 1 &&
+        !childAnalysis.rootVFor &&
+        !childAnalysis.rootFragment;
+      const childRoots = childAnalysis?.htmlElements.filter((element) =>
+        childAnalysis.rootStarts.includes(element.nodeStart),
+      );
+      if (
+        selectedPaths.has(parent.path) &&
+        singleRoot &&
+        childRoots?.length === 1 &&
+        !childAnalysis.fallthroughUnverifiable
+      ) {
+        addElement(parent.path, componentRootSite(edge.site, childRoots[0]), [parent.path]);
+      }
+      if (
+        selectedPaths.has(edge.child) &&
+        singleRoot &&
+        // A self-recursive edge is already covered by the parent-style site
+        // above; adding the same span twice would produce overlapping edits.
+        edge.parent !== edge.child &&
+        !childAnalysis?.fallthroughUnverifiable
+      ) {
+        addElement(parent.path, edge.site, [edge.child]);
+        if (childRoots?.length === 1) {
+          const shadowSite = componentRootSite(edge.site, childRoots[0]);
+          if (shadowSite.classAttribute) {
+            shadowSite.classAttribute = { ...shadowSite.classAttribute, writable: false };
+            addElement(parent.path, shadowSite, [edge.child]);
+          }
+        }
+      }
+    }
+  }
+
   for (const file of selected) {
     await rejectSymlinkTarget(file.path, packageRoot);
     const analysis = analyses.get(file.path);
     warnings.push(...analysis.warnings);
-    if (analysis.retained || analysis.blocks.length === 0) continue;
-    files.set(file.path, {
-      ...file,
-      htmlElements: analysis.htmlElements,
-      htmlStylesheets: [{ cssPath: file.path, variants: [], direct: true, analyzable: true }],
-      htmlReferencesSafe: !analysis.retention,
-      htmlScriptText: analysis.scriptText,
-    });
+    if (analysis.retained) continue;
+    const componentOpen =
+      analysis.componentsOpen ||
+      analysis.resolvedComponents.some((edge) => {
+        const child = analyses.get(edge.child);
+        return (
+          !child ||
+          child.retained ||
+          child.dynamic ||
+          child.fallthroughUnverifiable ||
+          child.rootVFor ||
+          child.rootFragment ||
+          child.rootStarts.length !== 1 ||
+          !child.htmlElements.some((element) => element.nodeStart === child.rootStarts[0])
+        );
+      });
+    const callers = vueGraph.callers.get(file.path);
+    const callerOpen =
+      !packageIsPrivate ||
+      callers.length === 0 ||
+      vueGraph.callerOpen.has(file.path) ||
+      callers.some(
+        (edge) => analyses.get(edge.parent)?.dynamic || analyses.get(edge.parent)?.retained,
+      );
+    const retention = analysis.dynamic
+      ? "dynamic-template-class"
+      : componentOpen
+        ? "component-class-target"
+        : analysis.alwaysRenderedRoots < 2 && callerOpen
+          ? "open-root-fallthrough"
+          : undefined;
+    // ponytail: unscoped deletion is limited to private single-source packages;
+    // widen it only when the dependency graph can prove stylesheet co-loading.
+    const migrateUnscoped =
+      analysis.blocks.length === 0 &&
+      analysis.unscopedBlocks.length > 0 &&
+      projectWideUsageProven &&
+      !analysis.dynamic &&
+      // Injected and slotted content can use any class an unscoped rule
+      // targets without ever receiving its utility.
+      !analysis.vHtml &&
+      !analysis.hasSlot &&
+      !analysis.escapeUnverifiable &&
+      !componentOpen &&
+      ownedSources.length === 1 &&
+      ownedSources[0].path === file.path;
+    if (migrateUnscoped) {
+      await compileBlocks(file, analysis.unscopedBlocks);
+      unscopedPaths.add(file.path);
+    }
+    if (analysis.unscopedBlocks.length > 0 && !migrateUnscoped) {
+      for (const block of analysis.unscopedBlocks) {
+        warnings.push({
+          code: "unscoped-style-block",
+          file: file.path,
+          start: block.contentStart,
+          end: block.contentEnd,
+          message: "The global reach of this unscoped style block could not be proven.",
+        });
+      }
+    }
+    const vueBlocks = migrateUnscoped ? analysis.unscopedBlocks : analysis.blocks;
+    if (vueBlocks.length === 0) continue;
+    const vueRetention = migrateUnscoped ? undefined : retention;
+    const shadowCss = vueShadowCss
+      .filter(
+        (entry) =>
+          entry.path !== file.path ||
+          (!entry.scoped && !(migrateUnscoped && entry.migratingUnscoped)),
+      )
+      .map((entry) => entry.source);
     stylesheets.push({
       cssPath: file.path,
       cssSource: file.source,
       cssModuleId: normalizedRelativePath(packageRoot, file.path),
       syntax: "css",
-      isModule: !analysis.retention,
-      vueBlocks: analysis.blocks,
-      vueRetention: analysis.retention,
-      // Open-surface files never delete rules, so only closed files carry
-      // the shadow pool.
-      vueShadowCss: analysis.retention ? undefined : vueShadowCss,
-      vueShadowModuleCss: analysis.retention ? undefined : vueShadowModuleCss,
-      vueShadowUnverifiable: analysis.retention ? undefined : vueShadowUnverifiable,
+      isModule: !vueRetention,
+      vueBlocks,
+      vueRetention,
+      vueUnscoped: migrateUnscoped,
+      vueShadowCss: vueRetention ? undefined : shadowCss,
+      vueShadowModuleCss: vueRetention ? undefined : vueShadowModuleCss,
+      vueShadowUnverifiable: vueRetention ? undefined : vueShadowUnverifiable,
     });
   }
-  return { files, stylesheets, warnings, compiler: loaded.compiler };
+
+  for (const file of ownedVue) {
+    const analysis = analyses.get(file.path);
+    if (analysis.retained) continue;
+    const elements = elementsByFile.get(file.path) ?? [];
+    const contextPaths = [...new Set(elements.flatMap((element) => element.cssPaths))];
+    if (contextPaths.length === 0) continue;
+    await rejectSymlinkTarget(file.path, packageRoot);
+    files.set(file.path, {
+      ...file,
+      htmlElements: elements,
+      htmlStylesheets: contextPaths.map((cssPath) => ({
+        cssPath,
+        variants: [],
+        direct: cssPath === file.path,
+        analyzable: true,
+      })),
+      htmlReferencesSafe: !analysis.dynamic,
+      htmlScriptText: analysis.scriptText,
+    });
+  }
+  return {
+    files,
+    stylesheets,
+    stylePaths,
+    unscopedPaths,
+    warnings,
+    compiler: loaded.compiler,
+    sass,
+    less,
+  };
 }
 
 async function preparePackageHtml({
@@ -1284,6 +1814,20 @@ async function snapshotFile(snapshots, path) {
   return recordSnapshot(snapshots, path, await readFile(path, "utf8"));
 }
 
+// The compiler just loaded this dependency, so its disappearance is a source
+// change during planning -- a fatal integrity error `--force` must not
+// downgrade to a recoverable package failure.
+async function snapshotLoadedSource(snapshots, path) {
+  try {
+    return await snapshotFile(snapshots, path);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      throw new Error(`Source changed during planning: ${path}`);
+    }
+    throw error;
+  }
+}
+
 function recordSnapshot(snapshots, path, source) {
   if (snapshots.has(path) && snapshots.get(path) !== source) {
     throw new Error(`Source changed during planning: ${path}`);
@@ -1305,6 +1849,11 @@ function packageFailure(workspaceRoot, packageRoot, error) {
 function isRecoverablePlanningError(error) {
   const message = error instanceof Error ? error.message : String(error);
   return message.startsWith(RECOVERABLE_INPUT_ERROR);
+}
+
+function isMissingStyleCompilerError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /^(?:Sass|Less) must be installed in the target project\.$/.test(message);
 }
 
 function isIntegrityError(error) {
