@@ -177,7 +177,7 @@ export function analyzeVueSource(compiler, path, source) {
     blocks.push(block);
   }
 
-  const state = { elements: [], components: [], dynamic: false, vHtml: false };
+  const state = { elements: [], components: [], dynamic: false, vHtml: false, hasSlot: false };
   visitTemplateNode(source, template.ast, state);
   const alwaysRenderedRoots = template.ast.children.filter(
     (node) =>
@@ -316,6 +316,7 @@ export function analyzeVueSource(compiler, path, source) {
     fallthroughUnverifiable,
     dynamic: state.dynamic,
     vHtml: state.vHtml,
+    hasSlot: state.hasSlot,
     alwaysRenderedRoots,
     shadowCssTexts,
     unscopedShadowCssTexts,
@@ -348,6 +349,7 @@ export function verifyVueSource(compiler, path, source, includeUnscoped = false)
 
 function visitTemplateNode(source, node, state) {
   if (node.type === NODE_ELEMENT) {
+    if (node.tagType === TAG_SLOT) state.hasSlot = true;
     let classBound = false;
     for (const prop of node.props ?? []) {
       if (prop.type !== PROP_DIRECTIVE) continue;

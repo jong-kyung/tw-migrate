@@ -541,6 +541,25 @@ test("warns when a Vue element already carries a conflicting utility", async () 
   }
 });
 
+test("keeps rebased Vue conflict warnings on authored offsets", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <div class="card p-4">Card</div>\n</template>\n<script setup>\nimport "./a.css";\nimport "./b.css";\n</script>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "a.css"), ".card { margin: 7px; }\n"),
+      writeFile(join(cwd, "b.css"), ".card { padding: 13px; }\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    const warning = report.warnings.find((entry) => entry.code === "existing-tailwind-conflict")!;
+    const start = Buffer.byteLength(vue.slice(0, vue.indexOf("card p-4")));
+    assert.deepEqual([warning.start, warning.end], [start, start + Buffer.byteLength("card p-4")]);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("a :deep escape in another SFC shadows scoped deletion", async () => {
   const cwd = await fixture();
   const child =
@@ -597,6 +616,23 @@ test("migrates a stylesheet statically imported by a Vue script", async () => {
     assert.match(await readFile(join(cwd, "Card.vue"), "utf8"), /class="card p-\[13px\]"/);
     const second = await migrate({ cwd, styleFile: "Card.vue", write: true });
     assert.deepEqual(second.changedFiles, []);
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("propagates Vue consumer contexts through local CSS imports", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="nested">A</p>\n</template>\n<script setup>\nimport "./entry.css";\n</script>\n';
+  try {
+    await Promise.all([
+      writeFile(join(cwd, "Card.vue"), vue),
+      writeFile(join(cwd, "entry.css"), '@import "./nested.css";\n'),
+      writeFile(join(cwd, "nested.css"), ".nested { margin: 7px; }\n"),
+    ]);
+    const report = await migrate({ cwd, styleFile: "Card.vue" });
+    assert.match(report.diff, /class="nested m-\[7px\]"/);
   } finally {
     await cleanup(cwd);
   }
@@ -1440,6 +1476,26 @@ test("a vanished real Sass entry stays a fatal integrity error", async () => {
     virtualEntry: true,
   });
   assert.match(virtual.css, /padding: 1px/);
+});
+
+test("slots defeat the unscoped sole-source proof", async () => {
+  const cwd = await fixture();
+  try {
+    await Promise.all([
+      rm(join(cwd, "Button.module.css")),
+      rm(join(cwd, "Button.tsx")),
+      writeFile(
+        join(cwd, "Card.vue"),
+        '<template>\n  <div class="shared">Card</div>\n  <slot />\n</template>\n<style>\n.shared { margin: 7px; }\n</style>\n',
+      ),
+    ]);
+    const report = await migrate({ cwd });
+    assert.ok(report.warnings.some((entry) => entry.code === "unscoped-style-block"));
+    assert.equal(report.convertedRules, 0);
+    assert.ok(!report.changedFiles.includes("Card.vue"));
+  } finally {
+    await cleanup(cwd);
+  }
 });
 
 test("a scan-excluded HTML shell defeats the unscoped sole-source proof", async () => {

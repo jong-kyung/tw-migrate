@@ -120,11 +120,16 @@ pub(crate) fn plan_html_file(
                 .find(|existing| tailwind_utilities_conflict(candidate, existing))
                 .map(|existing| (candidate.clone(), (*existing).to_string()))
         }) {
+            let authored = element
+                .class_attribute
+                .as_ref()
+                .map(|attribute| (attribute.start, attribute.end))
+                .unwrap_or((0, 0));
             warnings.push(Warning {
                 code: "existing-tailwind-conflict",
                 file: file.path.clone(),
-                start: class_attribute.start,
-                end: class_attribute.end,
+                start: authored.0,
+                end: authored.1,
                 message: format!(
                     "Generated utility `{generated}` may conflict with existing `{existing}`."
                 ),

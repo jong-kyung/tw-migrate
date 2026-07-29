@@ -1201,24 +1201,33 @@ async function preparePackageVue({
   for (const file of selected) {
     const analysis = analyses.get(file.path);
     if (analysis.retained) continue;
-    const importedStyles = [
-      ...new Set(
-        [
-          // A bare script specifier is a package import; resolving it against
-          // the SFC directory could bind an unrelated local file.
-          ...analysis.scriptStyleImports
-            .filter((reference) => reference.startsWith("."))
-            .flatMap((reference) => stylesheetReferenceTargets(file.path, reference, styleSources)),
-          ...analysis.styleBlockImports.flatMap((entry) =>
-            stylesheetReferenceTargets(file.path, entry.reference, styleSources),
-          ),
-        ].filter((path) => pathOwners.get(path) === packageRoot),
-      ),
-    ];
-    for (const path of importedStyles) stylePaths.add(path);
+    const importedStyles = new Set(
+      [
+        // A bare script specifier is a package import; resolving it against
+        // the SFC directory could bind an unrelated local file.
+        ...analysis.scriptStyleImports
+          .filter((reference) => reference.startsWith("."))
+          .flatMap((reference) => stylesheetReferenceTargets(file.path, reference, styleSources)),
+        ...analysis.styleBlockImports.flatMap((entry) =>
+          stylesheetReferenceTargets(file.path, entry.reference, styleSources),
+        ),
+      ].filter((path) => pathOwners.get(path) === packageRoot),
+    );
+    for (const path of importedStyles) {
+      stylePaths.add(path);
+      if (extension(path) !== ".css") continue;
+      for (const imported of cssImports(styleSources.get(path))) {
+        // Conditional imports need variant-aware contexts; retaining them is
+        // safer than attaching an unconditional utility.
+        if (imported.media) continue;
+        for (const target of stylesheetReferenceTargets(path, imported.href, styleSources)) {
+          if (pathOwners.get(target) === packageRoot) importedStyles.add(target);
+        }
+      }
+    }
     const ownContexts = [
       ...(analysis.blocks.length > 0 || analysis.unscopedBlocks.length > 0 ? [file.path] : []),
-      ...importedStyles.filter((path) => !isStylesheetModule(path)),
+      ...[...importedStyles].filter((path) => !isStylesheetModule(path)),
     ];
     for (const element of analysis.htmlElements) {
       const ownElement =
@@ -1314,9 +1323,10 @@ async function preparePackageVue({
       analysis.unscopedBlocks.length > 0 &&
       projectWideUsageProven &&
       !analysis.dynamic &&
-      // Injected `v-html` content can use any class an unscoped rule
+      // Injected and slotted content can use any class an unscoped rule
       // targets without ever receiving its utility.
       !analysis.vHtml &&
+      !analysis.hasSlot &&
       !analysis.escapeUnverifiable &&
       !componentOpen &&
       ownedSources.length === 1 &&
