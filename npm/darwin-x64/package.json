@@ -1,6 +1,6 @@
 {
   "name": "tw-migrate-darwin-x64",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Preview and migrate React CSS to Tailwind utilities",
   "license": "MIT",
   "repository": {
