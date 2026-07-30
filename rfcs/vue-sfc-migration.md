@@ -268,9 +268,10 @@ and a second run produces no diff.
   Any other `$style` or `useCssModule` appearance — template expressions,
   interpolations, dynamic directive arguments, script text, or an unreadable
   script — retains the whole module with `unsupported-css-module-reference`,
-  as does an unsupported unnamed module sibling block (every unnamed
-  `<style module>` feeds the same `$style` object).
-  Named modules (`<style module="cls">`) retain with `unsupported-sfc-block`.
+  as does an unsupported sibling targeting the default binding (bare
+  `<style module>` and `<style module="$style">` both feed the same `$style`
+  object). Other named modules (`<style module="cls">`) retain with
+  `unsupported-sfc-block`.
   Module class and id names are localized at build time, so cascade-shadow
   checks apply only to their global (type/attribute/`:global`) selector
   surface — but unknown classes can still land on a binding element and

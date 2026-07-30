@@ -1618,6 +1618,7 @@ test("an unsupported module sibling block retains the whole $style module", asyn
     '<style module lang="postcss">\n.card { color: red; }\n</style>\n',
     '<style module src="./retained.css"></style>\n',
     '<style module media="screen">\n.card { color: red; }\n</style>\n',
+    '<style module="$style">\n.card { color: red; }\n</style>\n',
   ];
   try {
     for (const sibling of siblings) {

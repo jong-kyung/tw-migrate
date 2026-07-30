@@ -101,6 +101,7 @@ export function analyzeVueSource(compiler, path, source) {
   for (const style of descriptor.styles) {
     const start = style.loc.start.offset;
     const end = style.loc.end.offset;
+    const usesDefaultModuleBinding = style.module === true || style.module === "$style";
     const unsupportedAttributes = Object.keys(style.attrs).filter(
       (attribute) => !SUPPORTED_STYLE_ATTRIBUTES.has(attribute),
     );
@@ -111,14 +112,14 @@ export function analyzeVueSource(compiler, path, source) {
         end,
         `Unsupported <style> attributes: ${unsupportedAttributes.join(", ")}.`,
       );
-      if (style.module === true) moduleSiblingUnsupported = true;
+      if (usesDefaultModuleBinding) moduleSiblingUnsupported = true;
       escapeUnverifiable = true;
       continue;
     }
     if (style.src !== undefined) {
       if (style.module !== undefined) {
         warn("unsupported-sfc-block", start, end, "A <style module src> block is not supported.");
-        if (style.module === true) moduleSiblingUnsupported = true;
+        if (usesDefaultModuleBinding) moduleSiblingUnsupported = true;
         escapeUnverifiable = true;
       } else {
         styleBlockImports.push({ reference: style.src, start, end });
@@ -126,6 +127,9 @@ export function analyzeVueSource(compiler, path, source) {
       continue;
     }
     if (style.module !== undefined && style.module !== true) {
+      // `$style` explicitly names the same binding as a bare module, so this
+      // unsupported sibling must keep every block feeding that object alive.
+      if (usesDefaultModuleBinding) moduleSiblingUnsupported = true;
       // Named module bindings are rare and unproven; the block still feeds
       // the module shadow channel (type selectors stay global).
       warn("unsupported-sfc-block", start, end, "Named <style module> blocks are not supported.");
@@ -136,7 +140,7 @@ export function analyzeVueSource(compiler, path, source) {
       // Every unnamed module block feeds the same `$style` object, so an
       // unsupported sibling supplies classes the closure cannot see; the
       // whole module must retain.
-      if (style.module === true) moduleSiblingUnsupported = true;
+      if (usesDefaultModuleBinding) moduleSiblingUnsupported = true;
       warn(
         "preprocessor-style-block",
         start,
