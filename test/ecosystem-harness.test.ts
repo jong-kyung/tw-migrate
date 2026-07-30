@@ -194,6 +194,10 @@ test("rejects invalid manifests before execution", () => {
   const missingSource = controlled();
   delete missingSource.source;
   errorFor([missingSource]);
+  errorFor([controlled({ probes: {} })]);
+  errorFor([external({ probes: {} })]);
+  errorFor([external({ probes: { base: probe({ action: { type: "hovre", selector } }) } })]);
+  errorFor([external({ probes: { base: probe({ selector: { type: "datta", value: "card" } }) } })]);
 });
 
 test("migration source paths must stay relative and inside the driver", () => {

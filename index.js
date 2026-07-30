@@ -51,6 +51,9 @@ const RECOVERABLE_INPUT_ERROR = "TW_MIGRATE_RECOVERABLE_INPUT:";
 const compareStrings = (left, right) => (left > right) - (left < right);
 
 export async function migrate(options = {}) {
+  if ("cssFile" in options) {
+    throw new TypeError("cssFile has been replaced by styleFile");
+  }
   if (options.styleFile && options.workspaces) {
     throw new TypeError("styleFile cannot be combined with workspaces");
   }

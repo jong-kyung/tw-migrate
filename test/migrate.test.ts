@@ -70,6 +70,8 @@ test("returns structured migration report fields", async () => {
 test("validates API-only migration options", async () => {
   const cwd = await fixture();
   try {
+    const legacyOptions = { cwd, cssFile: "Button.module.css" };
+    await assert.rejects(migrate(legacyOptions), /replaced by styleFile/);
     await assert.rejects(
       migrate({ cwd, styleFile: "Button.module.css", workspaces: true }),
       /styleFile cannot be combined with workspaces/,
