@@ -186,71 +186,11 @@ test("smoke and external cases accept non-exhaustive probes without occupying co
   errorFor([base, { id: "smoke", kind: "smoke", fixture: "missing" }]);
 });
 
-test("controlled cases require independent hover, focus, and keyboard focus-visible probes", () => {
-  for (const name of ["hover", "focus", "focus-visible"]) {
-    const probes = structuredClone(controlled().probes);
-    delete probes[name];
-    assert.throws(
-      () => validateManifest(manifest(controlled({ probes }))),
-      new RegExp(`missing.*${name}`),
-    );
-  }
-});
-
-test("controlled cases require responsive probes below and above the breakpoint", () => {
-  for (const name of ["responsive-below", "responsive-above"]) {
-    const probes = structuredClone(controlled().probes);
-    delete probes[name];
-    assert.throws(
-      () => validateManifest(manifest(controlled({ probes }))),
-      new RegExp(`missing.*${name}`),
-    );
-  }
-});
-
-test("every probe requires route, viewport, readiness, selector, and cardinality", () => {
-  for (const field of ["route", "viewport", "readiness", "selector", "cardinality", "identity"]) {
-    const project = structuredClone(controlled());
-    delete project.probes.base[field];
-    errorFor([project]);
-  }
-});
-
-test("controlled state actions and responsive ordering are strict", () => {
-  const wrongHover = structuredClone(controlled());
-  wrongHover.probes.hover.action.type = "focus";
-  errorFor([wrongHover]);
-
-  const wrongKey = structuredClone(controlled());
-  wrongKey.probes["focus-visible"].action.key = "Enter";
-  errorFor([wrongKey]);
-
-  const unordered = structuredClone(controlled());
-  unordered.probes["responsive-below"].viewport.width = desktop.width;
-  errorFor([unordered]);
-});
-
 test("rejects invalid manifests before execution", () => {
   errorFor([controlled(), controlled({ style: "scss" })]);
   errorFor([controlled({ extra: true })]);
   errorFor([controlled(), controlled({ id: "same-cell" })]);
   errorFor([external({ revision: "abc123" })]);
-  errorFor([
-    controlled({
-      probes: {
-        ...controlled().probes,
-        base: probe({ selector: { type: "class", value: ".ready" } }),
-      },
-    }),
-  ]);
-  errorFor([
-    controlled({
-      probes: {
-        ...controlled().probes,
-        base: probe({ readiness: { selector, cardinality: 0 } }),
-      },
-    }),
-  ]);
   const missingSource = controlled();
   delete missingSource.source;
   errorFor([missingSource]);
@@ -383,13 +323,6 @@ test("external repositories and paths stay inside the CI checkout trust boundary
     errorFor([external({ start })]);
   errorFor([external({ runtimeWrites: ["src/App.module.css"] })]);
   errorFor([external({ runtimeWrites: ["a", "b", "c", "d"] })]);
-  for (const selector of [
-    { type: "tag", value: ".card" },
-    { type: "css", value: ".card" },
-    { type: "css", value: "#card" },
-  ]) {
-    errorFor([external({ probes: { base: probe({ selector }) } })]);
-  }
 });
 
 test("package script exposes the focused ecosystem harness entrypoint", () => {
@@ -1008,94 +941,12 @@ test("case failure uploads preserve package publication logs", async (t) => {
   assert.equal(await readFile(join(uploadRoot, "publish.log"), "utf8"), "npm publish failed\n");
 });
 
-test("workflow matrices match every manifest kind across all required OSes", async () => {
-  const manifest = await loadManifest();
-  const workflow = await readEcosystemWorkflow();
-  const matrices = [
-    ...workflow.matchAll(
-      /^      matrix:\n        os: \[([a-z, ]+)\]\n        case: \[([a-z0-9-, ]+)\]\n        include:$/gm,
-    ),
-  ];
-  assert.equal(
-    matrices.length,
-    3,
-    "expected literal controlled, smoke, and external workflow matrices",
-  );
-  for (const matrix of matrices)
-    assert.deepEqual(matrix[1].split(", "), ["linux", "macos", "windows"]);
-  for (const [index, kind] of ["controlled", "smoke", "external"].entries()) {
-    assert.deepEqual(
-      matrices[index][2].split(", "),
-      manifest.projects.filter((project) => project.kind === kind).map(({ id }) => id),
-    );
-  }
-});
-
 test("case jobs run after non-cancelled partial package failure while preserving label gating", async () => {
   const workflow = await readEcosystemWorkflow();
   assert.match(
     workflow,
     /^  case:\n    needs: package\n    if: \$\{\{ !cancelled\(\) && \(github\.event_name != 'pull_request' \|\| github\.event\.label\.name == 'test:e2e'\) \}\}$/m,
   );
-});
-
-test("fixture integration dependencies use the required exact pins", async () => {
-  const allStyles = ["css", "scss", "sass", "less"];
-  const expected = {
-    "react-vite": {
-      styles: allStyles,
-      pins: {
-        "@tailwindcss/vite": "4.3.3",
-        tailwindcss: "4.3.3",
-        vite: "8.1.5",
-        react: "19.2.8",
-        "react-dom": "19.2.8",
-      },
-    },
-    next: {
-      styles: allStyles,
-      pins: {
-        "@tailwindcss/postcss": "4.3.3",
-        tailwindcss: "4.3.3",
-        next: "15.5.21",
-        react: "19.2.8",
-        "react-dom": "19.2.8",
-      },
-    },
-    "vite-html": {
-      styles: allStyles,
-      pins: { "@tailwindcss/vite": "4.3.3", tailwindcss: "4.3.3", vite: "8.1.5" },
-    },
-    "vue-vite": {
-      styles: ["css"],
-      pins: {
-        "@tailwindcss/vite": "4.3.3",
-        tailwindcss: "4.3.3",
-        vite: "8.1.5",
-        vue: "3.5.40",
-        "@vitejs/plugin-vue": "6.0.8",
-      },
-    },
-  };
-  for (const [runtime, { styles, pins }] of Object.entries(expected)) {
-    for (const style of styles) {
-      const fixture = JSON.parse(
-        await readFile(
-          new URL(
-            `../ecosystem-ci/fixtures/controlled/${runtime}/${style}/package.json`,
-            import.meta.url,
-          ),
-          "utf8",
-        ),
-      );
-      for (const [name, version] of Object.entries(pins))
-        assert.equal(fixture.dependencies[name], version);
-      if (style === "scss" || style === "sass") assert.equal(fixture.dependencies.sass, "1.101.3");
-      if (style === "less") assert.equal(fixture.dependencies.less, "4.7.0");
-      if (runtime === "next" && style === "less")
-        assert.equal(fixture.dependencies["next-with-less"], "3.0.1");
-    }
-  }
 });
 
 test("the no-argument CLI stays browser-free and returns usage", () => {

@@ -32,7 +32,6 @@
     "index.js",
     "index.d.ts",
     "native.js",
-    "rfcs",
     "style-compiler.js",
     "vue.js"
   ],

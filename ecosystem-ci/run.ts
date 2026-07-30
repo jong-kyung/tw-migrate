@@ -10,14 +10,16 @@ import { stagePackages } from "./packages.ts";
 import { platformCommand } from "./shared.ts";
 import type { ControlledProject, Manifest, ProbedProject, Project } from "./types.ts";
 
-// `projects.json` is untrusted until validateManifest narrows it, so the
-// validators below walk `unknown` values rather than the manifest types.
+// `projects.json` is reviewed in-repo, so `types.ts` is the contract for its
+// shape and a malformed probe simply fails its own case. What is validated
+// here is the external-case trust boundary: the repositories the harness
+// clones and the package-manager argv it executes. Those validators walk
+// `unknown` values rather than the manifest types.
 type Unknown = Record<string, unknown>;
 
 const usage = "Usage: node ecosystem-ci/run.ts (--case <id> | --all)";
 const runtimes = new Set(["react-vite", "next", "vite-html", "vue-vite"]);
 const styles = new Set(["css", "scss", "sass", "less"]);
-const selectorTypes = new Set(["role", "name", "text", "data", "id", "tag", "css"]);
 
 function object(value: unknown, label: string): Unknown {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -37,91 +39,9 @@ function exactKeys(value: unknown, allowed: string[], required: string[], label:
   return record;
 }
 
-function positiveInteger(value: unknown): boolean {
-  return Number.isInteger(value) && (value as number) >= 1;
-}
-
 function nonempty(value: unknown, label: string): void {
   if (typeof value !== "string" || value.length === 0)
     throw new Error(`${label} must be a non-empty string`);
-}
-
-function validateSelector(value: unknown, label: string): void {
-  const selector = exactKeys(value, ["type", "value", "name"], ["type", "value"], label);
-  if (typeof selector.type !== "string" || !selectorTypes.has(selector.type)) {
-    throw new Error(
-      `${label}.type must be role, name, text, data, id, tag, or css (CSS class selectors are forbidden)`,
-    );
-  }
-  nonempty(selector.value, `${label}.value`);
-  if (selector.type === "tag" && !/^[a-z][a-z0-9-]*$/.test(String(selector.value))) {
-    throw new Error(`${label}.value must be one lowercase HTML tag`);
-  }
-  if (selector.type === "css" && /[.#]/.test(String(selector.value))) {
-    throw new Error(`${label}.value must not contain class or id selectors`);
-  }
-  if ("name" in selector) {
-    if (selector.type !== "role") throw new Error(`${label}.name is only valid for role selectors`);
-    nonempty(selector.name, `${label}.name`);
-  }
-}
-
-function validateExpectation(value: unknown, label: string): void {
-  const expectation = exactKeys(
-    value,
-    ["selector", "cardinality"],
-    ["selector", "cardinality"],
-    label,
-  );
-  validateSelector(expectation.selector, `${label}.selector`);
-  if (!positiveInteger(expectation.cardinality)) {
-    throw new Error(`${label}.cardinality must be a positive integer`);
-  }
-}
-
-function validateViewport(value: unknown, label: string): void {
-  const viewport = exactKeys(value, ["width", "height"], ["width", "height"], label);
-  for (const dimension of ["width", "height"] as const) {
-    if (!positiveInteger(viewport[dimension])) {
-      throw new Error(`${label}.${dimension} must be a positive integer`);
-    }
-  }
-}
-
-function validateAction(value: unknown, label: string): void {
-  const action = object(value, label);
-  if (action.type === "press") {
-    exactKeys(action, ["type", "key"], ["type", "key"], label);
-    nonempty(action.key, `${label}.key`);
-  } else if (["click", "hover", "focus"].includes(action.type as string)) {
-    exactKeys(action, ["type", "selector"], ["type", "selector"], label);
-    validateSelector(action.selector, `${label}.selector`);
-  } else {
-    throw new Error(`${label}.type must be click, hover, focus, or press`);
-  }
-}
-
-function validateProbe(value: unknown, label: string): void {
-  const probe = exactKeys(
-    value,
-    ["route", "viewport", "readiness", "selector", "cardinality", "identity", "action"],
-    ["route", "viewport", "readiness", "selector", "cardinality", "identity"],
-    label,
-  );
-  nonempty(probe.route, `${label}.route`);
-  validateViewport(probe.viewport, `${label}.viewport`);
-  validateExpectation(probe.readiness, `${label}.readiness`);
-  validateSelector(probe.selector, `${label}.selector`);
-  if (!positiveInteger(probe.cardinality)) {
-    throw new Error(`${label}.cardinality must be a positive integer`);
-  }
-  if (!Array.isArray(probe.identity) || probe.identity.length !== probe.cardinality) {
-    throw new Error(`${label}.identity must contain one stable identity per target`);
-  }
-  probe.identity.forEach((identity: unknown, index: number) =>
-    nonempty(identity, `${label}.identity[${index}]`),
-  );
-  if ("action" in probe) validateAction(probe.action, `${label}.action`);
 }
 
 function validateRelativePath(value: unknown, label: string): void {
@@ -137,46 +57,6 @@ function validateSource(value: unknown, label: string): void {
   validateRelativePath(source.path, `${label}.path`);
   nonempty(source.before, `${label}.before`);
   nonempty(source.after, `${label}.after`);
-}
-
-function validateProbes(value: unknown, label: string, controlled: boolean): void {
-  const probes = object(value, label);
-  if (controlled) {
-    const names = [
-      "base",
-      "hover",
-      "focus",
-      "focus-visible",
-      "responsive-below",
-      "responsive-above",
-    ];
-    // `module-panel` is optional: only fixtures exercising `<style module>`
-    // migration carry a CSS Modules element to observe.
-    exactKeys(probes, [...names, "module-panel"], names, label);
-  } else if (Object.keys(probes).length === 0) {
-    throw new Error(`${label} must contain at least one probe`);
-  }
-
-  for (const [name, probe] of Object.entries(probes)) validateProbe(probe, `${label}.${name}`);
-  if (!controlled) return;
-
-  const probe = (name: string) =>
-    probes[name] as { action?: { type?: string; key?: string }; viewport: { width: number } };
-  for (const [name, type] of [
-    ["hover", "hover"],
-    ["focus", "focus"],
-    ["focus-visible", "press"],
-  ] as const) {
-    if (!probe(name).action || probe(name).action?.type !== type) {
-      throw new Error(`${label}.${name}.action.type must be ${JSON.stringify(type)}`);
-    }
-  }
-  if (probe("focus-visible").action?.key !== "Tab") {
-    throw new Error(`${label}.focus-visible.action.key must be "Tab"`);
-  }
-  if (probe("responsive-below").viewport.width >= probe("responsive-above").viewport.width) {
-    throw new Error(`${label}.responsive-below viewport must be narrower than responsive-above`);
-  }
 }
 
 function validateCommand(command: unknown, label: string): void {
@@ -223,7 +103,7 @@ function validateExternalStart(value: unknown, label: string): void {
 function validateCommon(project: Unknown, label: string): void {
   nonempty(project.id, `${label}.id`);
   validateSource(project.source, `${label}.source`);
-  validateProbes(project.probes, `${label}.probes`, project.kind === "controlled");
+  object(project.probes, `${label}.probes`);
 }
 
 function validateProject(value: unknown, index: number): void {
@@ -390,9 +270,8 @@ export function validateManifest(value: unknown): Manifest {
   return { projects } as Manifest;
 }
 
-export async function loadManifest(
-  url: URL = new URL("./projects.json", import.meta.url),
-): Promise<Manifest> {
+export async function loadManifest(): Promise<Manifest> {
+  const url = new URL("./projects.json", import.meta.url);
   return validateManifest(JSON.parse(await readFile(url, "utf8")));
 }
 

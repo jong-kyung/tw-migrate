@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { utf8OffsetMap } from "./html.js";
 import { staticImportBindings, staticImports, staticStringExpression } from "./native.js";
 
 const ESCAPE_SELECTOR = /(?:::v-|:)(?:deep|global|slotted)\(([^)]*)\)/g;
@@ -526,21 +527,6 @@ function classInsertionOffset(source, node) {
   if (source[offset - 1] === "/") offset -= 1;
   while (offset > node.loc.start.offset && /\s/.test(source[offset - 1])) offset -= 1;
   return offset;
-}
-
-// Map UTF-16 string indices to UTF-8 byte offsets in one source pass, so
-// large templates stay linear instead of rescanning the prefix per site.
-function utf8OffsetMap(source, indices) {
-  const sorted = [...new Set(indices)].sort((left, right) => left - right);
-  const map = new Map();
-  let lastIndex = 0;
-  let bytes = 0;
-  for (const index of sorted) {
-    bytes += Buffer.byteLength(source.slice(lastIndex, index));
-    lastIndex = index;
-    map.set(index, bytes);
-  }
-  return map;
 }
 
 function toByteWarnings(source, warnings) {

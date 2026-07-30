@@ -15,7 +15,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
-import { parseHtmlSource } from "./html.js";
+import { parseHtmlSource, utf8OffsetMap } from "./html.js";
 import { planBatchMigration, staticImports, validateCss } from "./native.js";
 import { analyzeVueSource, loadProjectVueCompiler, verifyVueSource } from "./vue.js";
 import {
@@ -50,9 +50,6 @@ const IGNORED_DIRECTORIES = new Set([".git", ".next", "build", "dist", "node_mod
 const RECOVERABLE_INPUT_ERROR = "TW_MIGRATE_RECOVERABLE_INPUT:";
 
 export async function migrate(options = {}) {
-  if ("cssFile" in options) {
-    throw new TypeError("cssFile has been replaced by styleFile");
-  }
   if (options.styleFile && options.workspaces) {
     throw new TypeError("styleFile cannot be combined with workspaces");
   }
@@ -1841,12 +1838,22 @@ function cssImports(source) {
       imports.push({
         href: match[1] ?? match[2],
         media: match[3].trim(),
-        start: utf8Offset(source, index),
-        end: utf8Offset(source, end + 1),
+        start: index,
+        end: end + 1,
       });
     index = end;
   }
-  return imports;
+  // Offsets are collected as string indices and converted together, so the
+  // source prefix is scanned once rather than twice per import.
+  const offsets = utf8OffsetMap(
+    source,
+    imports.flatMap((imported) => [imported.start, imported.end]),
+  );
+  return imports.map((imported) => ({
+    ...imported,
+    start: offsets.get(imported.start),
+    end: offsets.get(imported.end),
+  }));
 }
 
 function localHtmlReference(packageRoot, base, reference) {
@@ -1985,10 +1992,6 @@ function normalizedRelativePath(root, path) {
 
 function maskCssComments(source) {
   return source.replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\r\n]/g, " "));
-}
-
-function utf8Offset(source, index) {
-  return Buffer.byteLength(source.slice(0, index));
 }
 
 function indexStylesheetDependents(styleSources) {

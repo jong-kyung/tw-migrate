@@ -9,7 +9,6 @@ import test from "node:test";
 import { __unstable__loadDesignSystem as loadDesignSystem } from "tailwindcss";
 
 import { migrate } from "../index.js";
-import type { MigrateOptions } from "../index.d.ts";
 import { compileSassEntry, loadProjectSass, sourceMappings } from "../style-compiler.js";
 
 const initialCss = ".button { padding: 13px; }\n";
@@ -71,11 +70,6 @@ test("returns structured migration report fields", async () => {
 test("validates API-only migration options", async () => {
   const cwd = await fixture();
   try {
-    await assert.rejects(
-      // The removed option is intentionally invalid input for this assertion.
-      migrate({ cwd, cssFile: "Button.module.css" } as MigrateOptions),
-      /cssFile has been replaced by styleFile/,
-    );
     await assert.rejects(
       migrate({ cwd, styleFile: "Button.module.css", workspaces: true }),
       /styleFile cannot be combined with workspaces/,
