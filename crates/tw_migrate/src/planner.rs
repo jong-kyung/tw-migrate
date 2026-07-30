@@ -980,12 +980,12 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
         }
     }
 
-    // A retained scoped rule in the same SFC remains unlayered. Feed only
-    // those surviving selectors into the module entry's shadow gate so fully
-    // migratable scoped and module blocks can still convert together.
+    // A retained scoped or unscoped rule in the same SFC remains unlayered.
+    // Feed only those surviving selectors into the module entry's shadow gate
+    // so fully migratable sibling and module blocks can still convert together.
     let mut co_located_retained_css: HashMap<String, Vec<String>> = HashMap::new();
     for (index, stylesheet) in request.stylesheets.iter().enumerate() {
-        if stylesheet.vue_module || stylesheet.vue_unscoped || stylesheet.vue_blocks.is_empty() {
+        if stylesheet.vue_module || stylesheet.vue_blocks.is_empty() {
             continue;
         }
         // The immutable batch snapshot still carries the module binding, which

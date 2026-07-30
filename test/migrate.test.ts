@@ -1686,6 +1686,26 @@ test("a retained co-located scoped rule shadows the module entry", async () => {
   }
 });
 
+test("a retained co-located unscoped rule shadows the module entry", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="global" :class="$style.mod">A</p>\n  <span>B</span>\n</template>\n<script setup>\nconst c = "red";\n</script>\n<style>\n.global { color: v-bind(c); }\n</style>\n<style module>\n.mod { color: blue; }\n</style>\n';
+  try {
+    await Promise.all([
+      rm(join(cwd, "Button.module.css")),
+      rm(join(cwd, "Button.tsx")),
+      writeFile(join(cwd, "Cascade.vue"), vue),
+    ]);
+    const report = await migrate({ cwd });
+    assert.deepEqual(report.changedFiles, []);
+    assert.ok(report.rules.every((rule) => rule.status === "retained"));
+    assert.ok(report.warnings.some((entry) => entry.code === "unsupported-value"));
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("a $style member without a module rule retains the whole module", async () => {
   const cwd = await fixture();
   // Deleting the only rule would empty the block, drop the runtime `$style`
