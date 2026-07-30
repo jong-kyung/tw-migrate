@@ -807,7 +807,6 @@ struct BatchMatch {
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 fn plan_consumer_file(
     file: &SourceFile,
     css_path: &str,

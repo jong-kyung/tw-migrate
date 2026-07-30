@@ -19,7 +19,7 @@ pub(crate) fn plan_html_file(
         .filter(|context| context.analyzable && context.css_path == css_path)
         .collect::<Vec<_>>();
     if contexts.is_empty() {
-        return empty_plan();
+        return empty_source_plan();
     }
 
     let live_attributes = rebased_attributes(file);
@@ -271,7 +271,7 @@ pub(crate) fn plan_vue_module_file(
         .filter(|context| context.analyzable && context.css_path == css_path)
         .collect::<Vec<_>>();
     if contexts.is_empty() {
-        return empty_plan();
+        return empty_source_plan();
     }
 
     // A direct member naming a class no module rule defines still needs the
@@ -289,7 +289,7 @@ pub(crate) fn plan_vue_module_file(
             .filter_map(|element| element.module_binding.as_ref())
             .any(|binding| !rule_classes.contains(&binding.name));
         if unresolved {
-            let mut plan = empty_plan();
+            let mut plan = empty_source_plan();
             for element in &file.html_elements {
                 if !element_has_module_context(element, css_path) || is_shadow_only(element) {
                     continue;
@@ -405,13 +405,16 @@ pub(crate) fn plan_vue_module_file(
                 }
                 // Inline spans include their separator; multiline spans start
                 // at the directive so their existing indentation stays intact.
-                let separator = file
+                let separator = if file
                     .source
                     .as_bytes()
                     .get(binding_span.0)
                     .is_some_and(u8::is_ascii_whitespace)
-                    .then_some(" ")
-                    .unwrap_or_default();
+                {
+                    " "
+                } else {
+                    ""
+                };
                 edits.push(Edit {
                     start: binding_span.0,
                     end: binding_span.1,
@@ -684,10 +687,6 @@ fn contextual_candidate(
 }
 
 pub(crate) fn empty_source_plan() -> SourcePlan {
-    empty_plan()
-}
-
-fn empty_plan() -> SourcePlan {
     SourcePlan {
         edits: Vec::new(),
         removable_import_edits: Vec::new(),

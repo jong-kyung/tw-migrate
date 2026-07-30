@@ -469,10 +469,8 @@ fn border_property_mask(property: &str) -> u16 {
         "border-right" => RIGHT,
         "border-bottom" => BOTTOM,
         "border-left" => LEFT,
-        "border-block" => BLOCK,
-        "border-inline" => INLINE,
-        "border-block-start" | "border-block-end" => BLOCK,
-        "border-inline-start" | "border-inline-end" => INLINE,
+        "border-block" | "border-block-start" | "border-block-end" => BLOCK,
+        "border-inline" | "border-inline-start" | "border-inline-end" => INLINE,
         "border-top-width" => TOP & WIDTH,
         "border-right-width" => RIGHT & WIDTH,
         "border-bottom-width" => BOTTOM & WIDTH,
@@ -695,15 +693,13 @@ fn rounded_utility_mask(utility: &str) -> u64 {
         .and_then(|utility| utility.split('-').next());
     match side {
         Some("t") => 0b0011,
-        Some("r") => 0b0110,
+        Some("r" | "e") => 0b0110,
         Some("b") => 0b1100,
-        Some("l") => 0b1001,
+        Some("l" | "s") => 0b1001,
         Some("tl" | "ss") => 0b0001,
         Some("tr" | "se") => 0b0010,
         Some("br" | "ee") => 0b0100,
         Some("bl" | "es") => 0b1000,
-        Some("s") => 0b1001,
-        Some("e") => 0b0110,
         _ => 0b1111,
     }
 }
