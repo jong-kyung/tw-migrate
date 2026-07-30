@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (Phases 1–2 implemented)
+Accepted (Phases 1–4 implemented)
 
 ## Summary
 
@@ -11,10 +11,11 @@ consumed by JS/TS JSX and static HTML. This RFC extends the pipeline to Vue 3
 single-file components (`.vue`), where one file is both a stylesheet source
 (`<style>` blocks) and a consumer (`<template>` class usage).
 
-Support ships in staged phases. Phases 1–2 cover literal `class` attributes,
-inline scoped CSS/SCSS/Sass/Less, static external stylesheet edges, and direct
-`<script setup>` component relationships. Later phases add literal `:class`
-bindings and `<style module>`/`$style`.
+Support ships in staged phases. Phases 1–3 cover literal `class` attributes,
+static string and interpolation-free template `:class` bindings, inline scoped
+CSS/SCSS/Sass/Less, static external stylesheet edges, and direct `<script setup>`
+component relationships. Phase 4 adds `<style module>`/`$style` member
+bindings.
 
 SFC parsing uses the official `@vue/compiler-sfc`, resolved from the target
 project like Sass and Less. The unofficial Rust toolchain `vize` was evaluated
@@ -27,8 +28,9 @@ if vize reaches a stable release or official adoption.
 1. Accept `.vue` files as discovered inputs and as explicit `styleFile`
    targets in Vue 3 packages.
 2. Parse SFCs with the target project's own `@vue/compiler-sfc`.
-3. Rewrite literal `<template>` `class` attributes to Tailwind utilities using
-   rules proven from the same file's plain-CSS `<style scoped>` blocks.
+3. Rewrite literal `<template>` `class` attributes and static `:class` values to
+   Tailwind utilities using rules proven from the same file's plain-CSS
+   `<style scoped>` blocks.
 4. Remove a scoped rule only when every element it can match is proven inside
    the file, including injection surfaces (component tags, root fallthrough,
    dynamic bindings).
@@ -54,8 +56,8 @@ if vize reaches a stable release or official adoption.
    expressions into utilities.
 5. Migrating `<style>` blocks without `scoped` in Phase 1; they are global CSS
    and require cross-file proof.
-6. Runtime component-tree analysis or evaluation of dynamic `:class`
-   expressions beyond the literal forms scheduled for Phase 3.
+6. Runtime component-tree analysis or evaluation of `:class` expressions beyond
+   direct string literals and interpolation-free template literals.
 7. In-DOM templates, render functions, JSX-in-Vue, or `template` options in
    plain JS files.
 8. Editing compiled SFC output; all edits target authored `.vue` bytes.
@@ -198,8 +200,10 @@ the rule to retain-with-append or retain-only:
    Phase 1. Literal class attributes beside a dynamic binding remain proven
    sites and still receive appended utilities. Runtime class mutation through
    scripts, event handlers, refs, or custom directives is outside the supported
-   scope, matching the React/JSX path. Phase 3 narrows dynamic bindings to
-   literal object/array forms.
+   scope, matching the React/JSX path. Phase 3 recognizes only direct string
+   literals and interpolation-free template literals. Object, array,
+   conditional, logical, concatenated, interpolated, variable, and helper-call
+   forms remain opaque, matching React's current static `className` boundary.
 4. **Escape hatches.** Rules containing `:deep()`, `:global()`, `>>>`,
    `/deep/`, or declarations using `v-bind()` have no utility representation
    and retain through the existing selector/declaration support codes
@@ -258,9 +262,41 @@ and a second run produces no diff.
   `unscoped-style-block` until co-loading can be proven.
 - `<style scoped lang="scss|sass|less">` compiles with the target project's
   compiler and maps generated rules back to block-relative authored offsets.
-- `<style module>` retains whole with `unsupported-sfc-block` until Phase 4.
-- `<style src="…">` contributes a stylesheet consumer edge; module forms
-  retain until Phase 4.
+- `<style module>` migrates against proven direct `$style.x` member bindings
+  (`:class="$style.x"` on a plain element): the binding is replaced by (or
+  merged into) a static `class` attribute and the emptied block is removed.
+  Any other `$style` or `useCssModule` appearance — template expressions,
+  interpolations, dynamic directive arguments, script text, or an unreadable
+  script — retains the whole module with `unsupported-css-module-reference`,
+  as does an unsupported sibling targeting the default binding (bare
+  `<style module>` and `<style module="$style">` both feed the same `$style`
+  object). Other named modules (`<style module="cls">`) retain with
+  `unsupported-sfc-block`.
+  Module class and id names are localized at build time, so cascade-shadow
+  checks apply only to their global (type/attribute/`:global`) selector
+  surface — but unknown classes can still land on a binding element and
+  compete for the same properties, so a dynamic template surface retains the
+  module with `dynamic-template-class` and an open single-root caller surface
+  retains it with `open-root-fallthrough`, mirroring the scoped gates.
+  (`component-class-target` does not apply: a child component's root can
+  never carry the hashed class, because a `$style` binding on a component tag
+  is already an opaque surface.) A binding whose element carries an
+  uneditable literal `class` attribute is never rewritten into a duplicate
+  attribute; the module is retained instead. A direct member that names a
+  class no module rule defines retains the whole module: deleting sibling
+  rules could empty the block and drop the runtime `$style` injection the
+  remaining access depends on. A rule whose class shares a binding with a
+  retained sibling (compile failure, batch conflict) also retains — the
+  retained rule stays unlayered on the same element, so converting the
+  sibling would flip the cascade. The same gate covers a resolved caller's
+  fallthrough classes: they land on the module-bound child root, so package
+  CSS targeting them retains the module rule. The module entry plans before
+  the scoped entry, and a binding that survives module planning is an opaque
+  cascade surface for scoped planning — scoped rules matching that element
+  retain with `shadowed-scoped-rule`, because the retained module rule
+  competes unlayered with a replacement utility.
+- `<style src="…">` contributes a stylesheet consumer edge; module `src`
+  forms retain.
 - `<script>` contents and languages do not participate in template closure.
   Inline text is carried only by the existing CSS Module deletion guard;
   runtime class mutation remains outside the supported scope.
@@ -303,18 +339,26 @@ mirroring a missing Sass compiler.
 - Add cross-file caller analysis to close the root-fallthrough surface and to
   admit unscoped block migration where project-wide usage is proven.
 
-### Phase 3: Literal `:class` Bindings
+### Phase 3: Static `:class` Bindings (implemented)
 
-- Prove object literal (`:class="{ btn: cond }"`) and array literal forms,
-  parsing embedded expressions with the existing oxc path at corrected
-  offsets.
-- Narrow the dynamic-binding retention from template-wide to element-wise for
-  proven literal forms.
+- Prove direct string literals (`:class="'btn'"`) and interpolation-free
+  template literals (``:class="`btn`"``) with the same OXC expression parser
+  used by the React/JSX path.
+- Append generated utilities through a separate static `class` attribute,
+  preserving the authored binding unchanged on host elements and component
+  call sites.
+- Keep object, array, conditional, logical, interpolated, concatenated,
+  variable, and helper-call forms opaque with `dynamic-template-class`, matching
+  React's current static `className` support boundary.
 
-### Phase 4: CSS Modules (`<style module>` / `$style`)
+### Phase 4: CSS Modules (`<style module>` / `$style`) (implemented)
 
-- Prove `$style.x` usage across template and script, mirroring the existing
-  JS CSS Modules flow.
+- Prove direct `$style.x` member bindings in the template and rewrite them to
+  static `class` attributes, mirroring the existing JS CSS Modules flow.
+- Retain the whole module when `$style` or `useCssModule` appears outside a
+  proven site, and retain named `<style module="…">` blocks.
+- Plan module blocks as a second same-path stylesheet entry so scoped and
+  module blocks in one SFC migrate together.
 
 Each phase merges separately. Public documentation describes only released
 phases.
@@ -328,6 +372,8 @@ phases.
 - Compiler resolution is package-relative; a repository-installed Vue must
   never satisfy a target project.
 - Parse errors, Vue 2 sources, and unsupported blocks retain the file.
+- Static string/template `:class` bindings migrate; all other binding forms
+  remain opaque.
 
 ### Rust
 
@@ -355,7 +401,8 @@ phases.
 
 1. `.vue` files are discovered and selectable in Vue 3 packages, parsed by
    the target project's `@vue/compiler-sfc`.
-2. Literal template classes gain utilities only from same-file scoped proof.
+2. Literal template classes and static `:class` values gain utilities only from
+   proven stylesheet contexts.
 3. No scoped rule is removed while any injection surface remains open.
 4. Every unproven construct retains with one of the stable warning codes.
 5. Untouched `.vue` bytes are preserved exactly; edited files reparse with
@@ -370,7 +417,8 @@ phases.
 1. Cross-file closure recognizes direct local component imports from
    `<script setup>`. Normal-script registration, aliases outside that graph,
    publishable package roots, and components without known callers retain.
-2. Any dynamic class binding retains all scoped class rules until Phase 3.
+2. Any non-static class binding retains all scoped class rules. Phase 3 only
+   closes direct string and interpolation-free template literal bindings.
 3. Inline preprocessors rely on source maps from the target project's
    compiler; ambiguous or dependency-owned rule origins retain. Build-tool
    preprocessor injection (Vite `additionalData`, webpack loader options) is

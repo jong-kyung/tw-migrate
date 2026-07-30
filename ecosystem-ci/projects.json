@@ -2077,6 +2077,27 @@
           },
           "cardinality": 1,
           "identity": ["responsive"]
+        },
+        "module-panel": {
+          "route": "/",
+          "viewport": {
+            "width": 1280,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Toggle details"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "data",
+            "value": "module-panel"
+          },
+          "cardinality": 1,
+          "identity": ["panel"]
         }
       }
     },

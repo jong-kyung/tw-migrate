@@ -51,6 +51,26 @@ pub struct StaticImportBinding {
     pub local: String,
 }
 
+pub(crate) fn static_string_expression(
+    path: &str,
+    source: &str,
+) -> Result<Option<String>, String> {
+    let allocator = Allocator::default();
+    let source_type = source_type_for_path(path)?;
+    let expression = Parser::new(&allocator, source, source_type)
+        .parse_expression()
+        .map_err(|diagnostics| format!("Failed to parse {path}: {diagnostics:?}"))?;
+    Ok(match expression {
+        Expression::StringLiteral(literal) => Some(literal.value.to_string()),
+        Expression::TemplateLiteral(template) if template.expressions.is_empty() => template
+            .quasis
+            .first()
+            .and_then(|quasi| quasi.value.cooked.as_ref())
+            .map(ToString::to_string),
+        _ => None,
+    })
+}
+
 pub(crate) fn static_import_bindings(
     path: &str,
     source: &str,

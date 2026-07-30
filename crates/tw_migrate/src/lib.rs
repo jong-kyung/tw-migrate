@@ -57,6 +57,14 @@ pub fn static_imports(path: String, source: String) -> napi::Result<Vec<String>>
 }
 
 #[napi]
+pub fn static_string_expression(
+    path: String,
+    source: String,
+) -> napi::Result<Option<String>> {
+    js_rewrite::static_string_expression(&path, &source).map_err(napi::Error::from_reason)
+}
+
+#[napi]
 pub fn static_import_bindings(
     path: String,
     source: String,
@@ -88,6 +96,24 @@ mod tests {
         )
         .unwrap();
         assert_eq!(imports, ["./card.css", "./card.module.css"]);
+    }
+
+    #[test]
+    fn extracts_only_direct_static_string_expressions() {
+        assert_eq!(
+            crate::js_rewrite::static_string_expression("Component.js", "'card'").unwrap(),
+            Some("card".to_string())
+        );
+        assert_eq!(
+            crate::js_rewrite::static_string_expression("Component.js", "`card`").unwrap(),
+            Some("card".to_string())
+        );
+        for expression in ["['card']", "active ? 'card' : 'other'", "`card-${size}`"] {
+            assert_eq!(
+                crate::js_rewrite::static_string_expression("Component.js", expression).unwrap(),
+                None
+            );
+        }
     }
 
     #[test]

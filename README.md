@@ -41,9 +41,10 @@ node /path/to/tw-migrate/bin/tw-migrate.js --write
 - SCSS/Sass/Less values evaluated with the target project's installed compiler; ambiguous mixin and partial origins are retained
 - `.js`, `.jsx`, `.ts`, and `.tsx` source files
 - static `.html` literal `class`/`id` attributes scoped by local external stylesheet links (link-level `print` media supported; other link media conditions are retained)
-- Vue 3 `.vue` files: literal template `class`/`id` attributes matched against inline CSS, SCSS, Sass, and Less `<style scoped>` blocks plus statically imported stylesheets, parsed and compiled with the target project's dependencies
-- direct `<script setup>` component imports can prove child-root and caller class surfaces across SFCs; unresolved components, exported roots, dynamic bindings, and callers outside that graph retain scoped rules
-- unscoped Vue styles migrate only in private single-source packages where their global usage is closed; broader unscoped surfaces and `<style module>` blocks retain with warnings
+- Vue 3 `.vue` files: literal template `class`/`id` attributes and static string/template `:class` bindings matched against inline CSS, SCSS, Sass, and Less `<style scoped>` blocks plus statically imported stylesheets, parsed and compiled with the target project's dependencies
+- direct `<script setup>` component imports can prove child-root and caller class surfaces across SFCs; unresolved components, exported roots, non-static bindings, and callers outside that graph retain scoped rules
+- unscoped Vue styles migrate only in private single-source packages where their global usage is closed; broader unscoped surfaces retain with warnings
+- Vue `<style module>` blocks migrate against direct `:class="$style.x"` member bindings; any other `$style`/`useCssModule` appearance or a named module retains the block
 - direct CSS Module members, static template literals, and static expression literals
 - global `className` and `id` literals
 - multi-compound CSS Module selectors whose element relationships are proven from the JSX graph

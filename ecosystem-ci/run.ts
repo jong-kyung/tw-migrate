@@ -150,7 +150,9 @@ function validateProbes(value: unknown, label: string, controlled: boolean): voi
       "responsive-below",
       "responsive-above",
     ];
-    exactKeys(probes, names, names, label);
+    // `module-panel` is optional: only fixtures exercising `<style module>`
+    // migration carry a CSS Modules element to observe.
+    exactKeys(probes, [...names, "module-panel"], names, label);
   } else if (Object.keys(probes).length === 0) {
     throw new Error(`${label} must contain at least one probe`);
   }
