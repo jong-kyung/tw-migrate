@@ -1,17 +1,16 @@
-import type { Browser } from "playwright";
 import type { BrowserCommandContext } from "vite-plus/test/node";
 
 import { loadManifest, resolveFixture } from "./run.ts";
 import { runExternalLifecycle, runLifecycle, runProductionSmoke } from "./lifecycle.ts";
-import type { ControlledProject } from "./types.ts";
+import type { Browser, ControlledProject } from "./types.ts";
 
 export const commands = {
   async runEcosystemCase(context: BrowserCommandContext, id: string) {
-    // Only the Playwright provider exposes a Browser; the base type does not.
+    // Only Vite+'s Playwright provider exposes this browser capability.
     const browser = (context.provider as { browser?: Browser } | undefined)?.browser;
     if (!browser || typeof browser.newPage !== "function") {
       throw new Error(
-        "ecosystem command requires the Vitest Playwright provider browser capability",
+        "ecosystem command requires the Vite+ Playwright provider browser capability",
       );
     }
     const manifest = await loadManifest();

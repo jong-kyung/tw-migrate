@@ -30,9 +30,6 @@ importers:
       less:
         specifier: 4.7.0
         version: 4.7.0
-      playwright:
-        specifier: 1.61.1
-        version: 1.61.1
       sass:
         specifier: 1.101.3
         version: 1.101.3
@@ -5398,13 +5395,15 @@ snapshots:
       sonic-boom: 4.2.1
       thread-stream: 3.2.0
 
-  playwright-core@1.61.1: {}
+  playwright-core@1.61.1:
+    optional: true
 
   playwright@1.61.1:
     dependencies:
       playwright-core: 1.61.1
     optionalDependencies:
       fsevents: 2.3.2
+    optional: true
 
   pngjs@7.0.0: {}
 

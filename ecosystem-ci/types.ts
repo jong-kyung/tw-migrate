@@ -20,6 +20,33 @@ export interface Viewport {
   height: number;
 }
 
+/** Browser capabilities consumed from Vite+'s Playwright provider. */
+export interface Locator {
+  click(): Promise<void>;
+  count(): Promise<number>;
+  evaluateAll<T>(callback: (nodes: Element[]) => T): Promise<T>;
+  focus(): Promise<void>;
+  hover(): Promise<void>;
+}
+
+export interface Page {
+  keyboard: { press(key: string): Promise<void> };
+  addStyleTag(options: { content: string }): Promise<unknown>;
+  close(): Promise<void>;
+  evaluate<T>(callback: () => T): Promise<Awaited<T>>;
+  getByRole(role: string, options?: { name: string }): Locator;
+  getByText(text: string, options: { exact: boolean }): Locator;
+  goto(url: string, options: { waitUntil: "domcontentloaded"; timeout: number }): Promise<unknown>;
+  locator(selector: string): Locator;
+  on(event: "console", listener: (message: { text(): string; type(): string }) => void): void;
+  on(event: "pageerror", listener: (error: Error) => void): void;
+  screenshot(options: { path: string; fullPage: boolean }): Promise<unknown>;
+}
+
+export interface Browser {
+  newPage(options: { viewport: Viewport }): Promise<Page>;
+}
+
 export type ProbeAction =
   | { type: "press"; key: string }
   | { type: "click" | "hover" | "focus"; selector: ProbeSelector };

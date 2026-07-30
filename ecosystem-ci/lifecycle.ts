@@ -28,6 +28,7 @@ import { startRegistry } from "./registry.ts";
 import { assertOracle, captureAll, maxCaptureAttempts } from "./oracle.ts";
 import { availablePort, inside, platformCommand, sha256 } from "./shared.ts";
 import type {
+  Browser,
   CaptureArtifact,
   CaptureSet,
   ControlledProject,
@@ -39,8 +40,6 @@ import type {
   Provenance,
   RunningServer,
 } from "./types.ts";
-
-type Browser = import("playwright").Browser;
 
 export interface LifecycleResult {
   baseline: CaptureSet;

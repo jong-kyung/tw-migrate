@@ -447,7 +447,7 @@ export function runHarness(
   execute([
     "run",
     "--config",
-    "ecosystem-ci/vitest.config.ts",
+    "ecosystem-ci/vite.config.ts",
     ...selected.flatMap(({ id }) => ["--project", id]),
   ]);
   return selected;
