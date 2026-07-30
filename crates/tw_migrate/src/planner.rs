@@ -684,6 +684,8 @@ struct RuleOrigin {
 struct CandidateMaps {
     candidates: HashMap<SelectorKey, Vec<String>>,
     origins: HashMap<(SelectorKey, String), Vec<RuleOrigin>>,
+    rule_selectors: HashMap<RuleId, String>,
+    retained_rules: HashSet<RuleId>,
     /// Multi-compound module rules whose relationship proof failed, with the
     /// retained-rule message.
     unproven: HashMap<RuleId, String>,
@@ -901,7 +903,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
     // Relationship proofs run here against the request's immutable file set,
     // so every stylesheet is proven on the same snapshot regardless of the
     // edits earlier stylesheets make during the main pass.
-    let mut unproven_maps = Vec::new();
+    let mut candidate_maps = Vec::new();
     for (index, stylesheet) in request.stylesheets.iter().enumerate() {
         let plan_request = batch_stylesheet_request(&request, stylesheet, request.files.clone());
         let externally_blocked = stylesheet
@@ -909,8 +911,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
             .iter()
             .copied()
             .collect::<HashSet<_>>();
-        let candidate_maps = candidate_map_for_request(&plan_request, &externally_blocked)?;
-        unproven_maps.push(candidate_maps.unproven);
+        let maps = candidate_map_for_request(&plan_request, &externally_blocked)?;
         for file in request.files.iter().filter(|file| file.writable) {
             let result = plan_consumer_file(
                 file,
@@ -918,7 +919,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
                 stylesheet
                     .is_module
                     .unwrap_or_else(|| is_stylesheet_module(&stylesheet.css_path)),
-                &candidate_maps.candidates,
+                &maps.candidates,
                 &BTreeSet::new(),
                 // The conflict pass must keep collecting matches; the main
                 // pass applies the unresolved-member retention itself.
@@ -929,7 +930,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
                 stylesheet.vue_module,
             )?;
             for matched in result.matches {
-                if let Some(origins) = candidate_maps
+                if let Some(origins) = maps
                     .origins
                     .get(&(matched.key, matched.origin_candidate.clone()))
                 {
@@ -945,6 +946,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
                 }
             }
         }
+        candidate_maps.push(maps);
     }
 
     let mut blocked_rules: Vec<RuleConflicts> = vec![HashMap::new(); request.stylesheets.len()];
@@ -976,6 +978,53 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
                 }
             }
         }
+    }
+
+    // A retained scoped rule in the same SFC remains unlayered. Feed only
+    // those surviving selectors into the module entry's shadow gate so fully
+    // migratable scoped and module blocks can still convert together.
+    let mut co_located_retained_css: HashMap<String, Vec<String>> = HashMap::new();
+    for (index, stylesheet) in request.stylesheets.iter().enumerate() {
+        if stylesheet.vue_module || stylesheet.vue_unscoped || stylesheet.vue_blocks.is_empty() {
+            continue;
+        }
+        // The immutable batch snapshot still carries the module binding, which
+        // makes scoped rules look shadowed before the module entry gets its
+        // chance to remove it. Hide that one circular surface while deciding
+        // which scoped rules survive independently.
+        let mut files = request.files.clone();
+        for file in files
+            .iter_mut()
+            .filter(|file| file.path == stylesheet.css_path)
+        {
+            for element in &mut file.html_elements {
+                element.module_binding = None;
+            }
+        }
+        let plan_request = batch_stylesheet_request(&request, stylesheet, files);
+        let externally_blocked = stylesheet
+            .blocked_rules
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>();
+        let maps = candidate_map_for_request(&plan_request, &externally_blocked)?;
+        let mut retained = maps.retained_rules;
+        retained.extend(blocked_rules[index].keys().copied());
+        if stylesheet.vue_retention.is_some() {
+            retained.extend(maps.rule_selectors.keys().copied());
+        }
+        let css = co_located_retained_css
+            .entry(stylesheet.css_path.clone())
+            .or_default();
+        css.extend(retained.into_iter().filter_map(|rule| {
+            maps.rule_selectors
+                .get(&rule)
+                .map(|selector| format!("{selector} {{}}"))
+        }));
+    }
+    for css in co_located_retained_css.values_mut() {
+        css.sort();
+        css.dedup();
     }
 
     let mut originals = HashMap::new();
@@ -1018,6 +1067,11 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
             file.prior_edits = applied_edits.get(&file.path).cloned().unwrap_or_default();
         }
         let mut stylesheet_request = batch_stylesheet_request(&request, stylesheet, files);
+        if stylesheet.vue_module
+            && let Some(css) = co_located_retained_css.get(&stylesheet.css_path)
+        {
+            stylesheet_request.vue_shadow_css.extend(css.iter().cloned());
+        }
         stylesheet_request.css_source = current
             .get(&stylesheet.css_path)
             .cloned()
@@ -1044,7 +1098,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
             stylesheet_request,
             &blocked_rules[index],
             &externally_blocked,
-            &unproven_maps[index],
+            &candidate_maps[index].unproven,
             true,
         )?;
 
@@ -1586,6 +1640,22 @@ fn candidate_map_for_request(
         .filter(|rule| rule.warning.is_some())
         .flat_map(|rule| rule.related_classes.iter().cloned())
         .collect::<BTreeSet<_>>();
+    let rule_selectors = rules
+        .iter()
+        .map(|rule| (rule_id(rule), rule.selector.clone()))
+        .collect::<HashMap<_, _>>();
+    let retained_rules = rules
+        .iter()
+        .filter(|rule| {
+            rule.warning.is_some()
+                || externally_blocked.contains(&rule_id(rule))
+                || rule
+                    .related_classes
+                    .iter()
+                    .any(|class| blocked_classes.contains(class))
+        })
+        .map(rule_id)
+        .collect::<HashSet<_>>();
     let mut candidate_map: HashMap<SelectorKey, Vec<String>> = HashMap::new();
     let mut origins: HashMap<(SelectorKey, String), Vec<RuleOrigin>> = HashMap::new();
     for rule in rules {
@@ -1622,6 +1692,8 @@ fn candidate_map_for_request(
     Ok(CandidateMaps {
         candidates: candidate_map,
         origins,
+        rule_selectors,
+        retained_rules,
         unproven,
     })
 }

@@ -403,12 +403,19 @@ pub(crate) fn plan_vue_module_file(
                 if additions.iter().any(|candidate| candidate.contains('"')) {
                     continue;
                 }
-                // The removal span starts at the attribute's leading
-                // whitespace, so the rewritten attribute restores it.
+                // Inline spans include their separator; multiline spans start
+                // at the directive so their existing indentation stays intact.
+                let separator = file
+                    .source
+                    .as_bytes()
+                    .get(binding_span.0)
+                    .is_some_and(u8::is_ascii_whitespace)
+                    .then_some(" ")
+                    .unwrap_or_default();
                 edits.push(Edit {
                     start: binding_span.0,
                     end: binding_span.1,
-                    replacement: format!(" class=\"{}\"", additions.join(" ")),
+                    replacement: format!("{separator}class=\"{}\"", additions.join(" ")),
                 });
                 (binding_span.0, binding_span.1)
             }

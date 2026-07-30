@@ -111,12 +111,14 @@ export function analyzeVueSource(compiler, path, source) {
         end,
         `Unsupported <style> attributes: ${unsupportedAttributes.join(", ")}.`,
       );
+      if (style.module === true) moduleSiblingUnsupported = true;
       escapeUnverifiable = true;
       continue;
     }
     if (style.src !== undefined) {
       if (style.module !== undefined) {
         warn("unsupported-sfc-block", start, end, "A <style module src> block is not supported.");
+        if (style.module === true) moduleSiblingUnsupported = true;
         escapeUnverifiable = true;
       } else {
         styleBlockImports.push({ reference: style.src, start, end });
@@ -450,12 +452,13 @@ function visitTemplateNode(source, node, state) {
   for (const child of node.children ?? []) visitTemplateNode(source, child, state);
 }
 
-// The removal span of an attribute starts before its leading whitespace so
-// deleting it leaves no double space behind.
+// Inline attributes consume their separator so deletion leaves no double
+// space. Multiline attributes keep their newline and indentation byte-exact.
 function attributeRemovalStart(source, node, prop) {
-  let start = prop.loc.start.offset;
+  const attributeStart = prop.loc.start.offset;
+  let start = attributeStart;
   while (start > node.loc.start.offset + 1 && /\s/.test(source[start - 1])) start -= 1;
-  return start;
+  return /[\r\n]/.test(source.slice(start, attributeStart)) ? attributeStart : start;
 }
 
 function staticClassBinding(prop) {

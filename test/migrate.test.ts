@@ -1380,6 +1380,22 @@ test("rewrites proven $style bindings and deletes the emptied module block", asy
   }
 });
 
+test("preserves multiline whitespace around rewritten $style bindings", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p\n    :class="$style.card"\n  >A</p>\n  <span>B</span>\n</template>\n<style module>\n.card { padding: 13px; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Card.vue"), vue);
+    await migrate({ cwd, styleFile: "Card.vue", write: true });
+    assert.equal(
+      await readFile(join(cwd, "Card.vue"), "utf8"),
+      '<template>\n  <p\n    class="p-[13px]"\n  >A</p>\n  <span>B</span>\n</template>\n',
+    );
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
 test("$style outside proven member sites retains the module", async () => {
   const cwd = await fixture();
   const conditional =
@@ -1594,17 +1610,23 @@ test("module conflict warnings anchor to authored bytes after scoped edits", asy
 
 test("an unsupported module sibling block retains the whole $style module", async () => {
   const cwd = await fixture();
-  // Both unnamed blocks feed the same `$style` object, so deleting the
-  // supported rule's binding would orphan the retained sibling's class.
-  const vue =
-    '<template>\n  <p :class="$style.card">A</p>\n  <p class="etc">B</p>\n</template>\n<style module>\n.card { padding: 13px; }\n</style>\n<style module lang="postcss">\n.card { color: red; }\n</style>\n';
+  // Every unnamed block feeds the same `$style` object, so deleting the
+  // supported rule's binding would orphan a retained sibling's class.
+  const prefix =
+    '<template>\n  <p :class="$style.card">A</p>\n  <p class="etc">B</p>\n</template>\n<style module>\n.card { padding: 13px; }\n</style>\n';
+  const siblings = [
+    '<style module lang="postcss">\n.card { color: red; }\n</style>\n',
+    '<style module src="./retained.css"></style>\n',
+    '<style module media="screen">\n.card { color: red; }\n</style>\n',
+  ];
   try {
-    await writeFile(join(cwd, "Sibling.vue"), vue);
-    const report = await migrate({ cwd, styleFile: "Sibling.vue", write: true });
-    assert.deepEqual(report.changedFiles, []);
-    assert.ok(report.warnings.some((entry) => entry.code === "preprocessor-style-block"));
-    assert.ok(report.warnings.some((entry) => entry.code === "unsupported-css-module-reference"));
-    assert.match(await readFile(join(cwd, "Sibling.vue"), "utf8"), /\$style\.card/);
+    for (const sibling of siblings) {
+      await writeFile(join(cwd, "Sibling.vue"), prefix + sibling);
+      const report = await migrate({ cwd, styleFile: "Sibling.vue" });
+      assert.deepEqual(report.changedFiles, []);
+      assert.ok(report.warnings.some((entry) => entry.code === "unsupported-css-module-reference"));
+      assert.ok(report.rules.every((rule) => rule.status === "retained"));
+    }
   } finally {
     await cleanup(cwd);
   }
@@ -1640,6 +1662,24 @@ test("a retained module keeps co-located scoped rules retained", async () => {
     assert.deepEqual(report.changedFiles, []);
     assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
     assert.ok(report.warnings.some((entry) => entry.code === "unsupported-css-module-reference"));
+  } finally {
+    await cleanup(cwd);
+  }
+});
+
+test("a retained co-located scoped rule shadows the module entry", async () => {
+  const cwd = await fixture();
+  // On hover the later module selector originally ties the scoped selector's
+  // specificity and wins by source order. A layered utility would lose to the
+  // retained unlayered scoped rule instead, so both rules must stay authored.
+  const vue =
+    '<template>\n  <p class="card" :class="$style.mod">A</p>\n  <span>B</span>\n</template>\n<script setup>\nconst c = "red";\n</script>\n<style scoped>\n.card { color: v-bind(c); }\n</style>\n<style module>\n.mod:hover { color: blue; }\n</style>\n';
+  try {
+    await writeFile(join(cwd, "Cascade.vue"), vue);
+    const report = await migrate({ cwd, styleFile: "Cascade.vue" });
+    assert.deepEqual(report.changedFiles, []);
+    assert.ok(report.rules.every((rule) => rule.status === "retained"));
+    assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
   } finally {
     await cleanup(cwd);
   }

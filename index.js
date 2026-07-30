@@ -1420,6 +1420,8 @@ async function preparePackageVue({
     const vueBlocks = migrateUnscoped ? analysis.unscopedBlocks : analysis.blocks;
     if (vueBlocks.length === 0 && !migrateModule) continue;
     const vueRetention = migrateUnscoped ? undefined : retention;
+    // Same-file scoped blocks stay out of the general corpus; the batch planner
+    // adds back only their retained selectors when it plans the module entry.
     const shadowCss = vueShadowCss
       .filter(
         (entry) =>
