@@ -4,7 +4,7 @@ import { lstat, mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from 
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
-import test from "node:test";
+import { test } from "vite-plus/test";
 
 import { __unstable__loadDesignSystem as loadDesignSystem } from "tailwindcss";
 
@@ -31,7 +31,7 @@ async function cleanup(cwd: string): Promise<void> {
   await rm(cwd, { recursive: true, force: true });
 }
 
-void test("canonicalizes aliased cwd paths before Git discovery", async () => {
+test("canonicalizes aliased cwd paths before Git discovery", async () => {
   const cwd = await fixture();
   const alias = `${cwd}-alias`;
   let linked = false;
@@ -47,7 +47,7 @@ void test("canonicalizes aliased cwd paths before Git discovery", async () => {
   }
 });
 
-void test("returns structured migration report fields", async () => {
+test("returns structured migration report fields", async () => {
   const cwd = await fixture();
   try {
     const report = await migrate({ cwd });
@@ -67,7 +67,7 @@ void test("returns structured migration report fields", async () => {
   }
 });
 
-void test("validates API-only migration options", async () => {
+test("validates API-only migration options", async () => {
   const cwd = await fixture();
   try {
     await assert.rejects(
@@ -87,7 +87,7 @@ void test("validates API-only migration options", async () => {
   }
 });
 
-void test("normalizes separators when resolving source map roots", () => {
+test("normalizes separators when resolving source map roots", () => {
   const sourceRoot = pathToFileURL(`${join(tmpdir(), "nested")}/`).href;
   assert.equal(
     sourceMappings({
@@ -121,7 +121,7 @@ void test("normalizes separators when resolving source map roots", () => {
   );
 });
 
-void test("retains nested SCSS rules whose expansion prevents a unique authored mapping", async () => {
+test("retains nested SCSS rules whose expansion prevents a unique authored mapping", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -145,7 +145,7 @@ void test("retains nested SCSS rules whose expansion prevents a unique authored 
   }
 });
 
-void test("retains a disproven SCSS descendant relationship with authored offsets", async () => {
+test("retains a disproven SCSS descendant relationship with authored offsets", async () => {
   const source = "$m: 12px;\n.parent { padding: 13px; }\n.parent .child { margin: $m; }\n";
   const cwd = await fixture();
   try {
@@ -171,7 +171,7 @@ void test("retains a disproven SCSS descendant relationship with authored offset
   }
 });
 
-void test("only follows real top-level CSS imports and preserves media warning offsets", async () => {
+test("only follows real top-level CSS imports and preserves media warning offsets", async () => {
   const cwd = await fixture();
   const source =
     '/* 한글 */\n@import "./print.css" print;\n@import "./speech.css" speech;\n.fake::before { content: "@import \'./trap.css\';"; }\n';
@@ -198,7 +198,7 @@ void test("only follows real top-level CSS imports and preserves media warning o
   }
 });
 
-void test("anchors Sass compile-failure warnings to authored offsets", async () => {
+test("anchors Sass compile-failure warnings to authored offsets", async () => {
   const source = "$space: 13px;\n.pad { padding: $space; }\n.button { COLOR: red; }\n";
   const cwd = await fixture();
   try {
@@ -223,7 +223,7 @@ void test("anchors Sass compile-failure warnings to authored offsets", async () 
   }
 });
 
-void test("escapes literal underscores in arbitrary values", async () => {
+test("escapes literal underscores in arbitrary values", async () => {
   const cwd = await fixture({ css: ".button { --font-key: Open_Sans; }\n" });
   try {
     const report = await migrate({ cwd, styleFile: "Button.module.css" });
@@ -236,7 +236,7 @@ void test("escapes literal underscores in arbitrary values", async () => {
   }
 });
 
-void test("round-trips quoted values and urls through arbitrary candidates", async () => {
+test("round-trips quoted values and urls through arbitrary candidates", async () => {
   const cwd = await fixture({
     css: '.button { background-image: url("a_b.png"); font-family: "My Font", sans-serif; content: "a_b"; width: calc(min(100%, 50vw)); }\n',
   });
@@ -253,7 +253,7 @@ void test("round-trips quoted values and urls through arbitrary candidates", asy
   }
 });
 
-void test("migrates a closed Vue SFC byte-exactly and removes the emptied scoped block", async () => {
+test("migrates a closed Vue SFC byte-exactly and removes the emptied scoped block", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">한글</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -273,7 +273,7 @@ void test("migrates a closed Vue SFC byte-exactly and removes the emptied scoped
   }
 });
 
-void test("retains a single-root Vue SFC scoped rule while appending its utilities", async () => {
+test("retains a single-root Vue SFC scoped rule while appending its utilities", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <div class="panel">A</div>\n</template>\n<style scoped>\n.panel { margin: 7px; }\n</style>\n';
@@ -295,7 +295,7 @@ void test("retains a single-root Vue SFC scoped rule while appending its utiliti
   }
 });
 
-void test("migrates supported preprocessors beside retained Vue style blocks", async () => {
+test("migrates supported preprocessors beside retained Vue style blocks", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped lang="scss">\n.card { padding: 13px; }\n</style>\n<style>\n.free { color: red; }\n</style>\n';
@@ -313,7 +313,7 @@ void test("migrates supported preprocessors beside retained Vue style blocks", a
   }
 });
 
-void test("locates scoped blocks with whitespace in their closing tags", async () => {
+test("locates scoped blocks with whitespace in their closing tags", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="note">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style >\n<style scoped>\n.note { margin: 3px; }\n</style>\n';
@@ -329,7 +329,7 @@ void test("locates scoped blocks with whitespace in their closing tags", async (
   }
 });
 
-void test("retains an SFC with a custom block", async () => {
+test("retains an SFC with a custom block", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="note">B</p>\n</template>\n<docs>runtime transform</docs>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -343,7 +343,7 @@ void test("retains an SFC with a custom block", async () => {
   }
 });
 
-void test("retains scoped styles with unsupported behavioral attributes", async () => {
+test("retains scoped styles with unsupported behavioral attributes", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="note">B</p>\n</template>\n<style scoped media="print">\n.card { padding: 13px; }\n</style>\n';
@@ -357,7 +357,7 @@ void test("retains scoped styles with unsupported behavioral attributes", async 
   }
 });
 
-void test("treats a dynamic v-bind argument as an open class surface", async () => {
+test("treats a dynamic v-bind argument as an open class surface", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p v-bind:[key]="v" class="etc">B</p>\n</template>\n<script setup>\nconst key = "class";\nconst v = "x";\n</script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -374,7 +374,7 @@ void test("treats a dynamic v-bind argument as an open class surface", async () 
   }
 });
 
-void test("migrates static Vue class bindings on hosts and component calls", async () => {
+test("migrates static Vue class bindings on hosts and component calls", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -401,7 +401,7 @@ void test("migrates static Vue class bindings on hosts and component calls", asy
   }
 });
 
-void test("keeps non-static Vue class bindings opaque", async () => {
+test("keeps non-static Vue class bindings opaque", async () => {
   for (const binding of [
     "{ card: active }",
     "['card']",
@@ -430,7 +430,7 @@ void test("keeps non-static Vue class bindings opaque", async () => {
   }
 });
 
-void test("uses DOM ASCII whitespace for static Vue class bindings", async () => {
+test("uses DOM ASCII whitespace for static Vue class bindings", async () => {
   const cwd = await fixture();
   const vue =
     "<template>\n  <p :class=\"'a b'\">Bound</p>\n  <p>Sibling</p>\n</template>\n<style scoped>\n.a { padding: 13px; }\n</style>\n";
@@ -445,7 +445,7 @@ void test("uses DOM ASCII whitespace for static Vue class bindings", async () =>
   }
 });
 
-void test("does not synthesize classes beside unsafe Vue attributes", async () => {
+test("does not synthesize classes beside unsafe Vue attributes", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="a&amp;b" :class="\'card\'">Bound</p>\n  <p>Sibling</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -461,7 +461,7 @@ void test("does not synthesize classes beside unsafe Vue attributes", async () =
   }
 });
 
-void test("retains a scoped rule whose class other package CSS also targets", async () => {
+test("retains a scoped rule whose class other package CSS also targets", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="only">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n.only { margin: 3px; }\n</style>\n';
@@ -483,7 +483,7 @@ void test("retains a scoped rule whose class other package CSS also targets", as
   }
 });
 
-void test("appends utilities to a literal class site beside a dynamic binding", async () => {
+test("appends utilities to a literal class site beside a dynamic binding", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="row" :class="tone">A</p>\n</template>\n<script setup>\nconst tone = "warm";\n</script>\n<style scoped>\n.row { margin: 7px; }\n</style>\n';
@@ -498,7 +498,7 @@ void test("appends utilities to a literal class site beside a dynamic binding", 
   }
 });
 
-void test("ignores custom directive runtime mutations outside static template scope", async () => {
+test("ignores custom directive runtime mutations outside static template scope", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p v-highlight class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -513,7 +513,7 @@ void test("ignores custom directive runtime mutations outside static template sc
   }
 });
 
-void test("a :global escape in a module stylesheet shadows scoped deletion", async () => {
+test("a :global escape in a module stylesheet shadows scoped deletion", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -530,7 +530,7 @@ void test("a :global escape in a module stylesheet shadows scoped deletion", asy
   }
 });
 
-void test("a gitignored SFC's unscoped block shadows scoped deletion", async () => {
+test("a gitignored SFC's unscoped block shadows scoped deletion", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -551,7 +551,7 @@ void test("a gitignored SFC's unscoped block shadows scoped deletion", async () 
   }
 });
 
-void test("withholds quote-bearing candidates inside Vue class attributes", async () => {
+test("withholds quote-bearing candidates inside Vue class attributes", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { font-family: "My Font", sans-serif; }\n</style>\n';
@@ -566,7 +566,7 @@ void test("withholds quote-bearing candidates inside Vue class attributes", asyn
   }
 });
 
-void test("reports Vue-only warnings without requiring a Tailwind entry", async () => {
+test("reports Vue-only warnings without requiring a Tailwind entry", async () => {
   await mkdir(".tmp", { recursive: true });
   const cwd = await mkdtemp(join(process.cwd(), ".tmp", "fixture-"));
   const vue =
@@ -588,7 +588,7 @@ void test("reports Vue-only warnings without requiring a Tailwind entry", async 
   }
 });
 
-void test("interpolated preprocessor selectors make the shadow corpus unverifiable", async () => {
+test("interpolated preprocessor selectors make the shadow corpus unverifiable", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -605,7 +605,7 @@ void test("interpolated preprocessor selectors make the shadow corpus unverifiab
   }
 });
 
-void test("warns when a Vue element already carries a conflicting utility", async () => {
+test("warns when a Vue element already carries a conflicting utility", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card p-4">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -622,7 +622,7 @@ void test("warns when a Vue element already carries a conflicting utility", asyn
   }
 });
 
-void test("keeps rebased Vue conflict warnings on authored offsets", async () => {
+test("keeps rebased Vue conflict warnings on authored offsets", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <div class="card p-4">Card</div>\n</template>\n<script setup>\nimport "./a.css";\nimport "./b.css";\n</script>\n';
@@ -641,7 +641,7 @@ void test("keeps rebased Vue conflict warnings on authored offsets", async () =>
   }
 });
 
-void test("a :deep escape in another SFC shadows scoped deletion", async () => {
+test("a :deep escape in another SFC shadows scoped deletion", async () => {
   const cwd = await fixture();
   const child =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -660,7 +660,7 @@ void test("a :deep escape in another SFC shadows scoped deletion", async () => {
   }
 });
 
-void test("a paren-less deep combinator makes the shadow corpus unverifiable", async () => {
+test("a paren-less deep combinator makes the shadow corpus unverifiable", async () => {
   const cwd = await fixture();
   const child =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -679,7 +679,7 @@ void test("a paren-less deep combinator makes the shadow corpus unverifiable", a
   }
 });
 
-void test("migrates a stylesheet statically imported by a Vue script", async () => {
+test("migrates a stylesheet statically imported by a Vue script", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script setup lang="ts">\nimport type { Props } from "./props";\ndefineProps<Props>();\nimport "./card.css";\n</script>\n';
@@ -702,7 +702,7 @@ void test("migrates a stylesheet statically imported by a Vue script", async () 
   }
 });
 
-void test("does not infer stylesheets from extensionless Vue script imports", async () => {
+test("does not infer stylesheets from extensionless Vue script imports", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n</template>\n<script setup>\nimport helper from "./theme";\nvoid helper;\n</script>\n';
@@ -719,7 +719,7 @@ void test("does not infer stylesheets from extensionless Vue script imports", as
   }
 });
 
-void test("propagates Vue consumer contexts through local CSS imports", async () => {
+test("propagates Vue consumer contexts through local CSS imports", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="nested">A</p>\n</template>\n<script setup>\nimport "./entry.css";\n</script>\n';
@@ -736,7 +736,7 @@ void test("propagates Vue consumer contexts through local CSS imports", async ()
   }
 });
 
-void test("routes a Vue script's imported preprocessor through the existing compiler", async () => {
+test("routes a Vue script's imported preprocessor through the existing compiler", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script>\nimport "./card.scss";\nexport default {};\n</script>\n';
@@ -753,7 +753,7 @@ void test("routes a Vue script's imported preprocessor through the existing comp
   }
 });
 
-void test("ignores dynamic and commented Vue stylesheet imports", async () => {
+test("ignores dynamic and commented Vue stylesheet imports", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script setup>\n// import "./card.css";\nimport("./card.css");\n</script>\n';
@@ -771,7 +771,7 @@ void test("ignores dynamic and commented Vue stylesheet imports", async () => {
   }
 });
 
-void test("keeps imported stylesheet candidates isolated per Vue element", async () => {
+test("keeps imported stylesheet candidates isolated per Vue element", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -796,7 +796,7 @@ void test("keeps imported stylesheet candidates isolated per Vue element", async
   }
 });
 
-void test("follows external Vue style blocks as stylesheet consumer edges", async () => {
+test("follows external Vue style blocks as stylesheet consumer edges", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped src="./card.css"></style>\n';
@@ -814,7 +814,7 @@ void test("follows external Vue style blocks as stylesheet consumer edges", asyn
   }
 });
 
-void test("unresolved external Vue styles retain scoped deletions", async () => {
+test("unresolved external Vue styles retain scoped deletions", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped src="@/theme.css"></style>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -829,7 +829,7 @@ void test("unresolved external Vue styles retain scoped deletions", async () => 
   }
 });
 
-void test("does not require Tailwind for an explicitly selected Vue module import", async () => {
+test("does not require Tailwind for an explicitly selected Vue module import", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script setup>\nimport styles from "./card.module.css";\n</script>\n';
@@ -846,7 +846,7 @@ void test("does not require Tailwind for an explicitly selected Vue module impor
   }
 });
 
-void test("closes Vue root fallthrough through static component callers", async () => {
+test("closes Vue root fallthrough through static component callers", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -872,7 +872,7 @@ void test("closes Vue root fallthrough through static component callers", async 
   }
 });
 
-void test("dynamic Vue import globs keep caller fallthrough open", async () => {
+test("dynamic Vue import globs keep caller fallthrough open", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -902,7 +902,7 @@ void test("dynamic Vue import globs keep caller fallthrough open", async () => {
   }
 });
 
-void test("extensionless local globs keep caller fallthrough open", async () => {
+test("extensionless local globs keep caller fallthrough open", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -932,7 +932,7 @@ void test("extensionless local globs keep caller fallthrough open", async () => 
   }
 });
 
-void test("a self-recursive component migrates without overlapping edits", async () => {
+test("a self-recursive component migrates without overlapping edits", async () => {
   const cwd = await fixture();
   const tree =
     '<template>\n  <div class="node">\n    <Tree class="node" />\n  </div>\n</template>\n<script setup>\nimport Tree from "./Tree.vue";\n</script>\n<style scoped>\n.node { padding: 13px; }\n</style>\n';
@@ -948,7 +948,7 @@ void test("a self-recursive component migrates without overlapping edits", async
   }
 });
 
-void test("a dependency vanishing during Vue block compilation stays fatal under force", async () => {
+test("a dependency vanishing during Vue block compilation stays fatal under force", async () => {
   const cwd = await fixture();
   const fakeSass = [
     'import { pathToFileURL } from "node:url";',
@@ -987,7 +987,7 @@ void test("a dependency vanishing during Vue block compilation stays fatal under
   }
 });
 
-void test("unresolved Vue aliases keep every possible caller surface open", async () => {
+test("unresolved Vue aliases keep every possible caller surface open", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -1014,7 +1014,7 @@ void test("unresolved Vue aliases keep every possible caller surface open", asyn
   }
 });
 
-void test("dynamic aliased Vue imports keep caller fallthrough open", async () => {
+test("dynamic aliased Vue imports keep caller fallthrough open", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -1044,7 +1044,7 @@ void test("dynamic aliased Vue imports keep caller fallthrough open", async () =
   }
 });
 
-void test("dynamic aliased imports in Vue scripts keep caller fallthrough open", async () => {
+test("dynamic aliased imports in Vue scripts keep caller fallthrough open", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -1074,7 +1074,7 @@ void test("dynamic aliased imports in Vue scripts keep caller fallthrough open",
   }
 });
 
-void test("does not rewrite symlinked Vue files reached by component proof", async (context) => {
+test("does not rewrite symlinked Vue files reached by component proof", async (context) => {
   if (process.platform === "win32") context.skip("symlink creation requires elevated privileges");
   const cwd = await fixture();
   try {
@@ -1094,7 +1094,7 @@ void test("does not rewrite symlinked Vue files reached by component proof", asy
   }
 });
 
-void test("writes parent scoped utilities at the proven component call site", async () => {
+test("writes parent scoped utilities at the proven component call site", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -1122,7 +1122,7 @@ void test("writes parent scoped utilities at the proven component call site", as
   }
 });
 
-void test("a component chained through a single-root parent stays open", async () => {
+test("a component chained through a single-root parent stays open", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -1153,7 +1153,7 @@ void test("a component chained through a single-root parent stays open", async (
   }
 });
 
-void test("v-html defeats the unscoped sole-source proof", async () => {
+test("v-html defeats the unscoped sole-source proof", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -1172,7 +1172,7 @@ void test("v-html defeats the unscoped sole-source proof", async () => {
   }
 });
 
-void test("an unresolved package stylesheet import shadows scoped deletion", async () => {
+test("an unresolved package stylesheet import shadows scoped deletion", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script setup>\nimport "bootstrap/dist/css/bootstrap.css";\n</script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -1186,7 +1186,7 @@ void test("an unresolved package stylesheet import shadows scoped deletion", asy
   }
 });
 
-void test("warns when a fallthrough utility conflicts with a child-root class", async () => {
+test("warns when a fallthrough utility conflicts with a child-root class", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -1208,7 +1208,7 @@ void test("warns when a fallthrough utility conflicts with a child-root class", 
   }
 });
 
-void test("bare stylesheet specifiers never bind coincidental local files", async () => {
+test("bare stylesheet specifiers never bind coincidental local files", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card other">A</p>\n  <p class="etc">B</p>\n</template>\n<script setup>\nimport "theme/card.css";\n</script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -1229,7 +1229,7 @@ void test("bare stylesheet specifiers never bind coincidental local files", asyn
   }
 });
 
-void test("explicit non-Vue local imports do not open proven caller surfaces", async () => {
+test("explicit non-Vue local imports do not open proven caller surfaces", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -1255,7 +1255,7 @@ void test("explicit non-Vue local imports do not open proven caller surfaces", a
   }
 });
 
-void test("a root v-for child renders a fragment and blocks call-site rewrites", async () => {
+test("a root v-for child renders a fragment and blocks call-site rewrites", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -1281,7 +1281,7 @@ void test("a root v-for child renders a fragment and blocks call-site rewrites",
   }
 });
 
-void test("a text root fragments the child and blocks call-site rewrites", async () => {
+test("a text root fragments the child and blocks call-site rewrites", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -1305,7 +1305,7 @@ void test("a text root fragments the child and blocks call-site rewrites", async
   }
 });
 
-void test("a multi-root child never receives call-site rewrites", async () => {
+test("a multi-root child never receives call-site rewrites", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -1329,7 +1329,7 @@ void test("a multi-root child never receives call-site rewrites", async () => {
   }
 });
 
-void test("CSS v-bind declarations retain across plain and preprocessor blocks", async () => {
+test("CSS v-bind declarations retain across plain and preprocessor blocks", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -1356,7 +1356,7 @@ void test("CSS v-bind declarations retain across plain and preprocessor blocks",
   }
 });
 
-void test("rewrites proven $style bindings and deletes the emptied module block", async () => {
+test("rewrites proven $style bindings and deletes the emptied module block", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p :class="$style.card">A</p>\n  <p class="plain" :class="$style.note">B</p>\n</template>\n<style module>\n.card { padding: 13px; }\n.note { margin: 7px; }\n</style>\n';
@@ -1374,7 +1374,7 @@ void test("rewrites proven $style bindings and deletes the emptied module block"
   }
 });
 
-void test("preserves multiline whitespace around rewritten $style bindings", async () => {
+test("preserves multiline whitespace around rewritten $style bindings", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p\n    :class="$style.card"\n  >A</p>\n  <span>B</span>\n</template>\n<style module>\n.card { padding: 13px; }\n</style>\n';
@@ -1390,7 +1390,7 @@ void test("preserves multiline whitespace around rewritten $style bindings", asy
   }
 });
 
-void test("$style outside proven member sites retains the module", async () => {
+test("$style outside proven member sites retains the module", async () => {
   const cwd = await fixture();
   const conditional =
     '<template>\n  <p :class="$style.tone">A</p>\n  <p :class="cond ? $style.tone : \'\'">B</p>\n</template>\n<script setup>\nconst cond = true;\n</script>\n<style module>\n.tone { color: red; }\n</style>\n';
@@ -1413,7 +1413,7 @@ void test("$style outside proven member sites retains the module", async () => {
   }
 });
 
-void test("scoped and module blocks migrate together in either order", async () => {
+test("scoped and module blocks migrate together in either order", async () => {
   const cwd = await fixture();
   const moduleFirst =
     '<template>\n  <p class="card" :class="$style.boxed">A</p>\n  <p class="etc">B</p>\n</template>\n<style module>\n.boxed { margin: 3px; }\n</style>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -1440,7 +1440,7 @@ void test("scoped and module blocks migrate together in either order", async () 
   }
 });
 
-void test("named module blocks retain with a warning", async () => {
+test("named module blocks retain with a warning", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p :class="classes.card">A</p>\n</template>\n<style module="classes">\n.card { padding: 13px; }\n</style>\n';
@@ -1454,7 +1454,7 @@ void test("named module blocks retain with a warning", async () => {
   }
 });
 
-void test("preprocessor module blocks compile before conversion", async () => {
+test("preprocessor module blocks compile before conversion", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p :class="$style.card">A</p>\n  <p class="etc">B</p>\n</template>\n<style module lang="scss">\n$pad: 13px;\n.card { padding: $pad; }\n</style>\n';
@@ -1471,7 +1471,7 @@ void test("preprocessor module blocks compile before conversion", async () => {
   }
 });
 
-void test("module :global escapes retain individually while siblings convert", async () => {
+test("module :global escapes retain individually while siblings convert", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p :class="$style.card">A</p>\n  <p class="etc">B</p>\n</template>\n<style module>\n.card { padding: 13px; }\n:global(.free) { color: blue; }\n</style>\n';
@@ -1490,7 +1490,7 @@ void test("module :global escapes retain individually while siblings convert", a
   }
 });
 
-void test("a dynamic directive argument naming $style retains the module", async () => {
+test("a dynamic directive argument naming $style retains the module", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p :class="$style.card">A</p>\n  <p v-on:[$style.card]="go">B</p>\n</template>\n<script setup>\nconst go = () => {};\n</script>\n<style module>\n.card { padding: 13px; }\n</style>\n';
@@ -1504,7 +1504,7 @@ void test("a dynamic directive argument naming $style retains the module", async
   }
 });
 
-void test("an uneditable class attribute retains the module instead of duplicating it", async () => {
+test("an uneditable class attribute retains the module instead of duplicating it", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="plain&amp;x" :class="$style.card">A</p>\n  <p class="etc">B</p>\n</template>\n<style module>\n.card { padding: 13px; }\n</style>\n';
@@ -1519,7 +1519,7 @@ void test("an uneditable class attribute retains the module instead of duplicati
   }
 });
 
-void test("open caller and dynamic surfaces retain modules like scoped rules", async () => {
+test("open caller and dynamic surfaces retain modules like scoped rules", async () => {
   const cwd = await fixture();
   const singleRoot =
     '<template>\n  <p :class="$style.card">Single root</p>\n</template>\n<style module>\n.card { padding: 13px; }\n</style>\n';
@@ -1548,7 +1548,7 @@ void test("open caller and dynamic surfaces retain modules like scoped rules", a
   }
 });
 
-void test("a module compile failure never blocks the sibling scoped entry", async () => {
+test("a module compile failure never blocks the sibling scoped entry", async () => {
   const cwd = await fixture();
   // Both rules occupy the same block-local span, so path-level attribution
   // would block the healthy scoped rule too.
@@ -1566,7 +1566,7 @@ void test("a module compile failure never blocks the sibling scoped entry", asyn
   }
 });
 
-void test("a blocked sibling rule keeps the shared $style binding alive", async () => {
+test("a blocked sibling rule keeps the shared $style binding alive", async () => {
   const cwd = await fixture();
   // The second rule fails Tailwind candidate compilation; the retained rule
   // stays unlayered, so converting the sibling would flip the cascade -- the
@@ -1587,7 +1587,7 @@ void test("a blocked sibling rule keeps the shared $style binding alive", async 
   }
 });
 
-void test("module conflict warnings anchor to authored bytes after scoped edits", async () => {
+test("module conflict warnings anchor to authored bytes after scoped edits", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="frame">A</p>\n  <p class="etc">C</p>\n  <p class="p-[10px]" :class="$style.boxed">B</p>\n</template>\n<style scoped>\n.frame { padding: 11px; }\n</style>\n<style module>\n.boxed { padding: 13px; }\n</style>\n';
@@ -1602,7 +1602,7 @@ void test("module conflict warnings anchor to authored bytes after scoped edits"
   }
 });
 
-void test("an unsupported module sibling block retains the whole $style module", async () => {
+test("an unsupported module sibling block retains the whole $style module", async () => {
   const cwd = await fixture();
   // Every unnamed block feeds the same `$style` object, so deleting the
   // supported rule's binding would orphan a retained sibling's class.
@@ -1627,7 +1627,7 @@ void test("an unsupported module sibling block retains the whole $style module",
   }
 });
 
-void test("a surviving $style binding shadows scoped rules on its element", async () => {
+test("a surviving $style binding shadows scoped rules on its element", async () => {
   const cwd = await fixture();
   // The retained module rule competes unlayered with a replacement utility,
   // so the scoped rule on the shared element must retain; other elements
@@ -1647,7 +1647,7 @@ void test("a surviving $style binding shadows scoped rules on its element", asyn
   }
 });
 
-void test("a retained module keeps co-located scoped rules retained", async () => {
+test("a retained module keeps co-located scoped rules retained", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card" :class="$style.mod">A</p>\n  <p class="etc">B</p>\n</template>\n<script setup>\nimport { useCssModule } from "vue";\nconst s = useCssModule();\nvoid s;\n</script>\n<style scoped>\n.card { color: red; }\n</style>\n<style module>\n.mod { color: blue; }\n</style>\n';
@@ -1662,7 +1662,7 @@ void test("a retained module keeps co-located scoped rules retained", async () =
   }
 });
 
-void test("a retained co-located scoped rule shadows the module entry", async () => {
+test("a retained co-located scoped rule shadows the module entry", async () => {
   const cwd = await fixture();
   // On hover the later module selector originally ties the scoped selector's
   // specificity and wins by source order. A layered utility would lose to the
@@ -1680,7 +1680,7 @@ void test("a retained co-located scoped rule shadows the module entry", async ()
   }
 });
 
-void test("a retained co-located unscoped rule shadows the module entry", async () => {
+test("a retained co-located unscoped rule shadows the module entry", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="global" :class="$style.mod">A</p>\n  <span>B</span>\n</template>\n<script setup>\nconst c = "red";\n</script>\n<style>\n.global { color: v-bind(c); }\n</style>\n<style module>\n.mod { color: blue; }\n</style>\n';
@@ -1700,7 +1700,7 @@ void test("a retained co-located unscoped rule shadows the module entry", async 
   }
 });
 
-void test("a $style member without a module rule retains the whole module", async () => {
+test("a $style member without a module rule retains the whole module", async () => {
   const cwd = await fixture();
   // Deleting the only rule would empty the block, drop the runtime `$style`
   // injection, and crash the remaining member access.
@@ -1723,7 +1723,7 @@ void test("a $style member without a module rule retains the whole module", asyn
   }
 });
 
-void test("caller classes on a module-bound child root join the cascade gate", async () => {
+test("caller classes on a module-bound child root join the cascade gate", async () => {
   const cwd = await fixture();
   const child =
     '<template>\n  <p :class="$style.card">Child root</p>\n</template>\n<style module>\n.card { padding: 13px; }\n</style>\n';
@@ -1759,7 +1759,7 @@ void test("caller classes on a module-bound child root join the cascade gate", a
   }
 });
 
-void test("checks effective child roots when retaining child scoped rules", async () => {
+test("checks effective child roots when retaining child scoped rules", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -1783,7 +1783,7 @@ void test("checks effective child roots when retaining child scoped rules", asyn
   }
 });
 
-void test("retains child ID rules when a caller overrides the root ID", async () => {
+test("retains child ID rules when a caller overrides the root ID", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -1804,7 +1804,7 @@ void test("retains child ID rules when a caller overrides the root ID", async ()
   }
 });
 
-void test("retains parent scoped rules when child class fallthrough is disabled", async () => {
+test("retains parent scoped rules when child class fallthrough is disabled", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -1825,7 +1825,7 @@ void test("retains parent scoped rules when child class fallthrough is disabled"
   }
 });
 
-void test("retains parent scoped rules when child props can consume classes", async () => {
+test("retains parent scoped rules when child props can consume classes", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -1846,7 +1846,7 @@ void test("retains parent scoped rules when child props can consume classes", as
   }
 });
 
-void test("uses the caller ID as the effective child-root selector", async () => {
+test("uses the caller ID as the effective child-root selector", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -1869,7 +1869,7 @@ void test("uses the caller ID as the effective child-root selector", async () =>
   }
 });
 
-void test("opens component selector proofs for dynamic caller IDs", async () => {
+test("opens component selector proofs for dynamic caller IDs", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -1887,7 +1887,7 @@ void test("opens component selector proofs for dynamic caller IDs", async () => 
   }
 });
 
-void test("warns when a child-root utility conflicts at a rewritten call site", async () => {
+test("warns when a child-root utility conflicts at a rewritten call site", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -1908,7 +1908,7 @@ void test("warns when a child-root utility conflicts at a rewritten call site", 
   }
 });
 
-void test("checks child-root sites before deleting parent scoped rules", async () => {
+test("checks child-root sites before deleting parent scoped rules", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -1927,7 +1927,7 @@ void test("checks child-root sites before deleting parent scoped rules", async (
   }
 });
 
-void test("keeps classless child roots in type-selector shadow checks", async () => {
+test("keeps classless child roots in type-selector shadow checks", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -1950,7 +1950,7 @@ void test("keeps classless child roots in type-selector shadow checks", async ()
   }
 });
 
-void test("includes unselected child scoped rules in parent shadow checks", async () => {
+test("includes unselected child scoped rules in parent shadow checks", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -1971,7 +1971,7 @@ void test("includes unselected child scoped rules in parent shadow checks", asyn
   }
 });
 
-void test("keeps caller proofs open when an owned SFC cannot be analyzed", async () => {
+test("keeps caller proofs open when an owned SFC cannot be analyzed", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -2001,7 +2001,7 @@ void test("keeps caller proofs open when an owned SFC cannot be analyzed", async
   }
 });
 
-void test("retains root fallthrough for callers outside script setup", async () => {
+test("retains root fallthrough for callers outside script setup", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -2020,7 +2020,7 @@ void test("retains root fallthrough for callers outside script setup", async () 
   }
 });
 
-void test("a vanished real Sass entry stays a fatal integrity error", async () => {
+test("a vanished real Sass entry stays a fatal integrity error", async () => {
   const sass = await loadProjectSass(process.cwd());
   await mkdir(".tmp", { recursive: true });
   const missing = join(process.cwd(), ".tmp", "missing-entry.scss");
@@ -2032,7 +2032,7 @@ void test("a vanished real Sass entry stays a fatal integrity error", async () =
   assert.match(virtual.css, /padding: 1px/);
 });
 
-void test("slots defeat the unscoped sole-source proof", async () => {
+test("slots defeat the unscoped sole-source proof", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -2052,7 +2052,7 @@ void test("slots defeat the unscoped sole-source proof", async () => {
   }
 });
 
-void test("a scan-excluded HTML shell defeats the unscoped sole-source proof", async () => {
+test("a scan-excluded HTML shell defeats the unscoped sole-source proof", async () => {
   const cwd = await fixture();
   try {
     execFileSync("git", ["init", "-q"], { cwd });
@@ -2074,7 +2074,7 @@ void test("a scan-excluded HTML shell defeats the unscoped sole-source proof", a
   }
 });
 
-void test("caller template edits do not recompile untouched preprocessor blocks", async () => {
+test("caller template edits do not recompile untouched preprocessor blocks", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -2101,7 +2101,7 @@ void test("caller template edits do not recompile untouched preprocessor blocks"
   }
 });
 
-void test("migrates unscoped Vue styles when the package has one source", async () => {
+test("migrates unscoped Vue styles when the package has one source", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -2124,7 +2124,7 @@ void test("migrates unscoped Vue styles when the package has one source", async 
   }
 });
 
-void test("retains unscoped Vue rules that can lose the unlayered cascade", async () => {
+test("retains unscoped Vue rules that can lose the unlayered cascade", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -2144,7 +2144,7 @@ void test("retains unscoped Vue rules that can lose the unlayered cascade", asyn
   }
 });
 
-void test("keeps retained same-file style blocks in unscoped shadow checks", async () => {
+test("keeps retained same-file style blocks in unscoped shadow checks", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -2164,7 +2164,7 @@ void test("keeps retained same-file style blocks in unscoped shadow checks", asy
   }
 });
 
-void test("retains unscoped Vue rules when another project source exists", async () => {
+test("retains unscoped Vue rules when another project source exists", async () => {
   const cwd = await fixture();
   try {
     await writeFile(
@@ -2179,7 +2179,7 @@ void test("retains unscoped Vue rules when another project source exists", async
   }
 });
 
-void test("retains unscoped Vue rules when planning workspace packages", async () => {
+test("retains unscoped Vue rules when planning workspace packages", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -2215,7 +2215,7 @@ void test("retains unscoped Vue rules when planning workspace packages", async (
   }
 });
 
-void test("unresolved component roots block unscoped Vue deletion", async () => {
+test("unresolved component roots block unscoped Vue deletion", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -2234,7 +2234,7 @@ void test("unresolved component roots block unscoped Vue deletion", async () => 
   }
 });
 
-void test("unresolved external styles block unscoped Vue deletion", async () => {
+test("unresolved external styles block unscoped Vue deletion", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -2254,7 +2254,7 @@ void test("unresolved external styles block unscoped Vue deletion", async () => 
   }
 });
 
-void test("retains competing cross-file scoped rules with styles after templates", async () => {
+test("retains competing cross-file scoped rules with styles after templates", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -2291,7 +2291,7 @@ void test("retains competing cross-file scoped rules with styles after templates
   }
 });
 
-void test("retains competing cross-file scoped rules with styles before templates", async () => {
+test("retains competing cross-file scoped rules with styles before templates", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -2316,7 +2316,7 @@ void test("retains competing cross-file scoped rules with styles before template
   }
 });
 
-void test("retains a parent rule when an unselected child shadow is unverifiable", async () => {
+test("retains a parent rule when an unselected child shadow is unverifiable", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -2338,7 +2338,7 @@ void test("retains a parent rule when an unselected child shadow is unverifiable
   }
 });
 
-void test("migrates scoped Vue preprocessor blocks through project compilers", async () => {
+test("migrates scoped Vue preprocessor blocks through project compilers", async () => {
   for (const [lang, declaration, candidate] of [
     ["scss", "$space: 13px;\n.card { padding: $space; }", "p-[13px]"],
     ["sass", "$space: 13px\n.card\n  padding: $space", "p-[13px]"],
@@ -2362,7 +2362,7 @@ void test("migrates scoped Vue preprocessor blocks through project compilers", a
   }
 });
 
-void test("maps partial Vue preprocessor edits to absolute authored bytes", async () => {
+test("maps partial Vue preprocessor edits to absolute authored bytes", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p title="한글" class="card">A</p>\n  <p class="keep">B</p>\n</template>\n<style scoped lang="scss">\n.card { padding: 13px; }\n.keep { animation: spin 1s; }\n</style>\n';
@@ -2381,7 +2381,7 @@ void test("maps partial Vue preprocessor edits to absolute authored bytes", asyn
   }
 });
 
-void test("an external script block leaves scoped rules shadow-retained", async () => {
+test("an external script block leaves scoped rules shadow-retained", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script src="./behavior.js"></script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -2400,7 +2400,7 @@ void test("an external script block leaves scoped rules shadow-retained", async 
   }
 });
 
-void test("a global type selector shadows scoped deletion only for matching tags", async () => {
+test("a global type selector shadows scoped deletion only for matching tags", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -2421,7 +2421,7 @@ void test("a global type selector shadows scoped deletion only for matching tags
   }
 });
 
-void test("Sass parent-selector concatenation makes the shadow corpus unverifiable", async () => {
+test("Sass parent-selector concatenation makes the shadow corpus unverifiable", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card-active">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card-active { padding: 13px; }\n</style>\n';
@@ -2438,7 +2438,7 @@ void test("Sass parent-selector concatenation makes the shadow corpus unverifiab
   }
 });
 
-void test("ignores function ref runtime mutations outside static template scope", async () => {
+test("ignores function ref runtime mutations outside static template scope", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p :ref="el => el?.classList.add(\'card\')">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -2453,7 +2453,7 @@ void test("ignores function ref runtime mutations outside static template scope"
   }
 });
 
-void test("ignores handler runtime mutations outside static template scope", async () => {
+test("ignores handler runtime mutations outside static template scope", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p @click="$event.currentTarget.classList.add(pick())">B</p>\n</template>\n<script setup>\nconst pick = () => "x";\n</script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -2468,7 +2468,7 @@ void test("ignores handler runtime mutations outside static template scope", asy
   }
 });
 
-void test("an unsupported script language leaves scoped rules shadow-retained", async () => {
+test("an unsupported script language leaves scoped rules shadow-retained", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script lang="coffee">\nx = 1\n</script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -2483,7 +2483,7 @@ void test("an unsupported script language leaves scoped rules shadow-retained", 
   }
 });
 
-void test("a ::v-global escape in another SFC shadows scoped deletion", async () => {
+test("a ::v-global escape in another SFC shadows scoped deletion", async () => {
   const cwd = await fixture();
   const child =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -2502,7 +2502,7 @@ void test("a ::v-global escape in another SFC shadows scoped deletion", async ()
   }
 });
 
-void test("script blocks do not open the static template class surface", async () => {
+test("script blocks do not open the static template class surface", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<script setup>\nconst answer = 42;\n</script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -2517,7 +2517,7 @@ void test("script blocks do not open the static template class surface", async (
   }
 });
 
-void test("an external style block participates in scoped cascade shadowing", async () => {
+test("an external style block participates in scoped cascade shadowing", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped src="./external.css"></style>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
@@ -2534,7 +2534,7 @@ void test("an external style block participates in scoped cascade shadowing", as
   }
 });
 
-void test("retains a CSS Module referenced by a Vue SFC script", async () => {
+test("retains a CSS Module referenced by a Vue SFC script", async () => {
   const cwd = await fixture();
   const vue =
     "<template>\n  <button :class=\"styles.button\">Save</button>\n</template>\n<script setup>\nimport styles from './Button.module.css';\n</script>\n";
@@ -2552,7 +2552,7 @@ void test("retains a CSS Module referenced by a Vue SFC script", async () => {
   }
 });
 
-void test("withholds quote-bearing candidates from quoted HTML attributes and retains their rules", async () => {
+test("withholds quote-bearing candidates from quoted HTML attributes and retains their rules", async () => {
   const cwd = await fixture();
   try {
     await Promise.all([
@@ -2575,7 +2575,7 @@ void test("withholds quote-bearing candidates from quoted HTML attributes and re
   }
 });
 
-void test("preserves CRLF line endings through a partial migration", async () => {
+test("preserves CRLF line endings through a partial migration", async () => {
   const cwd = await fixture({
     css: ".button {\r\n  padding: 13px;\r\n}\r\n.other {\r\n  display: grid;\r\n}\r\n",
     tsx: initialTsx.replaceAll("\n", "\r\n"),
