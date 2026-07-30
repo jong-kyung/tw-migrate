@@ -32,7 +32,6 @@
     "index.js",
     "index.d.ts",
     "native.js",
-    "rfcs",
     "style-compiler.js",
     "vue.js"
   ],
@@ -43,7 +42,7 @@
     "build": "napi build --manifest-path crates/tw_migrate/Cargo.toml --package-json-path package.json --output-dir . --platform --release --no-js --dts binding.d.ts",
     "build:debug": "napi build --manifest-path crates/tw_migrate/Cargo.toml --package-json-path package.json --output-dir . --platform --no-js --dts binding.d.ts",
     "artifacts": "napi artifacts --output-dir . --npm-dir npm",
-    "test": "cargo test && pnpm build:debug && node --test",
+    "test": "cargo test && pnpm build:debug && vp test",
     "test:ecosystem": "node ecosystem-ci/run.ts",
     "test:rust": "cargo test",
     "typecheck": "tsc --noEmit",

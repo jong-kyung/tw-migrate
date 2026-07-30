@@ -4,12 +4,11 @@ import { lstat, mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from 
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
-import test from "node:test";
+import { test } from "vite-plus/test";
 
 import { __unstable__loadDesignSystem as loadDesignSystem } from "tailwindcss";
 
 import { migrate } from "../index.js";
-import type { MigrateOptions } from "../index.d.ts";
 import { compileSassEntry, loadProjectSass, sourceMappings } from "../style-compiler.js";
 
 const initialCss = ".button { padding: 13px; }\n";
@@ -71,11 +70,8 @@ test("returns structured migration report fields", async () => {
 test("validates API-only migration options", async () => {
   const cwd = await fixture();
   try {
-    await assert.rejects(
-      // The removed option is intentionally invalid input for this assertion.
-      migrate({ cwd, cssFile: "Button.module.css" } as MigrateOptions),
-      /cssFile has been replaced by styleFile/,
-    );
+    const legacyOptions = { cwd, cssFile: "Button.module.css" };
+    await assert.rejects(migrate(legacyOptions), /replaced by styleFile/);
     await assert.rejects(
       migrate({ cwd, styleFile: "Button.module.css", workspaces: true }),
       /styleFile cannot be combined with workspaces/,

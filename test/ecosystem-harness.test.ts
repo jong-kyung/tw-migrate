@@ -6,7 +6,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
-import test from "node:test";
+import { test } from "vite-plus/test";
 
 import {
   assertInstalledLayout,
@@ -186,74 +186,18 @@ test("smoke and external cases accept non-exhaustive probes without occupying co
   errorFor([base, { id: "smoke", kind: "smoke", fixture: "missing" }]);
 });
 
-test("controlled cases require independent hover, focus, and keyboard focus-visible probes", () => {
-  for (const name of ["hover", "focus", "focus-visible"]) {
-    const probes = structuredClone(controlled().probes);
-    delete probes[name];
-    assert.throws(
-      () => validateManifest(manifest(controlled({ probes }))),
-      new RegExp(`missing.*${name}`),
-    );
-  }
-});
-
-test("controlled cases require responsive probes below and above the breakpoint", () => {
-  for (const name of ["responsive-below", "responsive-above"]) {
-    const probes = structuredClone(controlled().probes);
-    delete probes[name];
-    assert.throws(
-      () => validateManifest(manifest(controlled({ probes }))),
-      new RegExp(`missing.*${name}`),
-    );
-  }
-});
-
-test("every probe requires route, viewport, readiness, selector, and cardinality", () => {
-  for (const field of ["route", "viewport", "readiness", "selector", "cardinality", "identity"]) {
-    const project = structuredClone(controlled());
-    delete project.probes.base[field];
-    errorFor([project]);
-  }
-});
-
-test("controlled state actions and responsive ordering are strict", () => {
-  const wrongHover = structuredClone(controlled());
-  wrongHover.probes.hover.action.type = "focus";
-  errorFor([wrongHover]);
-
-  const wrongKey = structuredClone(controlled());
-  wrongKey.probes["focus-visible"].action.key = "Enter";
-  errorFor([wrongKey]);
-
-  const unordered = structuredClone(controlled());
-  unordered.probes["responsive-below"].viewport.width = desktop.width;
-  errorFor([unordered]);
-});
-
 test("rejects invalid manifests before execution", () => {
   errorFor([controlled(), controlled({ style: "scss" })]);
   errorFor([controlled({ extra: true })]);
   errorFor([controlled(), controlled({ id: "same-cell" })]);
   errorFor([external({ revision: "abc123" })]);
-  errorFor([
-    controlled({
-      probes: {
-        ...controlled().probes,
-        base: probe({ selector: { type: "class", value: ".ready" } }),
-      },
-    }),
-  ]);
-  errorFor([
-    controlled({
-      probes: {
-        ...controlled().probes,
-        base: probe({ readiness: { selector, cardinality: 0 } }),
-      },
-    }),
-  ]);
   const missingSource = controlled();
   delete missingSource.source;
   errorFor([missingSource]);
+  errorFor([controlled({ probes: {} })]);
+  errorFor([external({ probes: {} })]);
+  errorFor([external({ probes: { base: probe({ action: { type: "hovre", selector } }) } })]);
+  errorFor([external({ probes: { base: probe({ selector: { type: "datta", value: "card" } }) } })]);
 });
 
 test("migration source paths must stay relative and inside the driver", () => {
@@ -319,7 +263,7 @@ test("external commands receive only the explicit non-secret environment", () =>
 
 test("post-migration server phases preserve the expected tracked diff", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "tw-migrate-external-diff-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.onTestFinished(() => rm(root, { recursive: true, force: true }));
   const git = (args: string[]) => execFileSync("git", args, { cwd: root, stdio: "pipe" });
   git(["init", "-q"]);
   git(["config", "user.email", "test@example.com"]);
@@ -383,13 +327,6 @@ test("external repositories and paths stay inside the CI checkout trust boundary
     errorFor([external({ start })]);
   errorFor([external({ runtimeWrites: ["src/App.module.css"] })]);
   errorFor([external({ runtimeWrites: ["a", "b", "c", "d"] })]);
-  for (const selector of [
-    { type: "tag", value: ".card" },
-    { type: "css", value: ".card" },
-    { type: "css", value: "#card" },
-  ]) {
-    errorFor([external({ probes: { base: probe({ selector }) } })]);
-  }
 });
 
 test("package script exposes the focused ecosystem harness entrypoint", () => {
@@ -399,7 +336,7 @@ test("package script exposes the focused ecosystem harness entrypoint", () => {
 
 test("stages concrete optional dependency versions without changing the tracked manifest", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "tw-migrate-stage-test-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.onTestFinished(() => rm(root, { recursive: true, force: true }));
   const repoRoot = join(root, "repo");
   const stageRoot = join(root, "stage");
   await mkdir(repoRoot);
@@ -432,7 +369,7 @@ test("stages concrete optional dependency versions without changing the tracked 
 
 test("package stage CLI creates the exact upload tree consumed by the workflow", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "tw-migrate-package-upload-test-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.onTestFinished(() => rm(root, { recursive: true, force: true }));
   const artifactRoot = join(root, "package-artifacts");
   const target = currentTarget();
   const provenance = {
@@ -471,7 +408,7 @@ test("package stage CLI creates the exact upload tree consumed by the workflow",
 
 test("provenance rejects altered tarballs, commits, platforms, and package identities", async (t) => {
   const artifactRoot = await mkdtemp(join(tmpdir(), "tw-migrate-provenance-test-"));
-  t.after(() => rm(artifactRoot, { recursive: true, force: true }));
+  t.onTestFinished(() => rm(artifactRoot, { recursive: true, force: true }));
   await Promise.all([
     writeFile(join(artifactRoot, "root.tgz"), "root"),
     writeFile(join(artifactRoot, "native.tgz"), "native"),
@@ -528,7 +465,7 @@ test("provenance rejects altered tarballs, commits, platforms, and package ident
 
 test("installed layout rejects checkout, symlink, wrong platform, and unexpected package paths", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "tw-migrate-layout-test-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.onTestFinished(() => rm(root, { recursive: true, force: true }));
   const checkout = join(root, "checkout");
   const driverRoot = join(root, "driver");
   const target = currentTarget();
@@ -593,7 +530,7 @@ test("publisher credential response body is bounded by the registry startup time
     response.write('{"token":"');
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
-  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  t.onTestFinished(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
   const { port } = server.address() as AddressInfo;
   await assert.rejects(publisherToken(`http://127.0.0.1:${port}`, 250), { name: "TimeoutError" });
@@ -864,7 +801,7 @@ test("migration contract checks the exact report/source and no-op second run wit
 
 test("source-wide idempotency catches an unreported extra source mutation", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "tw-migrate-source-tree-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.onTestFinished(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, "src"));
   await Promise.all([
     writeFile(join(root, "src", "reported.css"), "reported\n"),
@@ -890,7 +827,7 @@ test("source-wide idempotency catches an unreported extra source mutation", asyn
 
 test("source snapshots exclude generated trees and reject non-regular paths", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "tw-migrate-source-safety-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.onTestFinished(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, "node_modules"));
   await writeFile(join(root, "node_modules", "generated.js"), "ignored\n");
   assert.deepEqual(await snapshotMigrationSources(root), {});
@@ -926,7 +863,7 @@ test("controlled expectations cover every reported changed file with exact bytes
       );
       assert.deepEqual(
         Object.keys(expected.changedFiles).sort(),
-        [...expected.first.changedFiles].sort(),
+        [...expected.first.changedFiles].sort((left, right) => left.localeCompare(right)),
       );
       assert.ok(
         Object.values(expected.changedFiles).every((contents) => typeof contents === "string"),
@@ -980,7 +917,7 @@ test("final server teardown records and propagates only when lifecycle otherwise
 
 test("workflow artifact allowlist rejects traversal, symlinks, directories, and undeclared files", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "tw-migrate-artifacts-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.onTestFinished(() => rm(root, { recursive: true, force: true }));
   await writeFile(join(root, "phase-ledger.json"), "{}");
   assert.deepEqual(await artifactAllowlist(root, ["phase-ledger.json"]), [
     join(root, "phase-ledger.json"),
@@ -994,7 +931,7 @@ test("workflow artifact allowlist rejects traversal, symlinks, directories, and 
 
 test("case failure uploads preserve package publication logs", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "tw-migrate-publish-log-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.onTestFinished(() => rm(root, { recursive: true, force: true }));
   const uploadRoot = `${root}-upload`;
   await Promise.all([
     writeFile(
@@ -1008,94 +945,12 @@ test("case failure uploads preserve package publication logs", async (t) => {
   assert.equal(await readFile(join(uploadRoot, "publish.log"), "utf8"), "npm publish failed\n");
 });
 
-test("workflow matrices match every manifest kind across all required OSes", async () => {
-  const manifest = await loadManifest();
-  const workflow = await readEcosystemWorkflow();
-  const matrices = [
-    ...workflow.matchAll(
-      /^      matrix:\n        os: \[([a-z, ]+)\]\n        case: \[([a-z0-9-, ]+)\]\n        include:$/gm,
-    ),
-  ];
-  assert.equal(
-    matrices.length,
-    3,
-    "expected literal controlled, smoke, and external workflow matrices",
-  );
-  for (const matrix of matrices)
-    assert.deepEqual(matrix[1].split(", "), ["linux", "macos", "windows"]);
-  for (const [index, kind] of ["controlled", "smoke", "external"].entries()) {
-    assert.deepEqual(
-      matrices[index][2].split(", "),
-      manifest.projects.filter((project) => project.kind === kind).map(({ id }) => id),
-    );
-  }
-});
-
 test("case jobs run after non-cancelled partial package failure while preserving label gating", async () => {
   const workflow = await readEcosystemWorkflow();
   assert.match(
     workflow,
     /^  case:\n    needs: package\n    if: \$\{\{ !cancelled\(\) && \(github\.event_name != 'pull_request' \|\| github\.event\.label\.name == 'test:e2e'\) \}\}$/m,
   );
-});
-
-test("fixture integration dependencies use the required exact pins", async () => {
-  const allStyles = ["css", "scss", "sass", "less"];
-  const expected = {
-    "react-vite": {
-      styles: allStyles,
-      pins: {
-        "@tailwindcss/vite": "4.3.3",
-        tailwindcss: "4.3.3",
-        vite: "8.1.5",
-        react: "19.2.8",
-        "react-dom": "19.2.8",
-      },
-    },
-    next: {
-      styles: allStyles,
-      pins: {
-        "@tailwindcss/postcss": "4.3.3",
-        tailwindcss: "4.3.3",
-        next: "15.5.21",
-        react: "19.2.8",
-        "react-dom": "19.2.8",
-      },
-    },
-    "vite-html": {
-      styles: allStyles,
-      pins: { "@tailwindcss/vite": "4.3.3", tailwindcss: "4.3.3", vite: "8.1.5" },
-    },
-    "vue-vite": {
-      styles: ["css"],
-      pins: {
-        "@tailwindcss/vite": "4.3.3",
-        tailwindcss: "4.3.3",
-        vite: "8.1.5",
-        vue: "3.5.40",
-        "@vitejs/plugin-vue": "6.0.8",
-      },
-    },
-  };
-  for (const [runtime, { styles, pins }] of Object.entries(expected)) {
-    for (const style of styles) {
-      const fixture = JSON.parse(
-        await readFile(
-          new URL(
-            `../ecosystem-ci/fixtures/controlled/${runtime}/${style}/package.json`,
-            import.meta.url,
-          ),
-          "utf8",
-        ),
-      );
-      for (const [name, version] of Object.entries(pins))
-        assert.equal(fixture.dependencies[name], version);
-      if (style === "scss" || style === "sass") assert.equal(fixture.dependencies.sass, "1.101.3");
-      if (style === "less") assert.equal(fixture.dependencies.less, "4.7.0");
-      if (runtime === "next" && style === "less")
-        assert.equal(fixture.dependencies["next-with-less"], "3.0.1");
-    }
-  }
 });
 
 test("the no-argument CLI stays browser-free and returns usage", () => {

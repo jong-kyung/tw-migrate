@@ -15,7 +15,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
-import { parseHtmlSource } from "./html.js";
+import { parseHtmlSource, utf8OffsetMap } from "./html.js";
 import { planBatchMigration, staticImports, validateCss } from "./native.js";
 import { analyzeVueSource, loadProjectVueCompiler, verifyVueSource } from "./vue.js";
 import {
@@ -48,6 +48,7 @@ const STYLESHEET_SYNTAX = new Map([
 ]);
 const IGNORED_DIRECTORIES = new Set([".git", ".next", "build", "dist", "node_modules"]);
 const RECOVERABLE_INPUT_ERROR = "TW_MIGRATE_RECOVERABLE_INPUT:";
+const compareStrings = (left, right) => (left > right) - (left < right);
 
 export async function migrate(options = {}) {
   if ("cssFile" in options) {
@@ -70,7 +71,7 @@ export async function migrate(options = {}) {
   );
   if (leftovers.length > 0) {
     const listed = leftovers
-      .sort()
+      .sort(compareStrings)
       .map((path) => `  ${normalizedRelativePath(cwd, path)}`)
       .join("\n");
     throw new Error(
@@ -180,7 +181,7 @@ export async function migrate(options = {}) {
       ...rule,
       file: normalizedRelativePath(cwd, rule.file),
     })),
-    candidates: [...candidates].sort(),
+    candidates: [...candidates].sort(compareStrings),
     warnings: warnings.map((warning) => ({
       ...warning,
       file: normalizedRelativePath(cwd, warning.file),
@@ -228,8 +229,8 @@ async function resolveScope(options) {
     if (path && !allPaths.includes(path)) allPaths.push(path);
     if (path && !scannedPaths.includes(path)) scannedPaths.push(path);
   }
-  allPaths.sort();
-  scannedPaths.sort();
+  allPaths.sort(compareStrings);
+  scannedPaths.sort(compareStrings);
   const targetable = new Set(allPaths);
 
   const allPackageRoots = await discoverPackageRoots(workspaceRoot, allPaths);
@@ -239,7 +240,7 @@ async function resolveScope(options) {
     const owner = await findPackageRoot(dirname(path));
     if (!allPackageRoots.includes(owner)) allPackageRoots.push(owner);
   }
-  allPackageRoots.sort();
+  allPackageRoots.sort(compareStrings);
   const pathOwners = new Map(
     scannedPaths.map((path) => [path, owningPackage(path, allPackageRoots)]),
   );
@@ -397,7 +398,7 @@ async function planPackage(context, packageRoot) {
   try {
     stylesheets = [];
     const compilerDependents = new Map();
-    for (const stylePath of targets.sort()) {
+    for (const stylePath of targets.sort(compareStrings)) {
       await rejectSymlinkTarget(stylePath, packageRoot);
       const isPartial = isSassPath(stylePath) && basename(stylePath).startsWith("_");
       const stylesheet = {
@@ -440,7 +441,9 @@ async function planPackage(context, packageRoot) {
       const dependents = compilerDependents.get(stylesheet.cssPath) ?? [];
       if (dependents.length === 0) continue;
       stylesheet.isPartial = true;
-      stylesheet.cssDependents = [...new Set([...stylesheet.cssDependents, ...dependents])].sort();
+      stylesheet.cssDependents = [...new Set([...stylesheet.cssDependents, ...dependents])].sort(
+        compareStrings,
+      );
     }
   } catch (error) {
     if (!options.force || isIntegrityError(error)) throw error;
@@ -599,7 +602,7 @@ function replanCompileFailures(tailwind, request, initialPlan) {
     const cssPath = request.stylesheets[index].cssPath;
     for (const { authoredSpan, candidates } of blocked.values()) {
       const failed = [...candidates]
-        .sort()
+        .sort(compareStrings)
         .map((candidate) => `\`${candidate}\``)
         .join(", ");
       plan.warnings.push({
@@ -742,7 +745,7 @@ async function discoverFiles(root, useGit) {
       }
     }),
   );
-  return existing.filter(Boolean).sort();
+  return existing.filter(Boolean).sort(compareStrings);
 }
 
 async function discoverPackageRoots(workspaceRoot, paths) {
@@ -753,7 +756,7 @@ async function discoverPackageRoots(workspaceRoot, paths) {
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
-  return [...new Set(roots)].sort();
+  return [...new Set(roots)].sort(compareStrings);
 }
 
 function owningPackage(path, packageRoots) {
@@ -1841,12 +1844,22 @@ function cssImports(source) {
       imports.push({
         href: match[1] ?? match[2],
         media: match[3].trim(),
-        start: utf8Offset(source, index),
-        end: utf8Offset(source, end + 1),
+        start: index,
+        end: end + 1,
       });
     index = end;
   }
-  return imports;
+  // Offsets are collected as string indices and converted together, so the
+  // source prefix is scanned once rather than twice per import.
+  const offsets = utf8OffsetMap(
+    source,
+    imports.flatMap((imported) => [imported.start, imported.end]),
+  );
+  return imports.map((imported) => ({
+    ...imported,
+    start: offsets.get(imported.start),
+    end: offsets.get(imported.end),
+  }));
 }
 
 function localHtmlReference(packageRoot, base, reference) {
@@ -1987,10 +2000,6 @@ function maskCssComments(source) {
   return source.replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\r\n]/g, " "));
 }
 
-function utf8Offset(source, index) {
-  return Buffer.byteLength(source.slice(0, index));
-}
-
 function indexStylesheetDependents(styleSources) {
   const dependents = new Map();
   for (const [path, rawSource] of styleSources) {
@@ -2018,7 +2027,8 @@ function indexStylesheetDependents(styleSources) {
       }
     }
   }
-  for (const [target, paths] of dependents) dependents.set(target, [...new Set(paths)].sort());
+  for (const [target, paths] of dependents)
+    dependents.set(target, [...new Set(paths)].sort(compareStrings));
   return dependents;
 }
 
@@ -2026,7 +2036,7 @@ function addStyleDependent(styleDependents, target, importer) {
   const paths = styleDependents.get(target) ?? [];
   if (paths.includes(importer)) return;
   paths.push(importer);
-  paths.sort();
+  paths.sort(compareStrings);
   styleDependents.set(target, paths);
 }
 

@@ -61,22 +61,8 @@ const R_ANCESTRY: &str = "unproven-ancestry";
 const R_NO_USAGES: &str = "no-usages";
 const R_EXPORTED: &str = "exported-render-sites-unknown";
 
-/// Prove `ancestor relation target` for every usage of `target` under the
-/// closed-world assumption: `files` is the whole scanned project, so every
-/// render site of every component can be enumerated within it.
-#[cfg(test)]
-pub(crate) fn prove(
-    files: &[(&str, &str)],
-    css_path: &str,
-    ancestor: &SelectorKey,
-    relation: Relation,
-    target: &SelectorKey,
-) -> ProofOutcome {
-    prove_in_world(files, css_path, ancestor, relation, target, true)
-}
-
-/// Like [`prove`], but `closed_world: false` marks exported components as
-/// having unknown render sites (`exported-render-sites-unknown`).
+/// With `closed_world: false`, exported components have unknown render sites
+/// (`exported-render-sites-unknown`).
 #[cfg(test)]
 pub(crate) fn prove_in_world(
     files: &[(&str, &str)],
@@ -1730,7 +1716,7 @@ mod tests {
         ancestor: &str,
         target: &str,
     ) -> ProofOutcome {
-        prove(files, CSS, &class(ancestor), relation, &class(target))
+        prove_in_world(files, CSS, &class(ancestor), relation, &class(target), true)
     }
 
     #[test]

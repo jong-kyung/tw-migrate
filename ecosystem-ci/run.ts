@@ -37,13 +37,13 @@ function exactKeys(value: unknown, allowed: string[], required: string[], label:
   return record;
 }
 
-function positiveInteger(value: unknown): boolean {
-  return Number.isInteger(value) && (value as number) >= 1;
-}
-
 function nonempty(value: unknown, label: string): void {
   if (typeof value !== "string" || value.length === 0)
     throw new Error(`${label} must be a non-empty string`);
+}
+
+function positiveInteger(value: unknown): boolean {
+  return Number.isInteger(value) && (value as number) >= 1;
 }
 
 function validateSelector(value: unknown, label: string): void {
@@ -124,21 +124,6 @@ function validateProbe(value: unknown, label: string): void {
   if ("action" in probe) validateAction(probe.action, `${label}.action`);
 }
 
-function validateRelativePath(value: unknown, label: string): void {
-  nonempty(value, label);
-  const path = value as string;
-  if (posix.isAbsolute(path) || win32.isAbsolute(path) || path.split(/[\\/]/).includes("..")) {
-    throw new Error(`${label} must be a relative path without traversal`);
-  }
-}
-
-function validateSource(value: unknown, label: string): void {
-  const source = exactKeys(value, ["path", "before", "after"], ["path", "before", "after"], label);
-  validateRelativePath(source.path, `${label}.path`);
-  nonempty(source.before, `${label}.before`);
-  nonempty(source.after, `${label}.after`);
-}
-
 function validateProbes(value: unknown, label: string, controlled: boolean): void {
   const probes = object(value, label);
   if (controlled) {
@@ -177,6 +162,21 @@ function validateProbes(value: unknown, label: string, controlled: boolean): voi
   if (probe("responsive-below").viewport.width >= probe("responsive-above").viewport.width) {
     throw new Error(`${label}.responsive-below viewport must be narrower than responsive-above`);
   }
+}
+
+function validateRelativePath(value: unknown, label: string): void {
+  nonempty(value, label);
+  const path = value as string;
+  if (posix.isAbsolute(path) || win32.isAbsolute(path) || path.split(/[\\/]/).includes("..")) {
+    throw new Error(`${label} must be a relative path without traversal`);
+  }
+}
+
+function validateSource(value: unknown, label: string): void {
+  const source = exactKeys(value, ["path", "before", "after"], ["path", "before", "after"], label);
+  validateRelativePath(source.path, `${label}.path`);
+  nonempty(source.before, `${label}.before`);
+  nonempty(source.after, `${label}.after`);
 }
 
 function validateCommand(command: unknown, label: string): void {
@@ -390,9 +390,8 @@ export function validateManifest(value: unknown): Manifest {
   return { projects } as Manifest;
 }
 
-export async function loadManifest(
-  url: URL = new URL("./projects.json", import.meta.url),
-): Promise<Manifest> {
+export async function loadManifest(): Promise<Manifest> {
+  const url = new URL("./projects.json", import.meta.url);
   return validateManifest(JSON.parse(await readFile(url, "utf8")));
 }
 

@@ -6,16 +6,15 @@ pub(crate) fn exact_theme_token(
     theme_tokens: &HashMap<String, String>,
 ) -> Option<String> {
     let token_prefix = format!("{namespace}-");
-    let mut named = theme_tokens
+    if let Some(name) = theme_tokens
         .iter()
         .filter(|(name, token_value)| {
             name.starts_with(&token_prefix) && token_value.trim() == value
         })
-        .map(|(name, _)| name[token_prefix.len()..].to_string())
-        .collect::<Vec<_>>();
-    named.sort();
-    if let Some(name) = named.into_iter().next() {
-        return Some(name);
+        .map(|(name, _)| &name[token_prefix.len()..])
+        .min()
+    {
+        return Some(name.to_string());
     }
 
     if namespace == "spacing"
