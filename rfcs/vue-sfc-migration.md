@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (Phases 1–3 implemented)
+Accepted (Phases 1–4 implemented)
 
 ## Summary
 
@@ -14,7 +14,8 @@ single-file components (`.vue`), where one file is both a stylesheet source
 Support ships in staged phases. Phases 1–3 cover literal `class` attributes,
 static string and interpolation-free template `:class` bindings, inline scoped
 CSS/SCSS/Sass/Less, static external stylesheet edges, and direct `<script setup>`
-component relationships. A later phase adds `<style module>`/`$style`.
+component relationships. Phase 4 adds `<style module>`/`$style` member
+bindings.
 
 SFC parsing uses the official `@vue/compiler-sfc`, resolved from the target
 project like Sass and Less. The unofficial Rust toolchain `vize` was evaluated
@@ -261,9 +262,41 @@ and a second run produces no diff.
   `unscoped-style-block` until co-loading can be proven.
 - `<style scoped lang="scss|sass|less">` compiles with the target project's
   compiler and maps generated rules back to block-relative authored offsets.
-- `<style module>` retains whole with `unsupported-sfc-block` until Phase 4.
-- `<style src="…">` contributes a stylesheet consumer edge; module forms
-  retain until Phase 4.
+- `<style module>` migrates against proven direct `$style.x` member bindings
+  (`:class="$style.x"` on a plain element): the binding is replaced by (or
+  merged into) a static `class` attribute and the emptied block is removed.
+  Any other `$style` or `useCssModule` appearance — template expressions,
+  interpolations, dynamic directive arguments, script text, or an unreadable
+  script — retains the whole module with `unsupported-css-module-reference`,
+  as does an unsupported sibling targeting the default binding (bare
+  `<style module>` and `<style module="$style">` both feed the same `$style`
+  object). Other named modules (`<style module="cls">`) retain with
+  `unsupported-sfc-block`.
+  Module class and id names are localized at build time, so cascade-shadow
+  checks apply only to their global (type/attribute/`:global`) selector
+  surface — but unknown classes can still land on a binding element and
+  compete for the same properties, so a dynamic template surface retains the
+  module with `dynamic-template-class` and an open single-root caller surface
+  retains it with `open-root-fallthrough`, mirroring the scoped gates.
+  (`component-class-target` does not apply: a child component's root can
+  never carry the hashed class, because a `$style` binding on a component tag
+  is already an opaque surface.) A binding whose element carries an
+  uneditable literal `class` attribute is never rewritten into a duplicate
+  attribute; the module is retained instead. A direct member that names a
+  class no module rule defines retains the whole module: deleting sibling
+  rules could empty the block and drop the runtime `$style` injection the
+  remaining access depends on. A rule whose class shares a binding with a
+  retained sibling (compile failure, batch conflict) also retains — the
+  retained rule stays unlayered on the same element, so converting the
+  sibling would flip the cascade. The same gate covers a resolved caller's
+  fallthrough classes: they land on the module-bound child root, so package
+  CSS targeting them retains the module rule. The module entry plans before
+  the scoped entry, and a binding that survives module planning is an opaque
+  cascade surface for scoped planning — scoped rules matching that element
+  retain with `shadowed-scoped-rule`, because the retained module rule
+  competes unlayered with a replacement utility.
+- `<style src="…">` contributes a stylesheet consumer edge; module `src`
+  forms retain.
 - `<script>` contents and languages do not participate in template closure.
   Inline text is carried only by the existing CSS Module deletion guard;
   runtime class mutation remains outside the supported scope.
@@ -318,10 +351,14 @@ mirroring a missing Sass compiler.
   variable, and helper-call forms opaque with `dynamic-template-class`, matching
   React's current static `className` support boundary.
 
-### Phase 4: CSS Modules (`<style module>` / `$style`)
+### Phase 4: CSS Modules (`<style module>` / `$style`) (implemented)
 
-- Prove `$style.x` usage across template and script, mirroring the existing
-  JS CSS Modules flow.
+- Prove direct `$style.x` member bindings in the template and rewrite them to
+  static `class` attributes, mirroring the existing JS CSS Modules flow.
+- Retain the whole module when `$style` or `useCssModule` appears outside a
+  proven site, and retain named `<style module="…">` blocks.
+- Plan module blocks as a second same-path stylesheet entry so scoped and
+  module blocks in one SFC migrate together.
 
 Each phase merges separately. Public documentation describes only released
 phases.

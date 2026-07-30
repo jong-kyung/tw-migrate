@@ -147,11 +147,13 @@ export function assertExpectedChangedFiles(
 }
 
 // Withholding authored styles must keep a Vue SFC renderable: only the style
-// block contents are emptied there, while plain stylesheet sources are
-// emptied whole as before.
+// block contents are replaced there, while plain stylesheet sources are
+// emptied whole as before. The comment keeps each block non-empty because
+// @vue/compiler-sfc drops empty blocks from the descriptor, which would strip
+// the `$style` injection a `<style module>` template binding depends on.
 export function withheldStyles(project: ControlledProject, source: string): string {
   if (project.runtime !== "vue-vite") return "";
-  return source.replace(/(<style\b[^>]*>)[\s\S]*?(<\/style>)/g, "$1$2");
+  return source.replace(/(<style\b[^>]*>)[\s\S]*?(<\/style>)/g, "$1/* withheld */$2");
 }
 
 export function assertMigrationContract({

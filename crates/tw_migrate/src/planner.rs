@@ -15,7 +15,10 @@ use crate::{
     css_plan::{
         ParseOptions, ParsedCss, RulePlan, SelectorKey, index_shadow_selectors, parse_css_rules,
     },
-    html_rewrite::{candidates_fit_attribute, empty_source_plan, plan_html_file},
+    html_rewrite::{
+        candidates_fit_attribute, empty_source_plan, plan_html_file, plan_vue_module_file,
+        rebase_span,
+    },
     js_rewrite::{
         SourcePlan, opaque_reference_plan, plan_batch_source_file, plan_source_file, validate_js,
     },
@@ -103,59 +106,29 @@ fn mask_vue_source(source: &str, blocks: &[VueBlock]) -> Result<String, String> 
 /// Map a caller-supplied Vue retention code onto the static warning code and
 /// per-rule message used when an open template surface retains a scoped rule.
 fn rebase_vue_blocks(
-    original: &str,
-    current: &str,
+    prior_edits: &[Vec<Edit>],
     blocks: &mut [VueBlock],
 ) -> Result<(), String> {
-    if original == current {
-        return Ok(());
-    }
-    let mut prefix = original
-        .bytes()
-        .zip(current.bytes())
-        .take_while(|(left, right)| left == right)
-        .count();
-    while !original.is_char_boundary(prefix) || !current.is_char_boundary(prefix) {
-        prefix -= 1;
-    }
-    let max_suffix = original.len().min(current.len()) - prefix;
-    let mut suffix = original
-        .bytes()
-        .rev()
-        .zip(current.bytes().rev())
-        .take(max_suffix)
-        .take_while(|(left, right)| left == right)
-        .count();
-    while !original.is_char_boundary(original.len() - suffix)
-        || !current.is_char_boundary(current.len() - suffix)
-    {
-        suffix -= 1;
-    }
-    let original_change_end = original.len() - suffix;
-    let delta = current.len() as isize - original.len() as isize;
-    for block in blocks {
-        if block.outer_end <= prefix {
-            continue;
+    // Earlier same-path entries edit template attributes and their own
+    // blocks; those ranges are disjoint from this entry's blocks, so each
+    // boundary shifts exactly through the applied edit rounds. An edit
+    // reaching inside one of these blocks is a genuine conflict.
+    for round in prior_edits {
+        let mut round = round.clone();
+        round.sort_by_key(|edit| (edit.start, edit.end));
+        for block in blocks.iter_mut() {
+            if round.iter().any(|edit| {
+                edit.start < block.outer_end
+                    && (edit.end > block.outer_start
+                        || (edit.start == edit.end && edit.start > block.outer_start))
+            }) {
+                return Err("A Vue style block changed during batch planning".to_string());
+            }
+            block.outer_start = shift_offset(&round, block.outer_start);
+            block.outer_end = shift_offset(&round, block.outer_end);
+            block.content_start = shift_offset(&round, block.content_start);
+            block.content_end = shift_offset(&round, block.content_end);
         }
-        if block.outer_start < original_change_end {
-            return Err("A Vue style block changed during batch planning".to_string());
-        }
-        block.outer_start = block
-            .outer_start
-            .checked_add_signed(delta)
-            .ok_or_else(|| "Invalid Vue style block span".to_string())?;
-        block.outer_end = block
-            .outer_end
-            .checked_add_signed(delta)
-            .ok_or_else(|| "Invalid Vue style block span".to_string())?;
-        block.content_start = block
-            .content_start
-            .checked_add_signed(delta)
-            .ok_or_else(|| "Invalid Vue style block span".to_string())?;
-        block.content_end = block
-            .content_end
-            .checked_add_signed(delta)
-            .ok_or_else(|| "Invalid Vue style block span".to_string())?;
     }
     Ok(())
 }
@@ -222,6 +195,7 @@ fn rule_site_reachable(
     rule: &RulePlan,
     file: &SourceFile,
     css_path: &str,
+    vue_module: bool,
     reachable: impl Fn(&[&str], &HtmlElement) -> bool,
 ) -> bool {
     file.html_elements
@@ -230,14 +204,22 @@ fn rule_site_reachable(
         .any(|element| {
             let classes = element_classes(element);
             let ids = element_ids(element);
-            let site_matches_rule = rule
-                .related_classes
-                .iter()
-                .any(|class| classes.contains(&class.as_str()))
-                || matches!(
-                    &rule.key,
-                    Some(SelectorKey::Id(name)) if ids.contains(&name.as_str())
-                );
+            // Module class names are hashed at runtime, so a module rule
+            // reaches a site only through its proven `$style` binding.
+            let site_matches_rule = if vue_module {
+                element
+                    .module_binding
+                    .as_ref()
+                    .is_some_and(|binding| rule.related_classes.contains(&binding.name))
+            } else {
+                rule.related_classes
+                    .iter()
+                    .any(|class| classes.contains(&class.as_str()))
+                    || matches!(
+                        &rule.key,
+                        Some(SelectorKey::Id(name)) if ids.contains(&name.as_str())
+                    )
+            };
             site_matches_rule && reachable(&classes, element)
         })
 }
@@ -250,6 +232,7 @@ fn stamp_in_file_shadow(
     rules: &mut [RulePlan],
     vue_files: &[&SourceFile],
     css_path: &str,
+    vue_module: bool,
     additionally_retained: &HashSet<RuleId>,
 ) {
     loop {
@@ -277,7 +260,7 @@ fn stamp_in_file_shadow(
             let shadowed = retained_at_rule_unverifiable
                 || retained.unverifiable
                 || vue_files.iter().any(|file| {
-                    rule_site_reachable(rule, file, css_path, |classes, element| {
+                    rule_site_reachable(rule, file, css_path, vue_module, |classes, element| {
                         classes
                             .iter()
                             .any(|class| retained.classes.contains(*class))
@@ -287,6 +270,13 @@ fn stamp_in_file_shadow(
                             || element_ids(element)
                                 .iter()
                                 .any(|id| retained.ids.contains(*id))
+                            // A module site carries its retained sibling's
+                            // hashed class through the binding, not through
+                            // a literal class.
+                            || (vue_module
+                                && element.module_binding.as_ref().is_some_and(|binding| {
+                                    retained.classes.contains(binding.name.as_str())
+                                }))
                     })
                 });
             if shadowed {
@@ -369,6 +359,10 @@ struct PlanRequest {
     /// the whole SFC source.
     #[serde(default)]
     vue_blocks: Vec<VueBlock>,
+    /// True for the `<style module>` entry of an SFC: consumers match proven
+    /// `$style` binding sites instead of literal classes.
+    #[serde(default)]
+    vue_module: bool,
     /// Present only for Vue SFC stylesheets with an open template surface:
     /// the retention warning code every otherwise-unwarned rule receives.
     #[serde(default)]
@@ -431,6 +425,8 @@ struct BatchStylesheet {
     #[serde(default)]
     vue_blocks: Vec<VueBlock>,
     #[serde(default)]
+    vue_module: bool,
+    #[serde(default)]
     vue_retention: Option<String>,
     #[serde(default)]
     vue_unscoped: bool,
@@ -484,10 +480,22 @@ pub(crate) struct HtmlElement {
     /// Element tag name, provided by the Vue lowering for shadow matching.
     #[serde(default)]
     pub(crate) tag: Option<String>,
+    /// A proven `:class="$style.x"` site: the module class name and the full
+    /// attribute span to remove when the reference is rewritten.
+    #[serde(default)]
+    pub(crate) module_binding: Option<ModuleBinding>,
     /// Optional per-element stylesheet reachability used by cross-file Vue
     /// component proofs. Empty means every file-level HTML context applies.
     #[serde(default)]
     pub(crate) css_paths: Vec<String>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ModuleBinding {
+    pub(crate) name: String,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
 }
 
 #[derive(Clone, Deserialize)]
@@ -555,6 +563,11 @@ struct RuleReport {
     /// Authored-domain rule span for anchoring caller-side warnings, or
     /// (0, 0) when the rule has no unique authored mapping.
     authored_span: RuleId,
+    /// Index of the owning batch stylesheet entry. Same-path entries (a Vue
+    /// SFC's scoped and module blocks) reuse local rule spans, so compile
+    /// failures must be attributed per entry, not per path; the JS caller
+    /// strips this before the public report.
+    stylesheet: usize,
 }
 
 #[derive(Serialize)]
@@ -671,6 +684,8 @@ struct RuleOrigin {
 struct CandidateMaps {
     candidates: HashMap<SelectorKey, Vec<String>>,
     origins: HashMap<(SelectorKey, String), Vec<RuleOrigin>>,
+    rule_selectors: HashMap<RuleId, String>,
+    retained_rules: HashSet<RuleId>,
     /// Multi-compound module rules whose relationship proof failed, with the
     /// retained-rule message.
     unproven: HashMap<RuleId, String>,
@@ -792,15 +807,18 @@ struct BatchMatch {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn plan_consumer_file(
     file: &SourceFile,
     css_path: &str,
     is_module: bool,
     candidates: &HashMap<SelectorKey, Vec<String>>,
     preserved_module_classes: &BTreeSet<String>,
+    module_rule_classes: Option<&BTreeSet<String>>,
     utility_prefix: Option<&str>,
     batch_mode: bool,
     vue_unscoped: bool,
+    vue_module: bool,
 ) -> Result<SourcePlan, String> {
     // Vue scoped styles never apply outside their own SFC, and a `.vue` file
     // is not parseable JS: the only live pairing is an SFC consuming its own
@@ -808,6 +826,23 @@ fn plan_consumer_file(
     // stylesheet is an opaque reference that can only retain a module.
     let stylesheet_is_vue = is_vue_path(css_path);
     let file_is_vue = is_vue_path(&file.path);
+    if stylesheet_is_vue && vue_module {
+        if file_is_vue
+            && file
+                .html_stylesheets
+                .iter()
+                .any(|context| context.analyzable && context.css_path == css_path)
+        {
+            return Ok(plan_vue_module_file(
+                file,
+                css_path,
+                candidates,
+                module_rule_classes,
+                utility_prefix,
+            ));
+        }
+        return Ok(empty_source_plan());
+    }
     if stylesheet_is_vue && vue_unscoped {
         if file_is_vue || Path::new(&file.path).extension().is_some_and(|ext| ext == "html") {
             return Ok(plan_html_file(file, css_path, candidates, utility_prefix));
@@ -868,7 +903,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
     // Relationship proofs run here against the request's immutable file set,
     // so every stylesheet is proven on the same snapshot regardless of the
     // edits earlier stylesheets make during the main pass.
-    let mut unproven_maps = Vec::new();
+    let mut candidate_maps = Vec::new();
     for (index, stylesheet) in request.stylesheets.iter().enumerate() {
         let plan_request = batch_stylesheet_request(&request, stylesheet, request.files.clone());
         let externally_blocked = stylesheet
@@ -876,8 +911,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
             .iter()
             .copied()
             .collect::<HashSet<_>>();
-        let candidate_maps = candidate_map_for_request(&plan_request, &externally_blocked)?;
-        unproven_maps.push(candidate_maps.unproven);
+        let maps = candidate_map_for_request(&plan_request, &externally_blocked)?;
         for file in request.files.iter().filter(|file| file.writable) {
             let result = plan_consumer_file(
                 file,
@@ -885,14 +919,18 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
                 stylesheet
                     .is_module
                     .unwrap_or_else(|| is_stylesheet_module(&stylesheet.css_path)),
-                &candidate_maps.candidates,
+                &maps.candidates,
                 &BTreeSet::new(),
+                // The conflict pass must keep collecting matches; the main
+                // pass applies the unresolved-member retention itself.
+                None,
                 request.utility_prefix.as_deref(),
                 true,
                 stylesheet.vue_unscoped,
+                stylesheet.vue_module,
             )?;
             for matched in result.matches {
-                if let Some(origins) = candidate_maps
+                if let Some(origins) = maps
                     .origins
                     .get(&(matched.key, matched.origin_candidate.clone()))
                 {
@@ -908,6 +946,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
                 }
             }
         }
+        candidate_maps.push(maps);
     }
 
     let mut blocked_rules: Vec<RuleConflicts> = vec![HashMap::new(); request.stylesheets.len()];
@@ -939,6 +978,53 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
                 }
             }
         }
+    }
+
+    // A retained scoped or unscoped rule in the same SFC remains unlayered.
+    // Feed only those surviving selectors into the module entry's shadow gate
+    // so fully migratable sibling and module blocks can still convert together.
+    let mut co_located_retained_css: HashMap<String, Vec<String>> = HashMap::new();
+    for (index, stylesheet) in request.stylesheets.iter().enumerate() {
+        if stylesheet.vue_module || stylesheet.vue_blocks.is_empty() {
+            continue;
+        }
+        // The immutable batch snapshot still carries the module binding, which
+        // makes scoped rules look shadowed before the module entry gets its
+        // chance to remove it. Hide that one circular surface while deciding
+        // which scoped rules survive independently.
+        let mut files = request.files.clone();
+        for file in files
+            .iter_mut()
+            .filter(|file| file.path == stylesheet.css_path)
+        {
+            for element in &mut file.html_elements {
+                element.module_binding = None;
+            }
+        }
+        let plan_request = batch_stylesheet_request(&request, stylesheet, files);
+        let externally_blocked = stylesheet
+            .blocked_rules
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>();
+        let maps = candidate_map_for_request(&plan_request, &externally_blocked)?;
+        let mut retained = maps.retained_rules;
+        retained.extend(blocked_rules[index].keys().copied());
+        if stylesheet.vue_retention.is_some() {
+            retained.extend(maps.rule_selectors.keys().copied());
+        }
+        let css = co_located_retained_css
+            .entry(stylesheet.css_path.clone())
+            .or_default();
+        css.extend(retained.into_iter().filter_map(|rule| {
+            maps.rule_selectors
+                .get(&rule)
+                .map(|selector| format!("{selector} {{}}"))
+        }));
+    }
+    for css in co_located_retained_css.values_mut() {
+        css.sort();
+        css.dedup();
     }
 
     let mut originals = HashMap::new();
@@ -981,14 +1067,21 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
             file.prior_edits = applied_edits.get(&file.path).cloned().unwrap_or_default();
         }
         let mut stylesheet_request = batch_stylesheet_request(&request, stylesheet, files);
+        if stylesheet.vue_module
+            && let Some(css) = co_located_retained_css.get(&stylesheet.css_path)
+        {
+            stylesheet_request.vue_shadow_css.extend(css.iter().cloned());
+        }
         stylesheet_request.css_source = current
             .get(&stylesheet.css_path)
             .cloned()
             .unwrap_or_else(|| stylesheet.css_source.clone());
         if !stylesheet_request.vue_blocks.is_empty() {
             rebase_vue_blocks(
-                &stylesheet.css_source,
-                &stylesheet_request.css_source,
+                applied_edits
+                    .get(&stylesheet.css_path)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
                 &mut stylesheet_request.vue_blocks,
             )?;
         }
@@ -1005,7 +1098,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
             stylesheet_request,
             &blocked_rules[index],
             &externally_blocked,
-            &unproven_maps[index],
+            &candidate_maps[index].unproven,
             true,
         )?;
 
@@ -1024,7 +1117,10 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
         candidates.extend(response.candidates);
         converted_rules += response.converted_rules;
         retained_rules += response.retained_rules;
-        rules.extend(response.rules);
+        rules.extend(response.rules.into_iter().map(|mut rule| {
+            rule.stylesheet = index;
+            rule
+        }));
         warnings.extend(response.warnings);
     }
 
@@ -1081,6 +1177,7 @@ fn batch_stylesheet_request(
         theme_tokens: batch.theme_tokens.clone(),
         css_dependents: stylesheet.css_dependents.clone(),
         vue_blocks: stylesheet.vue_blocks.clone(),
+        vue_module: stylesheet.vue_module,
         vue_retention: stylesheet.vue_retention.clone(),
         vue_unscoped: stylesheet.vue_unscoped,
         vue_shadow_css: stylesheet.vue_shadow_css.clone(),
@@ -1187,12 +1284,18 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
             // classes directly, or can match one of its template sites
             // through the site's tag, id, or co-occurring classes.
             let shadowed = unverifiable
-                || rule
-                    .related_classes
-                    .iter()
-                    .any(|class| shadow.classes.contains(class))
+                || (!request.vue_module
+                    && rule
+                        .related_classes
+                        .iter()
+                        .any(|class| shadow.classes.contains(class)))
                 || vue_files.iter().any(|file| {
-                    rule_site_reachable(rule, file, &request.css_path, |classes, element| {
+                    rule_site_reachable(
+                        rule,
+                        file,
+                        &request.css_path,
+                        request.vue_module,
+                        |classes, element| {
                         classes.iter().any(|class| shadow.classes.contains(*class))
                             || element_tag(element).is_some_and(|tag| {
                                 shadow.types.contains(&tag.to_ascii_lowercase())
@@ -1200,7 +1303,31 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
                             || element_ids(element)
                                 .iter()
                                 .any(|id| shadow.ids.contains(*id))
-                    })
+                            // A module binding the module entry (planned
+                            // first) did not replace stays live: its hashed
+                            // class lands on this site at runtime and the
+                            // retained module rule is an unlayered
+                            // competitor the shadow index cannot name. An
+                            // exact replacement rebases in place, so check
+                            // the current text; a span an edit only touched
+                            // (preserved-binding insertion) rebases to None
+                            // and counts as live conservatively.
+                            || (!request.vue_module
+                                && element.module_binding.as_ref().is_some_and(|binding| {
+                                    match rebase_span(
+                                        binding.start,
+                                        binding.end,
+                                        &file.prior_edits,
+                                    ) {
+                                        None => true,
+                                        Some((start, end)) => file
+                                            .source
+                                            .get(start..end)
+                                            .is_some_and(|text| text.contains("$style")),
+                                    }
+                                }))
+                        },
+                    )
                 });
             if shadowed {
                 rule.warning = Some("shadowed-scoped-rule");
@@ -1210,6 +1337,7 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
             &mut parsed.rules,
             &vue_files,
             &request.css_path,
+            request.vue_module,
             &HashSet::new(),
         );
     }
@@ -1512,6 +1640,22 @@ fn candidate_map_for_request(
         .filter(|rule| rule.warning.is_some())
         .flat_map(|rule| rule.related_classes.iter().cloned())
         .collect::<BTreeSet<_>>();
+    let rule_selectors = rules
+        .iter()
+        .map(|rule| (rule_id(rule), rule.selector.clone()))
+        .collect::<HashMap<_, _>>();
+    let retained_rules = rules
+        .iter()
+        .filter(|rule| {
+            rule.warning.is_some()
+                || externally_blocked.contains(&rule_id(rule))
+                || rule
+                    .related_classes
+                    .iter()
+                    .any(|class| blocked_classes.contains(class))
+        })
+        .map(rule_id)
+        .collect::<HashSet<_>>();
     let mut candidate_map: HashMap<SelectorKey, Vec<String>> = HashMap::new();
     let mut origins: HashMap<(SelectorKey, String), Vec<RuleOrigin>> = HashMap::new();
     for rule in rules {
@@ -1548,6 +1692,8 @@ fn candidate_map_for_request(
     Ok(CandidateMaps {
         candidates: candidate_map,
         origins,
+        rule_selectors,
+        retained_rules,
         unproven,
     })
 }
@@ -1648,6 +1794,7 @@ fn plan_request(
             &mut rules,
             &vue_files,
             &request.css_path,
+            request.vue_module,
             &quote_blocked,
         );
     }
@@ -1700,6 +1847,12 @@ fn plan_request(
         }
     }
 
+    let module_rule_classes = request.vue_module.then(|| {
+        rules
+            .iter()
+            .flat_map(|rule| rule.related_classes.iter().cloned())
+            .collect::<BTreeSet<_>>()
+    });
     for file in &request.files {
         let mut result = plan_consumer_file(
             file,
@@ -1707,9 +1860,11 @@ fn plan_request(
             is_module,
             &candidate_map,
             &preserved_module_classes,
+            module_rule_classes.as_ref(),
             request.utility_prefix.as_deref(),
             batch_mode,
             request.vue_unscoped,
+            request.vue_module,
         )?;
 
         module_references_safe &= result.module_references_safe;
@@ -1720,7 +1875,10 @@ fn plan_request(
         let unsafe_html_link = file.html_stylesheets.iter().any(|context| {
             context.direct && !context.analyzable && context.css_path == request.css_path
         });
-        if is_module && (unsafe_html_link || (direct_html_link && !file.html_references_safe)) {
+        if is_module
+            && !request.vue_module
+            && (unsafe_html_link || (direct_html_link && !file.html_references_safe))
+        {
             module_references_safe = false;
         }
         // Inline scripts are never analyzed, so a script that names one of the
@@ -1730,6 +1888,7 @@ fn plan_request(
             .iter()
             .any(|context| context.css_path == request.css_path);
         if is_module
+            && !request.vue_module
             && any_html_context
             && !file.html_script_text.is_empty()
             && rules.iter().any(|rule| {
@@ -1831,6 +1990,7 @@ fn plan_request(
                 file: request.css_path.clone(),
                 rule_id,
                 authored_span: report_authored_span,
+                stylesheet: 0,
             });
         } else if rule.warning == Some("candidate-compilation-failure") {
             // The caller blocked this rule after a Tailwind compilation
@@ -1843,6 +2003,7 @@ fn plan_request(
                 file: request.css_path.clone(),
                 rule_id,
                 authored_span: report_authored_span,
+                stylesheet: 0,
             });
         } else {
             retained_rules += 1;
@@ -1918,6 +2079,7 @@ fn plan_request(
                 file: request.css_path.clone(),
                 rule_id,
                 authored_span: report_authored_span,
+                stylesheet: 0,
             });
         }
     }
@@ -4057,6 +4219,97 @@ mod tests {
             response["deletedFiles"],
             serde_json::json!(["/project/Button.module.css"])
         );
+    }
+
+    fn vue_module_request(source: &str, bindings: &[(&str, &str)]) -> serde_json::Value {
+        let content_start = source.find("<style module>").unwrap() + "<style module>".len();
+        let content_end = source.find("</style>").unwrap();
+        let elements = bindings
+            .iter()
+            .map(|(tag, name)| {
+                let binding = format!(":class=\"$style.{name}\"");
+                let attr_start = source.find(&binding).unwrap();
+                serde_json::json!({
+                    "tag": tag,
+                    "moduleBinding": {
+                        "name": name,
+                        "start": attr_start - 1,
+                        "end": attr_start + binding.len(),
+                    },
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "stylesheets": [{
+                "cssPath": "/project/Card.vue",
+                "cssSource": source,
+                "isModule": true,
+                "syntax": "css",
+                "vueModule": true,
+                "vueBlocks": [{
+                    "outerStart": source.find("<style module>").unwrap(),
+                    "outerEnd": content_end + "</style>".len(),
+                    "contentStart": content_start,
+                    "contentEnd": content_end,
+                }],
+            }],
+            "files": [{
+                "path": "/project/Card.vue",
+                "source": source,
+                "htmlElements": elements,
+                "htmlStylesheets": [{
+                    "cssPath": "/project/Card.vue",
+                    "variants": [],
+                    "direct": true,
+                    "analyzable": true,
+                }],
+                "htmlReferencesSafe": true,
+            }],
+        })
+    }
+
+    #[test]
+    fn vue_module_bindings_rewrite_and_delete_the_emptied_block() {
+        let source = "<template>\n  <p :class=\"$style.card\">A</p>\n</template>\n<style module>\n.card { padding: 13px; }\n</style>\n";
+        let request = vue_module_request(source, &[("p", "card")]);
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(
+            response["files"][0]["source"],
+            "<template>\n  <p class=\"p-[13px]\">A</p>\n</template>\n"
+        );
+    }
+
+    #[test]
+    fn vue_module_rules_ignore_same_named_corpus_classes_but_respect_site_tags() {
+        let source = "<template>\n  <p :class=\"$style.card\">A</p>\n</template>\n<style module>\n.card { padding: 13px; }\n</style>\n";
+        // A corpus `.card` cannot match the hashed runtime class.
+        let mut hashed = vue_module_request(source, &[("p", "card")]);
+        hashed["stylesheets"][0]["vueShadowCss"] = serde_json::json!([".card { padding: 20px; }"]);
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&hashed.to_string()).unwrap()).unwrap();
+        assert_eq!(response["convertedRules"], 1);
+
+        // A corpus type selector still reaches the binding's element.
+        let mut typed = vue_module_request(source, &[("p", "card")]);
+        typed["stylesheets"][0]["vueShadowCss"] = serde_json::json!(["p { padding: 20px; }"]);
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&typed.to_string()).unwrap()).unwrap();
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["warnings"][0]["code"], "shadowed-scoped-rule");
+    }
+
+    #[test]
+    fn vue_module_rewrites_withhold_quote_bearing_candidates() {
+        let source = "<template>\n  <p :class=\"$style.card\">A</p>\n</template>\n<style module>\n.card { font-family: \"My Font\", sans-serif; }\n</style>\n";
+        let request = vue_module_request(source, &[("p", "card")]);
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        // The double-quoted rewritten attribute cannot hold the candidate.
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 1);
+        assert_eq!(response["files"], serde_json::json!([]));
     }
 
     fn vue_batch_request(

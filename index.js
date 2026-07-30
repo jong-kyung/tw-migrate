@@ -175,7 +175,11 @@ export async function migrate(options = {}) {
     diff,
     convertedRules,
     retainedRules,
-    rules: rules.map((rule) => ({ ...rule, file: normalizedRelativePath(cwd, rule.file) })),
+    // `stylesheet` is internal compile-failure attribution, not public shape.
+    rules: rules.map(({ stylesheet: _, ...rule }) => ({
+      ...rule,
+      file: normalizedRelativePath(cwd, rule.file),
+    })),
     candidates: [...candidates].sort(),
     warnings: warnings.map((warning) => ({
       ...warning,
@@ -558,8 +562,11 @@ function replanCompileFailures(tailwind, request, initialPlan) {
     for (const rule of plan.rules) {
       const failed = rule.candidates.filter((candidate) => failing.includes(candidate));
       if (failed.length === 0) continue;
-      let blocked = blockedByStylesheet.get(rule.file);
-      if (!blocked) blockedByStylesheet.set(rule.file, (blocked = new Map()));
+      // Keyed by entry index, not cssPath: same-path Vue entries (scoped and
+      // module blocks) reuse local rule spans, so path-level attribution
+      // would block unrelated rules in the sibling entry.
+      let blocked = blockedByStylesheet.get(rule.stylesheet);
+      if (!blocked) blockedByStylesheet.set(rule.stylesheet, (blocked = new Map()));
       const key = `${rule.ruleId.start}-${rule.ruleId.end}`;
       let entry = blocked.get(key);
       if (!entry) {
@@ -578,9 +585,9 @@ function replanCompileFailures(tailwind, request, initialPlan) {
       planBatchMigration(
         JSON.stringify({
           ...request,
-          stylesheets: request.stylesheets.map((stylesheet) => ({
+          stylesheets: request.stylesheets.map((stylesheet, index) => ({
             ...stylesheet,
-            blockedRules: [...(blockedByStylesheet.get(stylesheet.cssPath)?.values() ?? [])].map(
+            blockedRules: [...(blockedByStylesheet.get(index)?.values() ?? [])].map(
               (entry) => entry.ruleId,
             ),
           })),
@@ -588,7 +595,8 @@ function replanCompileFailures(tailwind, request, initialPlan) {
       ),
     );
   }
-  for (const [cssPath, blocked] of blockedByStylesheet) {
+  for (const [index, blocked] of blockedByStylesheet) {
+    const cssPath = request.stylesheets[index].cssPath;
     for (const { authoredSpan, candidates } of blocked.values()) {
       const failed = [...candidates]
         .sort()
@@ -1083,7 +1091,9 @@ async function preparePackageVue({
   };
   for (const file of selected) {
     const analysis = analyses.get(file.path);
-    if (!analysis.retained) await compileBlocks(file, analysis.blocks);
+    if (!analysis.retained) {
+      await compileBlocks(file, [...analysis.blocks, ...analysis.moduleBlocks]);
+    }
   }
   const vueGraph = buildVueComponentGraph(ownedVue, sourceFiles, analyses, {
     styleSources,
@@ -1157,7 +1167,10 @@ async function preparePackageVue({
         scoped: true,
       })),
     );
-    vueShadowModuleCss.push(...analysis.shadowModuleCssTexts);
+    vueShadowModuleCss.push(
+      ...analysis.shadowModuleCssTexts,
+      ...analysis.moduleBlocks.map((block) => block.analysisSource ?? block.content),
+    );
   }
 
   const packageIsPrivate =
@@ -1187,7 +1200,7 @@ async function preparePackageVue({
     ownedVue.every((file) => !analyses.get(file.path).retained);
   const elementsByFile = new Map();
   const addElement = (path, element, cssPaths) => {
-    if (!element.classAttribute || cssPaths.length === 0) return;
+    if ((!element.classAttribute && !element.moduleBinding) || cssPaths.length === 0) return;
     const elements = elementsByFile.get(path) ?? [];
     elements.push({ ...element, cssPaths: [...new Set(cssPaths)] });
     elementsByFile.set(path, elements);
@@ -1233,7 +1246,11 @@ async function preparePackageVue({
       }
     }
     const ownContexts = [
-      ...(analysis.blocks.length > 0 || analysis.unscopedBlocks.length > 0 ? [file.path] : []),
+      ...(analysis.blocks.length > 0 ||
+      analysis.unscopedBlocks.length > 0 ||
+      (analysis.moduleBlocks.length > 0 && !analysis.moduleClosureBroken)
+        ? [file.path]
+        : []),
       ...[...importedStyles].filter((path) => !isStylesheetModule(path)),
     ];
     for (const element of analysis.htmlElements) {
@@ -1277,7 +1294,14 @@ async function preparePackageVue({
       ) {
         addElement(parent.path, edge.site, [edge.child]);
         if (childRoots?.length === 1) {
-          const shadowSite = componentRootSite(edge.site, childRoots[0]);
+          // The caller's classes land on the child root, so module planning
+          // must see them next to the root's binding; the read-only class
+          // attribute marks the record as shadow-only (never rewritten, never
+          // counted as a reference).
+          const shadowSite = {
+            ...componentRootSite(edge.site, childRoots[0]),
+            moduleBinding: childRoots[0].moduleBinding,
+          };
           if (shadowSite.classAttribute) {
             shadowSite.classAttribute = { ...shadowSite.classAttribute, writable: false };
             addElement(parent.path, shadowSite, [edge.child]);
@@ -1352,9 +1376,52 @@ async function preparePackageVue({
         });
       }
     }
+    // Module classes are hashed, so corpus CSS cannot target them directly --
+    // but unknown classes can still land on a binding element (a dynamic
+    // surface anywhere in the template, or parent fallthrough onto a single
+    // root) and compete for the same properties, so those surfaces must be
+    // closed exactly like the scoped ones. `componentOpen` is exempt: a child
+    // component's root can never carry the hashed class, because a `$style`
+    // binding on a component tag is already an opaque (dynamic) surface.
+    const moduleRetention = analysis.dynamic
+      ? "dynamic-template-class"
+      : analysis.alwaysRenderedRoots < 2 && callerOpen
+        ? "open-root-fallthrough"
+        : undefined;
+    const migrateModule =
+      analysis.moduleBlocks.length > 0 && !analysis.moduleClosureBroken && !moduleRetention;
+    if (analysis.moduleBlocks.length > 0 && !migrateModule) {
+      const [code, message] = analysis.moduleClosureBroken
+        ? [
+            "unsupported-css-module-reference",
+            "`$style` is referenced outside provable direct member accesses, so the module is retained.",
+          ]
+        : moduleRetention === "dynamic-template-class"
+          ? [
+              "dynamic-template-class",
+              "A dynamic class binding makes the template's class set unprovable, so the module is retained.",
+            ]
+          : [
+              "open-root-fallthrough",
+              "A parent component can merge classes onto the single root element, so the module is retained.",
+            ];
+      for (const block of analysis.moduleBlocks) {
+        warnings.push({
+          code,
+          file: file.path,
+          start: block.contentStart,
+          end: block.contentEnd,
+          message,
+        });
+      }
+    }
+    // Module blocks were already compiled alongside the scoped blocks for
+    // the shadow corpus; recompiling here would double the preprocessor work.
     const vueBlocks = migrateUnscoped ? analysis.unscopedBlocks : analysis.blocks;
-    if (vueBlocks.length === 0) continue;
+    if (vueBlocks.length === 0 && !migrateModule) continue;
     const vueRetention = migrateUnscoped ? undefined : retention;
+    // Same-file scoped blocks stay out of the general corpus; the batch planner
+    // adds back only their retained selectors when it plans the module entry.
     const shadowCss = vueShadowCss
       .filter(
         (entry) =>
@@ -1362,19 +1429,41 @@ async function preparePackageVue({
           (!entry.scoped && !(migrateUnscoped && entry.migratingUnscoped)),
       )
       .map((entry) => entry.source);
-    stylesheets.push({
-      cssPath: file.path,
-      cssSource: file.source,
-      cssModuleId: normalizedRelativePath(packageRoot, file.path),
-      syntax: "css",
-      isModule: !vueRetention,
-      vueBlocks,
-      vueRetention,
-      vueUnscoped: migrateUnscoped,
-      vueShadowCss: vueRetention ? undefined : shadowCss,
-      vueShadowModuleCss: vueRetention ? undefined : vueShadowModuleCss,
-      vueShadowUnverifiable: vueRetention ? undefined : vueShadowUnverifiable,
-    });
+    if (migrateModule) {
+      // Module classes are hashed, so this entry is always a closed world;
+      // its own block text remains in the module shadow channel, which can
+      // only over-retain. It plans before the scoped entry so scoped
+      // planning can see which `$style` bindings survived: a live binding
+      // is an opaque cascade surface (its retained module rule competes
+      // unlayered with a replacement utility).
+      stylesheets.push({
+        cssPath: file.path,
+        cssSource: file.source,
+        cssModuleId: normalizedRelativePath(packageRoot, file.path),
+        syntax: "css",
+        isModule: true,
+        vueBlocks: analysis.moduleBlocks,
+        vueModule: true,
+        vueShadowCss: shadowCss,
+        vueShadowModuleCss,
+        vueShadowUnverifiable,
+      });
+    }
+    if (vueBlocks.length > 0) {
+      stylesheets.push({
+        cssPath: file.path,
+        cssSource: file.source,
+        cssModuleId: normalizedRelativePath(packageRoot, file.path),
+        syntax: "css",
+        isModule: !vueRetention,
+        vueBlocks,
+        vueRetention,
+        vueUnscoped: migrateUnscoped,
+        vueShadowCss: vueRetention ? undefined : shadowCss,
+        vueShadowModuleCss: vueRetention ? undefined : vueShadowModuleCss,
+        vueShadowUnverifiable: vueRetention ? undefined : vueShadowUnverifiable,
+      });
+    }
   }
 
   for (const file of ownedVue) {

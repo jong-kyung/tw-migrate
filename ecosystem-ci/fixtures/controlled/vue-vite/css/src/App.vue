@@ -2,6 +2,7 @@
   <article class="card" data-probe="card" data-identity="card">Card</article>
   <button class="action" data-identity="action">Toggle details</button>
   <section class="responsive" data-probe="responsive-layout" data-identity="responsive">Responsive</section>
+  <aside :class="$style.panel" data-probe="module-panel" data-identity="panel">Panel</aside>
 </template>
 <style scoped>
 .card {
@@ -27,5 +28,11 @@
 }
 .retained {
   display: block;
+}
+</style>
+<style module>
+.panel {
+  margin: 6px;
+  border-left: 4px solid rgb(60, 120, 60);
 }
 </style>

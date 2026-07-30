@@ -68,6 +68,7 @@ snapshot_cases! {
     style_unproven_relationship => default_setup,
     style_unsupported_url => default_setup,
     style_url_import_retained => default_setup,
+    style_vue_module => default_setup,
     style_vue_sfc => default_setup,
     style_vue_unsupported_version => setup_vue_two,
 }
