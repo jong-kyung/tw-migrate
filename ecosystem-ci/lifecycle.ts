@@ -893,45 +893,46 @@ async function executeLifecycle<T>(
   // paths toward the 260-character limit, and the case id is already in the
   // artifact roots and ledger.
   const runRoot = await temporaryDirectory("twm-");
+  let result: T | undefined;
   let succeeded = false;
   let primaryError: unknown;
   try {
-    const result = await body({ ledger, mark, diagnostic, runRoot });
+    result = await body({ ledger, mark, diagnostic, runRoot });
     succeeded = true;
-    return result;
   } catch (error) {
     primaryError = error;
     await recordFailure(error);
-    throw error;
-  } finally {
-    // Teardown steps land in the ledger so a post-completion hang is attributable from artifacts.
-    const teardownMark = async (step: string) => {
-      ledger.teardown = [...(ledger.teardown ?? []), { step, at: new Date().toISOString() }];
-      await writeFile(ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`).catch(() => {});
-    };
-    let teardownError: unknown;
-    await teardownMark("server-stop-started");
-    try {
-      await teardownLifecycleServer(activeServer(), primaryError, recordFailure);
-    } catch (error) {
-      teardownError = error;
-    }
-    await teardownMark("server-stopped");
-    // Orphaned dev-server processes can keep recreating files under runRoot on
-    // Windows, so recursive rm never converges; bound it and leave the OS temp
-    // directory behind rather than hanging the merge gate on cleanup.
-    const removed = await Promise.race([
-      rm(runRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).then(
-        () => true,
-        () => false,
-      ),
-      new Promise<boolean>((resolveWait) => setTimeout(resolveWait, 30_000, false)),
-    ]);
-    await teardownMark(removed ? "run-root-removed" : "run-root-left-behind");
-    if (succeeded && !teardownError && temporaryRoot)
-      await rm(temporaryRoot, { recursive: true, force: true });
-    if (teardownError) throw teardownError;
   }
+
+  // Teardown steps land in the ledger so a post-completion hang is attributable from artifacts.
+  const teardownMark = async (step: string) => {
+    ledger.teardown = [...(ledger.teardown ?? []), { step, at: new Date().toISOString() }];
+    await writeFile(ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`).catch(() => {});
+  };
+  let teardownError: unknown;
+  await teardownMark("server-stop-started");
+  try {
+    await teardownLifecycleServer(activeServer(), primaryError, recordFailure);
+  } catch (error) {
+    teardownError = error;
+  }
+  await teardownMark("server-stopped");
+  // Orphaned dev-server processes can keep recreating files under runRoot on
+  // Windows, so recursive rm never converges; bound it and leave the OS temp
+  // directory behind rather than hanging the merge gate on cleanup.
+  const removed = await Promise.race([
+    rm(runRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).then(
+      () => true,
+      () => false,
+    ),
+    new Promise<boolean>((resolveWait) => setTimeout(resolveWait, 30_000, false)),
+  ]);
+  await teardownMark(removed ? "run-root-removed" : "run-root-left-behind");
+  if (succeeded && !teardownError && temporaryRoot)
+    await rm(temporaryRoot, { recursive: true, force: true });
+  if (teardownError) throw teardownError;
+  if (!succeeded) throw primaryError;
+  return result as T;
 }
 
 export async function runLifecycle({
@@ -1378,6 +1379,7 @@ export async function runExternalLifecycle({
         );
       }
       let utilitiesExpectedDiff: Buffer | undefined;
+      let unsafeSourceError: Error | undefined;
       await mark("utilities-only-started");
       try {
         await clearGeneratedCaches(packageRoot);
@@ -1414,11 +1416,12 @@ export async function runExternalLifecycle({
         if (migratedSource === null) {
           const recreated = await lstat(sourcePath).catch(() => null);
           if (recreated?.isSymbolicLink() || (recreated && !recreated.isFile())) {
-            throw new Error(
+            unsafeSourceError = new Error(
               `external server recreated an unsafe migration path: ${project.source.path}`,
             );
+          } else {
+            await rm(sourcePath, { force: true });
           }
-          await rm(sourcePath, { force: true });
         } else {
           await writeFile(
             await checkedMigrationPath(packageRoot, canonicalPackageRoot, project.source.path),
@@ -1426,6 +1429,8 @@ export async function runExternalLifecycle({
           );
         }
       }
+
+      if (unsafeSourceError) throw unsafeSourceError;
 
       await clearGeneratedCaches(packageRoot);
       const postExpectedDiff = trackedCheckoutDiff(checkoutRoot);

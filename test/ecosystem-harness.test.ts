@@ -134,7 +134,7 @@ async function readEcosystemWorkflow() {
   ).replaceAll("\r\n", "\n");
 }
 
-test("admits the complete controlled runtime and stylesheet matrix", async () => {
+void test("admits the complete controlled runtime and stylesheet matrix", async () => {
   const loaded = await loadManifest();
   assert.deepEqual(
     loaded.projects
@@ -169,7 +169,7 @@ test("admits the complete controlled runtime and stylesheet matrix", async () =>
   );
 });
 
-test("smoke and external cases accept non-exhaustive probes without occupying controlled matrix cells", () => {
+void test("smoke and external cases accept non-exhaustive probes without occupying controlled matrix cells", () => {
   const base = controlled();
   const probeFields = {
     source: base.source,
@@ -186,7 +186,7 @@ test("smoke and external cases accept non-exhaustive probes without occupying co
   errorFor([base, { id: "smoke", kind: "smoke", fixture: "missing" }]);
 });
 
-test("rejects invalid manifests before execution", () => {
+void test("rejects invalid manifests before execution", () => {
   errorFor([controlled(), controlled({ style: "scss" })]);
   errorFor([controlled({ extra: true })]);
   errorFor([controlled(), controlled({ id: "same-cell" })]);
@@ -196,7 +196,7 @@ test("rejects invalid manifests before execution", () => {
   errorFor([missingSource]);
 });
 
-test("migration source paths must stay relative and inside the driver", () => {
+void test("migration source paths must stay relative and inside the driver", () => {
   for (const path of [
     "../outside.css",
     "src/../../outside.css",
@@ -207,12 +207,12 @@ test("migration source paths must stay relative and inside the driver", () => {
   }
 });
 
-test("external commands must be argument arrays rather than shell strings", () => {
+void test("external commands must be argument arrays rather than shell strings", () => {
   errorFor([external({ installs: [{ cwd: ".", args: "install --frozen-lockfile" }] })]);
   errorFor([external({ start: "run dev" })]);
 });
 
-test("external installs admit a reviewed pnpm workspace build and nothing looser", () => {
+void test("external installs admit a reviewed pnpm workspace build and nothing looser", () => {
   assert.doesNotThrow(() =>
     validateManifest(
       manifest(
@@ -245,7 +245,7 @@ test("external installs admit a reviewed pnpm workspace build and nothing looser
   ]);
 });
 
-test("external commands receive only the explicit non-secret environment", () => {
+void test("external commands receive only the explicit non-secret environment", () => {
   process.env.ECOSYSTEM_SENTINEL_SECRET = "must-not-leak";
   try {
     const env = externalEnvironment();
@@ -257,7 +257,7 @@ test("external commands receive only the explicit non-secret environment", () =>
   }
 });
 
-test("post-migration server phases preserve the expected tracked diff", async (t) => {
+void test("post-migration server phases preserve the expected tracked diff", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "tw-migrate-external-diff-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const git = (args: string[]) => execFileSync("git", args, { cwd: root, stdio: "pipe" });
@@ -285,7 +285,7 @@ test("post-migration server phases preserve the expected tracked diff", async (t
   );
 });
 
-test("external repositories and paths stay inside the CI checkout trust boundary", () => {
+void test("external repositories and paths stay inside the CI checkout trust boundary", () => {
   for (const repository of [
     "http://example.test/project.git",
     "ssh://git@example.test/project.git",
@@ -325,12 +325,12 @@ test("external repositories and paths stay inside the CI checkout trust boundary
   errorFor([external({ runtimeWrites: ["a", "b", "c", "d"] })]);
 });
 
-test("package script exposes the focused ecosystem harness entrypoint", () => {
+void test("package script exposes the focused ecosystem harness entrypoint", () => {
   const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   assert.equal(packageJson.scripts["test:ecosystem"], "node ecosystem-ci/run.ts");
 });
 
-test("stages concrete optional dependency versions without changing the tracked manifest", async (t) => {
+void test("stages concrete optional dependency versions without changing the tracked manifest", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "tw-migrate-stage-test-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const repoRoot = join(root, "repo");
@@ -363,7 +363,7 @@ test("stages concrete optional dependency versions without changing the tracked 
   assert.deepEqual(Object.values(staged.optionalDependencies), ["1.2.3", "1.2.3"]);
 });
 
-test("package stage CLI creates the exact upload tree consumed by the workflow", async (t) => {
+void test("package stage CLI creates the exact upload tree consumed by the workflow", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "tw-migrate-package-upload-test-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const artifactRoot = join(root, "package-artifacts");
@@ -402,7 +402,7 @@ test("package stage CLI creates the exact upload tree consumed by the workflow",
   assert.match(workflow, /path: ecosystem-ci\/package-artifacts-upload\//);
 });
 
-test("provenance rejects altered tarballs, commits, platforms, and package identities", async (t) => {
+void test("provenance rejects altered tarballs, commits, platforms, and package identities", async (t) => {
   const artifactRoot = await mkdtemp(join(tmpdir(), "tw-migrate-provenance-test-"));
   t.after(() => rm(artifactRoot, { recursive: true, force: true }));
   await Promise.all([
@@ -459,7 +459,7 @@ test("provenance rejects altered tarballs, commits, platforms, and package ident
   );
 });
 
-test("installed layout rejects checkout, symlink, wrong platform, and unexpected package paths", async (t) => {
+void test("installed layout rejects checkout, symlink, wrong platform, and unexpected package paths", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "tw-migrate-layout-test-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const checkout = join(root, "checkout");
@@ -518,7 +518,7 @@ test("installed layout rejects checkout, symlink, wrong platform, and unexpected
   );
 });
 
-test("publisher credential response body is bounded by the registry startup timeout", async (t) => {
+void test("publisher credential response body is bounded by the registry startup timeout", async (t) => {
   let requested = false;
   const server = createServer((_request, response) => {
     requested = true;
@@ -533,7 +533,7 @@ test("publisher credential response body is bounded by the registry startup time
   assert.equal(requested, true);
 });
 
-test("sealed registry config proxies dependencies but never product packages or mutations", () => {
+void test("sealed registry config proxies dependencies but never product packages or mutations", () => {
   const config = registryConfig({ storage: "/tmp/storage", allowPublish: false });
   assert.match(config, /tw-migrate-\*/);
   assert.match(config, /proxy: false/);
@@ -541,7 +541,7 @@ test("sealed registry config proxies dependencies but never product packages or 
   assert.match(config, /'\*\*':[\s\S]*proxy: npmjs/);
 });
 
-test("--case selects exactly one project and maps it to a Vitest project filter", async () => {
+void test("--case selects exactly one project and maps it to a Vitest project filter", async () => {
   const loaded = await loadManifest();
   const calls: string[][] = [];
   const selected = runHarness(["--case", "react-vite-css"], loaded, (args) => calls.push(args));
@@ -554,7 +554,7 @@ test("--case selects exactly one project and maps it to a Vitest project filter"
   ]);
 });
 
-test("Vitest and the lifecycle omit external projects unless the CI-only gate is active", async () => {
+void test("Vitest and the lifecycle omit external projects unless the CI-only gate is active", async () => {
   const projects = (await loadManifest()).projects;
   assert.equal(
     vitestProjects(projects, {}).some(({ kind }) => kind === "external"),
@@ -582,7 +582,7 @@ test("Vitest and the lifecycle omit external projects unless the CI-only gate is
   }
 });
 
-test("external cases require the explicit CI-only entrypoint", async () => {
+void test("external cases require the explicit CI-only entrypoint", async () => {
   const loaded = await loadManifest();
   assert.throws(
     () =>
@@ -629,7 +629,7 @@ test("external cases require the explicit CI-only entrypoint", async () => {
   }
 });
 
-test("unknown case prints the available ids without executing Vitest", async () => {
+void test("unknown case prints the available ids without executing Vitest", async () => {
   const loaded = await loadManifest();
   const message = /Unknown case "missing".*react-vite-css.*next-css.*vite-html-css/;
   assert.throws(
@@ -649,7 +649,7 @@ test("unknown case prints the available ids without executing Vitest", async () 
   );
 });
 
-test("no arguments print usage and --all is the only full-run selection", async () => {
+void test("no arguments print usage and --all is the only full-run selection", async () => {
   const loaded = await loadManifest();
   assert.throws(() => runHarness([], loaded, () => assert.fail("must not execute")), /Usage:/);
   const calls: string[][] = [];
@@ -665,7 +665,7 @@ test("no arguments print usage and --all is the only full-run selection", async 
   ]);
 });
 
-test("the browser oracle sorts every standard computed property and excludes only custom properties", () => {
+void test("the browser oracle sorts every standard computed property and excludes only custom properties", () => {
   assert.deepEqual(
     normalizeStyleEntries([
       ["z-index", "auto"],
@@ -681,7 +681,7 @@ test("the browser oracle sorts every standard computed property and excludes onl
   );
 });
 
-test("the causal witness requires a standard computed-property change for every probe", () => {
+void test("the causal witness requires a standard computed-property change for every probe", () => {
   const capture = (color: string, token: string) =>
     ({
       elements: [{ identity: "card", styles: { color, "--fixture-token": token } }],
@@ -699,7 +699,7 @@ test("the causal witness requires a standard computed-property change for every 
   );
 });
 
-test("capture retry permits initial plus three retries and creates fresh attempts", async () => {
+void test("capture retry permits initial plus three retries and creates fresh attempts", async () => {
   const attempts: number[] = [];
   const result = await retryCapture(async (attempt) => {
     attempts.push(attempt);
@@ -720,14 +720,14 @@ test("capture retry permits initial plus three retries and creates fresh attempt
   );
 });
 
-test("capture attempt timeout rejects a stalled operation", async () => {
+void test("capture attempt timeout rejects a stalled operation", async () => {
   await assert.rejects(
     withTimeout(() => new Promise(() => {}), 10),
     /timed out after 10ms/,
   );
 });
 
-test("page-creation failures keep diagnostics for all four attempts", async () => {
+void test("page-creation failures keep diagnostics for all four attempts", async () => {
   const diagnostics: { attempt: number; error: string }[] = [];
   await assert.rejects(
     captureProbe(
@@ -754,7 +754,7 @@ test("page-creation failures keep diagnostics for all four attempts", async () =
   assert.ok(diagnostics.every(({ error }) => error.includes("browser unavailable")));
 });
 
-test("contributor lifecycle defaults keep case and package artifacts under one OS temporary root", () => {
+void test("contributor lifecycle defaults keep case and package artifacts under one OS temporary root", () => {
   const root = join(tmpdir(), "tw-migrate-test-root");
   assert.deepEqual(temporaryLifecyclePaths("react-vite-css", root), {
     artifactRoot: join(root, "artifacts", "react-vite-css"),
@@ -762,7 +762,7 @@ test("contributor lifecycle defaults keep case and package artifacts under one O
   });
 });
 
-test("migration contract checks the exact report/source and no-op second run without retries", () => {
+void test("migration contract checks the exact report/source and no-op second run without retries", () => {
   const first = {
     changedFiles: ["src/a.css"],
     diff: "diff",
@@ -795,7 +795,7 @@ test("migration contract checks the exact report/source and no-op second run wit
   );
 });
 
-test("source-wide idempotency catches an unreported extra source mutation", async (t) => {
+void test("source-wide idempotency catches an unreported extra source mutation", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "tw-migrate-source-tree-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, "src"));
@@ -821,7 +821,7 @@ test("source-wide idempotency catches an unreported extra source mutation", asyn
   );
 });
 
-test("source snapshots exclude generated trees and reject non-regular paths", async (t) => {
+void test("source snapshots exclude generated trees and reject non-regular paths", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "tw-migrate-source-safety-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, "node_modules"));
@@ -831,7 +831,7 @@ test("source snapshots exclude generated trees and reject non-regular paths", as
   await assert.rejects(snapshotMigrationSources(root), /not regular/);
 });
 
-test("exact changed-file validation requires complete paths and bytes", () => {
+void test("exact changed-file validation requires complete paths and bytes", () => {
   const changedFiles = ["src/App.jsx", "src/App.css"];
   const files = { "src/App.jsx": "consumer\n", "src/App.css": "style\n" };
   assert.doesNotThrow(() => assertExpectedChangedFiles(changedFiles, files, files));
@@ -845,7 +845,7 @@ test("exact changed-file validation requires complete paths and bytes", () => {
   );
 });
 
-test("controlled expectations cover every reported changed file with exact bytes", async () => {
+void test("controlled expectations cover every reported changed file with exact bytes", async () => {
   for (const runtime of ["react-vite", "next", "vite-html"]) {
     for (const style of ["css", "scss", "sass", "less"]) {
       const expected = JSON.parse(
@@ -859,7 +859,7 @@ test("controlled expectations cover every reported changed file with exact bytes
       );
       assert.deepEqual(
         Object.keys(expected.changedFiles).sort(),
-        [...expected.first.changedFiles].sort(),
+        [...expected.first.changedFiles].sort((left, right) => left.localeCompare(right)),
       );
       assert.ok(
         Object.values(expected.changedFiles).every((contents) => typeof contents === "string"),
@@ -868,7 +868,7 @@ test("controlled expectations cover every reported changed file with exact bytes
   }
 });
 
-test("command timeout awaits and bounds teardown failures", async () => {
+void test("command timeout awaits and bounds teardown failures", async () => {
   await assert.rejects(
     waitForChild(new EventEmitter() as ChildProcess, {
       timeoutMs: 1,
@@ -888,7 +888,7 @@ test("command timeout awaits and bounds teardown failures", async () => {
   );
 });
 
-test("final server teardown records and propagates only when lifecycle otherwise succeeded", async () => {
+void test("final server teardown records and propagates only when lifecycle otherwise succeeded", async () => {
   const failure = new Error("stop failed");
   const recorded: unknown[] = [];
   const server = {
@@ -911,7 +911,7 @@ test("final server teardown records and propagates only when lifecycle otherwise
   );
 });
 
-test("workflow artifact allowlist rejects traversal, symlinks, directories, and undeclared files", async (t) => {
+void test("workflow artifact allowlist rejects traversal, symlinks, directories, and undeclared files", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "tw-migrate-artifacts-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await writeFile(join(root, "phase-ledger.json"), "{}");
@@ -925,7 +925,7 @@ test("workflow artifact allowlist rejects traversal, symlinks, directories, and 
   await assert.rejects(artifactAllowlist(root, ["link"]), /regular file|symlink/);
 });
 
-test("case failure uploads preserve package publication logs", async (t) => {
+void test("case failure uploads preserve package publication logs", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "tw-migrate-publish-log-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const uploadRoot = `${root}-upload`;
@@ -941,7 +941,7 @@ test("case failure uploads preserve package publication logs", async (t) => {
   assert.equal(await readFile(join(uploadRoot, "publish.log"), "utf8"), "npm publish failed\n");
 });
 
-test("case jobs run after non-cancelled partial package failure while preserving label gating", async () => {
+void test("case jobs run after non-cancelled partial package failure while preserving label gating", async () => {
   const workflow = await readEcosystemWorkflow();
   assert.match(
     workflow,
@@ -949,7 +949,7 @@ test("case jobs run after non-cancelled partial package failure while preserving
   );
 });
 
-test("the no-argument CLI stays browser-free and returns usage", () => {
+void test("the no-argument CLI stays browser-free and returns usage", () => {
   assert.throws(
     () =>
       execFileSync(process.execPath, ["ecosystem-ci/run.ts"], { encoding: "utf8", stdio: "pipe" }),

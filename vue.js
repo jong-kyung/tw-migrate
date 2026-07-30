@@ -21,7 +21,6 @@ const PROP_DIRECTIVE = 7;
 const TAG_ELEMENT = 0;
 const TAG_COMPONENT = 1;
 const TAG_SLOT = 2;
-const TAG_TEMPLATE = 3;
 
 // Resolve the target project's own Vue 3 compiler. Vue 2 resolves but is
 // unsupported; a missing Vue installation is a recoverable package failure

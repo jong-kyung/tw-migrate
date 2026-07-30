@@ -18,7 +18,7 @@ export interface MigrationWarning {
 
 export interface RuleReport {
   selector: string;
-  status: 'converted' | 'retained';
+  status: "converted" | "retained";
   candidates: string[];
   file: string;
   /** Rule span in the analysis source (compiled CSS for preprocessor stylesheets). */
