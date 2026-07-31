@@ -14,7 +14,7 @@ workspace delta:
 --- step: missing tailwind path ---
 status: 1
 stdout: ""
-stderr: "tw-migrate: Usage: tw-migrate [style-file] [--tailwind-css <entry.css>] [--workspaces] [--force] [--write]\n--tailwind-css requires a path.\n"
+stderr: "tw-migrate: Usage: tw-migrate [style-file] [options]\n--tailwind-css requires a path.\n"
 workspace delta:
   unchanged
 
