@@ -76,9 +76,7 @@ async function main() {
   );
 }
 
-if (import.meta.main) {
-  main().catch((error) => {
-    console.error(formatDiagnostic(`tw-migrate: ${error.message}`, "31"));
-    process.exitCode = 1;
-  });
-}
+main().catch((error) => {
+  console.error(formatDiagnostic(`tw-migrate: ${error.message}`, "31"));
+  process.exitCode = 1;
+});
