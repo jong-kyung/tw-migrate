@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import packageJson from "../package.json" with { type: "json" };
+import { formatDiagnostic } from "./diagnostics.js";
 
 const { version } = packageJson;
 const usage = "Usage: tw-migrate [style-file] [options]";
@@ -24,10 +25,6 @@ Examples:
   tw-migrate --write
   tw-migrate path/to/Button.module.scss
   tw-migrate --workspaces --write`;
-
-export function formatDiagnostic(message, ansi) {
-  return process.stderr.isTTY && !process.env.NO_COLOR ? `\x1b[${ansi}m${message}\x1b[0m` : message;
-}
 
 async function main() {
   const args = process.argv.slice(2);

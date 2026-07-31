@@ -1,16 +1,20 @@
 import assert from "node:assert/strict";
 import { test } from "vite-plus/test";
 
-import { formatDiagnostic } from "../bin/tw-migrate.js";
+import { formatDiagnostic } from "../bin/diagnostics.js";
 
 test("colors terminal diagnostics unless NO_COLOR is set", () => {
+  const ansiEscape = String.fromCharCode(27);
   const isTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
   const noColor = process.env.NO_COLOR;
   try {
     Object.defineProperty(process.stderr, "isTTY", { configurable: true, value: true });
     delete process.env.NO_COLOR;
-    assert.equal(formatDiagnostic("warning", "38;5;208"), "\x1b[38;5;208mwarning\x1b[0m");
-    assert.equal(formatDiagnostic("error", "31"), "\x1b[31merror\x1b[0m");
+    assert.equal(
+      formatDiagnostic("warning", "38;5;208"),
+      `${ansiEscape}[38;5;208mwarning${ansiEscape}[0m`,
+    );
+    assert.equal(formatDiagnostic("error", "31"), `${ansiEscape}[31merror${ansiEscape}[0m`);
 
     process.env.NO_COLOR = "1";
     assert.equal(formatDiagnostic("warning", "38;5;208"), "warning");
