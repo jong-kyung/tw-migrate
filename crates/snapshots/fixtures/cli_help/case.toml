@@ -2,3 +2,18 @@
 name = "help"
 args = ["--help"]
 status = 0
+
+[[steps]]
+name = "short_help"
+args = ["-h"]
+status = 0
+
+[[steps]]
+name = "version"
+args = ["--version"]
+status = 0
+
+[[steps]]
+name = "short_version"
+args = ["-v"]
+status = 0
