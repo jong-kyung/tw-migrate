@@ -4,6 +4,9 @@ import { migrate } from "../index.js";
 
 const usage =
   "Usage: tw-migrate [style-file] [--tailwind-css <entry.css>] [--workspaces] [--force] [--write]";
+export function formatDiagnostic(message, ansi) {
+  return process.stderr.isTTY && !process.env.NO_COLOR ? `\x1b[${ansi}m${message}\x1b[0m` : message;
+}
 
 async function main() {
   const args = process.argv.slice(2);
@@ -34,18 +37,23 @@ async function main() {
   if (report.diff) process.stdout.write(report.diff);
   for (const warning of report.warnings) {
     console.warn(
-      `warning[${warning.code}] ${warning.file}:${warning.start}-${warning.end} ${warning.message}`,
+      formatDiagnostic(
+        `warning[${warning.code}] ${warning.file}:${warning.start}-${warning.end} ${warning.message}`,
+        "38;5;208",
+      ),
     );
   }
   for (const failure of report.failures) {
-    console.warn(`skipped[${failure.package}] ${failure.message}`);
+    console.warn(formatDiagnostic(`skipped[${failure.package}] ${failure.message}`, "38;5;208"));
   }
   console.log(
     `${write ? "Applied" : "Previewed"} ${report.changedFiles.length} file(s); ${report.convertedRules} rule(s) converted, ${report.retainedRules} retained.`,
   );
 }
 
-main().catch((error) => {
-  console.error(`tw-migrate: ${error.message}`);
-  process.exitCode = 1;
-});
+if (import.meta.main) {
+  main().catch((error) => {
+    console.error(formatDiagnostic(`tw-migrate: ${error.message}`, "31"));
+    process.exitCode = 1;
+  });
+}
