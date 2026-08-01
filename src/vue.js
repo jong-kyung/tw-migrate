@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { utf8OffsetMap } from "./html.js";
+import { utf8OffsetMap } from "./html.ts";
 import { staticImportBindings, staticImports, staticStringExpression } from "./native.ts";
 
 const ESCAPE_SELECTOR = /(?:::v-|:)(?:deep|global|slotted)\(([^)]*)\)/g;
