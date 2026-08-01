@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import packageJson from "../package.json" with { type: "json" };
+import { formatDiagnostic } from "./diagnostics.js";
 
 const { version } = packageJson;
 const usage = "Usage: tw-migrate [style-file] [options]";
@@ -61,11 +62,14 @@ async function main() {
   if (report.diff) process.stdout.write(report.diff);
   for (const warning of report.warnings) {
     console.warn(
-      `warning[${warning.code}] ${warning.file}:${warning.start}-${warning.end} ${warning.message}`,
+      formatDiagnostic(
+        `warning[${warning.code}] ${warning.file}:${warning.start}-${warning.end} ${warning.message}`,
+        "38;5;208",
+      ),
     );
   }
   for (const failure of report.failures) {
-    console.warn(`skipped[${failure.package}] ${failure.message}`);
+    console.warn(formatDiagnostic(`skipped[${failure.package}] ${failure.message}`, "38;5;208"));
   }
   console.log(
     `${write ? "Applied" : "Previewed"} ${report.changedFiles.length} file(s); ${report.convertedRules} rule(s) converted, ${report.retainedRules} retained.`,
@@ -73,6 +77,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(`tw-migrate: ${error.message}`);
+  console.error(formatDiagnostic(`tw-migrate: ${error.message}`, "31"));
   process.exitCode = 1;
 });
