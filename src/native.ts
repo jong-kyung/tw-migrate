@@ -29,17 +29,19 @@ const target = targets[`${process.platform}-${process.arch}`];
 if (!target) throw new Error(`Unsupported platform: ${process.platform}-${process.arch}`);
 
 let binding: Binding | undefined;
-for (const load of [
+const loaders: (() => Binding)[] = [
   // One level up is the repository root in development (src/) and the package
   // root in the installed layout (dist/); both hold the locally built addon.
-  () => require(`../tw-migrate.${target}.node`) as Binding,
-  () => require(`tw-migrate-${target}`) as Binding,
-]) {
+  () => require(`../tw-migrate.${target}.node`),
+  () => require(`tw-migrate-${target}`),
+];
+for (const load of loaders) {
   try {
     binding = load();
     break;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "MODULE_NOT_FOUND") throw error;
+    const code = error instanceof Error && "code" in error ? error.code : undefined;
+    if (code !== "MODULE_NOT_FOUND") throw error;
   }
 }
 

@@ -167,7 +167,7 @@ export function parseHtmlSource(path: string, source: string): ParsedHtml {
     if (node.content) visit(node.content);
   }
 
-  visit(document as unknown as HtmlNode);
+  visit(document);
   return {
     ...toByteOffsets(source, { links, bases, elements, dynamicAttributes }),
     scriptText: scriptTexts.join("\n"),
@@ -203,9 +203,18 @@ function toByteOffsets(
     ),
     ...parsed.dynamicAttributes.flatMap((value) => [value.start, value.end]),
   ]);
-  const offset = (index: number): number => offsets.get(index) as number;
-  const attribute = <T extends HtmlSpan>(value: T | undefined): T | undefined =>
-    value && { ...value, start: offset(value.start), end: offset(value.end) };
+  // Every queried index was fed into the map above, so a miss is a bug in
+  // this module rather than a recoverable input condition.
+  const offset = (index: number): number => {
+    const byte = offsets.get(index);
+    if (byte === undefined) throw new Error(`No byte offset was mapped for index ${index}`);
+    return byte;
+  };
+  function attribute<T extends HtmlSpan>(value: T): T;
+  function attribute<T extends HtmlSpan>(value: T | undefined): T | undefined;
+  function attribute<T extends HtmlSpan>(value: T | undefined): T | undefined {
+    return value && { ...value, start: offset(value.start), end: offset(value.end) };
+  }
   return {
     links: parsed.links.map((link) => ({
       ...link,
@@ -214,12 +223,12 @@ function toByteOffsets(
       tagStart: offset(link.tagStart),
       tagEnd: offset(link.tagEnd),
     })),
-    bases: parsed.bases.map((base) => attribute(base) as HtmlBase),
+    bases: parsed.bases.map((base) => attribute(base)),
     elements: parsed.elements.map((element) => ({
       classAttribute: attribute(element.classAttribute),
       idAttribute: attribute(element.idAttribute),
     })),
-    dynamicAttributes: parsed.dynamicAttributes.map((value) => attribute(value) as HtmlSpan),
+    dynamicAttributes: parsed.dynamicAttributes.map((value) => attribute(value)),
   };
 }
 
@@ -253,7 +262,7 @@ function locatedAttribute(
   const quoted = quote === '"' || quote === "'";
   if (quoted) {
     start += 1;
-    end = raw.lastIndexOf(quote as string);
+    end = raw.lastIndexOf(quote);
     if (end < start) return undefined;
   } else {
     end = start;

@@ -78,11 +78,11 @@ export function isPreprocessorPath(path: string): boolean {
   return isSassPath(path) || extname(path) === ".less";
 }
 
-async function loadProjectModule(
+async function loadProjectModule<Compiler>(
   packageRoot: string,
   name: string,
   errorMessage: string,
-): Promise<unknown> {
+): Promise<Compiler> {
   const projectRequire = createRequire(join(packageRoot, "package.json"));
   let modulePath;
   try {
@@ -90,24 +90,16 @@ async function loadProjectModule(
   } catch {
     throw new Error(errorMessage);
   }
-  const imported: unknown = await import(pathToFileURL(modulePath).href);
-  return (imported as { default?: unknown }).default ?? imported;
+  const imported = await import(pathToFileURL(modulePath).href);
+  return imported.default ?? imported;
 }
 
 export function loadProjectSass(packageRoot: string): Promise<SassCompiler> {
-  return loadProjectModule(
-    packageRoot,
-    "sass",
-    "Sass must be installed in the target project.",
-  ) as Promise<SassCompiler>;
+  return loadProjectModule(packageRoot, "sass", "Sass must be installed in the target project.");
 }
 
 export function loadProjectLess(packageRoot: string): Promise<LessCompiler> {
-  return loadProjectModule(
-    packageRoot,
-    "less",
-    "Less must be installed in the target project.",
-  ) as Promise<LessCompiler>;
+  return loadProjectModule(packageRoot, "less", "Less must be installed in the target project.");
 }
 
 export async function compileSassEntry(
@@ -189,14 +181,12 @@ export async function compileLessEntry(
     loadedPaths: result.imports.map((path) =>
       isAbsolute(path) ? path : resolve(dirname(entryPath), path),
     ),
-    sourceMappings: result.map
-      ? sourceMappings(JSON.parse(result.map) as RawSourceMap, dirname(entryPath))
-      : [],
+    sourceMappings: result.map ? sourceMappings(JSON.parse(result.map), dirname(entryPath)) : [],
   };
 }
 
 export function sourceMappings(sourceMap: RawSourceMap, sourceBase?: string): SourceMapping[] {
-  const decoded = JSON.parse(decodeSourceMap(JSON.stringify(sourceMap))) as DecodedSourceMapping[];
+  const decoded: DecodedSourceMapping[] = JSON.parse(decodeSourceMap(JSON.stringify(sourceMap)));
   return decoded.flatMap(({ source, ...mapping }) => {
     const sourcePath = sourcePathFromMap(
       sourceReferenceFromMap(source, sourceMap.sourceRoot),
