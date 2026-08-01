@@ -26,7 +26,7 @@ Examples:
   tw-migrate path/to/Button.module.scss
   tw-migrate --workspaces --write`;
 
-async function main() {
+async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.includes("--help") || args.includes("-h")) {
     console.log(help);
@@ -37,8 +37,8 @@ async function main() {
     return;
   }
 
-  let styleFile;
-  let tailwindCss;
+  let styleFile: string | undefined;
+  let tailwindCss: string | undefined;
   let write = false;
   let force = false;
   let workspaces = false;

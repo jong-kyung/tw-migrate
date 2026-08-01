@@ -62,7 +62,7 @@ tw-migrate/
 
 ## Runtime Flow
 
-1. `src/bin.js` parses CLI arguments and calls `migrate()`.
+1. `src/bin.ts` parses CLI arguments and calls `migrate()`.
 2. `src/index.js` discovers package/workspace inputs, reads source snapshots, compiles preprocessors, and prepares planner requests.
 3. `src/style-compiler.js` loads Sass or Less from the target project, not from `tw-migrate` itself.
 4. `src/native.js` loads the local addon or the installed platform package and invokes the Rust planner.
@@ -71,7 +71,7 @@ tw-migrate/
 
 ## Where to Start
 
-- **CLI flags, output, and exit behavior**: `src/bin.js` and packaged snapshots.
+- **CLI flags, output, and exit behavior**: `src/bin.ts` and packaged snapshots.
 - **Discovery, workspaces, Git ignore behavior, force handling, or writes**: `src/index.js`.
 - **Public API shape**: `index.d.ts` and the top-level exports in `src/index.js`.
 - **Sass, SCSS, Less, or source maps**: `src/style-compiler.js` and `crates/tw_migrate/src/lib.rs`.
@@ -109,7 +109,7 @@ cargo install cargo-insta --version 1.48.0 --locked
 ```bash
 vp install --frozen-lockfile
 vp run build:debug
-node src/bin.js --help
+node src/bin.ts --help
 ```
 
 `vp run build:debug` compiles the native addon for the current platform. Run it before invoking the CLI or Node tests directly. A complete setup check is:
@@ -124,9 +124,9 @@ No `.env` file or local service is required.
 
 ```bash
 vp run build:debug
-node src/bin.js --help
-node src/bin.js path/to/Button.module.css
-node src/bin.js --workspaces --write
+node src/bin.ts --help
+node src/bin.ts path/to/Button.module.css
+node src/bin.ts --workspaces --write
 ```
 
 Preview is the default. Use `--write` only when a task explicitly requires filesystem changes.

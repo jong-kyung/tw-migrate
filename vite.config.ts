@@ -15,7 +15,7 @@ const generatedPatterns = ["dist/**"];
 
 export default defineConfig({
   pack: {
-    entry: ["src/bin.js", "src/index.js"],
+    entry: ["src/bin.ts", "src/index.js"],
     fixedExtension: false,
     // The published declarations are the curated root index.d.ts until the
     // sources are TypeScript; dts generation takes over in that phase.
