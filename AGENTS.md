@@ -25,11 +25,22 @@ tw-migrate/
 ├── src/                       # Published TypeScript layer, bundled into dist/ by vp pack
 │   ├── bin.ts                 # CLI entrypoint and argument parsing
 │   ├── diagnostics.ts         # CLI diagnostic coloring
-│   ├── index.ts               # Public migrate() API, its types, and orchestration
-│   ├── native.ts              # Native addon resolution and NAPI exports
-│   ├── html.ts                # HTML parsing and byte-offset extraction
-│   ├── style-compiler.ts      # Project-local Sass/Less loading and source maps
-│   └── vue.ts                 # Project-local Vue compiler loading and SFC lowering
+│   ├── index.ts               # Public migrate() API, planning orchestration, plan merging
+│   ├── types.ts               # Public API and shared internal type declarations
+│   ├── discovery.ts           # Package/workspace discovery and Git-aware file scanning
+│   ├── tailwind.ts            # Tailwind entry resolution, design-system and theme loading
+│   ├── plan/
+│   │   ├── html.ts            # HTML stylesheet-link contexts and consumer preparation
+│   │   └── vue.ts             # Vue SFC planning, component graph, and shadow corpus
+│   ├── util/
+│   │   ├── diff.ts            # Unified diff rendering
+│   │   ├── shared.ts          # Path classification, snapshots, and stylesheet reference helpers
+│   │   └── write.ts           # Snapshot verification and transactional writes
+│   ├── parser/
+│   │   ├── html.ts            # HTML parsing and byte-offset extraction
+│   │   ├── style-compiler.ts  # Project-local Sass/Less loading and source maps
+│   │   └── vue.ts             # Project-local Vue compiler loading and SFC lowering
+│   └── native.ts              # Native addon resolution and NAPI exports
 ├── crates/tw_migrate/         # Rust planner and NAPI addon
 │   └── src/
 │       ├── planner.rs         # Single/batch planning entrypoints
@@ -62,20 +73,22 @@ tw-migrate/
 ## Runtime Flow
 
 1. `src/bin.ts` parses CLI arguments and calls `migrate()`.
-2. `src/index.ts` discovers package/workspace inputs, reads source snapshots, compiles preprocessors, and prepares planner requests.
-3. `src/style-compiler.ts` loads Sass or Less from the target project, not from `tw-migrate` itself.
+2. `src/index.ts` orchestrates discovery (`src/discovery.ts`), source snapshots, preprocessor compilation, and planner request preparation (`src/plan/html.ts`, `src/plan/vue.ts`, `src/tailwind.ts`).
+3. `src/parser/style-compiler.ts` loads Sass or Less from the target project, not from `tw-migrate` itself.
 4. `src/native.ts` loads the local addon or the installed platform package and invokes the Rust planner.
 5. Rust analyzes CSS and source relationships, returning planned edits, candidates, warnings, and retained rules.
-6. `src/index.ts` verifies source integrity, renders the diff, and applies transactional writes only with `--write`.
+6. `src/index.ts` verifies source integrity, renders the diff (`src/util/diff.ts`), and applies transactional writes (`src/util/write.ts`) only with `--write`.
 
 ## Where to Start
 
 - **CLI flags, output, and exit behavior**: `src/bin.ts` and packaged snapshots.
-- **Discovery, workspaces, Git ignore behavior, force handling, or writes**: `src/index.ts`.
+- **Discovery, workspaces, or Git ignore behavior**: `src/discovery.ts`.
+- **Force handling and plan orchestration**: `src/index.ts`.
+- **Transactional writes and snapshot verification**: `src/util/write.ts`.
 - **Public API shape**: the exported types and top-level exports in `src/index.ts` (published as generated `dist/index.d.ts`).
-- **Sass, SCSS, Less, or source maps**: `src/style-compiler.ts` and `crates/tw_migrate/src/lib.rs`.
-- **HTML links, attributes, entities, or byte offsets**: `src/html.ts` and `crates/tw_migrate/src/html_rewrite.rs`.
-- **Vue SFC blocks, template class sites, or scoped retention**: `src/vue.ts` and the Vue paths in `crates/tw_migrate/src/planner.rs`.
+- **Sass, SCSS, Less, or source maps**: `src/parser/style-compiler.ts` and `crates/tw_migrate/src/lib.rs`.
+- **HTML links, attributes, entities, or byte offsets**: `src/parser/html.ts` and `crates/tw_migrate/src/html_rewrite.rs`.
+- **Vue SFC blocks, template class sites, or scoped retention**: `src/parser/vue.ts` and the Vue paths in `crates/tw_migrate/src/planner.rs`.
 - **CSS parsing and migration decisions**: `crates/tw_migrate/src/planner.rs` and `css_plan.rs`.
 - **JSX usage and selector relationships**: `js_rewrite.rs` and `jsx_graph.rs`.
 - **Utility generation and value encoding**: `utilities.rs`, `arbitrary.rs`, `theme.rs`, `at_rules.rs`, and `animations.rs`.
