@@ -1,7 +1,23 @@
 import { createRequire } from "node:module";
 
+// Mirrors the generated binding.d.ts (napi build --dts), inlined so type
+// checking does not depend on the addon having been built.
+export interface StaticImportBinding {
+  source: string;
+  local: string;
+}
+
+interface Binding {
+  decodeSourceMap: (sourceMap: string) => string;
+  planBatchMigration: (request: string) => string;
+  staticImportBindings: (path: string, source: string) => StaticImportBinding[];
+  staticImports: (path: string, source: string) => string[];
+  staticStringExpression: (path: string, source: string) => string | null;
+  validateCss: (source: string) => void;
+}
+
 const require = createRequire(import.meta.url);
-const targets = {
+const targets: Record<string, string> = {
   "darwin-arm64": "darwin-arm64",
   "darwin-x64": "darwin-x64",
   "linux-arm64": "linux-arm64-gnu",
@@ -12,18 +28,20 @@ const target = targets[`${process.platform}-${process.arch}`];
 
 if (!target) throw new Error(`Unsupported platform: ${process.platform}-${process.arch}`);
 
-let binding;
-for (const load of [
+let binding: Binding | undefined;
+const loaders: (() => Binding)[] = [
   // One level up is the repository root in development (src/) and the package
   // root in the installed layout (dist/); both hold the locally built addon.
   () => require(`../tw-migrate.${target}.node`),
   () => require(`tw-migrate-${target}`),
-]) {
+];
+for (const load of loaders) {
   try {
     binding = load();
     break;
   } catch (error) {
-    if (error.code !== "MODULE_NOT_FOUND") throw error;
+    const code = error instanceof Error && "code" in error ? error.code : undefined;
+    if (code !== "MODULE_NOT_FOUND") throw error;
   }
 }
 

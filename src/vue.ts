@@ -3,13 +3,21 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { utf8OffsetMap } from "./html.js";
-import { staticImportBindings, staticImports, staticStringExpression } from "./native.js";
+import { utf8OffsetMap } from "./html.ts";
+import { staticImportBindings, staticImports, staticStringExpression } from "./native.ts";
+import type { StaticImportBinding } from "./native.ts";
+import type { SourceMapping } from "./style-compiler.ts";
 
 const ESCAPE_SELECTOR = /(?:::v-|:)(?:deep|global|slotted)\(([^)]*)\)/g;
 const ESCAPE_RESIDUE = /(?:>>>|\/deep\/|::v-deep|:deep|::v-slotted|:slotted|::v-global|:global)/;
 const SUPPORTED_STYLE_ATTRIBUTES = new Set(["lang", "module", "scoped", "src"]);
-const SUPPORTED_STYLE_LANGUAGES = new Set([undefined, "css", "scss", "sass", "less"]);
+const SUPPORTED_STYLE_LANGUAGES = new Set<string | undefined>([
+  undefined,
+  "css",
+  "scss",
+  "sass",
+  "less",
+]);
 
 // @vue/compiler-core node and element kinds; @vue/compiler-sfc does not
 // re-export the enums, so the numeric values are pinned here.
@@ -22,10 +30,216 @@ const TAG_ELEMENT = 0;
 const TAG_COMPONENT = 1;
 const TAG_SLOT = 2;
 
+// Minimal structural view of the target project's @vue/compiler-sfc output;
+// the analysis duck-types the descriptor and template AST the same way the
+// untyped implementation did.
+interface SfcPosition {
+  offset: number;
+}
+
+interface SfcLoc {
+  start: SfcPosition;
+  end: SfcPosition;
+}
+
+interface TemplateExpression {
+  content: string;
+  isStatic?: boolean;
+}
+
+interface TemplateContent {
+  content?: string;
+  trim?: () => string;
+}
+
+interface TemplateProp {
+  type: number;
+  name: string;
+  loc: SfcLoc;
+  arg?: TemplateExpression;
+  exp?: TemplateExpression;
+  value?: { content: string; loc: SfcLoc };
+}
+
+interface TemplateNode {
+  type: number;
+  tag: string;
+  tagType: number;
+  props?: TemplateProp[];
+  children?: TemplateNode[];
+  loc: SfcLoc;
+  content?: TemplateContent;
+}
+
+interface TemplateRoot extends TemplateNode {
+  children: TemplateNode[];
+}
+
+interface SfcStyleBlock {
+  content: string;
+  loc: SfcLoc;
+  attrs: Record<string, string | true>;
+  lang?: string;
+  src?: string;
+  module?: string | boolean;
+  scoped?: boolean;
+}
+
+interface SfcScriptBlock {
+  content: string;
+  lang?: string;
+  src?: string;
+}
+
+interface SfcCustomBlock {
+  type: string;
+  loc: SfcLoc;
+}
+
+interface SfcDescriptor {
+  template?: { lang?: string; src?: string; ast: TemplateRoot } | null;
+  styles: SfcStyleBlock[];
+  customBlocks: SfcCustomBlock[];
+  script?: SfcScriptBlock | null;
+  scriptSetup?: SfcScriptBlock | null;
+}
+
+interface SfcParseError {
+  message: string;
+  loc?: { start?: { offset?: number } };
+}
+
+export interface VueCompiler {
+  parse: (
+    source: string,
+    options: { filename: string },
+  ) => { descriptor: SfcDescriptor; errors: SfcParseError[] };
+}
+
+export interface LoadedVueCompiler {
+  compiler?: VueCompiler;
+  unsupportedVersion?: string;
+}
+
+export interface VueWarning {
+  code: string;
+  file: string;
+  start: number;
+  end: number;
+  message: string;
+}
+
+export interface VueStyleBlock {
+  outerStart: number;
+  outerEnd: number;
+  contentStart: number;
+  contentEnd: number;
+  syntax: string;
+  content: string;
+  // Populated by the migration orchestrator when preprocessor block content
+  // is compiled for planner analysis.
+  analysisSource?: string;
+  sourcePath?: string;
+  sourceMappings?: SourceMapping[];
+}
+
+export interface VueTemplateAttribute {
+  value: string;
+  start: number;
+  end: number;
+  synthetic?: boolean;
+  // Cleared by the migration orchestrator on shadow-only sites that must
+  // never be rewritten or counted as a reference.
+  writable?: boolean;
+}
+
+export interface VueModuleBinding {
+  name: string;
+  start: number;
+  end: number;
+}
+
+export interface VueTemplateSite {
+  tag: string;
+  nodeStart: number;
+  classAttribute?: VueTemplateAttribute;
+  idAttribute?: VueTemplateAttribute;
+  matchClasses?: string[];
+  moduleBinding?: VueModuleBinding;
+}
+
+export interface VueStyleImport {
+  reference: string;
+  start: number;
+  end: number;
+}
+
+export interface VueComponentEdge {
+  parent: string;
+  child: string;
+  site: VueTemplateSite;
+}
+
+// The orchestrator-owned fields are populated by index.ts while building the
+// package component graph, after analysis produced the object.
+interface VueAnalysisBase {
+  warnings: VueWarning[];
+  resolvedComponents?: VueComponentEdge[];
+  componentsOpen?: boolean;
+  setupImports?: Set<string>;
+  rootIdsOverridden?: boolean;
+}
+
+export type VueAnalysis =
+  | (VueAnalysisBase & { retained: true })
+  | (VueAnalysisBase & {
+      retained: false;
+      blocks: VueStyleBlock[];
+      unscopedBlocks: VueStyleBlock[];
+      moduleBlocks: VueStyleBlock[];
+      moduleClosureBroken: boolean;
+      htmlElements: VueTemplateSite[];
+      componentSites: VueTemplateSite[];
+      rootStarts: (number | undefined)[];
+      rootVFor: boolean;
+      rootFragment: boolean;
+      scriptText: string;
+      scriptStyleImports: string[];
+      scriptImportsUnverifiable: boolean;
+      styleBlockImports: VueStyleImport[];
+      componentImports: StaticImportBinding[];
+      fallthroughUnverifiable: boolean;
+      dynamic: boolean;
+      vHtml: boolean;
+      hasSlot: boolean;
+      alwaysRenderedRoots: number;
+      shadowCssTexts: string[];
+      unscopedShadowCssTexts: string[];
+      shadowModuleCssTexts: string[];
+      shadowPreprocessorTexts: string[];
+      unscopedShadowPreprocessorTexts: string[];
+      escapeUnverifiable: boolean;
+    });
+
+interface TemplateSiteAttributes {
+  classAttribute?: VueTemplateAttribute;
+  idAttribute?: VueTemplateAttribute;
+  matchClasses?: string[];
+}
+
+interface TemplateState {
+  elements: VueTemplateSite[];
+  components: VueTemplateSite[];
+  dynamic: boolean;
+  vHtml: boolean;
+  hasSlot: boolean;
+  expressionTexts: string[];
+}
+
 // Resolve the target project's own Vue 3 compiler. Vue 2 resolves but is
 // unsupported; a missing Vue installation is a recoverable package failure
 // mirroring a missing Sass compiler.
-export async function loadProjectVueCompiler(packageRoot) {
+export async function loadProjectVueCompiler(packageRoot: string): Promise<LoadedVueCompiler> {
   const projectRequire = createRequire(join(packageRoot, "package.json"));
   let packagePath;
   try {
@@ -41,16 +255,16 @@ export async function loadProjectVueCompiler(packageRoot) {
   } catch {
     throw new Error("Vue 3 with compiler-sfc must be installed in the target project.");
   }
-  const imported = await import(pathToFileURL(modulePath));
+  const imported = await import(pathToFileURL(modulePath).href);
   return { compiler: imported.default ?? imported };
 }
 
 // Lower one SFC to the planner contract: plain-CSS scoped blocks in absolute
 // byte offsets and literal template class sites for the HTML matching model.
 // Returns `retained: true` when the whole file must stay untouched.
-export function analyzeVueSource(compiler, path, source) {
-  const warnings = [];
-  const warn = (code, start, end, message) =>
+export function analyzeVueSource(compiler: VueCompiler, path: string, source: string): VueAnalysis {
+  const warnings: VueWarning[] = [];
+  const warn = (code: string, start: number, end: number, message: string): number =>
     warnings.push({ code, file: path, start, end, message });
 
   const { descriptor, errors } = compiler.parse(source, { filename: path });
@@ -83,19 +297,19 @@ export function analyzeVueSource(compiler, path, source) {
     );
     return { warnings: toByteWarnings(source, warnings), retained: true };
   }
-  const blocks = [];
-  const unscopedBlocks = [];
-  const moduleBlocks = [];
-  const styleBlockImports = [];
+  const blocks: VueStyleBlock[] = [];
+  const unscopedBlocks: VueStyleBlock[] = [];
+  const moduleBlocks: VueStyleBlock[] = [];
+  const styleBlockImports: VueStyleImport[] = [];
   // Retained blocks are still real CSS that can win the cascade against the
   // utilities replacing a deleted scoped rule. Plain-CSS text feeds the
   // planner's parsed shadow index; preprocessor text is screened by the
   // caller before joining it.
-  const shadowCssTexts = [];
-  const unscopedShadowCssTexts = [];
-  const shadowModuleCssTexts = [];
-  const shadowPreprocessorTexts = [];
-  const unscopedShadowPreprocessorTexts = [];
+  const shadowCssTexts: string[] = [];
+  const unscopedShadowCssTexts: string[] = [];
+  const shadowModuleCssTexts: string[] = [];
+  const shadowPreprocessorTexts: string[] = [];
+  const unscopedShadowPreprocessorTexts: string[] = [];
   let escapeUnverifiable = false;
   let moduleSiblingUnsupported = false;
   for (const style of descriptor.styles) {
@@ -157,7 +371,7 @@ export function analyzeVueSource(compiler, path, source) {
       escapeUnverifiable = true;
       continue;
     }
-    const block = {
+    const block: VueStyleBlock = {
       outerStart,
       outerEnd: end + closing.length,
       contentStart: start,
@@ -196,7 +410,7 @@ export function analyzeVueSource(compiler, path, source) {
     blocks.push(block);
   }
 
-  const state = {
+  const state: TemplateState = {
     elements: [],
     components: [],
     dynamic: false,
@@ -242,7 +456,7 @@ export function analyzeVueSource(compiler, path, source) {
     }
   });
 
-  let componentImports = [];
+  let componentImports: StaticImportBinding[] = [];
   if (
     descriptor.scriptSetup &&
     !descriptor.scriptSetup.src &&
@@ -268,13 +482,24 @@ export function analyzeVueSource(compiler, path, source) {
     ]),
     ...styleBlockImports.flatMap((entry) => [entry.start, entry.end]),
     ...[...state.elements, ...state.components].flatMap((element) =>
-      [element.nodeStart, element.classAttribute, element.idAttribute, element.moduleBinding]
-        .filter((value) => value !== undefined)
-        .flatMap((value) => (typeof value === "number" ? [value] : [value.start, value.end])),
+      [
+        element.nodeStart,
+        element.classAttribute,
+        element.idAttribute,
+        element.moduleBinding,
+      ].flatMap((value) =>
+        value === undefined ? [] : typeof value === "number" ? [value] : [value.start, value.end],
+      ),
     ),
   ]);
-  const offset = (index) => offsets.get(index);
-  const attribute = (value) =>
+  // Every queried index was fed into the map above, so a miss is a bug in
+  // this module rather than a recoverable input condition.
+  const offset = (index: number): number => {
+    const byte = offsets.get(index);
+    if (byte === undefined) throw new Error(`No byte offset was mapped for index ${index}`);
+    return byte;
+  };
+  const attribute = (value: VueTemplateAttribute | undefined): VueTemplateAttribute | undefined =>
     value && { ...value, start: offset(value.start), end: offset(value.end) };
   return {
     warnings: warnings.map((warning) => ({
@@ -330,9 +555,12 @@ export function analyzeVueSource(compiler, path, source) {
       idAttribute: attribute(element.idAttribute),
       matchClasses: element.matchClasses,
     })),
+    // Slot and template roots are element nodes without a template site, so
+    // their starts were never fed into the offset map and stay undefined;
+    // nodeStart comparisons in the caller then never match them.
     rootStarts: template.ast.children
       .filter((node) => node.type === NODE_ELEMENT)
-      .map((node) => offset(node.loc.start.offset)),
+      .map((node) => offsets.get(node.loc.start.offset)),
     // A root-level `v-for` renders a fragment, so a lone AST root is not a
     // fallthrough-eligible single root.
     rootVFor: template.ast.children.some(
@@ -379,7 +607,12 @@ export function analyzeVueSource(compiler, path, source) {
 // Post-plan integrity check: the edited SFC must still parse, and each
 // remaining supported scoped block contents are returned for validation by
 // the caller.
-export function verifyVueSource(compiler, path, source, includeUnscoped = false) {
+export function verifyVueSource(
+  compiler: VueCompiler,
+  path: string,
+  source: string,
+  includeUnscoped = false,
+): { content: string; syntax: string }[] {
   const { descriptor, errors } = compiler.parse(source, { filename: path });
   if (errors.length > 0) {
     throw new Error(`Edited SFC no longer parses: ${path}: ${errors[0].message}`);
@@ -395,12 +628,12 @@ export function verifyVueSource(compiler, path, source, includeUnscoped = false)
     .map((style) => ({ content: style.content, syntax: style.lang ?? "css" }));
 }
 
-function visitTemplateNode(source, node, state) {
+function visitTemplateNode(source: string, node: TemplateNode, state: TemplateState): void {
   if (node.type === NODE_ELEMENT) {
     if (node.tagType === TAG_SLOT) state.hasSlot = true;
-    const bindingClasses = [];
+    const bindingClasses: string[] = [];
     let classOpaque = false;
-    let moduleBinding;
+    let moduleBinding: VueModuleBinding | undefined;
     for (const prop of node.props ?? []) {
       if (prop.type !== PROP_DIRECTIVE) continue;
       let provenModuleExpression = false;
@@ -458,14 +691,14 @@ function visitTemplateNode(source, node, state) {
 
 // Inline attributes consume their separator so deletion leaves no double
 // space. Multiline attributes keep their newline and indentation byte-exact.
-function attributeRemovalStart(source, node, prop) {
+function attributeRemovalStart(source: string, node: TemplateNode, prop: TemplateProp): number {
   const attributeStart = prop.loc.start.offset;
   let start = attributeStart;
   while (start > node.loc.start.offset + 1 && /\s/.test(source[start - 1])) start -= 1;
   return /[\r\n]/.test(source.slice(start, attributeStart)) ? attributeStart : start;
 }
 
-function staticClassBinding(prop) {
+function staticClassBinding(prop: TemplateProp): string | undefined {
   if (!prop.exp) return undefined;
   try {
     return staticStringExpression("Component.js", prop.exp.content) ?? undefined;
@@ -474,7 +707,13 @@ function staticClassBinding(prop) {
   }
 }
 
-function templateSite(source, node, bindingClasses, classOpaque, state) {
+function templateSite(
+  source: string,
+  node: TemplateNode,
+  bindingClasses: string[],
+  classOpaque: boolean,
+  state: TemplateState,
+): TemplateSiteAttributes {
   let classAttribute = literalAttribute(source, node, "class");
   const idAttribute = literalAttribute(source, node, "id");
   const hasClassAttr = node.props?.some(
@@ -502,7 +741,11 @@ function templateSite(source, node, bindingClasses, classOpaque, state) {
 
 // The inner span of a quoted, entity-free, literal attribute value, or
 // undefined when the attribute is absent or cannot be edited safely.
-function literalAttribute(source, node, name) {
+function literalAttribute(
+  source: string,
+  node: TemplateNode,
+  name: string,
+): VueTemplateAttribute | undefined {
   const prop = node.props?.find((prop) => prop.type === PROP_ATTRIBUTE && prop.name === name);
   if (!prop?.value) return undefined;
   const start = prop.value.loc.start.offset;
@@ -515,7 +758,7 @@ function literalAttribute(source, node, name) {
   return { value, start: start + 1, end: end - 1 };
 }
 
-function classInsertionOffset(source, node) {
+function classInsertionOffset(source: string, node: TemplateNode): number | undefined {
   const propsEnd = Math.max(
     node.loc.start.offset + 1 + node.tag.length,
     ...(node.props ?? []).map((prop) => prop.loc.end.offset),
@@ -528,14 +771,14 @@ function classInsertionOffset(source, node) {
   return offset;
 }
 
-function toByteWarnings(source, warnings) {
+function toByteWarnings(source: string, warnings: VueWarning[]): VueWarning[] {
   const offsets = utf8OffsetMap(
     source,
     warnings.flatMap((warning) => [warning.start, warning.end]),
   );
   return warnings.map((warning) => ({
     ...warning,
-    start: offsets.get(warning.start),
-    end: offsets.get(warning.end),
+    start: offsets.get(warning.start) ?? warning.start,
+    end: offsets.get(warning.end) ?? warning.end,
   }));
 }

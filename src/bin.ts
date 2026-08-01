@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import packageJson from "../package.json" with { type: "json" };
-import { formatDiagnostic } from "./diagnostics.js";
+import { formatDiagnostic } from "./diagnostics.ts";
 
 const { version } = packageJson;
 const usage = "Usage: tw-migrate [style-file] [options]";
@@ -26,7 +26,7 @@ Examples:
   tw-migrate path/to/Button.module.scss
   tw-migrate --workspaces --write`;
 
-async function main() {
+async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.includes("--help") || args.includes("-h")) {
     console.log(help);
@@ -37,8 +37,8 @@ async function main() {
     return;
   }
 
-  let styleFile;
-  let tailwindCss;
+  let styleFile: string | undefined;
+  let tailwindCss: string | undefined;
   let write = false;
   let force = false;
   let workspaces = false;
@@ -57,7 +57,7 @@ async function main() {
     else throw new Error(`Unexpected argument: ${argument}`);
   }
 
-  const { migrate } = await import("./index.js");
+  const { migrate } = await import("./index.ts");
   const report = await migrate({ styleFile, tailwindCss, write, force, workspaces });
   if (report.diff) process.stdout.write(report.diff);
   for (const warning of report.warnings) {

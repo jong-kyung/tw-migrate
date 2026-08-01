@@ -24,6 +24,6 @@
     "noUncheckedIndexedAccess": false,
     "skipLibCheck": true
   },
-  "include": ["ecosystem-ci/**/*.ts", "test/**/*.ts"],
+  "include": ["ecosystem-ci/**/*.ts", "src/**/*.ts", "test/**/*.ts"],
   "exclude": ["ecosystem-ci/fixtures", "node_modules", "target"]
 }

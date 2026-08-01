@@ -3,8 +3,78 @@ import { parse } from "parse5";
 const RECOVERABLE_PARSE_ERRORS = new Set(["missing-doctype"]);
 const TEMPLATE_MARKERS = /\{\{|\}\}|\$\{|<%|%>|<#|#>|\[%|%\]/;
 
-export function parseHtmlSource(path, source) {
-  const errors = [];
+// Minimal structural view of the parse5 tree; the walk duck-types nodes the
+// same way the untyped implementation did.
+interface ParsedAttribute {
+  name: string;
+  value: string;
+}
+
+interface OffsetRange {
+  startOffset: number;
+  endOffset: number;
+}
+
+interface NodeLocation extends OffsetRange {
+  attrs?: Record<string, OffsetRange | undefined>;
+  startTag?: OffsetRange;
+}
+
+interface HtmlNode {
+  nodeName: string;
+  tagName?: string;
+  value?: string;
+  attrs?: ParsedAttribute[];
+  childNodes?: HtmlNode[];
+  content?: HtmlNode;
+  sourceCodeLocation?: NodeLocation | null;
+}
+
+export interface HtmlAttribute {
+  value: string;
+  start: number;
+  end: number;
+  quoted?: boolean;
+  writable?: boolean;
+  synthetic?: boolean;
+}
+
+export interface HtmlLink {
+  href: string;
+  media: string;
+  start: number;
+  end: number;
+  tagStart: number;
+  tagEnd: number;
+}
+
+export interface HtmlBase {
+  href: string;
+  writable?: boolean;
+  start: number;
+  end: number;
+}
+
+export interface HtmlElementAttributes {
+  classAttribute?: HtmlAttribute;
+  idAttribute?: HtmlAttribute;
+}
+
+export interface HtmlSpan {
+  start: number;
+  end: number;
+}
+
+export interface ParsedHtml {
+  links: HtmlLink[];
+  bases: HtmlBase[];
+  elements: HtmlElementAttributes[];
+  dynamicAttributes: HtmlSpan[];
+  scriptText: string;
+}
+
+export function parseHtmlSource(path: string, source: string): ParsedHtml {
+  const errors: { code: string }[] = [];
   const document = parse(source, {
     sourceCodeLocationInfo: true,
     onParseError(error) {
@@ -15,20 +85,22 @@ export function parseHtmlSource(path, source) {
     throw new Error(`Failed to parse ${path}: ${errors.map((error) => error.code).join(", ")}`);
   }
 
-  const links = [];
-  const bases = [];
-  const elements = [];
-  const dynamicAttributes = [];
-  const scriptTexts = [];
+  const links: HtmlLink[] = [];
+  const bases: HtmlBase[] = [];
+  const elements: HtmlElementAttributes[] = [];
+  const dynamicAttributes: HtmlSpan[] = [];
+  const scriptTexts: string[] = [];
 
-  function visit(node) {
+  function visit(node: HtmlNode): void {
     if (node.tagName === "script") {
       for (const child of node.childNodes ?? []) {
         if (child.nodeName === "#text" && child.value) scriptTexts.push(child.value);
       }
     }
     if (node.tagName) {
-      const attributes = new Map(node.attrs.map((attribute) => [attribute.name, attribute.value]));
+      const attributes = new Map(
+        (node.attrs ?? []).map((attribute) => [attribute.name, attribute.value]),
+      );
       const locations = node.sourceCodeLocation?.attrs;
       if (locations) {
         if (
@@ -104,9 +176,9 @@ export function parseHtmlSource(path, source) {
 
 // Map UTF-16 string indices to UTF-8 byte offsets in one source pass, so
 // large documents stay linear instead of rescanning the prefix per site.
-export function utf8OffsetMap(source, indices) {
+export function utf8OffsetMap(source: string, indices: number[]): Map<number, number> {
   const sorted = [...new Set(indices)].sort((left, right) => left - right);
-  const map = new Map();
+  const map = new Map<number, number>();
   let lastIndex = 0;
   let bytes = 0;
   for (const index of sorted) {
@@ -117,20 +189,32 @@ export function utf8OffsetMap(source, indices) {
   return map;
 }
 
-function toByteOffsets(source, parsed) {
+function toByteOffsets(
+  source: string,
+  parsed: Omit<ParsedHtml, "scriptText">,
+): Omit<ParsedHtml, "scriptText"> {
   const offsets = utf8OffsetMap(source, [
     ...parsed.links.flatMap((link) => [link.start, link.end, link.tagStart, link.tagEnd]),
     ...parsed.bases.flatMap((base) => [base.start, base.end]),
     ...parsed.elements.flatMap((element) =>
-      [element.classAttribute, element.idAttribute]
-        .filter(Boolean)
-        .flatMap((value) => [value.start, value.end]),
+      [element.classAttribute, element.idAttribute].flatMap((value) =>
+        value ? [value.start, value.end] : [],
+      ),
     ),
     ...parsed.dynamicAttributes.flatMap((value) => [value.start, value.end]),
   ]);
-  const offset = (index) => offsets.get(index);
-  const attribute = (value) =>
-    value && { ...value, start: offset(value.start), end: offset(value.end) };
+  // Every queried index was fed into the map above, so a miss is a bug in
+  // this module rather than a recoverable input condition.
+  const offset = (index: number): number => {
+    const byte = offsets.get(index);
+    if (byte === undefined) throw new Error(`No byte offset was mapped for index ${index}`);
+    return byte;
+  };
+  function attribute<T extends HtmlSpan>(value: T): T;
+  function attribute<T extends HtmlSpan>(value: T | undefined): T | undefined;
+  function attribute<T extends HtmlSpan>(value: T | undefined): T | undefined {
+    return value && { ...value, start: offset(value.start), end: offset(value.end) };
+  }
   return {
     links: parsed.links.map((link) => ({
       ...link,
@@ -139,30 +223,34 @@ function toByteOffsets(source, parsed) {
       tagStart: offset(link.tagStart),
       tagEnd: offset(link.tagEnd),
     })),
-    bases: parsed.bases.map(attribute),
+    bases: parsed.bases.map((base) => attribute(base)),
     elements: parsed.elements.map((element) => ({
       classAttribute: attribute(element.classAttribute),
       idAttribute: attribute(element.idAttribute),
     })),
-    dynamicAttributes: parsed.dynamicAttributes.map(attribute),
+    dynamicAttributes: parsed.dynamicAttributes.map((value) => attribute(value)),
   };
 }
 
-function classInsertionOffset(source, startTag) {
+function classInsertionOffset(source: string, startTag?: OffsetRange): number | undefined {
   if (!startTag) return undefined;
   let offset = startTag.endOffset - 1;
   if (source[offset] !== ">") return undefined;
-  while (offset > startTag.startOffset && /\s/.test(source[offset - 1])) offset -= 1;
+  while (offset > startTag.startOffset && /\s/.test(source[offset - 1] ?? "")) offset -= 1;
   if (source[offset - 1] === "/") offset -= 1;
   return offset;
 }
 
-function stylesheetRel(value = "") {
+function stylesheetRel(value = ""): boolean {
   const tokens = value.toLowerCase().split(/\s+/);
   return tokens.includes("stylesheet") && !tokens.includes("alternate");
 }
 
-function locatedAttribute(source, location, parsedValue) {
+function locatedAttribute(
+  source: string,
+  location: OffsetRange | undefined,
+  parsedValue: string | undefined,
+): HtmlAttribute | undefined {
   if (!location || parsedValue === undefined) return undefined;
   const raw = source.slice(location.startOffset, location.endOffset);
   const equals = raw.indexOf("=");
@@ -178,7 +266,7 @@ function locatedAttribute(source, location, parsedValue) {
     if (end < start) return undefined;
   } else {
     end = start;
-    while (end < raw.length && !/\s/.test(raw[end])) end += 1;
+    while (end < raw.length && !/\s/.test(raw[end] ?? "")) end += 1;
   }
   const value = raw.slice(start, end);
   return {

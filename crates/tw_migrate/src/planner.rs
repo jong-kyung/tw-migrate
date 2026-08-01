@@ -6184,11 +6184,11 @@ mod tests {
         let planner = include_str!("planner.rs");
         let const_start = planner.find("const WARNING_CODES").unwrap();
         let const_end = const_start + planner[const_start..].find("];").unwrap();
-        // Scan every crate source and every repo src/ JS file so a new module
-        // cannot silently escape the pinning check.
+        // Scan every crate source and every repo src/ TypeScript file so a new
+        // module cannot silently escape the pinning check.
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut sources = format!("{}\n{}", &planner[..const_start], &planner[const_end..]);
-        for (dir, extension) in [(manifest.join("src"), "rs"), (manifest.join("../../src"), "js")] {
+        for (dir, extension) in [(manifest.join("src"), "rs"), (manifest.join("../../src"), "ts")] {
             for entry in std::fs::read_dir(dir).unwrap() {
                 let path = entry.unwrap().path();
                 if path.extension().is_some_and(|ext| ext == extension)
