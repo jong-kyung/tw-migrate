@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { utf8OffsetMap } from "./html.ts";
 import { staticImportBindings, staticImports, staticStringExpression } from "./native.ts";
 import type { StaticImportBinding } from "./native.ts";
+import type { SourceMapping } from "./style-compiler.ts";
 
 const ESCAPE_SELECTOR = /(?:::v-|:)(?:deep|global|slotted)\(([^)]*)\)/g;
 const ESCAPE_RESIDUE = /(?:>>>|\/deep\/|::v-deep|:deep|::v-slotted|:slotted|::v-global|:global)/;
@@ -135,6 +136,11 @@ export interface VueStyleBlock {
   contentEnd: number;
   syntax: string;
   content: string;
+  // Populated by the migration orchestrator when preprocessor block content
+  // is compiled for planner analysis.
+  analysisSource?: string;
+  sourcePath?: string;
+  sourceMappings?: SourceMapping[];
 }
 
 export interface VueTemplateAttribute {
@@ -142,6 +148,9 @@ export interface VueTemplateAttribute {
   start: number;
   end: number;
   synthetic?: boolean;
+  // Cleared by the migration orchestrator on shadow-only sites that must
+  // never be rewritten or counted as a reference.
+  writable?: boolean;
 }
 
 export interface VueModuleBinding {
@@ -165,10 +174,25 @@ export interface VueStyleImport {
   end: number;
 }
 
+export interface VueComponentEdge {
+  parent: string;
+  child: string;
+  site: VueTemplateSite;
+}
+
+// The orchestrator-owned fields are populated by index.ts while building the
+// package component graph, after analysis produced the object.
+interface VueAnalysisBase {
+  warnings: VueWarning[];
+  resolvedComponents?: VueComponentEdge[];
+  componentsOpen?: boolean;
+  setupImports?: Set<string>;
+  rootIdsOverridden?: boolean;
+}
+
 export type VueAnalysis =
-  | { warnings: VueWarning[]; retained: true }
-  | {
-      warnings: VueWarning[];
+  | (VueAnalysisBase & { retained: true })
+  | (VueAnalysisBase & {
       retained: false;
       blocks: VueStyleBlock[];
       unscopedBlocks: VueStyleBlock[];
@@ -195,7 +219,7 @@ export type VueAnalysis =
       shadowPreprocessorTexts: string[];
       unscopedShadowPreprocessorTexts: string[];
       escapeUnverifiable: boolean;
-    };
+    });
 
 interface TemplateSiteAttributes {
   classAttribute?: VueTemplateAttribute;

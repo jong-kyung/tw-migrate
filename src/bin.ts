@@ -57,7 +57,7 @@ async function main(): Promise<void> {
     else throw new Error(`Unexpected argument: ${argument}`);
   }
 
-  const { migrate } = await import("./index.js");
+  const { migrate } = await import("./index.ts");
   const report = await migrate({ styleFile, tailwindCss, write, force, workspaces });
   if (report.diff) process.stdout.write(report.diff);
   for (const warning of report.warnings) {

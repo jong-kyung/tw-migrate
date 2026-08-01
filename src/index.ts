@@ -17,7 +17,7 @@ import { promisify } from "node:util";
 
 import { parseHtmlSource, utf8OffsetMap } from "./html.ts";
 import { planBatchMigration, staticImports, validateCss } from "./native.ts";
-import { analyzeVueSource, loadProjectVueCompiler, verifyVueSource } from "./vue.js";
+import { analyzeVueSource, loadProjectVueCompiler, verifyVueSource } from "./vue.ts";
 import {
   compileLessEntry,
   compileSassEntry,
@@ -26,6 +26,219 @@ import {
   loadProjectLess,
   loadProjectSass,
 } from "./style-compiler.ts";
+import type { HtmlElementAttributes } from "./html.ts";
+import type { LessCompiler, SassCompiler, SourceMapping } from "./style-compiler.ts";
+import type {
+  VueAnalysis,
+  VueComponentEdge,
+  VueCompiler,
+  VueStyleBlock,
+  VueTemplateSite,
+} from "./vue.ts";
+
+export interface MigrateOptions {
+  styleFile?: string;
+  cwd?: string;
+  write?: boolean;
+  tailwindCss?: string;
+  workspaces?: boolean;
+  force?: boolean;
+}
+
+export interface MigrationWarning {
+  code: string;
+  file: string;
+  /** Byte offsets into the authored file, or (0, 0) when no unique mapping exists. */
+  start: number;
+  end: number;
+  message: string;
+}
+
+export interface RuleReport {
+  selector: string;
+  status: "converted" | "retained";
+  candidates: string[];
+  file: string;
+  /** Rule span in the analysis source (compiled CSS for preprocessor stylesheets). */
+  ruleId: { start: number; end: number };
+  /** Rule span in the authored file, or (0, 0) when no unique mapping exists. */
+  authoredSpan: { start: number; end: number };
+}
+
+export interface MigrationFailure {
+  package: string;
+  message: string;
+}
+
+export interface MigrationReport {
+  changedFiles: string[];
+  diff: string;
+  convertedRules: number;
+  retainedRules: number;
+  rules: RuleReport[];
+  candidates: string[];
+  warnings: MigrationWarning[];
+  failures: MigrationFailure[];
+}
+
+interface SourceFile {
+  path: string;
+  source: string;
+}
+
+interface HtmlContext {
+  cssPath: string;
+  variants: string[];
+  direct: boolean;
+  analyzable: boolean;
+}
+
+interface VuePlannedElement extends VueTemplateSite {
+  cssPaths: string[];
+  matchIds?: string[];
+  matchTag?: string;
+}
+
+interface PreparedSourceFile extends SourceFile {
+  htmlElements?: (HtmlElementAttributes | VuePlannedElement)[];
+  htmlStylesheets?: HtmlContext[];
+  htmlReferencesSafe?: boolean;
+  htmlScriptText?: string;
+}
+
+interface PlannedFile extends PreparedSourceFile {
+  writable: boolean;
+}
+
+interface RuleSpan {
+  start: number;
+  end: number;
+}
+
+interface StylesheetEntry {
+  cssPath: string;
+  cssSource: string;
+  cssModuleId: string;
+  cssDependents?: string[];
+  syntax?: string;
+  isModule: boolean;
+  isPartial?: boolean;
+  analysisSource?: string;
+  sourceMappings?: SourceMapping[];
+  vueBlocks?: VueStyleBlock[];
+  vueModule?: boolean;
+  vueRetention?: string;
+  vueUnscoped?: boolean;
+  vueShadowCss?: string[];
+  vueShadowModuleCss?: string[];
+  vueShadowUnverifiable?: boolean;
+  blockedRules?: RuleSpan[];
+}
+
+interface PlannerRequest {
+  stylesheets: StylesheetEntry[];
+  tailwindPath: string;
+  tailwindSource: string;
+  utilityPrefix: string | null;
+  themeTokens: Record<string, string>;
+  files: PlannedFile[];
+}
+
+// `stylesheet` is the planner's compile-failure attribution index into the
+// request stylesheets; it is stripped from the public RuleReport.
+interface PlanRule extends RuleReport {
+  stylesheet: number;
+}
+
+interface Plan {
+  files: SourceFile[];
+  deletedFiles: string[];
+  unlinkedFiles: string[];
+  candidates: string[];
+  rules: PlanRule[];
+  warnings: MigrationWarning[];
+  convertedRules: number;
+  retainedRules: number;
+}
+
+interface PlanResult {
+  failure?: MigrationFailure;
+  plan?: Plan;
+}
+
+interface Scope {
+  cwd: string;
+  workspaceRoot: string;
+  scannedPaths: string[];
+  targetable: Set<string>;
+  explicitStyle?: string;
+  configuredEntry?: string;
+  pathOwners: Map<string, string | undefined>;
+  selectedPackages: string[];
+  writablePackages: Set<string>;
+}
+
+interface MigrationContext extends Scope {
+  options: MigrateOptions;
+  snapshots: Map<string, string>;
+  styleSources: Map<string, string>;
+  sourceFiles: SourceFile[];
+  styleDependents: Map<string, string[]>;
+}
+
+interface RemovableLink {
+  filePath: string;
+  cssPath: string;
+  href: string;
+  media: string;
+}
+
+interface PreparedHtml {
+  files: PreparedSourceFile[];
+  stylePaths: Set<string>;
+  generatedPaths: Set<string>;
+  removableLinks: RemovableLink[];
+  warnings: MigrationWarning[];
+}
+
+interface PreparedVue {
+  files: Map<string, PreparedSourceFile>;
+  stylesheets: StylesheetEntry[];
+  stylePaths: Set<string>;
+  unscopedPaths: Set<string>;
+  warnings: MigrationWarning[];
+  compiler?: VueCompiler;
+  sass?: SassCompiler;
+  less?: LessCompiler;
+}
+
+interface ShadowCssEntry {
+  path: string;
+  source: string;
+  scoped?: boolean;
+  migratingUnscoped?: boolean;
+}
+
+interface DesignSystem {
+  theme: { prefix: string | null };
+  candidatesToCss: (candidates: string[]) => (string | null)[];
+}
+
+interface LoadedTailwind {
+  designSystem: DesignSystem;
+  css: string;
+  path: string;
+  themeTokens: Record<string, string>;
+}
+
+interface CssImport {
+  href: string;
+  media: string;
+  start: number;
+  end: number;
+}
+
+type StylesheetLoader = (id: string, base: string) => Promise<{ content: string; base: string }>;
 
 const run = promisify(execFile);
 const SOURCE_EXTENSIONS = new Set([
@@ -48,9 +261,16 @@ const STYLESHEET_SYNTAX = new Map([
 ]);
 const IGNORED_DIRECTORIES = new Set([".git", ".next", "build", "dist", "node_modules"]);
 const RECOVERABLE_INPUT_ERROR = "TW_MIGRATE_RECOVERABLE_INPUT:";
-const compareStrings = (left, right) => (left > right) - (left < right);
+const compareStrings = (left: string, right: string): number =>
+  Number(left > right) - Number(left < right);
 
-export async function migrate(options = {}) {
+function errorCode(error: unknown): string | undefined {
+  return error instanceof Error && "code" in error && typeof error.code === "string"
+    ? error.code
+    : undefined;
+}
+
+export async function migrate(options: MigrateOptions = {}): Promise<MigrationReport> {
   if ("cssFile" in options) {
     throw new TypeError("cssFile has been replaced by styleFile");
   }
@@ -81,7 +301,7 @@ export async function migrate(options = {}) {
     );
   }
 
-  const snapshots = new Map();
+  const snapshots = new Map<string, string>();
   const stylePaths = scope.scannedPaths.filter(isStylesheetPath);
   const sourcePaths = scope.scannedPaths.filter((path) => SOURCE_EXTENSIONS.has(extension(path)));
   const [styleSources, sourceCandidates] = await Promise.all([
@@ -104,7 +324,7 @@ export async function migrate(options = {}) {
       snapshotFile(snapshots, join(packageRoot, "package.json")),
     ),
   ]);
-  const sourceFiles = sourceCandidates.filter(Boolean);
+  const sourceFiles = sourceCandidates.flatMap((file) => (file ? [file] : []));
   // An explicit .vue selection is a source file, not a stylesheet input; only
   // real stylesheets may enter the stylesheet maps.
   if (explicitStyle && isStylesheetPath(explicitStyle) && !styleSources.has(explicitStyle)) {
@@ -114,7 +334,7 @@ export async function migrate(options = {}) {
     styleSources.set(configuredEntry, await snapshotFile(snapshots, configuredEntry));
   }
 
-  const context = {
+  const context: MigrationContext = {
     ...scope,
     options,
     snapshots,
@@ -122,39 +342,36 @@ export async function migrate(options = {}) {
     sourceFiles,
     styleDependents: indexStylesheetDependents(styleSources),
   };
-  const failures = [];
-  const plans = [];
+  const failures: MigrationFailure[] = [];
+  const plans: Plan[] = [];
   for (const packageRoot of selectedPackages) {
     const result = await planPackage(context, packageRoot);
     if (result.failure) failures.push(result.failure);
     else if (result.plan) plans.push(result.plan);
   }
 
-  const originals = new Map([
+  const originals = new Map<string, string>([
     ...styleSources,
-    ...sourceFiles.map((file) => [file.path, file.source]),
+    ...sourceFiles.map((file): [string, string] => [file.path, file.source]),
   ]);
   const { filesByPath, deletedPaths, candidates, rules, warnings, convertedRules, retainedRules } =
     mergePlans(plans, originals);
 
   const changed = [...filesByPath.values()]
-    .map((file) => ({ ...file, before: originals.get(file.path) }))
+    .map((file) => ({ ...file, before: originals.get(file.path) ?? "" }))
     .filter((file) => file.before !== file.source)
     .sort((left, right) => left.path.localeCompare(right.path));
   const deleted = [...deletedPaths]
-    .map((path) => ({ path, before: originals.get(path) }))
+    .map((path) => ({ path, before: originals.get(path) ?? "" }))
     .sort((left, right) => left.path.localeCompare(right.path));
-  const operations = [...changed, ...deleted].sort((left, right) =>
-    left.path.localeCompare(right.path),
-  );
+  const operations: { path: string; before: string; source?: string }[] = [
+    ...changed,
+    ...deleted,
+  ].sort((left, right) => left.path.localeCompare(right.path));
   const changedFiles = operations.map((file) => normalizedRelativePath(cwd, file.path));
   const diff = operations
     .map((file) =>
-      unifiedDiff(
-        normalizedRelativePath(cwd, file.path),
-        file.before,
-        "source" in file ? file.source : "",
-      ),
+      unifiedDiff(normalizedRelativePath(cwd, file.path), file.before, file.source ?? ""),
     )
     .join("");
 
@@ -190,7 +407,7 @@ export async function migrate(options = {}) {
   };
 }
 
-async function resolveScope(options) {
+async function resolveScope(options: MigrateOptions): Promise<Scope> {
   const cwd = await realpath(resolve(options.cwd ?? process.cwd()));
   const currentPackage = await findPackageRoot(cwd);
   const gitRoot = await findGitRoot(currentPackage);
@@ -242,7 +459,10 @@ async function resolveScope(options) {
   }
   allPackageRoots.sort(compareStrings);
   const pathOwners = new Map(
-    scannedPaths.map((path) => [path, owningPackage(path, allPackageRoots)]),
+    scannedPaths.map((path): [string, string | undefined] => [
+      path,
+      owningPackage(path, allPackageRoots),
+    ]),
   );
   if (explicitStyle && pathOwners.get(explicitStyle) !== currentPackage) {
     throw new TypeError("The selected stylesheet must belong to the current package");
@@ -264,7 +484,7 @@ async function resolveScope(options) {
   };
 }
 
-async function planPackage(context, packageRoot) {
+async function planPackage(context: MigrationContext, packageRoot: string): Promise<PlanResult> {
   const {
     options,
     snapshots,
@@ -321,7 +541,7 @@ async function planPackage(context, packageRoot) {
   ) {
     return vueWarningsOnlyResult(preparedVue);
   }
-  const packageSources = [
+  const packageSources: PreparedSourceFile[] = [
     ...sourceFiles
       .filter((file) => extension(file.path) !== ".html")
       .map((file) => preparedVue.files.get(file.path) ?? file),
@@ -338,8 +558,8 @@ async function planPackage(context, packageRoot) {
     return vueWarningsOnlyResult(preparedVue);
   }
 
-  let tailwindPath;
-  let tailwindEntries;
+  let tailwindPath: string;
+  let tailwindEntries: string[];
   try {
     ({ path: tailwindPath, entries: tailwindEntries } = resolveTailwindEntry(
       ownedStyles,
@@ -383,27 +603,29 @@ async function planPackage(context, packageRoot) {
     return { failure: packageFailure(workspaceRoot, packageRoot, error) };
   }
 
-  const files = packageSources.map((file) => {
+  const files = packageSources.map((file): PlannedFile => {
     const owner = pathOwners.get(file.path);
     return {
       ...file,
       writable:
         targetable.has(file.path) &&
-        (options.workspaces ? writablePackages.has(owner) : owner === packageRoot),
+        (options.workspaces
+          ? owner !== undefined && writablePackages.has(owner)
+          : owner === packageRoot),
     };
   });
-  let stylesheets;
-  let sass;
-  let less;
+  let stylesheets: StylesheetEntry[];
+  let sass: SassCompiler | undefined;
+  let less: LessCompiler | undefined;
   try {
     stylesheets = [];
-    const compilerDependents = new Map();
+    const compilerDependents = new Map<string, string[]>();
     for (const stylePath of targets.sort(compareStrings)) {
       await rejectSymlinkTarget(stylePath, packageRoot);
       const isPartial = isSassPath(stylePath) && basename(stylePath).startsWith("_");
-      const stylesheet = {
+      const stylesheet: StylesheetEntry = {
         cssPath: stylePath,
-        cssSource: styleSources.get(stylePath),
+        cssSource: styleSources.get(stylePath) ?? "",
         cssModuleId: normalizedRelativePath(packageRoot, stylePath),
         cssDependents: styleDependents.get(stylePath) ?? [],
         syntax: stylesheetSyntax(stylePath),
@@ -441,9 +663,9 @@ async function planPackage(context, packageRoot) {
       const dependents = compilerDependents.get(stylesheet.cssPath) ?? [];
       if (dependents.length === 0) continue;
       stylesheet.isPartial = true;
-      stylesheet.cssDependents = [...new Set([...stylesheet.cssDependents, ...dependents])].sort(
-        compareStrings,
-      );
+      stylesheet.cssDependents = [
+        ...new Set([...(stylesheet.cssDependents ?? []), ...dependents]),
+      ].sort(compareStrings);
     }
   } catch (error) {
     if (!options.force || isIntegrityError(error)) throw error;
@@ -451,7 +673,7 @@ async function planPackage(context, packageRoot) {
   }
 
   stylesheets.push(...preparedVue.stylesheets);
-  const request = {
+  const request: PlannerRequest = {
     stylesheets,
     tailwindPath: tailwind.path,
     tailwindSource: tailwind.css,
@@ -459,7 +681,7 @@ async function planPackage(context, packageRoot) {
     themeTokens: tailwind.themeTokens,
     files,
   };
-  let plan;
+  let plan: Plan;
   try {
     plan = JSON.parse(planBatchMigration(JSON.stringify(request)));
   } catch (error) {
@@ -482,16 +704,18 @@ async function planPackage(context, packageRoot) {
       parseHtmlSource(file.path, file.source);
     }
     for (const file of plan.files.filter((file) => extension(file.path) === ".vue")) {
+      const vueCompiler = preparedVue.compiler;
+      if (!vueCompiler) throw new Error(`No Vue compiler is available to verify ${file.path}`);
       const includeUnscoped = preparedVue.unscopedPaths.has(file.path);
-      const blocks = verifyVueSource(preparedVue.compiler, file.path, file.source, includeUnscoped);
+      const blocks = verifyVueSource(vueCompiler, file.path, file.source, includeUnscoped);
       // Blocks the migration never edited are byte-identical to the authored
       // input and need no recompilation; a caller that only received a
       // template edit must not suddenly require a preprocessor.
-      const untouched = new Map();
+      const untouched = new Map<string, number>();
       for (const block of verifyVueSource(
-        preparedVue.compiler,
+        vueCompiler,
         file.path,
-        snapshots.get(file.path),
+        snapshots.get(file.path) ?? "",
         includeUnscoped,
       )) {
         const key = `${block.syntax}\0${block.content}`;
@@ -537,8 +761,10 @@ async function planPackage(context, packageRoot) {
       if (!changed && !plan.deletedFiles.includes(stylesheet.cssPath)) continue;
       const source = changed?.source ?? "";
       if (isSassPath(stylesheet.cssPath)) {
+        sass ??= await loadProjectSass(packageRoot);
         validateCss((await compileSassEntry(sass, stylesheet.cssPath, source)).css);
       } else {
+        less ??= await loadProjectLess(packageRoot);
         validateCss((await compileLessEntry(less, stylesheet.cssPath, source)).css);
       }
     }
@@ -554,9 +780,16 @@ async function planPackage(context, packageRoot) {
 // candidate compiles. Each iteration blocks at least one new rule, so the
 // loop is bounded by the rule count; if a failing candidate cannot be
 // attributed to a new rule, fall back to the package-level failure path.
-function replanCompileFailures(tailwind, request, initialPlan) {
+function replanCompileFailures(
+  tailwind: LoadedTailwind,
+  request: PlannerRequest,
+  initialPlan: Plan,
+): Plan {
   let plan = initialPlan;
-  const blockedByStylesheet = new Map();
+  const blockedByStylesheet = new Map<
+    number,
+    Map<string, { ruleId: RuleSpan; authoredSpan: RuleSpan; candidates: Set<string> }>
+  >();
   const maxIterations = plan.rules.length + 1;
   for (let iteration = 0; ; iteration += 1) {
     const failing = invalidCandidates(tailwind, plan.candidates);
@@ -618,9 +851,9 @@ function replanCompileFailures(tailwind, request, initialPlan) {
   return plan;
 }
 
-function removeMigratedHtmlLinks(plan, preparedHtml) {
+function removeMigratedHtmlLinks(plan: Plan, preparedHtml: PreparedHtml): void {
   const unlinked = new Set(plan.unlinkedFiles);
-  const linksByFile = new Map();
+  const linksByFile = new Map<string, Set<string>>();
   for (const link of preparedHtml.removableLinks) {
     if (!unlinked.has(link.cssPath)) continue;
     const links = linksByFile.get(link.filePath) ?? new Set();
@@ -647,13 +880,13 @@ function removeMigratedHtmlLinks(plan, preparedHtml) {
   }
 }
 
-function mergePlans(plans, originals) {
-  const filesByPath = new Map();
-  const deletedPaths = new Set();
-  const candidates = new Set();
-  const rules = [];
-  const warnings = [];
-  const seenWarnings = new Set();
+function mergePlans(plans: Plan[], originals: Map<string, string>) {
+  const filesByPath = new Map<string, SourceFile>();
+  const deletedPaths = new Set<string>();
+  const candidates = new Set<string>();
+  const rules: PlanRule[] = [];
+  const warnings: MigrationWarning[] = [];
+  const seenWarnings = new Set<string>();
   let convertedRules = 0;
   let retainedRules = 0;
 
@@ -690,14 +923,14 @@ function mergePlans(plans, originals) {
   return { filesByPath, deletedPaths, candidates, rules, warnings, convertedRules, retainedRules };
 }
 
-async function findPackageRoot(start) {
+async function findPackageRoot(start: string): Promise<string> {
   let directory = start;
   while (true) {
     try {
       await readFile(join(directory, "package.json"), "utf8");
       return directory;
     } catch (error) {
-      if (error.code !== "ENOENT") throw error;
+      if (errorCode(error) !== "ENOENT") throw error;
     }
     const parent = dirname(directory);
     if (parent === directory) throw new Error(`No package.json was found from ${start}`);
@@ -705,7 +938,7 @@ async function findPackageRoot(start) {
   }
 }
 
-async function findGitRoot(cwd) {
+async function findGitRoot(cwd: string): Promise<string | undefined> {
   try {
     const { stdout } = await run("git", ["rev-parse", "--show-toplevel"], { cwd });
     return resolve(stdout.trim());
@@ -714,7 +947,7 @@ async function findGitRoot(cwd) {
   }
 }
 
-async function isIgnoredByGit(gitRoot, path) {
+async function isIgnoredByGit(gitRoot: string, path: string): Promise<boolean> {
   if (gitRoot === path) return false;
   try {
     await run("git", ["check-ignore", "-q", "--", relative(gitRoot, path)], { cwd: gitRoot });
@@ -724,7 +957,7 @@ async function isIgnoredByGit(gitRoot, path) {
   }
 }
 
-async function discoverFiles(root, useGit) {
+async function discoverFiles(root: string, useGit: boolean): Promise<string[]> {
   if (!useGit) return collectFiles(root, isRelevantDiscoveredFile);
 
   const { stdout } = await run("git", ["ls-files", "-co", "--exclude-standard", "-z", "--", "."], {
@@ -745,37 +978,37 @@ async function discoverFiles(root, useGit) {
       }
     }),
   );
-  return existing.filter(Boolean).sort(compareStrings);
+  return existing.flatMap((path) => (path ? [path] : [])).sort(compareStrings);
 }
 
-async function discoverPackageRoots(workspaceRoot, paths) {
+async function discoverPackageRoots(workspaceRoot: string, paths: string[]): Promise<string[]> {
   const roots = paths.filter((path) => basename(path) === "package.json").map(dirname);
   try {
     await readFile(join(workspaceRoot, "package.json"), "utf8");
     roots.push(workspaceRoot);
   } catch (error) {
-    if (error.code !== "ENOENT") throw error;
+    if (errorCode(error) !== "ENOENT") throw error;
   }
   return [...new Set(roots)].sort(compareStrings);
 }
 
-function owningPackage(path, packageRoots) {
+function owningPackage(path: string, packageRoots: string[]): string | undefined {
   return packageRoots
     .filter((root) => isWithin(root, path))
     .sort((left, right) => right.length - left.length)[0];
 }
 
-function isWithin(root, path) {
+function isWithin(root: string, path: string): boolean {
   return path === root || path.startsWith(`${root}${sep}`);
 }
 
-function hasIgnoredDirectory(root, path) {
+function hasIgnoredDirectory(root: string, path: string): boolean {
   return relative(root, path)
     .split(/[\\/]/)
     .some((part) => IGNORED_DIRECTORIES.has(part));
 }
 
-function isRelevantDiscoveredFile(path) {
+function isRelevantDiscoveredFile(path: string): boolean {
   return (
     basename(path) === "package.json" ||
     isStylesheetPath(path) ||
@@ -783,20 +1016,20 @@ function isRelevantDiscoveredFile(path) {
   );
 }
 
-function isStylesheetPath(path) {
+function isStylesheetPath(path: string): boolean {
   return STYLESHEET_SYNTAX.has(extension(path));
 }
 
-function stylesheetSyntax(path) {
+function stylesheetSyntax(path: string): string | undefined {
   return STYLESHEET_SYNTAX.get(extension(path));
 }
 
-function isStylesheetModule(path) {
+function isStylesheetModule(path: string): boolean {
   const syntax = stylesheetSyntax(path);
   return syntax !== undefined && path.endsWith(`.module.${syntax}`);
 }
 
-function sourceReferencesStyle(file, stylePath) {
+function sourceReferencesStyle(file: SourceFile, stylePath: string): boolean {
   let importPath = normalizedRelativePath(dirname(file.path), stylePath);
   if (!importPath.startsWith(".")) importPath = `./${importPath}`;
   return [`'${importPath}'`, `"${importPath}"`, `\`${importPath}\``].some((literal) =>
@@ -804,7 +1037,7 @@ function sourceReferencesStyle(file, stylePath) {
   );
 }
 
-function isLocalVueReference(reference) {
+function isLocalVueReference(reference: string): boolean {
   return (
     reference.startsWith(".") ||
     reference.startsWith("/") ||
@@ -819,18 +1052,22 @@ function isLocalVueReference(reference) {
 // An unresolved local reference only threatens the caller proof when it
 // could actually name a Vue file: `.vue` spellings, extensionless paths, and
 // aliases. An explicit foreign extension (`./utils.ts`) cannot.
-function couldResolveToVue(reference) {
+function couldResolveToVue(reference: string): boolean {
   const path = reference.split(/[?#]/, 1)[0];
   return path.endsWith(".vue") || extension(path) === "";
 }
 
-function vueReferenceTarget(importer, reference, vuePaths) {
+function vueReferenceTarget(
+  importer: string,
+  reference: string,
+  vuePaths: Set<string>,
+): string | undefined {
   if (!reference.startsWith(".")) return undefined;
   const target = resolve(dirname(importer), reference);
   return [target, `${target}.vue`, join(target, "index.vue")].find((path) => vuePaths.has(path));
 }
 
-function vueLiteralTargets(file, vuePaths) {
+function vueLiteralTargets(file: SourceFile, vuePaths: Set<string>): Set<string> {
   return new Set(
     [...file.source.matchAll(/(["'`])([^"'`\r\n]+)\1/g)].flatMap((match) => {
       // A local glob can match `.vue` files without spelling the extension
@@ -849,19 +1086,27 @@ function vueLiteralTargets(file, vuePaths) {
   );
 }
 
-function normalizedVueTag(value) {
+function normalizedVueTag(value: string): string {
   return value.replaceAll("-", "").toLowerCase();
 }
 
 function buildVueComponentGraph(
-  ownedVue,
-  sourceFiles,
-  analyses,
-  { styleSources, pathOwners, packageRoot },
+  ownedVue: SourceFile[],
+  sourceFiles: SourceFile[],
+  analyses: Map<string, VueAnalysis>,
+  {
+    styleSources,
+    pathOwners,
+    packageRoot,
+  }: {
+    styleSources: Map<string, string>;
+    pathOwners: Map<string, string | undefined>;
+    packageRoot: string;
+  },
 ) {
   const vuePaths = new Set(ownedVue.map((file) => file.path));
-  const callers = new Map([...vuePaths].map((path) => [path, []]));
-  const callerOpen = new Set();
+  const callers = new Map([...vuePaths].map((path): [string, VueComponentEdge[]] => [path, []]));
+  const callerOpen = new Set<string>();
   // A stylesheet import that does not resolve to a package-owned file (a
   // dependency or aliased stylesheet) still loads globally and can shadow
   // scoped deletions, but its selectors cannot be analyzed.
@@ -870,26 +1115,25 @@ function buildVueComponentGraph(
 
   for (const file of ownedVue) {
     const analysis = analyses.get(file.path);
-    if (analysis.retained) {
+    if (!analysis || analysis.retained) {
       for (const target of vuePaths) callerOpen.add(target);
       continue;
     }
-    const bindings = analysis.componentImports
-      .map((entry) => ({
-        ...entry,
-        target: vueReferenceTarget(file.path, entry.source, vuePaths),
-      }))
-      .filter((entry) => entry.target);
+    const bindings = analysis.componentImports.flatMap((entry) => {
+      const target = vueReferenceTarget(file.path, entry.source, vuePaths);
+      return target ? [{ ...entry, target }] : [];
+    });
     analysis.resolvedComponents = analysis.componentSites.flatMap((site) => {
       const matches = bindings.filter(
         (entry) => normalizedVueTag(entry.local) === normalizedVueTag(site.tag),
       );
       if (matches.length !== 1) return [];
       const edge = { parent: file.path, child: matches[0].target, site };
-      callers.get(edge.child).push(edge);
+      callers.get(edge.child)?.push(edge);
       if (site.idAttribute || analysis.dynamic) {
         callerOpen.add(edge.child);
-        analyses.get(edge.child).rootIdsOverridden = true;
+        const childAnalysis = analyses.get(edge.child);
+        if (childAnalysis) childAnalysis.rootIdsOverridden = true;
       }
       // A component rendered as a single-root parent's root chains the
       // parent's own fallthrough surface down to this child; that chain is
@@ -907,12 +1151,16 @@ function buildVueComponentGraph(
   }
 
   for (const file of sourceFiles) {
-    let references;
-    let blockReferences = [];
+    let references: string[];
+    let blockReferences: string[] = [];
     if (extension(file.path) === ".vue") {
       const fileAnalysis = analyses.get(file.path);
-      references = fileAnalysis?.scriptStyleImports ?? [];
-      blockReferences = fileAnalysis?.styleBlockImports?.map((entry) => entry.reference) ?? [];
+      if (fileAnalysis && !fileAnalysis.retained) {
+        references = fileAnalysis.scriptStyleImports;
+        blockReferences = fileAnalysis.styleBlockImports.map((entry) => entry.reference);
+      } else {
+        references = [];
+      }
     } else {
       try {
         references = staticImports(file.path, file.source);
@@ -932,7 +1180,7 @@ function buildVueComponentGraph(
     ) {
       for (const target of vuePaths) callerOpen.add(target);
     }
-    const resolvesOwned = (reference) =>
+    const resolvesOwned = (reference: string): boolean =>
       stylesheetReferenceTargets(file.path, reference, styleSources).some(
         (path) => pathOwners.get(path) === packageRoot,
       );
@@ -970,7 +1218,7 @@ function buildVueComponentGraph(
 // Vue analysis can produce retention warnings even when nothing remains to
 // plan (all blocks unsupported, unsupported Vue version); surface them
 // through an otherwise empty plan instead of dropping them.
-function vueWarningsOnlyResult(preparedVue) {
+function vueWarningsOnlyResult(preparedVue: PreparedVue): PlanResult {
   if (preparedVue.warnings.length === 0) return {};
   return {
     plan: {
@@ -1001,8 +1249,19 @@ async function preparePackageVue({
   workspaceRoot,
   workspaces,
   scannedPaths,
-}) {
-  const none = {
+}: {
+  packageRoot: string;
+  sourceFiles: SourceFile[];
+  styleSources: Map<string, string>;
+  pathOwners: Map<string, string | undefined>;
+  targetable: Set<string>;
+  explicitStyle?: string;
+  snapshots: Map<string, string>;
+  workspaceRoot: string;
+  workspaces?: boolean;
+  scannedPaths: string[];
+}): Promise<PreparedVue> {
+  const none: PreparedVue = {
     files: new Map(),
     stylesheets: [],
     stylePaths: new Set(),
@@ -1023,8 +1282,8 @@ async function preparePackageVue({
   if (selected.length === 0) return none;
 
   const loaded = await loadProjectVueCompiler(packageRoot);
-  const warnings = [];
-  if (loaded.unsupportedVersion) {
+  const warnings: MigrationWarning[] = [];
+  if (loaded.unsupportedVersion || !loaded.compiler) {
     for (const file of selected) {
       warnings.push({
         code: "unsupported-vue-version",
@@ -1036,15 +1295,24 @@ async function preparePackageVue({
     }
     return { ...none, warnings };
   }
+  const compiler = loaded.compiler;
 
   // Every owned SFC is analyzed even under explicit selection: retained
   // style blocks anywhere in the package feed the cascade-shadow gate below.
   const analyses = new Map(
-    ownedVue.map((file) => [file.path, analyzeVueSource(loaded.compiler, file.path, file.source)]),
+    ownedVue.map((file): [string, VueAnalysis] => [
+      file.path,
+      analyzeVueSource(compiler, file.path, file.source),
+    ]),
   );
+  const analysisOf = (path: string): VueAnalysis => {
+    const analysis = analyses.get(path);
+    if (!analysis) throw new Error(`No Vue analysis was recorded for ${path}`);
+    return analysis;
+  };
   const selectedPaths = new Set(selected.map((file) => file.path));
   for (const file of ownedVue) {
-    const analysis = analyses.get(file.path);
+    const analysis = analysisOf(file.path);
     if (analysis.retained) continue;
     for (const edge of analysis.styleBlockImports) {
       const local = stylesheetReferenceTargets(file.path, edge.reference, styleSources).some(
@@ -1063,9 +1331,9 @@ async function preparePackageVue({
       }
     }
   }
-  let sass;
-  let less;
-  const compileBlocks = async (file, blocks) => {
+  let sass: SassCompiler | undefined;
+  let less: LessCompiler | undefined;
+  const compileBlocks = async (file: SourceFile, blocks: VueStyleBlock[]): Promise<void> => {
     for (const block of blocks.filter((block) => block.syntax !== "css")) {
       const virtualPath = `${file.path}.${block.syntax}`;
       const compiled = isSassPath(virtualPath)
@@ -1093,7 +1361,7 @@ async function preparePackageVue({
     }
   };
   for (const file of selected) {
-    const analysis = analyses.get(file.path);
+    const analysis = analysisOf(file.path);
     if (!analysis.retained) {
       await compileBlocks(file, [...analysis.blocks, ...analysis.moduleBlocks]);
     }
@@ -1114,9 +1382,9 @@ async function preparePackageVue({
   // (interpolation or `&`-concatenation in preprocessor text, inline HTML
   // style blocks, unanalyzable SFCs, unextractable escapes) marks the whole
   // corpus unverifiable and retains every closed deletion.
-  const generatesSelectors = (text) => /#\{|@\{|&[\w-]/.test(text);
-  const vueShadowCss = [];
-  const vueShadowModuleCss = [];
+  const generatesSelectors = (text: string): boolean => /#\{|@\{|&[\w-]/.test(text);
+  const vueShadowCss: ShadowCssEntry[] = [];
+  const vueShadowModuleCss: string[] = [];
   let vueShadowUnverifiable = vueGraph.unresolvedStyleImport;
   for (const [path, source] of styleSources) {
     if (pathOwners.get(path) !== packageRoot) continue;
@@ -1139,7 +1407,7 @@ async function preparePackageVue({
     }
   }
   for (const file of ownedVue) {
-    const analysis = analyses.get(file.path);
+    const analysis = analysisOf(file.path);
     if (analysis.retained) {
       if (/<style/i.test(file.source)) vueShadowUnverifiable = true;
       continue;
@@ -1178,10 +1446,10 @@ async function preparePackageVue({
 
   const packageIsPrivate =
     JSON.parse(await snapshotFile(snapshots, join(packageRoot, "package.json"))).private === true;
-  const files = new Map();
-  const stylesheets = [];
-  const stylePaths = new Set();
-  const unscopedPaths = new Set();
+  const files = new Map<string, PreparedSourceFile>();
+  const stylesheets: StylesheetEntry[] = [];
+  const stylePaths = new Set<string>();
+  const unscopedPaths = new Set<string>();
   const ownedSources = sourceFiles.filter((file) => pathOwners.get(file.path) === packageRoot);
   // A scanned HTML file without a stylesheet link never enters sourceFiles,
   // but its class attributes are still a global usage surface (e.g. a
@@ -1200,25 +1468,32 @@ async function preparePackageVue({
     !explicitStyle &&
     !hiddenHtml &&
     ownedSources.every((file) => targetable.has(file.path)) &&
-    ownedVue.every((file) => !analyses.get(file.path).retained);
-  const elementsByFile = new Map();
-  const addElement = (path, element, cssPaths) => {
+    ownedVue.every((file) => !analysisOf(file.path).retained);
+  const elementsByFile = new Map<string, VuePlannedElement[]>();
+  const addElement = (
+    path: string,
+    element: VueTemplateSite & { matchIds?: string[]; matchTag?: string },
+    cssPaths: string[],
+  ): void => {
     if ((!element.classAttribute && !element.moduleBinding) || cssPaths.length === 0) return;
     const elements = elementsByFile.get(path) ?? [];
     elements.push({ ...element, cssPaths: [...new Set(cssPaths)] });
     elementsByFile.set(path, elements);
   };
-  const elementClasses = (element) =>
+  const elementClasses = (element: VueTemplateSite): string[] =>
     element.matchClasses ?? element.classAttribute?.value.split(/\s+/).filter(Boolean) ?? [];
-  const componentRootSite = (site, root) => ({
-    ...site,
-    matchClasses: [...elementClasses(site), ...elementClasses(root)],
-    matchIds: [site.idAttribute?.value ?? root.idAttribute?.value].filter(Boolean),
-    matchTag: root.tag,
-  });
+  const componentRootSite = (site: VueTemplateSite, root: VueTemplateSite) => {
+    const matchId = site.idAttribute?.value ?? root.idAttribute?.value;
+    return {
+      ...site,
+      matchClasses: [...elementClasses(site), ...elementClasses(root)],
+      matchIds: matchId ? [matchId] : [],
+      matchTag: root.tag,
+    };
+  };
 
   for (const file of selected) {
-    const analysis = analyses.get(file.path);
+    const analysis = analysisOf(file.path);
     if (analysis.retained) continue;
     const importedStyles = new Set(
       [
@@ -1239,7 +1514,7 @@ async function preparePackageVue({
     for (const path of importedStyles) {
       stylePaths.add(path);
       if (extension(path) !== ".css") continue;
-      for (const imported of cssImports(styleSources.get(path))) {
+      for (const imported of cssImports(styleSources.get(path) ?? "")) {
         // Conditional imports need variant-aware contexts; retaining them is
         // safer than attaching an unconditional utility.
         if (imported.media) continue;
@@ -1266,24 +1541,25 @@ async function preparePackageVue({
   }
 
   for (const parent of ownedVue) {
-    const analysis = analyses.get(parent.path);
+    const analysis = analysisOf(parent.path);
     if (analysis.retained) continue;
-    for (const edge of analysis.resolvedComponents) {
+    for (const edge of analysis.resolvedComponents ?? []) {
       const childAnalysis = analyses.get(edge.child);
+      const childDetails = childAnalysis && !childAnalysis.retained ? childAnalysis : undefined;
       // Vue only inherits call-site attributes onto a single-root child, so
       // the total root count must gate the rewrite independently of writable sites.
       const singleRoot =
-        childAnalysis?.rootStarts.length === 1 &&
-        !childAnalysis.rootVFor &&
-        !childAnalysis.rootFragment;
-      const childRoots = childAnalysis?.htmlElements.filter((element) =>
-        childAnalysis.rootStarts.includes(element.nodeStart),
+        childDetails?.rootStarts.length === 1 &&
+        !childDetails.rootVFor &&
+        !childDetails.rootFragment;
+      const childRoots = childDetails?.htmlElements.filter((element) =>
+        childDetails.rootStarts.includes(element.nodeStart),
       );
       if (
         selectedPaths.has(parent.path) &&
         singleRoot &&
         childRoots?.length === 1 &&
-        !childAnalysis.fallthroughUnverifiable
+        !childDetails?.fallthroughUnverifiable
       ) {
         addElement(parent.path, componentRootSite(edge.site, childRoots[0]), [parent.path]);
       }
@@ -1293,7 +1569,7 @@ async function preparePackageVue({
         // A self-recursive edge is already covered by the parent-style site
         // above; adding the same span twice would produce overlapping edits.
         edge.parent !== edge.child &&
-        !childAnalysis?.fallthroughUnverifiable
+        !childDetails?.fallthroughUnverifiable
       ) {
         addElement(parent.path, edge.site, [edge.child]);
         if (childRoots?.length === 1) {
@@ -1316,12 +1592,12 @@ async function preparePackageVue({
 
   for (const file of selected) {
     await rejectSymlinkTarget(file.path, packageRoot);
-    const analysis = analyses.get(file.path);
+    const analysis = analysisOf(file.path);
     warnings.push(...analysis.warnings);
     if (analysis.retained) continue;
     const componentOpen =
       analysis.componentsOpen ||
-      analysis.resolvedComponents.some((edge) => {
+      (analysis.resolvedComponents ?? []).some((edge) => {
         const child = analyses.get(edge.child);
         return (
           !child ||
@@ -1334,14 +1610,15 @@ async function preparePackageVue({
           !child.htmlElements.some((element) => element.nodeStart === child.rootStarts[0])
         );
       });
-    const callers = vueGraph.callers.get(file.path);
+    const callers = vueGraph.callers.get(file.path) ?? [];
     const callerOpen =
       !packageIsPrivate ||
       callers.length === 0 ||
       vueGraph.callerOpen.has(file.path) ||
-      callers.some(
-        (edge) => analyses.get(edge.parent)?.dynamic || analyses.get(edge.parent)?.retained,
-      );
+      callers.some((edge) => {
+        const parent = analyses.get(edge.parent);
+        return parent ? parent.retained || parent.dynamic : false;
+      });
     const retention = analysis.dynamic
       ? "dynamic-template-class"
       : componentOpen
@@ -1470,7 +1747,7 @@ async function preparePackageVue({
   }
 
   for (const file of ownedVue) {
-    const analysis = analyses.get(file.path);
+    const analysis = analysisOf(file.path);
     if (analysis.retained) continue;
     const elements = elementsByFile.get(file.path) ?? [];
     const contextPaths = [...new Set(elements.flatMap((element) => element.cssPaths))];
@@ -1495,7 +1772,7 @@ async function preparePackageVue({
     stylePaths,
     unscopedPaths,
     warnings,
-    compiler: loaded.compiler,
+    compiler,
     sass,
     less,
   };
@@ -1508,12 +1785,19 @@ async function preparePackageHtml({
   snapshots,
   pathOwners,
   styleDependents,
-}) {
-  const files = [];
-  const stylePaths = new Set();
-  const generatedPaths = new Set();
-  const removableLinks = [];
-  const warnings = [];
+}: {
+  packageRoot: string;
+  sourceFiles: SourceFile[];
+  styleSources: Map<string, string>;
+  snapshots: Map<string, string>;
+  pathOwners: Map<string, string | undefined>;
+  styleDependents: Map<string, string[]>;
+}): Promise<PreparedHtml> {
+  const files: PreparedSourceFile[] = [];
+  const stylePaths = new Set<string>();
+  const generatedPaths = new Set<string>();
+  const removableLinks: RemovableLink[] = [];
+  const warnings: MigrationWarning[] = [];
 
   const htmlFiles = sourceFiles.filter((file) => extension(file.path) === ".html");
   // Package-owned HTML goes first so stylesheets it discovers are claimed for
@@ -1531,8 +1815,8 @@ async function preparePackageHtml({
     if (foreign && !owner) continue;
     const referenceRoot = foreign ? owner : packageRoot;
     const parsed = parseHtmlSource(file.path, file.source);
-    const contexts = [];
-    let linkBase = dirname(file.path);
+    const contexts: HtmlContext[] = [];
+    let linkBase: string | undefined = dirname(file.path);
     const base = parsed.bases[0];
     if (base) {
       const baseReference = base.href.split(/[?#]/, 1)[0];
@@ -1658,7 +1942,24 @@ async function preparePackageHtml({
   return { files, stylePaths, generatedPaths, removableLinks, warnings };
 }
 
-async function collectHtmlStyleContexts(state) {
+interface HtmlContextState {
+  path: string;
+  variants: string[];
+  direct: boolean;
+  packageRoot: string;
+  sourceFiles: SourceFile[];
+  styleSources: Map<string, string>;
+  snapshots: Map<string, string>;
+  pathOwners: Map<string, string | undefined>;
+  styleDependents: Map<string, string[]>;
+  stylePaths: Set<string>;
+  generatedPaths: Set<string>;
+  contexts: HtmlContext[];
+  warnings: MigrationWarning[];
+  visited: Set<string>;
+}
+
+async function collectHtmlStyleContexts(state: HtmlContextState): Promise<void> {
   const key = `${state.path}\0${state.variants.join(":")}`;
   if (state.visited.has(key)) return;
   state.visited.add(key);
@@ -1682,7 +1983,7 @@ async function collectHtmlStyleContexts(state) {
     source =
       state.styleSources.get(state.path) ?? (await snapshotFile(state.snapshots, state.path));
   } catch (error) {
-    if (error.code === "ENOENT") {
+    if (errorCode(error) === "ENOENT") {
       if (extension(state.path) === ".css") addInferredPreprocessorContext(state);
       return;
     }
@@ -1738,7 +2039,12 @@ async function collectHtmlStyleContexts(state) {
   }
 }
 
-function inferredPreprocessorPath(state) {
+function inferredPreprocessorPath(
+  state: Pick<
+    HtmlContextState,
+    "path" | "packageRoot" | "styleSources" | "pathOwners" | "styleDependents"
+  >,
+): string | undefined {
   const stem = basename(state.path, ".css");
   const matches = [...state.styleSources.keys()].filter(
     (path) =>
@@ -1751,7 +2057,7 @@ function inferredPreprocessorPath(state) {
   return matches.length === 1 ? matches[0] : undefined;
 }
 
-function addInferredPreprocessorContext(state) {
+function addInferredPreprocessorContext(state: HtmlContextState): boolean {
   // A source importing the generated CSS pins the artifact itself: excluding
   // it from planning while migrating the inferred entry could delete the only
   // source able to rebuild the file that import depends on.
@@ -1785,8 +2091,8 @@ function addInferredPreprocessorContext(state) {
   return true;
 }
 
-function cssImports(source) {
-  const imports = [];
+function cssImports(source: string): CssImport[] {
+  const imports: CssImport[] = [];
   const masked = maskCssComments(source);
   let depth = 0;
   let quote;
@@ -1857,12 +2163,16 @@ function cssImports(source) {
   );
   return imports.map((imported) => ({
     ...imported,
-    start: offsets.get(imported.start),
-    end: offsets.get(imported.end),
+    start: offsets.get(imported.start) ?? imported.start,
+    end: offsets.get(imported.end) ?? imported.end,
   }));
 }
 
-function localHtmlReference(packageRoot, base, reference) {
+function localHtmlReference(
+  packageRoot: string,
+  base: string,
+  reference: string,
+): string | undefined {
   const path = reference.split(/[?#]/, 1)[0];
   if (!path || path.startsWith("//") || /^[a-z][a-z\d+.-]*:/i.test(path)) return undefined;
   let decoded;
@@ -1874,15 +2184,15 @@ function localHtmlReference(packageRoot, base, reference) {
   return decoded.startsWith("/") ? resolve(packageRoot, `.${decoded}`) : resolve(base, decoded);
 }
 
-function mediaVariants(media) {
+function mediaVariants(media: string): string[] | undefined {
   const normalized = media.trim().toLowerCase();
   if (!normalized || normalized === "all") return [];
   if (normalized === "print") return ["print"];
   return undefined;
 }
 
-function deduplicateHtmlContexts(contexts) {
-  const unique = new Map();
+function deduplicateHtmlContexts(contexts: HtmlContext[]): HtmlContext[] {
+  const unique = new Map<string, HtmlContext>();
   for (const context of contexts) {
     const key = `${context.cssPath}\0${context.variants.join(":")}\0${context.analyzable}`;
     const existing = unique.get(key);
@@ -1892,18 +2202,24 @@ function deduplicateHtmlContexts(contexts) {
   return [...unique.values()];
 }
 
-function htmlWarning(code, file, start, end, message) {
+function htmlWarning(
+  code: string,
+  file: string,
+  start: number,
+  end: number,
+  message: string,
+): MigrationWarning {
   return { code, file, start, end, message };
 }
 
-function isProjectInput(workspaceRoot, path) {
+function isProjectInput(workspaceRoot: string, path: string): boolean {
   return (
     isWithin(workspaceRoot, path) &&
     !relative(workspaceRoot, path).split(/[\\/]/).includes("node_modules")
   );
 }
 
-async function rejectSymlinkTarget(path, root) {
+async function rejectSymlinkTarget(path: string, root: string): Promise<void> {
   for (let current = path; isWithin(root, current); current = dirname(current)) {
     if ((await lstat(current)).isSymbolicLink()) {
       throw new Error(`Refusing to migrate a symbolic-link target: ${path}`);
@@ -1912,25 +2228,25 @@ async function rejectSymlinkTarget(path, root) {
   }
 }
 
-async function snapshotFile(snapshots, path) {
+async function snapshotFile(snapshots: Map<string, string>, path: string): Promise<string> {
   return recordSnapshot(snapshots, path, await readFile(path, "utf8"));
 }
 
 // The compiler just loaded this dependency, so its disappearance is a source
 // change during planning -- a fatal integrity error `--force` must not
 // downgrade to a recoverable package failure.
-async function snapshotLoadedSource(snapshots, path) {
+async function snapshotLoadedSource(snapshots: Map<string, string>, path: string): Promise<string> {
   try {
     return await snapshotFile(snapshots, path);
   } catch (error) {
-    if (error.code === "ENOENT") {
+    if (errorCode(error) === "ENOENT") {
       throw new Error(`Source changed during planning: ${path}`);
     }
     throw error;
   }
 }
 
-function recordSnapshot(snapshots, path, source) {
+function recordSnapshot(snapshots: Map<string, string>, path: string, source: string): string {
   if (snapshots.has(path) && snapshots.get(path) !== source) {
     throw new Error(`Source changed during planning: ${path}`);
   }
@@ -1938,7 +2254,11 @@ function recordSnapshot(snapshots, path, source) {
   return source;
 }
 
-function packageFailure(workspaceRoot, packageRoot, error) {
+function packageFailure(
+  workspaceRoot: string,
+  packageRoot: string,
+  error: unknown,
+): MigrationFailure {
   const message = error instanceof Error ? error.message : String(error);
   return {
     package: normalizedRelativePath(workspaceRoot, packageRoot) || ".",
@@ -1948,30 +2268,37 @@ function packageFailure(workspaceRoot, packageRoot, error) {
   };
 }
 
-function isRecoverablePlanningError(error) {
+function isRecoverablePlanningError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.startsWith(RECOVERABLE_INPUT_ERROR);
 }
 
-function isMissingStyleCompilerError(error) {
+function isMissingStyleCompilerError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /^(?:Sass|Less) must be installed in the target project\.$/.test(message);
 }
 
-function isIntegrityError(error) {
+function isIntegrityError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.startsWith("Source changed during planning:");
 }
 
-async function readSources(paths, snapshots) {
+async function readSources(
+  paths: string[],
+  snapshots: Map<string, string>,
+): Promise<Map<string, string>> {
   return new Map(
-    await Promise.all(paths.map(async (path) => [path, await snapshotFile(snapshots, path)])),
+    await Promise.all(
+      paths.map(
+        async (path): Promise<[string, string]> => [path, await snapshotFile(snapshots, path)],
+      ),
+    ),
   );
 }
 
-async function collectFiles(root, include) {
-  const files = [];
-  async function visit(directory) {
+async function collectFiles(root: string, include: (path: string) => boolean): Promise<string[]> {
+  const files: string[] = [];
+  async function visit(directory: string): Promise<void> {
     const entries = await readdir(directory, { withFileTypes: true });
     entries.sort((left, right) => left.name.localeCompare(right.name));
     for (const entry of entries) {
@@ -1987,21 +2314,21 @@ async function collectFiles(root, include) {
   return files;
 }
 
-function extension(path) {
+function extension(path: string): string {
   const match = /\.[^./]+$/.exec(path);
   return match?.[0] ?? "";
 }
 
-function normalizedRelativePath(root, path) {
+function normalizedRelativePath(root: string, path: string): string {
   return relative(root, path).split(sep).join("/");
 }
 
-function maskCssComments(source) {
+function maskCssComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\r\n]/g, " "));
 }
 
-function indexStylesheetDependents(styleSources) {
-  const dependents = new Map();
+function indexStylesheetDependents(styleSources: Map<string, string>): Map<string, string[]> {
+  const dependents = new Map<string, string[]>();
   for (const [path, rawSource] of styleSources) {
     const source = maskCssComments(rawSource);
     const references = [
@@ -2032,7 +2359,11 @@ function indexStylesheetDependents(styleSources) {
   return dependents;
 }
 
-function addStyleDependent(styleDependents, target, importer) {
+function addStyleDependent(
+  styleDependents: Map<string, string[]>,
+  target: string,
+  importer: string,
+): void {
   const paths = styleDependents.get(target) ?? [];
   if (paths.includes(importer)) return;
   paths.push(importer);
@@ -2040,7 +2371,11 @@ function addStyleDependent(styleDependents, target, importer) {
   styleDependents.set(target, paths);
 }
 
-function stylesheetReferenceTargets(importer, reference, styleSources) {
+function stylesheetReferenceTargets(
+  importer: string,
+  reference: string,
+  styleSources: Map<string, string>,
+): string[] {
   const target = resolve(dirname(importer), reference);
   const candidates = STYLESHEET_SYNTAX.has(extension(target))
     ? [target]
@@ -2053,10 +2388,14 @@ function stylesheetReferenceTargets(importer, reference, styleSources) {
   return candidates.filter((path) => styleSources.has(path));
 }
 
-function resolveTailwindEntry(stylePaths, styleSources, configuredPath) {
+function resolveTailwindEntry(
+  stylePaths: string[],
+  styleSources: Map<string, string>,
+  configuredPath?: string,
+): { path: string; entries: string[] } {
   const entries = stylePaths.filter((path) => {
     if (extension(path) !== ".css") return false;
-    const source = maskCssComments(styleSources.get(path));
+    const source = maskCssComments(styleSources.get(path) ?? "");
     return /@import\s+["']tailwindcss(?:\/[^"']*)?["']/.test(source);
   });
   if (configuredPath) return { path: configuredPath, entries };
@@ -2067,7 +2406,12 @@ function resolveTailwindEntry(stylePaths, styleSources, configuredPath) {
   return { path: entries[0], entries };
 }
 
-async function loadTailwind(packageRoot, tailwindCss, snapshots, workspaceRoot) {
+async function loadTailwind(
+  packageRoot: string,
+  tailwindCss: string,
+  snapshots: Map<string, string>,
+  workspaceRoot: string,
+): Promise<LoadedTailwind> {
   const projectRequire = createRequire(join(packageRoot, "package.json"));
   let packagePath;
   try {
@@ -2080,7 +2424,7 @@ async function loadTailwind(packageRoot, tailwindCss, snapshots, workspaceRoot) 
     throw new Error(`Tailwind v4 is required; found ${packageJson.version}.`);
 
   const modulePath = projectRequire.resolve("tailwindcss");
-  const tailwindModule = await import(pathToFileURL(modulePath));
+  const tailwindModule = await import(pathToFileURL(modulePath).href);
   const { __unstable__loadDesignSystem: loadDesignSystem } =
     tailwindModule.default ?? tailwindModule;
   const css = await snapshotFile(snapshots, tailwindCss);
@@ -2101,8 +2445,8 @@ async function loadTailwind(packageRoot, tailwindCss, snapshots, workspaceRoot) 
   return { designSystem, css, path: tailwindCss, themeTokens };
 }
 
-function extractThemeTokens(css) {
-  const tokens = {};
+function extractThemeTokens(css: string): Record<string, string> {
+  const tokens: Record<string, string> = {};
   for (const block of css.matchAll(/@theme[^{]*\{([^}]*)\}/gs)) {
     for (const match of block[1].matchAll(/--([\w-]+):\s*([^;{}]+);/g))
       tokens[match[1]] = match[2].trim();
@@ -2110,8 +2454,13 @@ function extractThemeTokens(css) {
   return tokens;
 }
 
-async function extractThemeTokensFromGraph(css, base, loadStylesheet, seen = new Set()) {
-  const tokens = {};
+async function extractThemeTokensFromGraph(
+  css: string,
+  base: string,
+  loadStylesheet: StylesheetLoader,
+  seen = new Set<string>(),
+): Promise<Record<string, string>> {
+  const tokens: Record<string, string> = {};
   for (const match of css.matchAll(/@import\s+["']([^"']+)["']/g)) {
     const key = `${base}\0${match[1]}`;
     if (seen.has(key)) continue;
@@ -2125,21 +2474,26 @@ async function extractThemeTokensFromGraph(css, base, loadStylesheet, seen = new
   return Object.assign(tokens, extractThemeTokens(css));
 }
 
-function invalidCandidates(tailwind, candidates) {
+function invalidCandidates(tailwind: LoadedTailwind, candidates: string[]): string[] {
   const generated = tailwind.designSystem.candidatesToCss(candidates);
   return candidates.filter((_, index) => generated[index] === null);
 }
 
-function createModuleLoader(snapshots, workspaceRoot) {
-  return async (id, base) => {
+function createModuleLoader(snapshots: Map<string, string>, workspaceRoot: string) {
+  return async (id: string, base: string) => {
     const path = createRequire(join(base, "package.json")).resolve(id);
     if (isProjectInput(workspaceRoot, path)) await snapshotFile(snapshots, path);
-    const imported = await import(pathToFileURL(path));
+    const imported = await import(pathToFileURL(path).href);
     return { path, base: dirname(path), module: imported.default ?? imported };
   };
 }
 
-function createStylesheetLoader(projectRequire, tailwindPackagePath, snapshots, workspaceRoot) {
+function createStylesheetLoader(
+  projectRequire: NodeJS.Require,
+  tailwindPackagePath: string,
+  snapshots: Map<string, string>,
+  workspaceRoot: string,
+): StylesheetLoader {
   const tailwindRoot = dirname(tailwindPackagePath);
   return async (id, base) => {
     let path;
@@ -2156,7 +2510,7 @@ function createStylesheetLoader(projectRequire, tailwindPackagePath, snapshots, 
   };
 }
 
-function unifiedDiff(path, before, after) {
+function unifiedDiff(path: string, before: string, after: string): string {
   const oldLines = before.split("\n");
   const newLines = after.split("\n");
   return [
@@ -2172,7 +2526,7 @@ function unifiedDiff(path, before, after) {
   ].join("");
 }
 
-async function verifySnapshots(snapshots) {
+async function verifySnapshots(snapshots: Map<string, string>): Promise<void> {
   for (const [path, before] of [...snapshots].sort(([left], [right]) =>
     left.localeCompare(right),
   )) {
@@ -2180,23 +2534,27 @@ async function verifySnapshots(snapshots) {
     try {
       current = await readFile(path, "utf8");
     } catch (error) {
-      throw new Error(`Source changed after planning: ${path} (${error.code ?? error.message})`);
+      const detail = errorCode(error) ?? (error instanceof Error ? error.message : String(error));
+      throw new Error(`Source changed after planning: ${path} (${detail})`);
     }
     if (current !== before) throw new Error(`Source changed after planning: ${path}`);
   }
 }
 
-async function writeChanges(changes, deletions) {
+async function writeChanges(
+  changes: (SourceFile & { before: string })[],
+  deletions: { path: string; before: string }[],
+): Promise<void> {
   const token = `${process.pid}-${Date.now()}`;
-  const staged = changes.map((change, index) => [
+  const staged = changes.map((change, index): [string, SourceFile] => [
     join(dirname(change.path), `.${basename(change.path)}.tw-migrate-${token}-${index}`),
     change,
   ]);
-  const backups = [...changes, ...deletions].map((change, index) => [
+  const backups = [...changes, ...deletions].map((change, index): [string, string] => [
     join(dirname(change.path), `.${basename(change.path)}.tw-migrate-backup-${token}-${index}`),
     change.path,
   ]);
-  const backedUp = [];
+  const backedUp: [string, string][] = [];
   let succeeded = false;
   try {
     for (const [temporaryPath, change] of staged) {
