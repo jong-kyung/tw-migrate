@@ -27,12 +27,11 @@
     "tw-migrate": "dist/bin.js"
   },
   "files": [
-    "dist",
-    "index.d.ts"
+    "dist"
   ],
   "type": "module",
   "main": "dist/index.js",
-  "types": "index.d.ts",
+  "types": "dist/index.d.ts",
   "scripts": {
     "build": "vp pack && napi build --manifest-path crates/tw_migrate/Cargo.toml --package-json-path package.json --output-dir . --platform --release --no-js --dts binding.d.ts",
     "build:debug": "napi build --manifest-path crates/tw_migrate/Cargo.toml --package-json-path package.json --output-dir . --platform --no-js --dts binding.d.ts",

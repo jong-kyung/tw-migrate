@@ -17,9 +17,7 @@ export default defineConfig({
   pack: {
     entry: ["src/bin.ts", "src/index.ts"],
     fixedExtension: false,
-    // The published declarations are the curated root index.d.ts until the
-    // sources are TypeScript; dts generation takes over in that phase.
-    dts: false,
+    dts: true,
   },
   staged: {
     "*": "vp check --fix",
