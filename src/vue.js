@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { utf8OffsetMap } from "./html.js";
-import { staticImportBindings, staticImports, staticStringExpression } from "./native.js";
+import { staticImportBindings, staticImports, staticStringExpression } from "./native.ts";
 
 const ESCAPE_SELECTOR = /(?:::v-|:)(?:deep|global|slotted)\(([^)]*)\)/g;
 const ESCAPE_RESIDUE = /(?:>>>|\/deep\/|::v-deep|:deep|::v-slotted|:slotted|::v-global|:global)/;

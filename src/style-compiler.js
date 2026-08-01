@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { decodeSourceMap } from "./native.js";
+import { decodeSourceMap } from "./native.ts";
 
 const SASS_EXTENSIONS = new Set([".scss", ".sass"]);
 

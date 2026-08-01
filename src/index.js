@@ -16,7 +16,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 import { parseHtmlSource, utf8OffsetMap } from "./html.js";
-import { planBatchMigration, staticImports, validateCss } from "./native.js";
+import { planBatchMigration, staticImports, validateCss } from "./native.ts";
 import { analyzeVueSource, loadProjectVueCompiler, verifyVueSource } from "./vue.js";
 import {
   compileLessEntry,

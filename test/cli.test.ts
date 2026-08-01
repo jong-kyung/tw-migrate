@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vite-plus/test";
 
-import { formatDiagnostic } from "../src/diagnostics.js";
+import { formatDiagnostic } from "../src/diagnostics.ts";
 
 test("colors terminal diagnostics unless NO_COLOR is set", () => {
   const ansiEscape = String.fromCharCode(27);

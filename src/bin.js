@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import packageJson from "../package.json" with { type: "json" };
-import { formatDiagnostic } from "./diagnostics.js";
+import { formatDiagnostic } from "./diagnostics.ts";
 
 const { version } = packageJson;
 const usage = "Usage: tw-migrate [style-file] [options]";
