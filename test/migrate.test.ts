@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { lstat, mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdtemp,
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
@@ -10,6 +20,7 @@ import { __unstable__loadDesignSystem as loadDesignSystem } from "tailwindcss";
 
 import { migrate } from "../src/index.ts";
 import { compileSassEntry, loadProjectSass, sourceMappings } from "../src/parser/style-compiler.ts";
+import { writeChanges } from "../src/util/write.ts";
 
 const initialCss = ".button { padding: 13px; }\n";
 const initialTsx =
@@ -2097,6 +2108,26 @@ test("withholds quote-bearing candidates from quoted HTML attributes and retains
   // single-quoted one can, and the global rules stay retained as always.
   assert.ok(!report.diff.includes("My_Font"));
   assert.match(report.diff, /class='btn p-\[13px\]'/);
+});
+
+test("staging failure leaves originals intact and no temporary artifacts", async () => {
+  const cwd = await tempDir();
+  const goodPath = join(cwd, "good.css");
+  const before = ".a { color: red; }\n";
+  await writeFile(goodPath, before);
+  await assert.rejects(
+    writeChanges(
+      [
+        { path: goodPath, source: ".a { color: blue; }\n", before },
+        { path: join(cwd, "missing.css"), source: "", before: "" },
+      ],
+      [],
+    ),
+    { code: "ENOENT" },
+  );
+  assert.equal(await readFile(goodPath, "utf8"), before);
+  const leftovers = (await readdir(cwd)).filter((name) => name.includes(".tw-migrate-"));
+  assert.deepEqual(leftovers, []);
 });
 
 test("preserves CRLF line endings through a partial migration", async () => {

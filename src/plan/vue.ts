@@ -2,6 +2,7 @@ import { dirname, join, resolve } from "node:path";
 
 import { staticImports, validateCss } from "../native.ts";
 import { compileStyleEntry, isPreprocessorPath } from "../parser/style-compiler.ts";
+import type { StyleCompilers } from "../parser/style-compiler.ts";
 import { analyzeVueSource, loadProjectVueCompiler } from "../parser/vue.ts";
 import {
   STYLESHEET_SYNTAX,
@@ -232,6 +233,7 @@ export function vueWarningsOnlyResult(preparedVue: PreparedVue): PlanResult {
 // blocks or templates cannot be analyzed keep their raw source and warn.
 export async function preparePackageVue({
   packageRoot,
+  styleCompilers,
   sourceFiles,
   styleSources,
   pathOwners,
@@ -243,6 +245,7 @@ export async function preparePackageVue({
   scannedPaths,
 }: {
   packageRoot: string;
+  styleCompilers: StyleCompilers;
   sourceFiles: SourceFile[];
   styleSources: Map<string, string>;
   pathOwners: Map<string, string | undefined>;
@@ -326,9 +329,13 @@ export async function preparePackageVue({
   const compileBlocks = async (file: SourceFile, blocks: VueStyleBlock[]): Promise<void> => {
     for (const block of blocks.filter((block) => block.syntax !== "css")) {
       const virtualPath = `${file.path}.${block.syntax}`;
-      const compiled = await compileStyleEntry(packageRoot, virtualPath, block.content, {
-        virtualEntry: true,
-      });
+      const compiled = await compileStyleEntry(
+        styleCompilers,
+        packageRoot,
+        virtualPath,
+        block.content,
+        { virtualEntry: true },
+      );
       validateCss(compiled.css);
       for (const loadedPath of compiled.loadedPaths) {
         if (loadedPath === virtualPath || !isProjectInput(workspaceRoot, loadedPath)) continue;

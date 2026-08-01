@@ -35,13 +35,16 @@ export async function writeChanges(
   const backedUp: [string, string][] = [];
   let succeeded = false;
   try {
-    await Promise.all(
+    const stagingResults = await Promise.allSettled(
       staged.map(async ([temporaryPath, change]) => {
         const { mode } = await stat(change.path);
         await writeFile(temporaryPath, change.source);
         await chmod(temporaryPath, mode & 0o777);
       }),
     );
+    for (const result of stagingResults) {
+      if (result.status === "rejected") throw result.reason;
+    }
     for (const [backupPath, originalPath] of backups) {
       await rename(originalPath, backupPath);
       backedUp.push([backupPath, originalPath]);

@@ -28,6 +28,7 @@ import {
   SOURCE_EXTENSIONS,
 } from "./util/shared.ts";
 import { compileStyleEntry, isPreprocessorPath, isSassPath } from "./parser/style-compiler.ts";
+import type { StyleCompilers } from "./parser/style-compiler.ts";
 import { invalidCandidates, loadTailwind, resolveTailwindEntry } from "./tailwind.ts";
 import { verifyVueSource } from "./parser/vue.ts";
 import { preparePackageVue, vueWarningsOnlyResult } from "./plan/vue.ts";
@@ -228,10 +229,12 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
   } catch (error) {
     return recover(error, isIntegrityError(error));
   }
+  const styleCompilers: StyleCompilers = {};
   let preparedVue;
   try {
     preparedVue = await preparePackageVue({
       packageRoot,
+      styleCompilers,
       sourceFiles,
       styleSources,
       pathOwners,
@@ -346,7 +349,12 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
       if ((isSassPath(stylePath) && !isPartial) || extension(stylePath) === ".less") {
         // Compile the snapshotted source, not the on-disk file: code loaded
         // during planning (e.g. Tailwind plugins) may have rewritten it since.
-        compiled = await compileStyleEntry(packageRoot, stylePath, stylesheet.cssSource);
+        compiled = await compileStyleEntry(
+          styleCompilers,
+          packageRoot,
+          stylePath,
+          stylesheet.cssSource,
+        );
       }
       if (compiled) {
         validateCss(compiled.css);
@@ -437,6 +445,7 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
           validateCss(
             (
               await compileStyleEntry(
+                styleCompilers,
                 packageRoot,
                 `${file.path}.${index}.${block.syntax}`,
                 block.content,
@@ -453,7 +462,9 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
       const changed = plan.files.find((file) => file.path === stylesheet.cssPath);
       if (!changed && !plan.deletedFiles.includes(stylesheet.cssPath)) continue;
       const source = changed?.source ?? "";
-      validateCss((await compileStyleEntry(packageRoot, stylesheet.cssPath, source)).css);
+      validateCss(
+        (await compileStyleEntry(styleCompilers, packageRoot, stylesheet.cssPath, source)).css,
+      );
     }
   } catch (error) {
     return recover(error, !isMissingStyleCompilerError(error));

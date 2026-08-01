@@ -101,22 +101,26 @@ export function loadProjectLess(packageRoot: string): Promise<LessCompiler> {
   return loadProjectModule(packageRoot, "less", "Less must be installed in the target project.");
 }
 
-const sassCompilers = new Map<string, SassCompiler>();
-const lessCompilers = new Map<string, LessCompiler>();
+// Compiler reuse is scoped to one package-planning run so a later migrate()
+// call re-resolves the target project's compilers instead of reusing a
+// possibly uninstalled one from an earlier invocation.
+export interface StyleCompilers {
+  sass?: SassCompiler;
+  less?: LessCompiler;
+}
 
 export async function compileStyleEntry(
+  compilers: StyleCompilers,
   packageRoot: string,
   entryPath: string,
   source: string,
   options: { virtualEntry?: boolean } = {},
 ): Promise<CompiledStyleEntry> {
   if (isSassPath(entryPath)) {
-    let sass = sassCompilers.get(packageRoot);
-    if (!sass) sassCompilers.set(packageRoot, (sass = await loadProjectSass(packageRoot)));
+    const sass = (compilers.sass ??= await loadProjectSass(packageRoot));
     return compileSassEntry(sass, entryPath, source, options);
   }
-  let less = lessCompilers.get(packageRoot);
-  if (!less) lessCompilers.set(packageRoot, (less = await loadProjectLess(packageRoot)));
+  const less = (compilers.less ??= await loadProjectLess(packageRoot));
   return compileLessEntry(less, entryPath, source);
 }
 
