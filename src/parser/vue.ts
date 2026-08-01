@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { utf8OffsetMap } from "./html.ts";
-import { staticImportBindings, staticImports, staticStringExpression } from "./native.ts";
-import type { StaticImportBinding } from "./native.ts";
+import { staticImportBindings, staticImports, staticStringExpression } from "../native.ts";
+import type { StaticImportBinding } from "../native.ts";
 import type { SourceMapping } from "./style-compiler.ts";
 
 const ESCAPE_SELECTOR = /(?:::v-|:)(?:deep|global|slotted)\(([^)]*)\)/g;
