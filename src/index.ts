@@ -27,19 +27,11 @@ import {
   stylesheetSyntax,
   SOURCE_EXTENSIONS,
 } from "./util/shared.ts";
-import {
-  compileLessEntry,
-  compileSassEntry,
-  isPreprocessorPath,
-  isSassPath,
-  loadProjectLess,
-  loadProjectSass,
-} from "./parser/style-compiler.ts";
+import { compileStyleEntry, isPreprocessorPath, isSassPath } from "./parser/style-compiler.ts";
 import { invalidCandidates, loadTailwind, resolveTailwindEntry } from "./tailwind.ts";
 import { verifyVueSource } from "./parser/vue.ts";
 import { preparePackageVue, vueWarningsOnlyResult } from "./plan/vue.ts";
 import { verifySnapshots, writeChanges } from "./util/write.ts";
-import type { LessCompiler, SassCompiler } from "./parser/style-compiler.ts";
 import type {
   LoadedTailwind,
   MigrateOptions,
@@ -216,9 +208,13 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
     styleDependents,
     pathOwners,
     targetable,
-    writablePackages,
+    selectedPackages,
     scannedPaths,
   } = context;
+  const recover = (error: unknown, fatal = false): PlanResult => {
+    if (!options.force || fatal) throw error;
+    return { failure: packageFailure(workspaceRoot, packageRoot, error) };
+  };
   let preparedHtml;
   try {
     preparedHtml = await preparePackageHtml({
@@ -230,8 +226,7 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
       styleDependents,
     });
   } catch (error) {
-    if (!options.force || isIntegrityError(error)) throw error;
-    return { failure: packageFailure(workspaceRoot, packageRoot, error) };
+    return recover(error, isIntegrityError(error));
   }
   let preparedVue;
   try {
@@ -248,8 +243,7 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
       scannedPaths,
     });
   } catch (error) {
-    if (!options.force || isIntegrityError(error)) throw error;
-    return { failure: packageFailure(workspaceRoot, packageRoot, error) };
+    return recover(error, isIntegrityError(error));
   }
   // An explicit .vue selection that produced nothing to plan must surface
   // its retention warnings without requiring an unrelated Tailwind entry.
@@ -287,8 +281,7 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
       configuredEntry,
     ));
   } catch (error) {
-    if (!options.force) throw error;
-    return { failure: packageFailure(workspaceRoot, packageRoot, error) };
+    return recover(error);
   }
 
   const excludedEntries = new Set([...tailwindEntries, tailwindPath]);
@@ -319,8 +312,7 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
   try {
     tailwind = await loadTailwind(packageRoot, tailwindPath, snapshots, workspaceRoot);
   } catch (error) {
-    if (!options.force || isIntegrityError(error)) throw error;
-    return { failure: packageFailure(workspaceRoot, packageRoot, error) };
+    return recover(error, isIntegrityError(error));
   }
 
   const files = packageSources.map((file): PlannedFile => {
@@ -330,13 +322,11 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
       writable:
         targetable.has(file.path) &&
         (options.workspaces
-          ? owner !== undefined && writablePackages.has(owner)
+          ? owner !== undefined && selectedPackages.includes(owner)
           : owner === packageRoot),
     };
   });
   let stylesheets: StylesheetEntry[];
-  let sass: SassCompiler | undefined;
-  let less: LessCompiler | undefined;
   try {
     stylesheets = [];
     const compilerDependents = new Map<string, string[]>();
@@ -353,14 +343,10 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
         isPartial,
       };
       let compiled;
-      if (isSassPath(stylePath) && !isPartial) {
-        sass ??= await loadProjectSass(packageRoot);
+      if ((isSassPath(stylePath) && !isPartial) || extension(stylePath) === ".less") {
         // Compile the snapshotted source, not the on-disk file: code loaded
         // during planning (e.g. Tailwind plugins) may have rewritten it since.
-        compiled = await compileSassEntry(sass, stylePath, stylesheet.cssSource);
-      } else if (extension(stylePath) === ".less") {
-        less ??= await loadProjectLess(packageRoot);
-        compiled = await compileLessEntry(less, stylePath, stylesheet.cssSource);
+        compiled = await compileStyleEntry(packageRoot, stylePath, stylesheet.cssSource);
       }
       if (compiled) {
         validateCss(compiled.css);
@@ -388,8 +374,7 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
       ].sort(compareStrings);
     }
   } catch (error) {
-    if (!options.force || isIntegrityError(error)) throw error;
-    return { failure: packageFailure(workspaceRoot, packageRoot, error) };
+    return recover(error, isIntegrityError(error));
   }
 
   stylesheets.push(...preparedVue.stylesheets);
@@ -405,15 +390,13 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
   try {
     plan = JSON.parse(planBatchMigration(JSON.stringify(request)));
   } catch (error) {
-    if (!options.force || !isRecoverablePlanningError(error)) throw error;
-    return { failure: packageFailure(workspaceRoot, packageRoot, error) };
+    return recover(error, !isRecoverablePlanningError(error));
   }
 
   try {
     plan = replanCompileFailures(tailwind, request, plan);
   } catch (error) {
-    if (!options.force) throw error;
-    return { failure: packageFailure(workspaceRoot, packageRoot, error) };
+    return recover(error);
   }
 
   removeMigratedHtmlLinks(plan, preparedHtml);
@@ -450,21 +433,11 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
         }
         if (block.syntax === "css") {
           validateCss(block.content);
-        } else if (block.syntax === "less") {
-          validateCss(
-            (
-              await compileLessEntry(
-                (preparedVue.less ??= await loadProjectLess(packageRoot)),
-                `${file.path}.${index}.less`,
-                block.content,
-              )
-            ).css,
-          );
         } else {
           validateCss(
             (
-              await compileSassEntry(
-                (preparedVue.sass ??= await loadProjectSass(packageRoot)),
+              await compileStyleEntry(
+                packageRoot,
                 `${file.path}.${index}.${block.syntax}`,
                 block.content,
                 { virtualEntry: true },
@@ -480,17 +453,10 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
       const changed = plan.files.find((file) => file.path === stylesheet.cssPath);
       if (!changed && !plan.deletedFiles.includes(stylesheet.cssPath)) continue;
       const source = changed?.source ?? "";
-      if (isSassPath(stylesheet.cssPath)) {
-        sass ??= await loadProjectSass(packageRoot);
-        validateCss((await compileSassEntry(sass, stylesheet.cssPath, source)).css);
-      } else {
-        less ??= await loadProjectLess(packageRoot);
-        validateCss((await compileLessEntry(less, stylesheet.cssPath, source)).css);
-      }
+      validateCss((await compileStyleEntry(packageRoot, stylesheet.cssPath, source)).css);
     }
   } catch (error) {
-    if (!options.force || !isMissingStyleCompilerError(error)) throw error;
-    return { failure: packageFailure(workspaceRoot, packageRoot, error) };
+    return recover(error, !isMissingStyleCompilerError(error));
   }
   return { plan };
 }
@@ -609,22 +575,21 @@ function mergePlans(plans: Plan[], originals: Map<string, string>) {
   const seenWarnings = new Set<string>();
   let convertedRules = 0;
   let retainedRules = 0;
+  const claimPath = (path: string, kind: string): void => {
+    if (!originals.has(path))
+      throw new Error(`Planned ${kind} is outside the source snapshot: ${path}`);
+    if (filesByPath.has(path) || deletedPaths.has(path)) {
+      throw new Error(`Multiple package groups planned changes for ${path}`);
+    }
+  };
 
   for (const plan of plans) {
     for (const file of plan.files) {
-      if (!originals.has(file.path))
-        throw new Error(`Planned file is outside the source snapshot: ${file.path}`);
-      if (filesByPath.has(file.path) || deletedPaths.has(file.path)) {
-        throw new Error(`Multiple package groups planned changes for ${file.path}`);
-      }
+      claimPath(file.path, "file");
       filesByPath.set(file.path, file);
     }
     for (const path of plan.deletedFiles) {
-      if (!originals.has(path))
-        throw new Error(`Planned deletion is outside the source snapshot: ${path}`);
-      if (filesByPath.has(path) || deletedPaths.has(path)) {
-        throw new Error(`Multiple package groups planned changes for ${path}`);
-      }
+      claimPath(path, "deletion");
       deletedPaths.add(path);
     }
     for (const candidate of plan.candidates) candidates.add(candidate);

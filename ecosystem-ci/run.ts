@@ -8,6 +8,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { stagePackages } from "./packages.ts";
 import { platformCommand } from "./shared.ts";
+import {
+  controlledRuntimes,
+  controlledStyles,
+  externalServers,
+  selectorTypes as knownSelectorTypes,
+} from "./types.ts";
 import type { ControlledProject, Manifest, ProbedProject, Project } from "./types.ts";
 
 // `projects.json` is untrusted until validateManifest narrows it, so the
@@ -15,9 +21,10 @@ import type { ControlledProject, Manifest, ProbedProject, Project } from "./type
 type Unknown = Record<string, unknown>;
 
 const usage = "Usage: node ecosystem-ci/run.ts (--case <id> | --all)";
-const runtimes = new Set(["react-vite", "next", "vite-html", "vue-vite"]);
-const styles = new Set(["css", "scss", "sass", "less"]);
-const selectorTypes = new Set(["role", "name", "text", "data", "id", "tag", "css"]);
+const runtimes = new Set<string>(controlledRuntimes);
+const styles = new Set<string>(controlledStyles);
+const selectorTypes = new Set<string>(knownSelectorTypes);
+const servers = new Set<string>(externalServers);
 
 function object(value: unknown, label: string): Unknown {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -50,7 +57,7 @@ function validateSelector(value: unknown, label: string): void {
   const selector = exactKeys(value, ["type", "value", "name"], ["type", "value"], label);
   if (typeof selector.type !== "string" || !selectorTypes.has(selector.type)) {
     throw new Error(
-      `${label}.type must be role, name, text, data, id, tag, or css (CSS class selectors are forbidden)`,
+      `${label}.type must be role, text, data, id, tag, or css (CSS class selectors are forbidden)`,
     );
   }
   nonempty(selector.value, `${label}.value`);
@@ -198,17 +205,8 @@ function validateExternalInstall(manager: string, value: unknown, label: string)
     manager === "npm"
       ? exact(["ci", "--ignore-scripts", "--no-audit", "--no-fund"])
       : exact(["install", "--frozen-lockfile", "--ignore-scripts"]);
-  const reviewedBuild =
-    manager === "pnpm" &&
-    args.length === 4 &&
-    args[0] === "--filter" &&
-    /^@?[a-z0-9][a-z0-9@/._-]*$/.test(String(args[1])) &&
-    args[2] === "run" &&
-    /^[a-z0-9:_-]+$/.test(String(args[3]));
-  if (!lockedInstall && !reviewedBuild) {
-    throw new Error(
-      `${label} must be a locked script-free install or a reviewed pnpm workspace build`,
-    );
+  if (!lockedInstall) {
+    throw new Error(`${label} must be a locked script-free install`);
   }
 }
 
@@ -338,7 +336,7 @@ function validateProject(value: unknown, index: number): void {
     if (new Set(project.runtimeWrites).size !== project.runtimeWrites.length)
       throw new Error(`${label}.runtimeWrites must be unique`);
     validateExternalStart(project.start, `${label}.start`);
-    if (!["vite", "next"].includes(project.server as string))
+    if (!servers.has(project.server as string))
       throw new Error(`${label}.server must be vite or next`);
   } else {
     throw new Error(`${label}.kind must be controlled, smoke, or external`);
@@ -441,7 +439,6 @@ export function runHarness(
   manifest: Manifest,
   execute: (args: string[]) => void = executeVitest,
 ): Project[] {
-  validateManifest(manifest);
   const selected = selectProjects(args, manifest);
   execute([
     "run",
@@ -479,9 +476,26 @@ async function withLocalPackageArtifacts<T>(operation: () => T | Promise<T>): Pr
   }
 }
 
+// The CI-only allowlist step: copies only ledger-declared artifacts of the
+// case into the `-upload` tree consumed by upload-artifact.
+async function prepareUpload(caseId: string): Promise<void> {
+  const artifactRoot = process.env.ECOSYSTEM_ARTIFACT_ROOT;
+  if (!artifactRoot) throw new Error("ECOSYSTEM_ARTIFACT_ROOT is required");
+  const manifest = await loadManifest();
+  const project = manifest.projects.find(({ id }) => id === caseId);
+  if (!project) throw new Error(`unknown case ${JSON.stringify(caseId)}`);
+  const { prepareCaseUpload } = await import("./lifecycle.ts");
+  await prepareCaseUpload(
+    resolveFixture(manifest, project),
+    artifactRoot,
+    `${artifactRoot}-upload`,
+  );
+}
+
 async function main() {
   try {
     const args = process.argv.slice(2);
+    if (args.length === 2 && args[0] === "--prepare-upload") return await prepareUpload(args[1]);
     const manifest = await loadManifest();
     selectProjects(args, manifest);
     await withLocalPackageArtifacts(() => runHarness(args, manifest));

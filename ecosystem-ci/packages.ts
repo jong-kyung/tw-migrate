@@ -1,13 +1,11 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { closeSync, openSync } from "node:fs";
 import { cp, lstat, mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { inside, platformCommand, sha256 } from "./shared.ts";
+import { inside, platformCommand, run, sha256 } from "./shared.ts";
 import type { InstalledLayout, PackageEntry, Provenance } from "./types.ts";
 
 interface Target {
@@ -43,36 +41,6 @@ function targetFor(platform: string, arch: string): Target {
 
 export function currentTarget(): Target {
   return targetFor(process.platform, process.arch);
-}
-
-async function run(
-  command: string,
-  args: string[],
-  { cwd, logPath, timeoutMs = 120_000 }: { cwd: string; logPath: string; timeoutMs?: number },
-): Promise<void> {
-  await mkdir(dirname(logPath), { recursive: true });
-  const log = openSync(logPath, "a");
-  const child = spawn(command, args, {
-    cwd,
-    shell: command.endsWith(".cmd"),
-    stdio: ["ignore", log, log],
-    windowsHide: true,
-  });
-  const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
-  const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolveRun, reject) => {
-      child.once("error", reject);
-      child.once("exit", (code, signal) => resolveRun({ code, signal }));
-    },
-  ).finally(() => {
-    clearTimeout(timer);
-    closeSync(log);
-  });
-  if (result.code !== 0) {
-    throw new Error(
-      `${command} ${args.join(" ")} failed (${result.signal ?? result.code}); log: ${logPath}`,
-    );
-  }
 }
 
 async function npmPack(packageDir: string, destination: string, logPath: string): Promise<string> {

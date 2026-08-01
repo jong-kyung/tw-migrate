@@ -59,7 +59,6 @@ function locator(page: Page, selector: ProbeSelector): Locator {
     const role = selector.value as Parameters<Page["getByRole"]>[0];
     return page.getByRole(role, selector.name ? { name: selector.name } : undefined);
   }
-  if (selector.type === "name") return page.locator(`[name=${JSON.stringify(selector.value)}]`);
   if (selector.type === "text") return page.getByText(selector.value, { exact: true });
   if (selector.type === "data")
     return page.locator(`[data-probe=${JSON.stringify(selector.value)}]`);
@@ -218,13 +217,6 @@ export async function captureAll(
   );
 }
 
-export interface OracleWitness {
-  identity: string | undefined;
-  property: string;
-  baseline: string;
-  withheld: string | undefined;
-}
-
 export function assertOracle({
   baseline,
   post,
@@ -235,34 +227,27 @@ export function assertOracle({
   post: CaptureSet;
   withheld: CaptureSet;
   candidateTokens: string[];
-}): Record<string, OracleWitness[]> {
+}): void {
   assert.deepEqual(
     Object.fromEntries(Object.entries(post).map(([name, value]) => [name, value.elements])),
     Object.fromEntries(Object.entries(baseline).map(([name, value]) => [name, value.elements])),
     "pre/post computed styles, identity, count, and order",
   );
   assert.ok(candidateTokens.length > 0, "causal witness requires expected candidate tokens");
-  const witnesses: Record<string, OracleWitness[]> = {};
   for (const [probeName, capture] of Object.entries(baseline)) {
-    const probeWitnesses: OracleWitness[] = [];
-    witnesses[probeName] = probeWitnesses;
-    capture.elements.forEach((element, index) => {
+    // The captures the lifecycle passes are already normalized to standard
+    // properties, but the guard stays: assertion inputs are not proven to have
+    // passed through normalizeStyleEntries, and a custom-property difference
+    // must never satisfy the causal witness.
+    const witnessed = capture.elements.some((element, index) => {
       const absent = withheld[probeName]?.elements[index];
-      for (const [property, value] of Object.entries(element.styles)) {
-        if (!property.startsWith("--") && absent?.styles[property] !== value) {
-          probeWitnesses.push({
-            identity: element.identity,
-            property,
-            baseline: value,
-            withheld: absent?.styles[property],
-          });
-        }
-      }
+      return Object.entries(element.styles).some(
+        ([property, value]) => !property.startsWith("--") && absent?.styles[property] !== value,
+      );
     });
     assert.ok(
-      probeWitnesses.length > 0,
+      witnessed,
       `authored stylesheet withholding must change a standard computed property for probe ${JSON.stringify(probeName)}`,
     );
   }
-  return witnesses;
 }

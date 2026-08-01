@@ -51,17 +51,6 @@ pub struct CaseContext<'a> {
     pub install_root: &'a Path,
 }
 
-pub fn default_setup(_: &CaseContext<'_>) -> Result<(), String> {
-    Ok(())
-}
-
-pub fn run_case(
-    case_name: &str,
-    setup: impl FnOnce(&CaseContext<'_>) -> Result<(), String>,
-) -> Result<String, String> {
-    run_case_with(case_name, setup, |_| Ok(()))
-}
-
 pub fn run_case_with(
     case_name: &str,
     setup: impl FnOnce(&CaseContext<'_>) -> Result<(), String>,
@@ -335,15 +324,8 @@ fn current_platform() -> Result<&'static str, String> {
     }
 }
 
-fn current_addon() -> Result<&'static str, String> {
-    match current_platform()? {
-        "darwin-arm64" => Ok("tw-migrate.darwin-arm64.node"),
-        "darwin-x64" => Ok("tw-migrate.darwin-x64.node"),
-        "linux-arm64-gnu" => Ok("tw-migrate.linux-arm64-gnu.node"),
-        "linux-x64-gnu" => Ok("tw-migrate.linux-x64-gnu.node"),
-        "win32-x64-msvc" => Ok("tw-migrate.win32-x64-msvc.node"),
-        _ => unreachable!(),
-    }
+fn current_addon() -> Result<String, String> {
+    Ok(format!("tw-migrate.{}.node", current_platform()?))
 }
 
 fn installed_bin(install_root: &Path) -> PathBuf {
@@ -524,37 +506,47 @@ fn normalize_sass_diagnostic_paths(value: String) -> String {
         .collect()
 }
 
-fn normalize_known_path_separators(mut value: String) -> String {
-    for marker in ["[WORKSPACE]", "[INSTALL]", "[REPO]"] {
-        let mut search_from = 0;
-        while let Some(offset) = value[search_from..].find(marker) {
-            let start = search_from + offset + marker.len();
-            let end = value[start..]
-                .find(|character: char| {
-                    character.is_ascii_whitespace() || matches!(character, '\'' | '"' | ')' | ',')
-                })
-                .map_or(value.len(), |offset| start + offset);
-            value.replace_range(start..end, &value[start..end].replace('\\', "/"));
-            search_from = end;
-        }
-    }
-    value
+fn normalize_known_path_separators(value: String) -> String {
+    replace_after_markers(
+        value,
+        &["[WORKSPACE]", "[INSTALL]", "[REPO]"],
+        |character| character.is_ascii_whitespace() || matches!(character, '\'' | '"' | ')' | ','),
+        |segment| Some(segment.replace('\\', "/")),
+    )
 }
 
-fn normalize_transaction_tokens(mut value: String) -> String {
-    for marker in [".tw-migrate-backup-", ".tw-migrate-stage-"] {
+fn normalize_transaction_tokens(value: String) -> String {
+    replace_after_markers(
+        value,
+        &[".tw-migrate-backup-", ".tw-migrate-stage-"],
+        |character| !character.is_ascii_digit() && character != '-',
+        |segment| (!segment.is_empty()).then(|| "[TOKEN]".to_string()),
+    )
+}
+
+/// Rewrite the segment after every marker occurrence, where a segment runs
+/// until the first character matching `terminator` (or the end of the value).
+/// A `None` replacement leaves the segment unchanged.
+fn replace_after_markers(
+    mut value: String,
+    markers: &[&str],
+    terminator: impl Fn(char) -> bool,
+    replace: impl Fn(&str) -> Option<String>,
+) -> String {
+    for marker in markers {
         let mut search_from = 0;
         while let Some(offset) = value[search_from..].find(marker) {
             let start = search_from + offset + marker.len();
             let end = value[start..]
-                .find(|character: char| !character.is_ascii_digit() && character != '-')
+                .find(&terminator)
                 .map_or(value.len(), |offset| start + offset);
-            if end == start {
-                search_from = start;
-                continue;
+            match replace(&value[start..end]) {
+                Some(replacement) => {
+                    value.replace_range(start..end, &replacement);
+                    search_from = start + replacement.len();
+                }
+                None => search_from = start,
             }
-            value.replace_range(start..end, "[TOKEN]");
-            search_from = start + "[TOKEN]".len();
         }
     }
     value

@@ -35,11 +35,13 @@ export async function writeChanges(
   const backedUp: [string, string][] = [];
   let succeeded = false;
   try {
-    for (const [temporaryPath, change] of staged) {
-      const { mode } = await stat(change.path);
-      await writeFile(temporaryPath, change.source);
-      await chmod(temporaryPath, mode & 0o777);
-    }
+    await Promise.all(
+      staged.map(async ([temporaryPath, change]) => {
+        const { mode } = await stat(change.path);
+        await writeFile(temporaryPath, change.source);
+        await chmod(temporaryPath, mode & 0o777);
+      }),
+    );
     for (const [backupPath, originalPath] of backups) {
       await rename(originalPath, backupPath);
       backedUp.push([backupPath, originalPath]);

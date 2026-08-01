@@ -5,7 +5,6 @@ use crate::{arbitrary::encode_value, theme::exact_theme_token};
 #[derive(Default)]
 pub(crate) struct SpacingValues {
     values: [Option<String>; 4],
-    used: bool,
 }
 
 impl SpacingValues {
@@ -28,7 +27,6 @@ impl SpacingValues {
             for (target, value) in self.values.iter_mut().zip(sides) {
                 *target = Some(value.to_string());
             }
-            self.used = true;
             return Ok(true);
         }
 
@@ -36,7 +34,6 @@ impl SpacingValues {
             return Ok(false);
         };
         self.values[side] = Some(value.to_string());
-        self.used = true;
         Ok(true)
     }
 
@@ -48,9 +45,6 @@ impl SpacingValues {
         side_prefixes: [&str; 4],
         theme_tokens: &HashMap<String, String>,
     ) -> Option<Vec<String>> {
-        if !self.used {
-            return Some(Vec::new());
-        }
         if let [Some(top), Some(right), Some(bottom), Some(left)] = &self.values
             && top == right
             && top == bottom
@@ -74,7 +68,6 @@ impl SpacingValues {
 #[derive(Default)]
 pub(crate) struct OverflowValues {
     axes: [Option<String>; 2],
-    used: bool,
 }
 
 impl OverflowValues {
@@ -98,16 +91,12 @@ impl OverflowValues {
             "overflow-y" => self.axes[1] = Some(value.to_string()),
             _ => return Ok(false),
         }
-        self.used = true;
         Ok(true)
     }
 
     /// Returns `None` when a stored value cannot be represented as a
     /// Tailwind arbitrary value.
     pub(crate) fn candidates(&self) -> Option<Vec<String>> {
-        if !self.used {
-            return Some(Vec::new());
-        }
         if let [Some(x), Some(y)] = &self.axes
             && x == y
         {
@@ -274,6 +263,20 @@ fn arbitrary_property(property: &str, value: &str) -> Result<String, &'static st
     encode_value(value)
         .map(|value| format!("[{property}:{value}]"))
         .ok_or("unsupported-value")
+}
+
+/// The first (generated, existing) pair where a generated utility conflicts
+/// with a class already present at the rewrite site.
+pub(crate) fn utility_conflict(
+    generated: &[String],
+    existing: &[&str],
+) -> Option<(String, String)> {
+    generated.iter().find_map(|candidate| {
+        existing
+            .iter()
+            .find(|existing| tailwind_utilities_conflict(candidate, existing))
+            .map(|existing| (candidate.clone(), (*existing).to_string()))
+    })
 }
 
 pub(crate) fn tailwind_utilities_conflict(generated: &str, existing: &str) -> bool {

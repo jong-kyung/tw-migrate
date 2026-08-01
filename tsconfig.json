@@ -21,7 +21,6 @@
     "checkJs": false,
 
     "strict": true,
-    "noUncheckedIndexedAccess": false,
     "skipLibCheck": true
   },
   "include": ["ecosystem-ci/**/*.ts", "src/**/*.ts", "test/**/*.ts"],

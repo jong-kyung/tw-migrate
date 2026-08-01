@@ -19,9 +19,7 @@ use crate::{
         candidates_fit_attribute, empty_source_plan, plan_html_file, plan_vue_module_file,
         rebase_span,
     },
-    js_rewrite::{
-        SourcePlan, opaque_reference_plan, plan_batch_source_file, plan_source_file, validate_js,
-    },
+    js_rewrite::{SourcePlan, opaque_reference_plan, plan_batch_source_file, validate_js},
     jsx_graph,
     utilities::{css_properties_conflict, tailwind_utilities_conflict, tailwind_variants_match},
 };
@@ -79,6 +77,16 @@ struct VueBlock {
     source_mappings: Vec<SourceMapping>,
 }
 
+impl VueBlock {
+    /// Shift every block boundary through one round of applied edits.
+    fn shift(&mut self, edits: &[Edit]) {
+        self.outer_start = shift_offset(edits, self.outer_start);
+        self.outer_end = shift_offset(edits, self.outer_end);
+        self.content_start = shift_offset(edits, self.content_start);
+        self.content_end = shift_offset(edits, self.content_end);
+    }
+}
+
 /// Same-length copy of a `.vue` source with every byte outside the scoped
 /// block contents replaced by a space, so parsing it as CSS yields spans in
 /// absolute `.vue` byte offsets with no rebasing.
@@ -124,10 +132,7 @@ fn rebase_vue_blocks(
             }) {
                 return Err("A Vue style block changed during batch planning".to_string());
             }
-            block.outer_start = shift_offset(&round, block.outer_start);
-            block.outer_end = shift_offset(&round, block.outer_end);
-            block.content_start = shift_offset(&round, block.content_start);
-            block.content_end = shift_offset(&round, block.content_end);
+            block.shift(&round);
         }
     }
     Ok(())
@@ -581,6 +586,39 @@ pub(crate) struct Warning {
     pub(crate) message: String,
 }
 
+impl Warning {
+    pub(crate) fn new(
+        code: &'static str,
+        file: String,
+        (start, end): (usize, usize),
+        message: String,
+    ) -> Self {
+        Self {
+            code,
+            file,
+            start,
+            end,
+            message,
+        }
+    }
+
+    /// The shared warning for a generated utility overlapping a Tailwind
+    /// class already present at the rewrite site.
+    pub(crate) fn existing_tailwind_conflict(
+        file: &str,
+        span: (usize, usize),
+        generated: &str,
+        existing: &str,
+    ) -> Self {
+        Self::new(
+            "existing-tailwind-conflict",
+            file.to_string(),
+            span,
+            format!("Generated utility `{generated}` may conflict with existing `{existing}`."),
+        )
+    }
+}
+
 /// Every warning code the migration can emit, including reason strings that
 /// flow through `rule.warning` and the JS-side `candidate-compilation-failure`
 /// stamped in index.js. Adding or removing a code requires updating this list
@@ -642,20 +680,32 @@ pub(crate) struct Edit {
     pub(crate) replacement: String,
 }
 
-/// Single-stylesheet planning. Production always routes through
-/// [`plan_batch_json`]; this remains as the unit-test entrypoint for the
-/// non-batch pass.
+/// Single-stylesheet planning for unit tests: a thin wrapper that reshapes
+/// the flat request into a one-stylesheet batch, the only production path.
 #[cfg(test)]
 pub fn plan_json(request: &str) -> Result<String, String> {
-    let request: PlanRequest = serde_json::from_str(request).map_err(|error| error.to_string())?;
-    serde_json::to_string(&plan_request(
-        request,
-        &HashMap::new(),
-        &HashSet::new(),
-        &HashMap::new(),
-        false,
-    )?)
-    .map_err(|error| error.to_string())
+    let mut request: serde_json::Value =
+        serde_json::from_str(request).map_err(|error| error.to_string())?;
+    let stylesheet = request
+        .as_object_mut()
+        .ok_or_else(|| "Plan request must be an object".to_string())?;
+    let mut batch = serde_json::Map::new();
+    for field in [
+        "files",
+        "tailwindPath",
+        "tailwindSource",
+        "utilityPrefix",
+        "themeTokens",
+    ] {
+        if let Some(value) = stylesheet.remove(field) {
+            batch.insert(field.to_string(), value);
+        }
+    }
+    batch.insert(
+        "stylesheets".to_string(),
+        serde_json::Value::Array(vec![request]),
+    );
+    plan_batch_json(&serde_json::Value::Object(batch).to_string())
 }
 
 /// Span of a rule in the analysis source (the compiled CSS for preprocessor
@@ -815,7 +865,6 @@ fn plan_consumer_file(
     preserved_module_classes: &BTreeSet<String>,
     module_rule_classes: Option<&BTreeSet<String>>,
     utility_prefix: Option<&str>,
-    batch_mode: bool,
     vue_unscoped: bool,
     vue_module: bool,
 ) -> Result<SourcePlan, String> {
@@ -846,11 +895,7 @@ fn plan_consumer_file(
         if file_is_vue || Path::new(&file.path).extension().is_some_and(|ext| ext == "html") {
             return Ok(plan_html_file(file, css_path, candidates, utility_prefix));
         }
-        return if batch_mode {
-            plan_batch_source_file(file, css_path, false, candidates, preserved_module_classes)
-        } else {
-            plan_source_file(file, css_path, false, candidates)
-        };
+        return plan_batch_source_file(file, css_path, false, candidates, preserved_module_classes);
     }
     if stylesheet_is_vue || file_is_vue {
         if file_is_vue
@@ -872,17 +917,13 @@ fn plan_consumer_file(
     {
         return Ok(plan_html_file(file, css_path, candidates, utility_prefix));
     }
-    if batch_mode {
-        plan_batch_source_file(
-            file,
-            css_path,
-            is_module,
-            candidates,
-            preserved_module_classes,
-        )
-    } else {
-        plan_source_file(file, css_path, is_module, candidates)
-    }
+    plan_batch_source_file(
+        file,
+        css_path,
+        is_module,
+        candidates,
+        preserved_module_classes,
+    )
 }
 
 pub(crate) fn is_recoverable_input_error(error: &str) -> bool {
@@ -903,14 +944,18 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
     // so every stylesheet is proven on the same snapshot regardless of the
     // edits earlier stylesheets make during the main pass.
     let mut candidate_maps = Vec::new();
+    // The snapshot passes below never edit the corpus, so one clone travels
+    // through every per-stylesheet request instead of a clone per stylesheet.
+    let mut snapshot_files = request.files.clone();
     for (index, stylesheet) in request.stylesheets.iter().enumerate() {
-        let plan_request = batch_stylesheet_request(&request, stylesheet, request.files.clone());
+        let plan_request = batch_stylesheet_request(&request, stylesheet, snapshot_files);
         let externally_blocked = stylesheet
             .blocked_rules
             .iter()
             .copied()
             .collect::<HashSet<_>>();
         let maps = candidate_map_for_request(&plan_request, &externally_blocked)?;
+        snapshot_files = plan_request.files;
         for file in request.files.iter().filter(|file| file.writable) {
             let result = plan_consumer_file(
                 file,
@@ -924,7 +969,6 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
                 // pass applies the unresolved-member retention itself.
                 None,
                 request.utility_prefix.as_deref(),
-                true,
                 stylesheet.vue_unscoped,
                 stylesheet.vue_module,
             )?;
@@ -991,22 +1035,28 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
         // makes scoped rules look shadowed before the module entry gets its
         // chance to remove it. Hide that one circular surface while deciding
         // which scoped rules survive independently.
-        let mut files = request.files.clone();
-        for file in files
-            .iter_mut()
-            .filter(|file| file.path == stylesheet.css_path)
-        {
-            for element in &mut file.html_elements {
-                element.module_binding = None;
+        let mut hidden_bindings = Vec::new();
+        for (file_index, file) in snapshot_files.iter_mut().enumerate() {
+            if file.path != stylesheet.css_path {
+                continue;
+            }
+            for (element_index, element) in file.html_elements.iter_mut().enumerate() {
+                if let Some(binding) = element.module_binding.take() {
+                    hidden_bindings.push((file_index, element_index, binding));
+                }
             }
         }
-        let plan_request = batch_stylesheet_request(&request, stylesheet, files);
+        let plan_request = batch_stylesheet_request(&request, stylesheet, snapshot_files);
         let externally_blocked = stylesheet
             .blocked_rules
             .iter()
             .copied()
             .collect::<HashSet<_>>();
         let maps = candidate_map_for_request(&plan_request, &externally_blocked)?;
+        snapshot_files = plan_request.files;
+        for (file_index, element_index, binding) in hidden_bindings {
+            snapshot_files[file_index].html_elements[element_index].module_binding = Some(binding);
+        }
         let mut retained = maps.retained_rules;
         retained.extend(blocked_rules[index].keys().copied());
         if stylesheet.vue_retention.is_some() {
@@ -1098,7 +1148,6 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
             &blocked_rules[index],
             &externally_blocked,
             &candidate_maps[index].unproven,
-            true,
         )?;
 
         for (path, batches) in response.applied_edits {
@@ -1186,7 +1235,7 @@ fn batch_stylesheet_request(
     }
 }
 
-/// Shared head of the single-pass and batch-pass pipelines: derive the
+/// Shared head of the candidate-map and main planning passes: derive the
 /// request flags, parse the stylesheet, and apply the utility prefix, so
 /// rule-selection behavior cannot silently diverge between the two paths.
 fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option<String>), String> {
@@ -1240,7 +1289,15 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
             },
         )?;
         if request.analysis_source.is_some() {
-            map_authored_rule_spans(request, analysis_source, &mut parsed.rules)?;
+            map_rule_spans(
+                &request.css_source,
+                request.syntax,
+                &request.css_path,
+                &request.source_mappings,
+                analysis_source,
+                &mut parsed.rules,
+                0,
+            )?;
             if is_module {
                 for rule in &mut parsed.rules {
                     if rule.warning.is_none() && rule.authored_span.is_none() {
@@ -1413,22 +1470,6 @@ fn parse_vue_rules(
         keyframes: Vec::new(),
         global_at_rules: Vec::new(),
     })
-}
-
-fn map_authored_rule_spans(
-    request: &PlanRequest,
-    analysis_source: &str,
-    rules: &mut [RulePlan],
-) -> Result<(), String> {
-    map_rule_spans(
-        &request.css_source,
-        request.syntax,
-        &request.css_path,
-        &request.source_mappings,
-        analysis_source,
-        rules,
-        0,
-    )
 }
 
 fn map_rule_spans(
@@ -1711,7 +1752,6 @@ fn plan_request(
     blocked_rules: &RuleConflicts,
     externally_blocked: &HashSet<RuleId>,
     unproven_rules: &HashMap<RuleId, String>,
-    batch_mode: bool,
 ) -> Result<PlanResponse, String> {
     let (
         is_module,
@@ -1739,17 +1779,6 @@ fn plan_request(
             rule.warning = Some("batch-stylesheet-conflict");
         }
     }
-    // In batch mode the caller passes proof results computed against the
-    // request snapshot; single-pass mode proves against its own files, which
-    // are that snapshot.
-    let computed_unproven;
-    let unproven_rules = if batch_mode {
-        unproven_rules
-    } else {
-        computed_unproven =
-            unproven_relationship_rules(&rules, &request.css_path, &request.files);
-        &computed_unproven
-    };
     stamp_unproven_rules(&mut rules, unproven_rules);
     // Late retention stamps (blocked candidates, unproven relationships) can
     // expose in-file cascade competitors the parse-time pass could not see.
@@ -1800,12 +1829,12 @@ fn plan_request(
 
     let preserved_module_classes = rules
         .iter()
-        .filter(|rule| batch_mode && is_module && is_batch_retained(rule.warning))
+        .filter(|rule| is_module && is_batch_retained(rule.warning))
         .flat_map(|rule| rule.related_classes.iter().cloned())
         .collect::<BTreeSet<_>>();
     let blocked_classes = rules
         .iter()
-        .filter(|rule| rule.warning.is_some() && !(batch_mode && is_batch_retained(rule.warning)))
+        .filter(|rule| rule.warning.is_some() && !is_batch_retained(rule.warning))
         .flat_map(|rule| rule.related_classes.iter().cloned())
         .collect::<BTreeSet<_>>();
     let mut candidate_map: HashMap<SelectorKey, Vec<String>> = HashMap::new();
@@ -1835,14 +1864,12 @@ fn plan_request(
         // deleting it or removing imports would break that consumer.
         module_references_safe = false;
         for dependent in &request.css_dependents {
-            warnings.push(Warning {
-                code: "unsupported-css-module-reference",
-                file: dependent.clone(),
-                start: 0,
-                end: 0,
-                message: "Another stylesheet references the CSS Module, so it is retained."
-                    .to_string(),
-            });
+            warnings.push(Warning::new(
+                "unsupported-css-module-reference",
+                dependent.clone(),
+                (0, 0),
+                "Another stylesheet references the CSS Module, so it is retained.".to_string(),
+            ));
         }
     }
 
@@ -1861,7 +1888,6 @@ fn plan_request(
             &preserved_module_classes,
             module_rule_classes.as_ref(),
             request.utility_prefix.as_deref(),
-            batch_mode,
             request.vue_unscoped,
             request.vue_module,
         )?;
@@ -1897,14 +1923,12 @@ fn plan_request(
             })
         {
             module_references_safe = false;
-            warnings.push(Warning {
-                code: "unproven-script-reference",
-                file: file.path.clone(),
-                start: 0,
-                end: 0,
-                message: "An inline script names a CSS Module class, so the module is retained."
-                    .to_string(),
-            });
+            warnings.push(Warning::new(
+                "unproven-script-reference",
+                file.path.clone(),
+                (0, 0),
+                "An inline script names a CSS Module class, so the module is retained.".to_string(),
+            ));
         }
         if !file.writable {
             if is_module
@@ -1913,14 +1937,12 @@ fn plan_request(
                     || !result.removable_import_edits.is_empty())
             {
                 module_references_safe = false;
-                warnings.push(Warning {
-                    code: "reference-only-css-module-consumer",
-                    file: file.path.clone(),
-                    start: 0,
-                    end: 0,
-                    message: "A reference-only source uses this CSS Module, so it is retained."
-                        .to_string(),
-                });
+                warnings.push(Warning::new(
+                    "reference-only-css-module-consumer",
+                    file.path.clone(),
+                    (0, 0),
+                    "A reference-only source uses this CSS Module, so it is retained.".to_string(),
+                ));
             }
             result.edits.clear();
             result.removable_import_edits.clear();
@@ -1953,7 +1975,6 @@ fn plan_request(
     for rule in rules {
         let can_remove = is_module
             && module_references_safe
-            && (batch_mode || all_module_refs_migrated)
             && rule.warning.is_none()
             && match &rule.key {
                 Some(SelectorKey::Class(name)) => {
@@ -1971,7 +1992,7 @@ fn plan_request(
                 end: original_offset(prior_edits, span.end),
             },
         );
-        if can_remove {
+        let status = if can_remove {
             converted_rules += 1;
             let authored_span = rule
                 .authored_span
@@ -1982,28 +2003,12 @@ fn plan_request(
                 end: authored_span.end,
                 replacement: String::new(),
             });
-            rule_reports.push(RuleReport {
-                selector: rule.selector,
-                status: "converted",
-                candidates: rule.candidates,
-                file: request.css_path.clone(),
-                rule_id,
-                authored_span: report_authored_span,
-                stylesheet: 0,
-            });
+            "converted"
         } else if rule.warning == Some("candidate-compilation-failure") {
             // The caller blocked this rule after a Tailwind compilation
             // failure and attributes the warning itself.
             retained_rules += 1;
-            rule_reports.push(RuleReport {
-                selector: rule.selector,
-                status: "retained",
-                candidates: rule.candidates,
-                file: request.css_path.clone(),
-                rule_id,
-                authored_span: report_authored_span,
-                stylesheet: 0,
-            });
+            "retained"
         } else {
             retained_rules += 1;
             let (code, message) = if rule.warning == Some("batch-stylesheet-conflict") {
@@ -2064,23 +2069,23 @@ fn plan_request(
                     "No exclusively supported className references were found.".to_string(),
                 )
             };
-            warnings.push(Warning {
+            warnings.push(Warning::new(
                 code,
-                file: request.css_path.clone(),
-                start: report_authored_span.start,
-                end: report_authored_span.end,
+                request.css_path.clone(),
+                (report_authored_span.start, report_authored_span.end),
                 message,
-            });
-            rule_reports.push(RuleReport {
-                selector: rule.selector,
-                status: "retained",
-                candidates: rule.candidates,
-                file: request.css_path.clone(),
-                rule_id,
-                authored_span: report_authored_span,
-                stylesheet: 0,
-            });
-        }
+            ));
+            "retained"
+        };
+        rule_reports.push(RuleReport {
+            selector: rule.selector,
+            status,
+            candidates: rule.candidates,
+            file: request.css_path.clone(),
+            rule_id,
+            authored_span: report_authored_span,
+            stylesheet: 0,
+        });
     }
 
     let remove_at_rules =
@@ -2204,13 +2209,12 @@ fn plan_request(
             StylesheetSyntax::Scss | StylesheetSyntax::Sass | StylesheetSyntax::Less
         )
     {
-        warnings.push(Warning {
-            code: "rebuild-required",
-            file: request.css_path.clone(),
-            start: 0,
-            end: 0,
-            message: "Rebuild this preprocessor entry to refresh its generated CSS.".to_string(),
-        });
+        warnings.push(Warning::new(
+            "rebuild-required",
+            request.css_path.clone(),
+            (0, 0),
+            "Rebuild this preprocessor entry to refresh its generated CSS.".to_string(),
+        ));
     }
 
     Ok(PlanResponse {
@@ -2276,10 +2280,7 @@ fn finish_vue_stylesheet(
         .collect::<Vec<_>>();
     let mut blocks = request.vue_blocks.clone();
     for block in &mut blocks {
-        block.outer_start = shift_offset(&edits, block.outer_start);
-        block.outer_end = shift_offset(&edits, block.outer_end);
-        block.content_start = shift_offset(&edits, block.content_start);
-        block.content_end = shift_offset(&edits, block.content_end);
+        block.shift(&edits);
     }
     // Conditionals that were already empty in the authored source are
     // untouched user bytes (often comment-only) and must survive; only
@@ -2315,10 +2316,7 @@ fn finish_vue_stylesheet(
         }
         conditional_edits.sort_by_key(|edit| (edit.start, edit.end));
         for block in &mut blocks {
-            block.outer_start = shift_offset(&conditional_edits, block.outer_start);
-            block.outer_end = shift_offset(&conditional_edits, block.outer_end);
-            block.content_start = shift_offset(&conditional_edits, block.content_start);
-            block.content_end = shift_offset(&conditional_edits, block.content_end);
+            block.shift(&conditional_edits);
         }
         for span in &mut preexisting_empty {
             span.0 = shift_offset(&conditional_edits, span.0);
@@ -2329,42 +2327,13 @@ fn finish_vue_stylesheet(
         edit_batches.push(conditional_edits);
     }
 
-    let mut removal_edits = Vec::new();
-    for (block, original) in blocks.iter().zip(&request.vue_blocks) {
-        let originally_empty = request.css_source[original.content_start..original.content_end]
-            .trim()
-            .is_empty();
-        let content = masked
-            .get(block.content_start..block.content_end)
-            .ok_or_else(|| "Invalid Vue style block span".to_string())?;
-        if originally_empty || !content.trim().is_empty() {
-            continue;
-        }
-        let mut end = block.outer_end;
-        // Swallow one trailing line break so the removed block does not leave
-        // a blank line behind.
-        if source.as_bytes().get(end) == Some(&b'\r') {
-            end += 1;
-        }
-        if source.as_bytes().get(end) == Some(&b'\n') {
-            end += 1;
-        }
-        removal_edits.push(Edit {
-            start: block.outer_start,
-            end,
-            replacement: String::new(),
-        });
-    }
+    let removal_edits = emptied_block_removals(request, &blocks, &masked, &source, false)?;
     if !removal_edits.is_empty() {
         source = apply_edits(&source, removal_edits.clone())?;
         masked = apply_edits(&masked, removal_edits.clone())?;
         edit_batches.push(removal_edits);
     }
-    let allocator = oxc_css_parser::Allocator::default();
-    CssParser::new(&allocator, &masked, Syntax::Css)
-        .parse::<Stylesheet>()
-        .map(|_| ())
-        .map_err(|error| format!("Edited stylesheet no longer parses: {error:?}"))?;
+    validate_stylesheet(&masked, Syntax::Css)?;
     Ok((source, edit_batches))
 }
 
@@ -2376,25 +2345,45 @@ fn finish_vue_preprocessor_stylesheet(
     let mut edit_batches = vec![edits.clone()];
     let mut blocks = request.vue_blocks.clone();
     for block in &mut blocks {
-        block.outer_start = shift_offset(&edits, block.outer_start);
-        block.outer_end = shift_offset(&edits, block.outer_end);
-        block.content_start = shift_offset(&edits, block.content_start);
-        block.content_end = shift_offset(&edits, block.content_end);
+        block.shift(&edits);
     }
     let mut source = apply_edits(&request.css_source, edits)?;
+    let removals = emptied_block_removals(request, &blocks, &source, &source, true)?;
+    if !removals.is_empty() {
+        source = apply_edits(&source, removals.clone())?;
+        edit_batches.push(removals);
+    }
+    Ok((source, edit_batches))
+}
+
+/// Removal edits for blocks whose CSS the migration emptied entirely, each
+/// swallowing one trailing line break so no blank line is left behind.
+/// `content_view` supplies the block contents (the masked copy for plain-CSS
+/// blocks); kept blocks are validated when `validate_kept` is set.
+fn emptied_block_removals(
+    request: &PlanRequest,
+    blocks: &[VueBlock],
+    content_view: &str,
+    source: &str,
+    validate_kept: bool,
+) -> Result<Vec<Edit>, String> {
     let mut removals = Vec::new();
     for (block, original) in blocks.iter().zip(&request.vue_blocks) {
         let originally_empty = request.css_source[original.content_start..original.content_end]
             .trim()
             .is_empty();
-        let content = source
+        let content = content_view
             .get(block.content_start..block.content_end)
             .ok_or_else(|| "Invalid Vue style block span".to_string())?;
         if originally_empty || !content.trim().is_empty() {
-            validate_stylesheet(content, block.syntax.parser_syntax())?;
+            if validate_kept {
+                validate_stylesheet(content, block.syntax.parser_syntax())?;
+            }
             continue;
         }
         let mut end = block.outer_end;
+        // Swallow one trailing line break so the removed block does not leave
+        // a blank line behind.
         if source.as_bytes().get(end) == Some(&b'\r') {
             end += 1;
         }
@@ -2407,11 +2396,7 @@ fn finish_vue_preprocessor_stylesheet(
             replacement: String::new(),
         });
     }
-    if !removals.is_empty() {
-        source = apply_edits(&source, removals.clone())?;
-        edit_batches.push(removals);
-    }
-    Ok((source, edit_batches))
+    Ok(removals)
 }
 
 fn apply_edits(source: &str, mut edits: Vec<Edit>) -> Result<String, String> {

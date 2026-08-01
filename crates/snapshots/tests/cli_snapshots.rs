@@ -1,12 +1,17 @@
-use tw_migrate_snapshots::{default_setup, run_case};
+use tw_migrate_snapshots::CaseContext;
+
+fn default_setup(_: &CaseContext<'_>) -> Result<(), String> {
+    Ok(())
+}
 
 macro_rules! snapshot_cases {
     ($($case:ident => $setup:expr),+ $(,)?) => {
         $(
             #[test]
             fn $case() {
-                let document = run_case(stringify!($case), $setup)
-                    .unwrap_or_else(|error| panic!("{error}"));
+                let document =
+                    tw_migrate_snapshots::run_case_with(stringify!($case), $setup, |_| Ok(()))
+                        .unwrap_or_else(|error| panic!("{error}"));
                 let mut settings = insta::Settings::clone_current();
                 settings.set_snapshot_path(concat!(env!("CARGO_MANIFEST_DIR"), "/snapshots"));
                 settings.bind(|| insta::assert_snapshot!(stringify!($case), document));

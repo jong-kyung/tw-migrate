@@ -3,8 +3,9 @@ import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { loadProjectModule } from "./parser/style-compiler.ts";
 import { extension, isProjectInput, maskCssComments, snapshotFile } from "./util/shared.ts";
-import type { LoadedTailwind, StylesheetLoader } from "./types.ts";
+import type { DesignSystem, LoadedTailwind, StylesheetLoader } from "./types.ts";
 
 export function resolveTailwindEntry(
   stylePaths: string[],
@@ -41,10 +42,9 @@ export async function loadTailwind(
   if (!String(packageJson.version).startsWith("4."))
     throw new Error(`Tailwind v4 is required; found ${packageJson.version}.`);
 
-  const modulePath = projectRequire.resolve("tailwindcss");
-  const tailwindModule = await import(pathToFileURL(modulePath).href);
-  const { __unstable__loadDesignSystem: loadDesignSystem } =
-    tailwindModule.default ?? tailwindModule;
+  const { __unstable__loadDesignSystem: loadDesignSystem } = await loadProjectModule<{
+    __unstable__loadDesignSystem: (css: string, options: unknown) => Promise<DesignSystem>;
+  }>(packageRoot, "tailwindcss", "Tailwind v4 must be installed in the target project.");
   const css = await snapshotFile(snapshots, tailwindCss);
   const base = dirname(tailwindCss);
   const loadModule = createModuleLoader(snapshots, workspaceRoot);

@@ -1,5 +1,5 @@
 import type { HtmlElementAttributes } from "./parser/html.ts";
-import type { LessCompiler, SassCompiler, SourceMapping } from "./parser/style-compiler.ts";
+import type { SourceMapping } from "./parser/style-compiler.ts";
 import type { VueCompiler, VueStyleBlock, VueTemplateSite } from "./parser/vue.ts";
 
 export interface MigrateOptions {
@@ -141,7 +141,6 @@ export interface Scope {
   configuredEntry?: string;
   pathOwners: Map<string, string | undefined>;
   selectedPackages: string[];
-  writablePackages: Set<string>;
 }
 
 export interface MigrationContext extends Scope {
@@ -174,8 +173,6 @@ export interface PreparedVue {
   unscopedPaths: Set<string>;
   warnings: MigrationWarning[];
   compiler?: VueCompiler;
-  sass?: SassCompiler;
-  less?: LessCompiler;
 }
 
 export interface ShadowCssEntry {

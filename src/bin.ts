@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
+import { styleText } from "node:util";
+
 import packageJson from "../package.json" with { type: "json" };
-import { formatDiagnostic } from "./diagnostics.ts";
 
 const { version } = packageJson;
 const usage = "Usage: tw-migrate [style-file] [options]";
@@ -62,14 +63,19 @@ async function main(): Promise<void> {
   if (report.diff) process.stdout.write(report.diff);
   for (const warning of report.warnings) {
     console.warn(
-      formatDiagnostic(
+      styleText(
+        "yellow",
         `warning[${warning.code}] ${warning.file}:${warning.start}-${warning.end} ${warning.message}`,
-        "38;5;208",
+        { stream: process.stderr },
       ),
     );
   }
   for (const failure of report.failures) {
-    console.warn(formatDiagnostic(`skipped[${failure.package}] ${failure.message}`, "38;5;208"));
+    console.warn(
+      styleText("yellow", `skipped[${failure.package}] ${failure.message}`, {
+        stream: process.stderr,
+      }),
+    );
   }
   console.log(
     `${write ? "Applied" : "Previewed"} ${report.changedFiles.length} file(s); ${report.convertedRules} rule(s) converted, ${report.retainedRules} retained.`,
@@ -77,6 +83,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error(formatDiagnostic(`tw-migrate: ${error.message}`, "31"));
+  console.error(styleText("red", `tw-migrate: ${error.message}`, { stream: process.stderr }));
   process.exitCode = 1;
 });
