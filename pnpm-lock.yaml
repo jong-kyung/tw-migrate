@@ -18,9 +18,6 @@ catalogs:
     less:
       specifier: 4.7.0
       version: 4.7.0
-    parse5:
-      specifier: 7.3.0
-      version: 7.3.0
     playwright:
       specifier: 1.61.1
       version: 1.61.1
@@ -52,7 +49,7 @@ importers:
   .:
     dependencies:
       parse5:
-        specifier: 'catalog:'
+        specifier: 7.3.0
         version: 7.3.0
     devDependencies:
       '@napi-rs/cli':
