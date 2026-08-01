@@ -238,7 +238,7 @@ The workspace `default-members` excludes `crates/snapshots`, so plain `cargo tes
 - Batch migration RFC: `rfcs/batch-css-migration.md`
 - Preprocessor and HTML RFC: `rfcs/preprocessor-and-html-migration.md`
 - Packaged snapshot workflow: `crates/snapshots/README.md`
-- CI contract: `.github/workflows/ci.yml` (unit, typecheck, packaged snapshots) and `.github/workflows/ecosystem.yml` (label-gated browser E2E)
+- CI contract: `.github/workflows/ci.yml` (cargo-shear, unit, typecheck, packaged snapshots) and `.github/workflows/ecosystem.yml` (label-gated browser E2E)
 
 <!--VITE PLUS START-->
 
