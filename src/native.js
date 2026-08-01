@@ -14,7 +14,9 @@ if (!target) throw new Error(`Unsupported platform: ${process.platform}-${proces
 
 let binding;
 for (const load of [
-  () => require(`./tw-migrate.${target}.node`),
+  // One level up is the repository root in development (src/) and the package
+  // root in the installed layout (dist/); both hold the locally built addon.
+  () => require(`../tw-migrate.${target}.node`),
   () => require(`tw-migrate-${target}`),
 ]) {
   try {

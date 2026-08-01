@@ -1,6 +1,7 @@
 .tmp/
 node_modules/
 target/
+/dist/
 *.node
 binding.d.ts
 .DS_Store

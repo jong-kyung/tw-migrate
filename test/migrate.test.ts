@@ -8,8 +8,8 @@ import { test } from "vite-plus/test";
 
 import { __unstable__loadDesignSystem as loadDesignSystem } from "tailwindcss";
 
-import { migrate } from "../index.js";
-import { compileSassEntry, loadProjectSass, sourceMappings } from "../style-compiler.js";
+import { migrate } from "../src/index.js";
+import { compileSassEntry, loadProjectSass, sourceMappings } from "../src/style-compiler.js";
 
 const initialCss = ".button { padding: 13px; }\n";
 const initialTsx =

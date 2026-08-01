@@ -12,7 +12,7 @@ Use this file to find the owning layer and choose focused validation. Prefer the
 
 - **JavaScript / Node ESM**: CLI parsing, project and workspace discovery, preprocessors, HTML analysis, packaging, transactional writes, and the public `migrate()` API.
 - **Rust 2024**: CSS parsing, utility generation, selector and JSX relationship analysis, rewrite planning, and source-map decoding.
-- **NAPI-RS**: exposes the Rust planner to `native.js` and the JavaScript orchestration layer.
+- **NAPI-RS**: exposes the Rust planner to `src/native.js` and the JavaScript orchestration layer.
 - **pnpm workspaces**: manages the root package and platform-specific native packages under `npm/*`.
 - **Insta**: stores packaged CLI snapshots under `crates/snapshots/snapshots/`.
 
@@ -22,13 +22,15 @@ High-signal repository map:
 
 ```text
 tw-migrate/
-├── bin/tw-migrate.js          # Published CLI entrypoint and argument parsing
-├── index.js                   # Public migrate() API and migration orchestration
+├── src/                       # Published JavaScript layer, bundled into dist/ by vp pack
+│   ├── bin.js                 # CLI entrypoint and argument parsing
+│   ├── diagnostics.js         # CLI diagnostic coloring
+│   ├── index.js               # Public migrate() API and migration orchestration
+│   ├── native.js              # Native addon resolution and NAPI exports
+│   ├── html.js                # HTML parsing and byte-offset extraction
+│   ├── style-compiler.js      # Project-local Sass/Less loading and source maps
+│   └── vue.js                 # Project-local Vue compiler loading and SFC lowering
 ├── index.d.ts                 # Public JavaScript API types
-├── native.js                  # Native addon resolution and NAPI exports
-├── html.js                    # HTML parsing and byte-offset extraction
-├── style-compiler.js          # Project-local Sass/Less loading and source maps
-├── vue.js                     # Project-local Vue compiler loading and SFC lowering
 ├── crates/tw_migrate/         # Rust planner and NAPI addon
 │   └── src/
 │       ├── planner.rs         # Single/batch planning entrypoints
@@ -60,21 +62,21 @@ tw-migrate/
 
 ## Runtime Flow
 
-1. `bin/tw-migrate.js` parses CLI arguments and calls `migrate()`.
-2. `index.js` discovers package/workspace inputs, reads source snapshots, compiles preprocessors, and prepares planner requests.
-3. `style-compiler.js` loads Sass or Less from the target project, not from `tw-migrate` itself.
-4. `native.js` loads the local addon or the installed platform package and invokes the Rust planner.
+1. `src/bin.js` parses CLI arguments and calls `migrate()`.
+2. `src/index.js` discovers package/workspace inputs, reads source snapshots, compiles preprocessors, and prepares planner requests.
+3. `src/style-compiler.js` loads Sass or Less from the target project, not from `tw-migrate` itself.
+4. `src/native.js` loads the local addon or the installed platform package and invokes the Rust planner.
 5. Rust analyzes CSS and source relationships, returning planned edits, candidates, warnings, and retained rules.
-6. `index.js` verifies source integrity, renders the diff, and applies transactional writes only with `--write`.
+6. `src/index.js` verifies source integrity, renders the diff, and applies transactional writes only with `--write`.
 
 ## Where to Start
 
-- **CLI flags, output, and exit behavior**: `bin/tw-migrate.js` and packaged snapshots.
-- **Discovery, workspaces, Git ignore behavior, force handling, or writes**: `index.js`.
-- **Public API shape**: `index.d.ts` and the top-level exports in `index.js`.
-- **Sass, SCSS, Less, or source maps**: `style-compiler.js` and `crates/tw_migrate/src/lib.rs`.
-- **HTML links, attributes, entities, or byte offsets**: `html.js` and `crates/tw_migrate/src/html_rewrite.rs`.
-- **Vue SFC blocks, template class sites, or scoped retention**: `vue.js` and the Vue paths in `crates/tw_migrate/src/planner.rs`.
+- **CLI flags, output, and exit behavior**: `src/bin.js` and packaged snapshots.
+- **Discovery, workspaces, Git ignore behavior, force handling, or writes**: `src/index.js`.
+- **Public API shape**: `index.d.ts` and the top-level exports in `src/index.js`.
+- **Sass, SCSS, Less, or source maps**: `src/style-compiler.js` and `crates/tw_migrate/src/lib.rs`.
+- **HTML links, attributes, entities, or byte offsets**: `src/html.js` and `crates/tw_migrate/src/html_rewrite.rs`.
+- **Vue SFC blocks, template class sites, or scoped retention**: `src/vue.js` and the Vue paths in `crates/tw_migrate/src/planner.rs`.
 - **CSS parsing and migration decisions**: `crates/tw_migrate/src/planner.rs` and `css_plan.rs`.
 - **JSX usage and selector relationships**: `js_rewrite.rs` and `jsx_graph.rs`.
 - **Utility generation and value encoding**: `utilities.rs`, `arbitrary.rs`, `theme.rs`, `at_rules.rs`, and `animations.rs`.
@@ -107,7 +109,7 @@ cargo install cargo-insta --version 1.48.0 --locked
 ```bash
 vp install --frozen-lockfile
 vp run build:debug
-node bin/tw-migrate.js --help
+node src/bin.js --help
 ```
 
 `vp run build:debug` compiles the native addon for the current platform. Run it before invoking the CLI or Node tests directly. A complete setup check is:
@@ -122,9 +124,9 @@ No `.env` file or local service is required.
 
 ```bash
 vp run build:debug
-node bin/tw-migrate.js --help
-node bin/tw-migrate.js path/to/Button.module.css
-node bin/tw-migrate.js --workspaces --write
+node src/bin.js --help
+node src/bin.js path/to/Button.module.css
+node src/bin.js --workspaces --write
 ```
 
 Preview is the default. Use `--write` only when a task explicitly requires filesystem changes.
@@ -193,8 +195,9 @@ The workspace `default-members` excludes `crates/snapshots`, so plain `cargo tes
 ## Packaging Notes
 
 - `vp run build:debug` writes the local development addon used by Node tests.
-- `vp run build` creates the release addon; `vp run artifacts` copies it into the matching `npm/<platform>/` package.
-- `native.js` first checks for a local addon, then falls back to the installed platform package.
+- `vp run build` bundles `src/` into `dist/` with `vp pack` and creates the release addon; `vp run artifacts` copies the addon into the matching `npm/<platform>/` package.
+- Published JavaScript is the `dist/` bundle; tests and local CLI runs execute `src/` directly.
+- `src/native.js` first checks for a local addon, then falls back to the installed platform package.
 - Native `.node` files are generated and ignored. Do not commit them.
 - Use `vp run snapshots:prepare` before snapshot tests; it removes stale platform addons before rebuilding artifacts.
 
