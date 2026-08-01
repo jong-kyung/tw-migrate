@@ -125,6 +125,15 @@ jobs:
           name: native-${{ matrix.runner }}
           path: npm
           if-no-files-found: error
+      # The publish job checks out fresh and installs nothing, so the bundled
+      # dist/ the root package points main and bin at must arrive as an
+      # artifact too. The bundle is platform-independent; one leg uploads it.
+      - uses: actions/upload-artifact@v7
+        if: matrix.runner == 'ubuntu-latest'
+        with:
+          name: dist
+          path: dist
+          if-no-files-found: error
 
   # Nothing reaches npm until a reviewer approves this job in the release
   # environment: npm cannot republish a version, unpublish expires after 72
@@ -181,6 +190,18 @@ jobs:
           pattern: native-*
           merge-multiple: true
           path: npm
+
+      - name: Download the bundled JavaScript
+        uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+
+      - name: Verify the published entrypoints are present
+        run: |
+          set -euo pipefail
+          test -f dist/bin.js
+          test -f dist/index.js
 
       - name: Verify every target is present
         run: |
