@@ -25,7 +25,7 @@ import {
   isSassPath,
   loadProjectLess,
   loadProjectSass,
-} from "./style-compiler.js";
+} from "./style-compiler.ts";
 
 const run = promisify(execFile);
 const SOURCE_EXTENSIONS = new Set([
