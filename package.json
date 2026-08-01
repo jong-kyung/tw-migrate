@@ -24,22 +24,17 @@
     "url": "git+https://github.com/jong-kyung/tw-migrate.git"
   },
   "bin": {
-    "tw-migrate": "bin/tw-migrate.js"
+    "tw-migrate": "dist/bin.js"
   },
   "files": [
-    "bin",
-    "html.js",
-    "index.js",
-    "index.d.ts",
-    "native.js",
-    "style-compiler.js",
-    "vue.js"
+    "dist",
+    "index.d.ts"
   ],
   "type": "module",
-  "main": "index.js",
+  "main": "dist/index.js",
   "types": "index.d.ts",
   "scripts": {
-    "build": "napi build --manifest-path crates/tw_migrate/Cargo.toml --package-json-path package.json --output-dir . --platform --release --no-js --dts binding.d.ts",
+    "build": "vp pack && napi build --manifest-path crates/tw_migrate/Cargo.toml --package-json-path package.json --output-dir . --platform --release --no-js --dts binding.d.ts",
     "build:debug": "napi build --manifest-path crates/tw_migrate/Cargo.toml --package-json-path package.json --output-dir . --platform --no-js --dts binding.d.ts",
     "artifacts": "napi artifacts --output-dir . --npm-dir npm",
     "test": "cargo test && pnpm build:debug && vp test",

@@ -25,14 +25,14 @@ The migration planner is a native addon, so a clone needs one build before the C
 ```bash
 vp install                    # or: pnpm install
 vp run build:debug            # compiles the addon for your platform
-node bin/tw-migrate.js --help
+node src/bin.js --help
 ```
 
-Then use `node bin/tw-migrate.js` wherever the commands above use `npx tw-migrate`. The CLI always migrates the package it is run from, so to migrate a different project, run the built entrypoint by absolute path from that project's directory:
+Then use `node src/bin.js` wherever the commands above use `npx tw-migrate`. The CLI always migrates the package it is run from, so to migrate a different project, run the built entrypoint by absolute path from that project's directory:
 
 ```bash
 cd ../some-app
-node /path/to/tw-migrate/bin/tw-migrate.js --write
+node /path/to/tw-migrate/src/bin.js --write
 ```
 
 ## Current support

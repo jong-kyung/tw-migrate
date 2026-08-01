@@ -10,15 +10,25 @@ import { defineConfig } from "vite-plus";
 //   `test/ecosystem-harness.test.ts` (reflowing a matrix array breaks it).
 const pinnedPatterns = ["crates/snapshots/fixtures/**", "ecosystem-ci/fixtures/**", ".github/**"];
 
+// `dist/` is the generated vp pack bundle; the formatter and linter own sources only.
+const generatedPatterns = ["dist/**"];
+
 export default defineConfig({
+  pack: {
+    entry: ["src/bin.js", "src/index.js"],
+    fixedExtension: false,
+    // The published declarations are the curated root index.d.ts until the
+    // sources are TypeScript; dts generation takes over in that phase.
+    dts: false,
+  },
   staged: {
     "*": "vp check --fix",
   },
   fmt: {
-    ignorePatterns: pinnedPatterns,
+    ignorePatterns: [...pinnedPatterns, ...generatedPatterns],
   },
   lint: {
-    ignorePatterns: pinnedPatterns,
+    ignorePatterns: [...pinnedPatterns, ...generatedPatterns],
     jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
     rules: { "vite-plus/prefer-vite-plus-imports": "error" },
     options: { typeAware: true, typeCheck: true },

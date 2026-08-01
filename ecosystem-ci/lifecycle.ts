@@ -709,6 +709,16 @@ async function prepareDriver(
   return { driverRoot, installed };
 }
 
+// The installed layout is owned by the root package manifest, so resolve the
+// API and CLI entrypoints from it instead of hardcoding file paths.
+async function installedEntrypoint(root: string, entry: "main" | "bin"): Promise<string> {
+  const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8")) as {
+    main: string;
+    bin: Record<string, string>;
+  };
+  return join(root, entry === "main" ? manifest.main : manifest.bin["tw-migrate"]);
+}
+
 async function readMaybe(path: string): Promise<string | null> {
   return readFile(path, "utf8").catch((error: NodeJS.ErrnoException) =>
     error.code === "ENOENT" ? null : Promise.reject(error),
@@ -1011,7 +1021,7 @@ export async function runLifecycle({
 
       await mark("migration-started");
       const module = await import(
-        `${pathToFileURL(join(installed.root, "index.js")).href}?case=${Date.now()}`
+        `${pathToFileURL(await installedEntrypoint(installed.root, "main")).href}?case=${Date.now()}`
       );
       const first = await module.migrate({
         cwd: driverRoot,
@@ -1162,7 +1172,7 @@ export async function runProductionSmoke({
         "production smoke source token before migration",
       );
       const treeBeforeFirst = await snapshotMigrationSources(driverRoot);
-      const cli = join(installed.root, "bin", "tw-migrate.js");
+      const cli = await installedEntrypoint(installed.root, "bin");
       await mark("first-cli-started");
       await run(process.execPath, [cli, "--write"], {
         cwd: driverRoot,
@@ -1253,7 +1263,7 @@ export async function runExternalLifecycle({
         artifactRoot as string,
       );
       const { migrate } = await import(
-        `${pathToFileURL(join(installed.root, "index.js")).href}?case=${Date.now()}`
+        `${pathToFileURL(await installedEntrypoint(installed.root, "main")).href}?case=${Date.now()}`
       );
       await mark("package-installed", [
         "install.log",
