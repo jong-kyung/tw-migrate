@@ -45,22 +45,22 @@
     "prepare": "vp config"
   },
   "dependencies": {
-    "parse5": "7.3.0"
+    "parse5": "catalog:"
   },
   "devDependencies": {
-    "@napi-rs/cli": "3.7.3",
-    "@types/node": "22.20.1",
+    "@napi-rs/cli": "catalog:",
+    "@types/node": "catalog:",
     "@vitest/browser-playwright": "catalog:",
-    "less": "4.7.0",
-    "playwright": "1.61.1",
-    "sass": "1.101.3",
-    "tailwindcss": "4.3.3",
-    "typescript": "7.0.2",
-    "verdaccio": "6.8.0",
+    "less": "catalog:",
+    "playwright": "catalog:",
+    "sass": "catalog:",
+    "tailwindcss": "catalog:",
+    "typescript": "catalog:",
+    "verdaccio": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:",
     "vitest": "catalog:",
-    "vue": "3.5.40"
+    "vue": "catalog:"
   },
   "optionalDependencies": {
     "tw-migrate-darwin-arm64": "workspace:*",

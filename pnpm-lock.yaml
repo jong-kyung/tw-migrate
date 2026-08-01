@@ -6,12 +6,42 @@ settings:
 
 catalogs:
   default:
+    '@napi-rs/cli':
+      specifier: 3.7.3
+      version: 3.7.3
+    '@types/node':
+      specifier: 22.20.1
+      version: 22.20.1
     '@vitest/browser-playwright':
       specifier: 4.1.10
       version: 4.1.10
+    less:
+      specifier: 4.7.0
+      version: 4.7.0
+    parse5:
+      specifier: 7.3.0
+      version: 7.3.0
+    playwright:
+      specifier: 1.61.1
+      version: 1.61.1
+    sass:
+      specifier: 1.101.3
+      version: 1.101.3
+    tailwindcss:
+      specifier: 4.3.3
+      version: 4.3.3
+    typescript:
+      specifier: 7.0.2
+      version: 7.0.2
+    verdaccio:
+      specifier: 6.8.0
+      version: 6.8.0
     vite-plus:
       specifier: 0.2.6
       version: 0.2.6
+    vue:
+      specifier: 3.5.40
+      version: 3.5.40
 
 overrides:
   vite: npm:@voidzero-dev/vite-plus-core@0.2.6
@@ -22,35 +52,35 @@ importers:
   .:
     dependencies:
       parse5:
-        specifier: 7.3.0
+        specifier: 'catalog:'
         version: 7.3.0
     devDependencies:
       '@napi-rs/cli':
-        specifier: 3.7.3
+        specifier: 'catalog:'
         version: 3.7.3(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)(@types/node@22.20.1)(node-addon-api@7.1.1)
       '@types/node':
-        specifier: 22.20.1
+        specifier: 'catalog:'
         version: 22.20.1
       '@vitest/browser-playwright':
         specifier: 'catalog:'
         version: 4.1.10(@voidzero-dev/vite-plus-core@0.2.6(@types/node@22.20.1)(less@4.7.0)(sass@1.101.3)(typescript@7.0.2))(playwright@1.61.1)(vitest@4.1.10)
       less:
-        specifier: 4.7.0
+        specifier: 'catalog:'
         version: 4.7.0
       playwright:
-        specifier: 1.61.1
+        specifier: 'catalog:'
         version: 1.61.1
       sass:
-        specifier: 1.101.3
+        specifier: 'catalog:'
         version: 1.101.3
       tailwindcss:
-        specifier: 4.3.3
+        specifier: 'catalog:'
         version: 4.3.3
       typescript:
-        specifier: 7.0.2
+        specifier: 'catalog:'
         version: 7.0.2
       verdaccio:
-        specifier: 6.8.0
+        specifier: 'catalog:'
         version: 6.8.0(typanion@3.14.0)
       vite:
         specifier: npm:@voidzero-dev/vite-plus-core@0.2.6
@@ -62,7 +92,7 @@ importers:
         specifier: 4.1.10
         version: 4.1.10(@types/node@22.20.1)(@vitest/browser-playwright@4.1.10)(@vitest/browser-preview@4.1.10)(@voidzero-dev/vite-plus-core@0.2.6(@types/node@22.20.1)(less@4.7.0)(sass@1.101.3)(typescript@7.0.2))
       vue:
-        specifier: 3.5.40
+        specifier: 'catalog:'
         version: 3.5.40(typescript@7.0.2)
     optionalDependencies:
       tw-migrate-darwin-arm64:
