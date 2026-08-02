@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap};
 use crate::{
     css_plan::SelectorKey,
     js_rewrite::{CandidateMatch, SourcePlan},
-    planner::{Edit, HtmlAttribute, SourceFile, Warning, element_classes, element_ids},
+    planner::{Edit, HtmlAttribute, SourceFile, Warning, element_classes, element_has_context, element_ids},
     utilities::utility_conflict,
 };
 
@@ -30,7 +30,7 @@ pub(crate) fn plan_html_file(
     let mut matched_module_refs = HashMap::new();
     let mut warnings = Vec::new();
     for element in &file.html_elements {
-        if !element.css_paths.is_empty() && !element.css_paths.iter().any(|path| path == css_path) {
+        if !element_has_context(element, css_path) {
             continue;
         }
         let Some(class_attribute) = element
@@ -199,9 +199,6 @@ fn merge_class_attribute(attribute: &HtmlAttribute, additions: &[String]) -> Opt
     })
 }
 
-/// The quote delimiter enclosing a live attribute value: the byte before the
-/// value span, or `"` for a synthetic attribute the planner itself inserts
-/// with double quotes.
 /// The first (generated, existing) utility conflict on a record whose
 /// classes cannot be edited but still receive fallthrough utilities.
 fn readonly_conflict(
@@ -225,6 +222,9 @@ fn readonly_conflict(
     None
 }
 
+/// The quote delimiter enclosing a live attribute value: the byte before the
+/// value span, or `"` for a synthetic attribute the planner itself inserts
+/// with double quotes.
 fn attribute_quote(source: &str, attribute: &HtmlAttribute) -> Option<u8> {
     if attribute.synthetic {
         return Some(b'"');
@@ -267,14 +267,14 @@ pub(crate) fn plan_vue_module_file(
             .html_elements
             .iter()
             .filter(|element| {
-                element_has_module_context(element, css_path) && !is_shadow_only(element)
+                element_has_context(element, css_path) && !is_shadow_only(element)
             })
             .filter_map(|element| element.module_binding.as_ref())
             .any(|binding| !rule_classes.contains(&binding.name));
         if unresolved {
             let mut plan = SourcePlan::default();
             for element in &file.html_elements {
-                if !element_has_module_context(element, css_path) || is_shadow_only(element) {
+                if !element_has_context(element, css_path) || is_shadow_only(element) {
                     continue;
                 }
                 let Some(binding) = &element.module_binding else {
@@ -305,7 +305,7 @@ pub(crate) fn plan_vue_module_file(
     let mut matched_module_refs = HashMap::new();
     let mut warnings = Vec::new();
     for element in &file.html_elements {
-        if !element_has_module_context(element, css_path) || is_shadow_only(element) {
+        if !element_has_context(element, css_path) || is_shadow_only(element) {
             continue;
         }
         let Some(binding) = &element.module_binding else {
@@ -423,12 +423,6 @@ pub(crate) fn plan_vue_module_file(
     }
 }
 
-/// Rebase an arbitrary span through the prior sequential edit rounds; `None`
-/// when an earlier entry edited inside it.
-fn element_has_module_context(element: &crate::planner::HtmlElement, css_path: &str) -> bool {
-    element.css_paths.is_empty() || element.css_paths.iter().any(|path| path == css_path)
-}
-
 /// An effective child-root shadow record mirrors a binding that is counted
 /// on its own element; it exists only so cascade checks can see the caller's
 /// merged classes, marked by its read-only class attribute.
@@ -439,6 +433,8 @@ fn is_shadow_only(element: &crate::planner::HtmlElement) -> bool {
         .is_some_and(|attribute| !attribute.writable)
 }
 
+/// Rebase an arbitrary span through the prior sequential edit rounds; `None`
+/// when an earlier entry edited inside it.
 pub(crate) fn rebase_span(
     start: usize,
     end: usize,
@@ -475,18 +471,13 @@ fn candidate_breaks_attribute(candidate: &str, quote: Option<u8>) -> bool {
 }
 
 fn rebased_attributes(file: &SourceFile) -> HashMap<usize, HtmlAttribute> {
+    // Only class attributes are queried back out of the returned map, and id
+    // attributes are never edited, so they contribute nothing to `delta`.
     let mut attributes = file
         .html_elements
         .iter()
-        .flat_map(|element| {
-            [
-                element.class_attribute.as_ref(),
-                element.id_attribute.as_ref(),
-            ]
-            .into_iter()
-            .flatten()
-            .filter(|attribute| attribute.writable)
-        })
+        .filter_map(|element| element.class_attribute.as_ref())
+        .filter(|attribute| attribute.writable)
         .filter_map(|attribute| {
             let original_start = attribute.start;
             let mut attribute = attribute.clone();

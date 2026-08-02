@@ -86,11 +86,11 @@ function validateAction(value: unknown, label: string): void {
   if (action.type === "press") {
     exactKeys(action, ["type", "key"], ["type", "key"], label);
     nonempty(action.key, `${label}.key`);
-  } else if (["click", "hover", "focus"].includes(action.type as string)) {
+  } else if (action.type === "hover" || action.type === "focus") {
     exactKeys(action, ["type", "selector"], ["type", "selector"], label);
     validateSelector(action.selector, `${label}.selector`);
   } else {
-    throw new Error(`${label}.type must be click, hover, focus, or press`);
+    throw new Error(`${label}.type must be hover, focus, or press`);
   }
 }
 

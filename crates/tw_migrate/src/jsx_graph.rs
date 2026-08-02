@@ -1396,7 +1396,11 @@ const PROBE_EXTENSIONS: [&str; 6] = ["tsx", "ts", "jsx", "js", "mjs", "cjs"];
 /// Resolve an extensionless relative specifier against the request file set:
 /// exact path, then each extension, then `index.*` under the path. Every
 /// match is returned; zero or multiple matches disqualify at the call site.
-fn resolve_specifier(paths: &[PathBuf], from: &str, specifier: &str) -> Vec<usize> {
+fn resolve_specifier(
+    path_index: &HashMap<PathBuf, usize>,
+    from: &str,
+    specifier: &str,
+) -> Vec<usize> {
     if !specifier.starts_with('.') {
         return Vec::new();
     }
@@ -1410,13 +1414,10 @@ fn resolve_specifier(paths: &[PathBuf], from: &str, specifier: &str) -> Vec<usiz
     for extension in PROBE_EXTENSIONS {
         probes.push(base.join(format!("index.{extension}")));
     }
-    let mut matches = Vec::new();
-    for (index, path) in paths.iter().enumerate() {
-        if probes.contains(path) {
-            matches.push(index);
-        }
-    }
-    matches
+    probes
+        .into_iter()
+        .filter_map(|probe| path_index.get(&probe).copied())
+        .collect()
 }
 
 fn mark_exports(
@@ -1435,17 +1436,18 @@ fn mark_exports(
 }
 
 fn link(world: &World) -> Linked {
-    let paths: Vec<PathBuf> = world
+    let path_index: HashMap<PathBuf, usize> = world
         .files
         .iter()
-        .map(|file| normalize_path(Path::new(&file.path)))
+        .enumerate()
+        .map(|(index, file)| (normalize_path(Path::new(&file.path)), index))
         .collect();
     let mut unanalyzable: HashMap<CompId, &'static str> = HashMap::new();
     let mut imports = Vec::new();
     for file in &world.files {
         let mut resolved = ResolvedImports::new();
         for (local, (specifier, imported)) in &file.imports {
-            let matches = resolve_specifier(&paths, &file.path, specifier);
+            let matches = resolve_specifier(&path_index, &file.path, specifier);
             let entry = match matches.as_slice() {
                 [only] => Ok((*only, imported.clone())),
                 [] => Err(R_UNRESOLVED),
@@ -1464,7 +1466,7 @@ fn link(world: &World) -> Linked {
     }
     for file in &world.files {
         for specifier in &file.ns_member_specs {
-            for candidate in resolve_specifier(&paths, &file.path, specifier) {
+            for candidate in resolve_specifier(&path_index, &file.path, specifier) {
                 mark_exports(world, candidate, R_HOC, &mut unanalyzable);
             }
         }

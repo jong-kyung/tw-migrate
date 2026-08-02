@@ -18,7 +18,7 @@ export interface Viewport {
 
 export type ProbeAction =
   | { type: "press"; key: string }
-  | { type: "click" | "hover" | "focus"; selector: ProbeSelector };
+  | { type: "hover" | "focus"; selector: ProbeSelector };
 
 export interface Probe {
   route: string;

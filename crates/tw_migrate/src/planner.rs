@@ -180,7 +180,7 @@ fn element_tag(element: &HtmlElement) -> Option<&str> {
     element.match_tag.as_deref().or(element.tag.as_deref())
 }
 
-fn element_has_context(element: &HtmlElement, css_path: &str) -> bool {
+pub(crate) fn element_has_context(element: &HtmlElement, css_path: &str) -> bool {
     element.css_paths.is_empty() || element.css_paths.iter().any(|path| path == css_path)
 }
 
@@ -909,14 +909,14 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
     // The snapshot passes below never edit the corpus, so one clone travels
     // through every per-stylesheet request instead of a clone per stylesheet.
     let mut snapshot_files = request.files.clone();
+    let externally_blocked = request
+        .stylesheets
+        .iter()
+        .map(|stylesheet| stylesheet.blocked_rules.iter().copied().collect::<HashSet<_>>())
+        .collect::<Vec<_>>();
     for (index, stylesheet) in request.stylesheets.iter().enumerate() {
         let plan_request = batch_stylesheet_request(&request, stylesheet, snapshot_files);
-        let externally_blocked = stylesheet
-            .blocked_rules
-            .iter()
-            .copied()
-            .collect::<HashSet<_>>();
-        let maps = candidate_map_for_request(&plan_request, &externally_blocked)?;
+        let maps = candidate_map_for_request(&plan_request, &externally_blocked[index])?;
         snapshot_files = plan_request.files;
         for file in request.files.iter().filter(|file| file.writable) {
             let result = plan_consumer_file(
@@ -1009,12 +1009,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
             }
         }
         let plan_request = batch_stylesheet_request(&request, stylesheet, snapshot_files);
-        let externally_blocked = stylesheet
-            .blocked_rules
-            .iter()
-            .copied()
-            .collect::<HashSet<_>>();
-        let maps = candidate_map_for_request(&plan_request, &externally_blocked)?;
+        let maps = candidate_map_for_request(&plan_request, &externally_blocked[index])?;
         snapshot_files = plan_request.files;
         for (file_index, element_index, binding) in hidden_bindings {
             snapshot_files[file_index].html_elements[element_index].module_binding = Some(binding);
@@ -1103,15 +1098,10 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
             .tailwind_path
             .as_ref()
             .and_then(|path| current.get(path).cloned());
-        let externally_blocked = stylesheet
-            .blocked_rules
-            .iter()
-            .copied()
-            .collect::<HashSet<_>>();
         let response = plan_request(
             stylesheet_request,
             &blocked_rules[index],
-            &externally_blocked,
+            &externally_blocked[index],
             &candidate_maps[index].unproven,
         )?;
 
@@ -2378,13 +2368,17 @@ fn apply_edits(source: &str, mut edits: Vec<Edit>) -> Result<String, String> {
             return Err("Overlapping source edits were produced".to_string());
         }
     }
-    let mut output = source.to_string();
-    for edit in edits.into_iter().rev() {
-        if edit.end > output.len() || edit.start > edit.end {
+    let mut output = String::with_capacity(source.len());
+    let mut cursor = 0;
+    for edit in edits {
+        if edit.end > source.len() || edit.start > edit.end {
             return Err("Invalid source edit span".to_string());
         }
-        output.replace_range(edit.start..edit.end, &edit.replacement);
+        output.push_str(&source[cursor..edit.start]);
+        output.push_str(&edit.replacement);
+        cursor = edit.end;
     }
+    output.push_str(&source[cursor..]);
     Ok(output)
 }
 

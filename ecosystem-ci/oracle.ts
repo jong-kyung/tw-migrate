@@ -85,8 +85,7 @@ async function performAction(page: Page, action: ProbeAction | undefined): Promi
   if (!action) return;
   if (action.type === "press") await page.keyboard.press(action.key);
   else if (action.type === "hover") await locator(page, action.selector).hover();
-  else if (action.type === "focus") await locator(page, action.selector).focus();
-  else await locator(page, action.selector).click();
+  else await locator(page, action.selector).focus();
 }
 
 async function capturePage(

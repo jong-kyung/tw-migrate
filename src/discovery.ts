@@ -1,13 +1,12 @@
 import { execFile } from "node:child_process";
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import {
   IGNORED_DIRECTORIES,
   SOURCE_EXTENSIONS,
   errorCode,
-  extension,
   isStylesheetPath,
   isWithin,
   rejectSymlinkTarget,
@@ -36,10 +35,10 @@ export async function resolveScope(options: MigrateOptions): Promise<Scope> {
       : [...allPaths];
   const explicitStyle = options.styleFile ? resolve(cwd, options.styleFile) : undefined;
   const configuredEntry = options.tailwindCss ? resolve(cwd, options.tailwindCss) : undefined;
-  if (explicitStyle && !isStylesheetPath(explicitStyle) && extension(explicitStyle) !== ".vue") {
+  if (explicitStyle && !isStylesheetPath(explicitStyle) && extname(explicitStyle) !== ".vue") {
     throw new TypeError("Only .css, .scss, .sass, .less, and .vue files can be migrated");
   }
-  if (configuredEntry && extension(configuredEntry) !== ".css") {
+  if (configuredEntry && extname(configuredEntry) !== ".css") {
     throw new TypeError("The Tailwind CSS entry must be a .css file");
   }
   if (configuredEntry && !(await stat(configuredEntry)).isFile()) {
@@ -172,7 +171,7 @@ function isRelevantDiscoveredFile(path: string): boolean {
   return (
     basename(path) === "package.json" ||
     isStylesheetPath(path) ||
-    SOURCE_EXTENSIONS.has(extension(path))
+    SOURCE_EXTENSIONS.has(extname(path))
   );
 }
 

@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, extname, join } from "node:path";
 
 import { unifiedDiff } from "./util/diff.ts";
 import { collectFiles, resolveScope } from "./discovery.ts";
@@ -7,7 +7,6 @@ import { parseHtmlSource } from "./parser/html.ts";
 import { preparePackageHtml } from "./plan/html.ts";
 import { planBatchMigration, validateCss } from "./native.ts";
 import {
-  extension,
   indexStylesheetDependents,
   isIntegrityError,
   isProjectInput,
@@ -88,7 +87,7 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
 
   const snapshots = new Map<string, string>();
   const stylePaths = scope.scannedPaths.filter(isStylesheetPath);
-  const sourcePaths = scope.scannedPaths.filter((path) => SOURCE_EXTENSIONS.has(extension(path)));
+  const sourcePaths = scope.scannedPaths.filter((path) => SOURCE_EXTENSIONS.has(extname(path)));
   const [styleSources, sourceCandidates] = await Promise.all([
     Promise.all(
       stylePaths.map(
@@ -104,7 +103,7 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
         // solely as a potential stylesheet consumer, and HTML entities can
         // encode any part of a linked filename, so retain ignored HTML
         // containing a link for parse5 to classify safely.
-        const mayReferenceModule = extension(path) !== ".html" || /<link\b/i.test(source);
+        const mayReferenceModule = extname(path) !== ".html" || /<link\b/i.test(source);
         if (!scope.targetable.has(path) && !mayReferenceModule) return undefined;
         return { path, source: recordSnapshot(snapshots, path, source) };
       }),
@@ -248,7 +247,7 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
   // its retention warnings without requiring an unrelated Tailwind entry.
   if (
     explicitStyle &&
-    extension(explicitStyle) === ".vue" &&
+    extname(explicitStyle) === ".vue" &&
     preparedVue.stylesheets.length === 0 &&
     ![...preparedVue.stylePaths].some((path) => !isStylesheetModule(path))
   ) {
@@ -256,7 +255,7 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
   }
   const packageSources: PreparedSourceFile[] = [
     ...sourceFiles
-      .filter((file) => extension(file.path) !== ".html")
+      .filter((file) => extname(file.path) !== ".html")
       .map((file) => preparedVue.files.get(file.path) ?? file),
     ...preparedHtml.files,
   ];
@@ -285,7 +284,7 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
 
   const excludedEntries = new Set([...tailwindEntries, tailwindPath]);
   const explicitCss =
-    explicitStyle && extension(explicitStyle) !== ".vue" ? explicitStyle : undefined;
+    explicitStyle && extname(explicitStyle) !== ".vue" ? explicitStyle : undefined;
   const targets = explicitCss
     ? [explicitCss]
     : explicitStyle
@@ -342,7 +341,7 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
         isPartial,
       };
       let compiled;
-      if ((isSassPath(stylePath) && !isPartial) || extension(stylePath) === ".less") {
+      if ((isSassPath(stylePath) && !isPartial) || extname(stylePath) === ".less") {
         // Compile the snapshotted source, not the on-disk file: code loaded
         // during planning (e.g. Tailwind plugins) may have rewritten it since.
         compiled = await compileStyleEntry(
@@ -407,10 +406,10 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
   plan.warnings.push(...preparedHtml.warnings);
   plan.warnings.push(...preparedVue.warnings);
   try {
-    for (const file of plan.files.filter((file) => extension(file.path) === ".html")) {
+    for (const file of plan.files.filter((file) => extname(file.path) === ".html")) {
       parseHtmlSource(file.path, file.source);
     }
-    for (const file of plan.files.filter((file) => extension(file.path) === ".vue")) {
+    for (const file of plan.files.filter((file) => extname(file.path) === ".vue")) {
       const vueCompiler = preparedVue.compiler;
       if (!vueCompiler) throw new Error(`No Vue compiler is available to verify ${file.path}`);
       const includeUnscoped = preparedVue.unscopedPaths.has(file.path);

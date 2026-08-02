@@ -449,14 +449,16 @@ async function checkedMigrationPath(
 async function readMigrationPaths(root: string, paths: string[]): Promise<Record<string, string>> {
   root = resolve(root);
   const canonicalRoot = await realpath(root);
-  const result: Record<string, string> = {};
-  for (const relativePath of [...paths].sort()) {
-    result[relativePath] = await readFile(
-      await checkedMigrationPath(root, canonicalRoot, relativePath),
-      "utf8",
-    );
-  }
-  return result;
+  return Object.fromEntries(
+    await Promise.all(
+      [...paths]
+        .sort()
+        .map(async (relativePath) => [
+          relativePath,
+          await readFile(await checkedMigrationPath(root, canonicalRoot, relativePath), "utf8"),
+        ]),
+    ),
+  );
 }
 
 export async function clearGeneratedCaches(root: string): Promise<void> {
@@ -486,20 +488,22 @@ export async function snapshotMigrationSources(root: string): Promise<FileDigest
       throw new Error(
         `migration source path escapes project through a symlink: ${relative(root, directory)}`,
       );
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
-      if (generatedDirectories.has(entry.name)) continue;
-      const path = resolve(directory, entry.name);
-      if (!inside(path, root)) throw new Error(`migration source path escapes project: ${path}`);
-      if (entry.isSymbolicLink())
-        throw new Error(`migration source path is not regular: ${relative(root, path)}`);
-      if (entry.isDirectory()) {
-        await walk(path);
-      } else if (migrationSourceExtensions.has(extname(entry.name).toLowerCase())) {
-        const relativePath = relative(root, path);
-        const checked = await checkedMigrationPath(root, canonicalRoot, relativePath);
-        result[relativePath] = await sha256(checked);
-      }
-    }
+    await Promise.all(
+      (await readdir(directory, { withFileTypes: true })).map(async (entry) => {
+        if (generatedDirectories.has(entry.name)) return;
+        const path = resolve(directory, entry.name);
+        if (!inside(path, root)) throw new Error(`migration source path escapes project: ${path}`);
+        if (entry.isSymbolicLink())
+          throw new Error(`migration source path is not regular: ${relative(root, path)}`);
+        if (entry.isDirectory()) {
+          await walk(path);
+        } else if (migrationSourceExtensions.has(extname(entry.name).toLowerCase())) {
+          const relativePath = relative(root, path);
+          const checked = await checkedMigrationPath(root, canonicalRoot, relativePath);
+          result[relativePath] = await sha256(checked);
+        }
+      }),
+    );
   };
   await walk(root);
   return Object.fromEntries(
@@ -684,6 +688,13 @@ async function existingArtifactNames(artifactRoot: string, names: string[]): Pro
   );
   return checked.filter((name) => name !== undefined);
 }
+
+const installLogNames = [
+  "install.log",
+  "publish.log",
+  "registry-bootstrap.log",
+  "registry-install.log",
+];
 
 function caseArtifactNames(project: ProbedProject): string[] {
   return [
@@ -874,12 +885,7 @@ export async function runLifecycle({
         packageArtifactRoot,
         artifactRoot,
       );
-      await mark("installed", [
-        "install.log",
-        "publish.log",
-        "registry-bootstrap.log",
-        "registry-install.log",
-      ]);
+      await mark("installed", installLogNames);
 
       await mark("baseline-started");
       server = await startServer(project, driverRoot, artifactRoot, "baseline");
@@ -1014,12 +1020,7 @@ export async function runProductionSmoke({
         packageArtifactRoot,
         artifactRoot,
       );
-      await mark("installed", [
-        "install.log",
-        "publish.log",
-        "registry-bootstrap.log",
-        "registry-install.log",
-      ]);
+      await mark("installed", installLogNames);
       const npm = platformCommand("npm");
 
       await mark("baseline-build-started");
@@ -1133,12 +1134,7 @@ export async function runExternalLifecycle({
       const { migrate } = await import(
         `${pathToFileURL(await installedEntrypoint(installedRoot, "main")).href}?case=${Date.now()}`
       );
-      await mark("package-installed", [
-        "install.log",
-        "publish.log",
-        "registry-bootstrap.log",
-        "registry-install.log",
-      ]);
+      await mark("package-installed", installLogNames);
       const checkoutRoot = await checkoutExternalProject(project, runRoot, artifactRoot);
       await checkedMigrationPath(checkoutRoot, await realpath(checkoutRoot), project.lockfile);
       const runtimeWriteOriginals = await snapshotRuntimeWrites(

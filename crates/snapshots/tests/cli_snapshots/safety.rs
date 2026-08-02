@@ -164,30 +164,43 @@ fn write_fake_package(context: &CaseContext<'_>, name: &str, source: &str) -> Re
         .map_err(|error| format!("write fake {name} compiler: {error}"))
 }
 
-fn setup_planning_mutation(context: &CaseContext<'_>) -> Result<(), String> {
+fn write_mutation_plugin(
+    context: &CaseContext<'_>,
+    plugin: &str,
+    target: &str,
+    comment: &str,
+    label: &str,
+) -> Result<(), String> {
     git_init(context)?;
-    let target = context.workspace.join("bbb/globals.css");
+    let target = context.workspace.join(target);
     fs::write(
-        context.workspace.join("aaa/mutate.cjs"),
+        context.workspace.join(plugin),
         format!(
-            "const fs = require('node:fs');\nfs.appendFileSync({}, '/* mutated */\\n');\nmodule.exports = () => {{}};\n",
+            "const fs = require('node:fs');\nfs.appendFileSync({}, '{comment}\\n');\nmodule.exports = () => {{}};\n",
             serde_json::to_string(&target.to_string_lossy()).unwrap()
         ),
     )
-    .map_err(|error| format!("write planning mutation plugin: {error}"))
+    .map_err(|error| format!("write {label} mutation plugin: {error}"))
+}
+
+fn setup_planning_mutation(context: &CaseContext<'_>) -> Result<(), String> {
+    write_mutation_plugin(
+        context,
+        "aaa/mutate.cjs",
+        "bbb/globals.css",
+        "/* mutated */",
+        "planning",
+    )
 }
 
 fn setup_reference_mutation(context: &CaseContext<'_>) -> Result<(), String> {
-    git_init(context)?;
-    let target = context.workspace.join("external/Note.tsx");
-    fs::write(
-        context.workspace.join("mutate.cjs"),
-        format!(
-            "const fs = require('node:fs');\nfs.appendFileSync({}, '// changed during planning\\n');\nmodule.exports = () => {{}};\n",
-            serde_json::to_string(&target.to_string_lossy()).unwrap()
-        ),
+    write_mutation_plugin(
+        context,
+        "mutate.cjs",
+        "external/Note.tsx",
+        "// changed during planning",
+        "reference",
     )
-    .map_err(|error| format!("write reference mutation plugin: {error}"))
 }
 
 fn setup_symlinks(context: &CaseContext<'_>) -> Result<(), String> {
@@ -201,21 +214,20 @@ fn setup_symlinks(context: &CaseContext<'_>) -> Result<(), String> {
     )
 }
 
+// Unix has one symlink kind; only Windows distinguishes file and directory
+// links.
 #[cfg(unix)]
 fn create_file_symlink(target: &Path, link: &Path) -> Result<(), String> {
     std::os::unix::fs::symlink(target, link)
         .map_err(|error| format!("create symlink {}: {error}", link.display()))
 }
+
+#[cfg(unix)]
+use create_file_symlink as create_directory_symlink;
 
 #[cfg(windows)]
 fn create_file_symlink(target: &Path, link: &Path) -> Result<(), String> {
     std::os::windows::fs::symlink_file(target, link)
-        .map_err(|error| format!("create symlink {}: {error}", link.display()))
-}
-
-#[cfg(unix)]
-fn create_directory_symlink(target: &Path, link: &Path) -> Result<(), String> {
-    std::os::unix::fs::symlink(target, link)
         .map_err(|error| format!("create symlink {}: {error}", link.display()))
 }
 

@@ -192,6 +192,16 @@ export function utf8OffsetMap(source: string, indices: number[]): Map<number, nu
   return map;
 }
 
+// Every queried index was fed into the offset map, so a miss is a bug in the
+// calling module rather than a recoverable input condition.
+export function offsetLookup(offsets: Map<number, number>): (index: number) => number {
+  return (index) => {
+    const byte = offsets.get(index);
+    if (byte === undefined) throw new Error(`No byte offset was mapped for index ${index}`);
+    return byte;
+  };
+}
+
 function toByteOffsets(
   source: string,
   parsed: Omit<ParsedHtml, "scriptText">,
@@ -206,13 +216,7 @@ function toByteOffsets(
     ),
     ...parsed.dynamicAttributes.flatMap((value) => [value.start, value.end]),
   ]);
-  // Every queried index was fed into the map above, so a miss is a bug in
-  // this module rather than a recoverable input condition.
-  const offset = (index: number): number => {
-    const byte = offsets.get(index);
-    if (byte === undefined) throw new Error(`No byte offset was mapped for index ${index}`);
-    return byte;
-  };
+  const offset = offsetLookup(offsets);
   const attribute = <T extends HtmlSpan>(value: T): T => ({
     ...value,
     start: offset(value.start),

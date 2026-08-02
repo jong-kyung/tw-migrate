@@ -1,5 +1,5 @@
 import { lstat, readFile } from "node:fs/promises";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 
 import { utf8OffsetMap } from "../parser/html.ts";
 import { isPreprocessorPath } from "../parser/style-compiler.ts";
@@ -40,11 +40,11 @@ export function isWithin(root: string, path: string): boolean {
 }
 
 export function isStylesheetPath(path: string): boolean {
-  return STYLESHEET_SYNTAX.has(extension(path));
+  return STYLESHEET_SYNTAX.has(extname(path));
 }
 
 export function stylesheetSyntax(path: string): string | undefined {
-  return STYLESHEET_SYNTAX.get(extension(path));
+  return STYLESHEET_SYNTAX.get(extname(path));
 }
 
 export function isStylesheetModule(path: string): boolean {
@@ -138,11 +138,6 @@ export function isIntegrityError(error: unknown): boolean {
   return message.startsWith("Source changed during planning:");
 }
 
-export function extension(path: string): string {
-  const match = /\.[^./]+$/.exec(path);
-  return match?.[0] ?? "";
-}
-
 export function normalizedRelativePath(root: string, path: string): string {
   return relative(root, path).split(sep).join("/");
 }
@@ -202,7 +197,7 @@ export function stylesheetReferenceTargets(
   styleSources: Map<string, string>,
 ): string[] {
   const target = resolve(dirname(importer), reference);
-  const candidates = STYLESHEET_SYNTAX.has(extension(target))
+  const candidates = STYLESHEET_SYNTAX.has(extname(target))
     ? [target]
     : [...STYLESHEET_SYNTAX.keys()].flatMap((syntax) => [
         `${target}${syntax}`,

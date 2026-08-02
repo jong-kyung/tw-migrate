@@ -46,7 +46,6 @@ struct Step {
 
 pub struct CaseContext<'a> {
     pub workspace: &'a Path,
-    pub home: &'a Path,
     pub install_root: &'a Path,
 }
 
@@ -96,7 +95,6 @@ pub fn run_case_with(
             .map_err(|error| format!("remove copied case metadata: {error}"))?;
         let context = CaseContext {
             workspace: &workspace,
-            home: &home,
             install_root: &suite.install_root,
         };
         setup(&context)?;

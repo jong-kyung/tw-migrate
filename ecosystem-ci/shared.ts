@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { createHash } from "node:crypto";
+import { hash } from "node:crypto";
 import { closeSync, openSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import net from "node:net";
@@ -35,9 +35,7 @@ export async function availablePort(): Promise<number> {
 }
 
 export async function sha256(path: string): Promise<string> {
-  return createHash("sha256")
-    .update(await readFile(path))
-    .digest("hex");
+  return hash("sha256", await readFile(path), "hex");
 }
 
 export async function terminateTree(child: ChildProcess): Promise<void> {

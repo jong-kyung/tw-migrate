@@ -54,13 +54,12 @@ export async function startRegistry({
   root,
   artifactRoot,
   allowPublish,
-  timeoutMs = 15_000,
 }: {
   root: string;
   artifactRoot: string;
   allowPublish: boolean;
-  timeoutMs?: number;
 }): Promise<RunningServer> {
+  const timeoutMs = 15_000;
   const verdaccioBin = join(dirname(require.resolve("verdaccio/package.json")), "bin", "verdaccio");
   await Promise.all([mkdir(root, { recursive: true }), mkdir(artifactRoot, { recursive: true })]);
   const storage = join(root, "storage");

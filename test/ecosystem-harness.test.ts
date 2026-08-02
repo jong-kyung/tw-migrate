@@ -180,7 +180,7 @@ test("smoke and external cases accept non-exhaustive probes without occupying co
     source: base.source,
     probes: {
       base: probe(),
-      details: probe({ action: { type: "click", selector } }),
+      details: probe({ action: { type: "hover", selector } }),
     },
   };
   assert.doesNotThrow(() =>
@@ -525,6 +525,25 @@ test("--case selects exactly one project and maps it to a Vitest project filter"
   ]);
 });
 
+async function withEnv(
+  vars: Record<string, string | undefined>,
+  fn: () => Promise<void> | void,
+): Promise<void> {
+  const previous = Object.fromEntries(Object.keys(vars).map((name) => [name, process.env[name]]));
+  for (const [name, value] of Object.entries(vars)) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+  try {
+    await fn();
+  } finally {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
+
 test("Vitest and the lifecycle omit external projects unless the CI-only gate is active", async () => {
   const projects = (await loadManifest()).projects;
   assert.equal(
@@ -537,20 +556,12 @@ test("Vitest and the lifecycle omit external projects unless the CI-only gate is
     ).length,
     2,
   );
-  const previous = { CI: process.env.CI, external: process.env.ECOSYSTEM_EXTERNAL };
-  delete process.env.CI;
-  delete process.env.ECOSYSTEM_EXTERNAL;
-  try {
-    await assert.rejects(
+  await withEnv({ CI: undefined, ECOSYSTEM_EXTERNAL: undefined }, () =>
+    assert.rejects(
       runExternalLifecycle({} as Parameters<typeof runExternalLifecycle>[0]),
       /require CI=true/,
-    );
-  } finally {
-    if (previous.CI === undefined) delete process.env.CI;
-    else process.env.CI = previous.CI;
-    if (previous.external === undefined) delete process.env.ECOSYSTEM_EXTERNAL;
-    else process.env.ECOSYSTEM_EXTERNAL = previous.external;
-  }
+    ),
+  );
 });
 
 test("external cases require the explicit CI-only entrypoint", async () => {
@@ -569,10 +580,7 @@ test("external cases require the explicit CI-only entrypoint", async () => {
       ),
     /CI-only/,
   );
-  const previous = { CI: process.env.CI, external: process.env.ECOSYSTEM_EXTERNAL };
-  process.env.CI = "true";
-  process.env.ECOSYSTEM_EXTERNAL = "1";
-  try {
+  await withEnv({ CI: "true", ECOSYSTEM_EXTERNAL: "1" }, () => {
     const calls: string[][] = [];
     const selected = runHarness(
       ["--external-case", "external-stylized-components"],
@@ -592,12 +600,7 @@ test("external cases require the explicit CI-only entrypoint", async () => {
         "external-stylized-components",
       ],
     ]);
-  } finally {
-    if (previous.CI === undefined) delete process.env.CI;
-    else process.env.CI = previous.CI;
-    if (previous.external === undefined) delete process.env.ECOSYSTEM_EXTERNAL;
-    else process.env.ECOSYSTEM_EXTERNAL = previous.external;
-  }
+  });
 });
 
 test("unknown case prints the available ids without executing Vitest", async () => {

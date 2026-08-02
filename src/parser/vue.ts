@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 
-import { utf8OffsetMap } from "./html.ts";
+import { offsetLookup, utf8OffsetMap } from "./html.ts";
 import { loadProjectModule } from "./style-compiler.ts";
 import { staticImportBindings, staticImports, staticStringExpression } from "../native.ts";
 import type { StaticImportBinding } from "../native.ts";
@@ -484,13 +484,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
       ),
     ),
   ]);
-  // Every queried index was fed into the map above, so a miss is a bug in
-  // this module rather than a recoverable input condition.
-  const offset = (index: number): number => {
-    const byte = offsets.get(index);
-    if (byte === undefined) throw new Error(`No byte offset was mapped for index ${index}`);
-    return byte;
-  };
+  const offset = offsetLookup(offsets);
   const attribute = (value: VueTemplateAttribute | undefined): VueTemplateAttribute | undefined =>
     value && { ...value, start: offset(value.start), end: offset(value.end) };
   const toByteBlock = (block: VueStyleBlock): VueStyleBlock => ({
