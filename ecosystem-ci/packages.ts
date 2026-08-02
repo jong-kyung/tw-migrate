@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 
 import { randomUUID } from "node:crypto";
-import { cp, lstat, mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { inside, platformCommand, run, sha256 } from "./shared.ts";
-import type { InstalledLayout, PackageEntry, Provenance } from "./types.ts";
+import type { PackageEntry, Provenance } from "./types.ts";
 
 interface Target {
   platform: string;
@@ -43,20 +43,22 @@ export function currentTarget(): Target {
   return targetFor(process.platform, process.arch);
 }
 
-async function npmPack(packageDir: string, destination: string, logPath: string): Promise<string> {
-  const before = new Set((await readdir(destination)).filter((file) => file.endsWith(".tgz")));
+// npm's tarball filename is deterministic for the unscoped names packed here.
+async function npmPack(
+  packageDir: string,
+  manifest: RootManifest,
+  destination: string,
+  logPath: string,
+): Promise<string> {
   await run(platformCommand("npm"), ["pack", "--pack-destination", destination], {
     cwd: packageDir,
     logPath,
   });
-  const created = (await readdir(destination)).filter(
-    (file) => file.endsWith(".tgz") && !before.has(file),
-  );
-  const [tarball] = created;
-  if (created.length !== 1 || !tarball) {
-    throw new Error(`npm pack in ${packageDir} created ${created.length} tarballs, expected one`);
+  const tarball = join(destination, `${manifest.name}-${manifest.version}.tgz`);
+  if (!(await lstat(tarball).catch(() => null))?.isFile()) {
+    throw new Error(`npm pack in ${packageDir} did not create ${tarball}`);
   }
-  return join(destination, tarball);
+  return tarball;
 }
 
 export async function stageRootPackage({
@@ -129,14 +131,14 @@ export async function stagePackages({
   ) as RootManifest;
   if (nativeManifest.name !== target.packageName)
     throw new Error(`native package name must be ${target.packageName}`);
-  const nativeTarball = await npmPack(nativeStage, tarballs, logPath);
+  const nativeTarball = await npmPack(nativeStage, nativeManifest, tarballs, logPath);
 
   const rootStage = join(staging, "root");
   const rootManifest = await stageRootPackage({ repoRoot, stageRoot: rootStage });
   if (rootManifest.name !== "tw-migrate") throw new Error("root package name must be tw-migrate");
   if (nativeManifest.version !== rootManifest.version)
     throw new Error("root and native package versions differ");
-  const rootTarball = await npmPack(rootStage, tarballs, logPath);
+  const rootTarball = await npmPack(rootStage, rootManifest, tarballs, logPath);
   const commitLog = join(artifactRoot, "git.log");
   await run("git", ["rev-parse", "HEAD"], { cwd: repoRoot, logPath: commitLog });
   // `run` already threw unless `git rev-parse` exited zero, so the log has a line.
@@ -251,7 +253,7 @@ export async function assertInstalledLayout({
   driverRoot: string;
   checkoutRoot: string;
   expected: { version: string; platform: string; addonSha256: string };
-}): Promise<InstalledLayout> {
+}): Promise<string> {
   const target = currentTarget();
   if (expected.platform !== target.platform)
     throw new Error("installed platform does not match current OS");
@@ -276,7 +278,7 @@ export async function assertInstalledLayout({
   if (!(await lstat(addon)).isFile()) throw new Error(`installed addon is missing: ${addon}`);
   if ((await sha256(addon)) !== expected.addonSha256)
     throw new Error("installed addon digest does not match provenance");
-  return { root, native, addon };
+  return root;
 }
 
 export async function publisherToken(registryUrl: string, timeoutMs = 15_000): Promise<string> {

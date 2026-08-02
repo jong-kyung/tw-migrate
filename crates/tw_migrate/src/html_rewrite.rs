@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap};
 use crate::{
     css_plan::SelectorKey,
     js_rewrite::{CandidateMatch, SourcePlan},
-    planner::{element_classes, element_ids, Edit, HtmlAttribute, SourceFile, Warning},
+    planner::{Edit, HtmlAttribute, SourceFile, Warning, element_classes, element_ids},
     utilities::utility_conflict,
 };
 
@@ -19,7 +19,7 @@ pub(crate) fn plan_html_file(
         .filter(|context| context.analyzable && context.css_path == css_path)
         .collect::<Vec<_>>();
     if contexts.is_empty() {
-        return empty_source_plan();
+        return SourcePlan::default();
     }
 
     let live_attributes = rebased_attributes(file);
@@ -30,9 +30,7 @@ pub(crate) fn plan_html_file(
     let mut matched_module_refs = HashMap::new();
     let mut warnings = Vec::new();
     for element in &file.html_elements {
-        if !element.css_paths.is_empty()
-            && !element.css_paths.iter().any(|path| path == css_path)
-        {
+        if !element.css_paths.is_empty() && !element.css_paths.iter().any(|path| path == css_path) {
             continue;
         }
         let Some(class_attribute) = element
@@ -122,13 +120,12 @@ pub(crate) fn plan_html_file(
 
     SourcePlan {
         edits,
-        removable_import_edits: Vec::new(),
         candidates: emitted.into_iter().collect(),
         matches,
         module_refs,
         matched_module_refs,
-        module_references_safe: true,
         warnings,
+        ..Default::default()
     }
 }
 
@@ -257,7 +254,7 @@ pub(crate) fn plan_vue_module_file(
         .filter(|context| context.analyzable && context.css_path == css_path)
         .collect::<Vec<_>>();
     if contexts.is_empty() {
-        return empty_source_plan();
+        return SourcePlan::default();
     }
 
     // A direct member naming a class no module rule defines still needs the
@@ -275,7 +272,7 @@ pub(crate) fn plan_vue_module_file(
             .filter_map(|element| element.module_binding.as_ref())
             .any(|binding| !rule_classes.contains(&binding.name));
         if unresolved {
-            let mut plan = empty_source_plan();
+            let mut plan = SourcePlan::default();
             for element in &file.html_elements {
                 if !element_has_module_context(element, css_path) || is_shadow_only(element) {
                     continue;
@@ -321,8 +318,7 @@ pub(crate) fn plan_vue_module_file(
         if !candidates.contains_key(&key) {
             continue;
         }
-        let Some(binding_span) = rebase_span(binding.start, binding.end, &file.prior_edits)
-        else {
+        let Some(binding_span) = rebase_span(binding.start, binding.end, &file.prior_edits) else {
             continue;
         };
         let mut additions = Vec::new();
@@ -418,13 +414,12 @@ pub(crate) fn plan_vue_module_file(
 
     SourcePlan {
         edits,
-        removable_import_edits: Vec::new(),
         candidates: emitted.into_iter().collect(),
         matches,
         module_refs,
         matched_module_refs,
-        module_references_safe: true,
         warnings,
+        ..Default::default()
     }
 }
 
@@ -570,7 +565,10 @@ fn rebase_attribute(mut attribute: HtmlAttribute, edits: &[Edit]) -> Option<Html
     attribute.end = end;
     if let Some(edit) = exact {
         if attribute.synthetic {
-            let value = edit.replacement.strip_prefix(" class=\"")?.strip_suffix('"')?;
+            let value = edit
+                .replacement
+                .strip_prefix(" class=\"")?
+                .strip_suffix('"')?;
             attribute.start += " class=\"".len();
             attribute.end = attribute.start + value.len();
             attribute.value = value.to_string();
@@ -648,19 +646,6 @@ fn contextual_candidate(
     format!("{variants}:{candidate}")
 }
 
-pub(crate) fn empty_source_plan() -> SourcePlan {
-    SourcePlan {
-        edits: Vec::new(),
-        removable_import_edits: Vec::new(),
-        candidates: Vec::new(),
-        matches: Vec::new(),
-        module_refs: HashMap::new(),
-        matched_module_refs: HashMap::new(),
-        module_references_safe: true,
-        warnings: Vec::new(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -705,7 +690,10 @@ mod tests {
         let file = quoted_fixture(source, source.find("card").unwrap(), "card");
         let candidates = HashMap::from([(
             SelectorKey::Class("card".to_string()),
-            vec!["[font-family:\"My_Font\"]".to_string(), "p-[13px]".to_string()],
+            vec![
+                "[font-family:\"My_Font\"]".to_string(),
+                "p-[13px]".to_string(),
+            ],
         )]);
         let plan = plan_html_file(&file, "/project/site.css", &candidates, None);
         // The quote-bearing candidate is withheld; the safe one still lands.

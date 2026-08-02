@@ -1,4 +1,4 @@
-import { dirname, extname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { staticImports, validateCss } from "../native.ts";
 import { compileStyleEntry, isPreprocessorPath } from "../parser/style-compiler.ts";
@@ -7,6 +7,7 @@ import { analyzeVueSource, loadProjectVueCompiler } from "../parser/vue.ts";
 import {
   STYLESHEET_SYNTAX,
   cssImports,
+  extension,
   isProjectInput,
   isStylesheetModule,
   normalizedRelativePath,
@@ -46,7 +47,7 @@ function isLocalVueReference(reference: string): boolean {
 // aliases. An explicit foreign extension (`./utils.ts`) cannot.
 function couldResolveToVue(reference: string): boolean {
   const path = reference.split(/[?#]/, 1)[0];
-  return path.endsWith(".vue") || extname(path) === "";
+  return path.endsWith(".vue") || extension(path) === "";
 }
 
 function vueReferenceTarget(
@@ -145,7 +146,7 @@ function buildVueComponentGraph(
   for (const file of sourceFiles) {
     let references: string[];
     let blockReferences: string[] = [];
-    if (extname(file.path) === ".vue") {
+    if (extension(file.path) === ".vue") {
       const fileAnalysis = analyses.get(file.path);
       if (fileAnalysis && !fileAnalysis.retained) {
         references = fileAnalysis.scriptStyleImports;
@@ -195,7 +196,7 @@ function buildVueComponentGraph(
       }),
     );
     for (const target of imported) {
-      if (extname(file.path) !== ".vue" || !analyses.get(file.path)?.setupImports?.has(target)) {
+      if (extension(file.path) !== ".vue" || !analyses.get(file.path)?.setupImports?.has(target)) {
         callerOpen.add(target);
       }
     }
@@ -264,11 +265,11 @@ export async function preparePackageVue({
     compiler: undefined,
   };
   // An explicit non-vue stylesheet selection plans only that stylesheet.
-  if (explicitStyle && extname(explicitStyle) !== ".vue") return none;
+  if (explicitStyle && extension(explicitStyle) !== ".vue") return none;
   // Ignore filtering scopes what gets migrated, never what gets scanned: a
   // gitignored SFC's retained style blocks still shadow scoped deletions.
   const ownedVue = sourceFiles.filter(
-    (file) => extname(file.path) === ".vue" && pathOwners.get(file.path) === packageRoot,
+    (file) => extension(file.path) === ".vue" && pathOwners.get(file.path) === packageRoot,
   );
   const selected = ownedVue.filter(
     (file) => targetable.has(file.path) && (!explicitStyle || file.path === explicitStyle),
@@ -386,7 +387,7 @@ export async function preparePackageVue({
   }
   for (const file of sourceFiles) {
     if (
-      extname(file.path) === ".html" &&
+      extension(file.path) === ".html" &&
       pathOwners.get(file.path) === packageRoot &&
       /<style/i.test(file.source)
     ) {
@@ -444,7 +445,9 @@ export async function preparePackageVue({
   const sourcePathSet = new Set(sourceFiles.map((file) => file.path));
   const hiddenHtml = scannedPaths.some(
     (path) =>
-      extname(path) === ".html" && pathOwners.get(path) === packageRoot && !sourcePathSet.has(path),
+      extension(path) === ".html" &&
+      pathOwners.get(path) === packageRoot &&
+      !sourcePathSet.has(path),
   );
   const projectWideUsageProven =
     packageIsPrivate &&
@@ -488,7 +491,7 @@ export async function preparePackageVue({
           .filter(
             (reference) =>
               reference.startsWith(".") &&
-              STYLESHEET_SYNTAX.has(extname(reference.split(/[?#]/, 1)[0])),
+              STYLESHEET_SYNTAX.has(extension(reference.split(/[?#]/, 1)[0])),
           )
           .flatMap((reference) => stylesheetReferenceTargets(file.path, reference, styleSources)),
         ...analysis.styleBlockImports.flatMap((entry) =>
@@ -498,7 +501,7 @@ export async function preparePackageVue({
     );
     for (const path of importedStyles) {
       stylePaths.add(path);
-      if (extname(path) !== ".css") continue;
+      if (extension(path) !== ".css") continue;
       for (const imported of cssImports(styleSources.get(path) ?? "")) {
         // Conditional imports need variant-aware contexts; retaining them is
         // safer than attaching an unconditional utility.

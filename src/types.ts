@@ -26,9 +26,9 @@ export interface RuleReport {
   candidates: string[];
   file: string;
   /** Rule span in the analysis source (compiled CSS for preprocessor stylesheets). */
-  ruleId: { start: number; end: number };
+  ruleId: RuleSpan;
   /** Rule span in the authored file, or (0, 0) when no unique mapping exists. */
-  authoredSpan: { start: number; end: number };
+  authoredSpan: RuleSpan;
 }
 
 export interface MigrationFailure {

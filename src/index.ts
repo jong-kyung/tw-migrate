@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { basename, extname, join } from "node:path";
+import { basename, join } from "node:path";
 
 import { unifiedDiff } from "./util/diff.ts";
 import { collectFiles, resolveScope } from "./discovery.ts";
@@ -7,6 +7,7 @@ import { parseHtmlSource } from "./parser/html.ts";
 import { preparePackageHtml } from "./plan/html.ts";
 import { planBatchMigration, validateCss } from "./native.ts";
 import {
+  extension,
   indexStylesheetDependents,
   isIntegrityError,
   isProjectInput,
@@ -58,9 +59,6 @@ export type {
 } from "./types.ts";
 
 export async function migrate(options: MigrateOptions = {}): Promise<MigrationReport> {
-  if ("cssFile" in options) {
-    throw new TypeError("cssFile has been replaced by styleFile");
-  }
   if (options.styleFile && options.workspaces) {
     throw new TypeError("styleFile cannot be combined with workspaces");
   }
@@ -90,7 +88,7 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
 
   const snapshots = new Map<string, string>();
   const stylePaths = scope.scannedPaths.filter(isStylesheetPath);
-  const sourcePaths = scope.scannedPaths.filter((path) => SOURCE_EXTENSIONS.has(extname(path)));
+  const sourcePaths = scope.scannedPaths.filter((path) => SOURCE_EXTENSIONS.has(extension(path)));
   const [styleSources, sourceCandidates] = await Promise.all([
     Promise.all(
       stylePaths.map(
@@ -106,7 +104,7 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
         // solely as a potential stylesheet consumer, and HTML entities can
         // encode any part of a linked filename, so retain ignored HTML
         // containing a link for parse5 to classify safely.
-        const mayReferenceModule = extname(path) !== ".html" || /<link\b/i.test(source);
+        const mayReferenceModule = extension(path) !== ".html" || /<link\b/i.test(source);
         if (!scope.targetable.has(path) && !mayReferenceModule) return undefined;
         return { path, source: recordSnapshot(snapshots, path, source) };
       }),
@@ -115,7 +113,7 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
       snapshotFile(snapshots, join(packageRoot, "package.json")),
     ),
   ]);
-  const sourceFiles = sourceCandidates.filter((file) => file !== undefined);
+  const sourceFiles = sourceCandidates.flatMap((file) => (file ? [file] : []));
   // An explicit .vue selection is a source file, not a stylesheet input; only
   // real stylesheets may enter the stylesheet maps.
   if (explicitStyle && isStylesheetPath(explicitStyle) && !styleSources.has(explicitStyle)) {
@@ -150,11 +148,8 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
 
   const changed = [...filesByPath.values()]
     .map((file) => ({ ...file, before: originals.get(file.path) ?? "" }))
-    .filter((file) => file.before !== file.source)
-    .sort((left, right) => left.path.localeCompare(right.path));
-  const deleted = [...deletedPaths]
-    .map((path) => ({ path, before: originals.get(path) ?? "" }))
-    .sort((left, right) => left.path.localeCompare(right.path));
+    .filter((file) => file.before !== file.source);
+  const deleted = [...deletedPaths].map((path) => ({ path, before: originals.get(path) ?? "" }));
   const operations: { path: string; before: string; source?: string }[] = [
     ...changed,
     ...deleted,
@@ -253,7 +248,7 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
   // its retention warnings without requiring an unrelated Tailwind entry.
   if (
     explicitStyle &&
-    extname(explicitStyle) === ".vue" &&
+    extension(explicitStyle) === ".vue" &&
     preparedVue.stylesheets.length === 0 &&
     ![...preparedVue.stylePaths].some((path) => !isStylesheetModule(path))
   ) {
@@ -261,7 +256,7 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
   }
   const packageSources: PreparedSourceFile[] = [
     ...sourceFiles
-      .filter((file) => extname(file.path) !== ".html")
+      .filter((file) => extension(file.path) !== ".html")
       .map((file) => preparedVue.files.get(file.path) ?? file),
     ...preparedHtml.files,
   ];
@@ -290,7 +285,7 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
 
   const excludedEntries = new Set([...tailwindEntries, tailwindPath]);
   const explicitCss =
-    explicitStyle && extname(explicitStyle) !== ".vue" ? explicitStyle : undefined;
+    explicitStyle && extension(explicitStyle) !== ".vue" ? explicitStyle : undefined;
   const targets = explicitCss
     ? [explicitCss]
     : explicitStyle
@@ -347,7 +342,7 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
         isPartial,
       };
       let compiled;
-      if ((isSassPath(stylePath) && !isPartial) || extname(stylePath) === ".less") {
+      if ((isSassPath(stylePath) && !isPartial) || extension(stylePath) === ".less") {
         // Compile the snapshotted source, not the on-disk file: code loaded
         // during planning (e.g. Tailwind plugins) may have rewritten it since.
         compiled = await compileStyleEntry(
@@ -412,10 +407,10 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
   plan.warnings.push(...preparedHtml.warnings);
   plan.warnings.push(...preparedVue.warnings);
   try {
-    for (const file of plan.files.filter((file) => extname(file.path) === ".html")) {
+    for (const file of plan.files.filter((file) => extension(file.path) === ".html")) {
       parseHtmlSource(file.path, file.source);
     }
-    for (const file of plan.files.filter((file) => extname(file.path) === ".vue")) {
+    for (const file of plan.files.filter((file) => extension(file.path) === ".vue")) {
       const vueCompiler = preparedVue.compiler;
       if (!vueCompiler) throw new Error(`No Vue compiler is available to verify ${file.path}`);
       const includeUnscoped = preparedVue.unscopedPaths.has(file.path);
@@ -488,8 +483,7 @@ function replanCompileFailures(
     number,
     Map<string, { ruleId: RuleSpan; authoredSpan: RuleSpan; candidates: Set<string> }>
   >();
-  const maxIterations = plan.rules.length + 1;
-  for (let iteration = 0; ; iteration += 1) {
+  while (true) {
     const failing = invalidCandidates(tailwind, plan.candidates);
     if (failing.length === 0) break;
     let progressed = false;
@@ -512,7 +506,7 @@ function replanCompileFailures(
       }
       for (const candidate of failed) entry.candidates.add(candidate);
     }
-    if (!progressed || iteration >= maxIterations) {
+    if (!progressed) {
       throw new Error(`Tailwind did not generate CSS for candidate: ${failing[0]}`);
     }
     plan = JSON.parse(

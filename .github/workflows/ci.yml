@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 jobs:
@@ -84,10 +85,6 @@ jobs:
           npm init -y >/dev/null
           pnpm add --no-optional "$pack_dir"/*.tgz
           pnpm exec tw-migrate --help
-      - uses: actions/upload-artifact@v7
-        with:
-          name: native-${{ matrix.runner }}
-          path: 'npm/**/*.node'
 
   packaged-cli-snapshots:
     strategy:
@@ -98,9 +95,6 @@ jobs:
           - macos-latest
           - windows-latest
     runs-on: ${{ matrix.runner }}
-    env:
-      CI: true
-      INSTA_UPDATE: no
     steps:
       - uses: actions/checkout@v7
       - uses: voidzero-dev/setup-vp@v1

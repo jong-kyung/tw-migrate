@@ -213,11 +213,11 @@ function toByteOffsets(
     if (byte === undefined) throw new Error(`No byte offset was mapped for index ${index}`);
     return byte;
   };
-  function attribute<T extends HtmlSpan>(value: T): T;
-  function attribute<T extends HtmlSpan>(value: T | undefined): T | undefined;
-  function attribute<T extends HtmlSpan>(value: T | undefined): T | undefined {
-    return value && { ...value, start: offset(value.start), end: offset(value.end) };
-  }
+  const attribute = <T extends HtmlSpan>(value: T): T => ({
+    ...value,
+    start: offset(value.start),
+    end: offset(value.end),
+  });
   return {
     links: parsed.links.map((link) => ({
       ...link,
@@ -228,8 +228,8 @@ function toByteOffsets(
     })),
     bases: parsed.bases.map((base) => attribute(base)),
     elements: parsed.elements.map((element) => ({
-      classAttribute: attribute(element.classAttribute),
-      idAttribute: attribute(element.idAttribute),
+      classAttribute: element.classAttribute && attribute(element.classAttribute),
+      idAttribute: element.idAttribute && attribute(element.idAttribute),
     })),
     dynamicAttributes: parsed.dynamicAttributes.map((value) => attribute(value)),
   };

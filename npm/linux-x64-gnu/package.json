@@ -1,7 +1,7 @@
 {
   "name": "tw-migrate-linux-x64-gnu",
   "version": "0.2.0",
-  "description": "Preview and migrate React CSS to Tailwind utilities",
+  "description": "Preview and migrate React, Vue, and HTML CSS to Tailwind utilities",
   "license": "MIT",
   "repository": {
     "type": "git",

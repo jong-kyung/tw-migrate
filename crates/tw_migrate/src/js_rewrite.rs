@@ -45,16 +45,30 @@ pub(crate) struct SourcePlan {
     pub(crate) warnings: Vec<Warning>,
 }
 
+/// The no-op plan: nothing to edit and no references observed, which is safe
+/// (`module_references_safe: true`).
+impl Default for SourcePlan {
+    fn default() -> Self {
+        Self {
+            edits: Vec::new(),
+            removable_import_edits: Vec::new(),
+            candidates: Vec::new(),
+            matches: Vec::new(),
+            module_refs: HashMap::new(),
+            matched_module_refs: HashMap::new(),
+            module_references_safe: true,
+            warnings: Vec::new(),
+        }
+    }
+}
+
 #[napi(object)]
 pub struct StaticImportBinding {
     pub source: String,
     pub local: String,
 }
 
-pub(crate) fn static_string_expression(
-    path: &str,
-    source: &str,
-) -> Result<Option<String>, String> {
+pub(crate) fn static_string_expression(path: &str, source: &str) -> Result<Option<String>, String> {
     let allocator = Allocator::default();
     let source_type = source_type_for_path(path)?;
     let expression = Parser::new(&allocator, source, source_type)
@@ -162,19 +176,17 @@ pub(crate) fn source_type_for_path(path: &str) -> Result<SourceType, String> {
 /// text names this stylesheet it becomes an unverifiable reference that
 /// conservatively retains the module; otherwise it has no effect. Writable
 /// files still fail loudly -- migration targets must be analyzable.
-pub(crate) fn opaque_reference_plan(file: &SourceFile, css_path: &str, is_module: bool) -> SourcePlan {
+pub(crate) fn opaque_reference_plan(
+    file: &SourceFile,
+    css_path: &str,
+    is_module: bool,
+) -> SourcePlan {
     let referenced = is_module
         && Path::new(css_path)
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| file.source.contains(name));
     SourcePlan {
-        edits: Vec::new(),
-        removable_import_edits: Vec::new(),
-        candidates: Vec::new(),
-        matches: Vec::new(),
-        module_refs: HashMap::new(),
-        matched_module_refs: HashMap::new(),
         module_references_safe: !referenced,
         warnings: if referenced {
             vec![Warning::new(
@@ -187,6 +199,7 @@ pub(crate) fn opaque_reference_plan(file: &SourceFile, css_path: &str, is_module
         } else {
             Vec::new()
         },
+        ..Default::default()
     }
 }
 
@@ -223,7 +236,7 @@ pub(crate) fn plan_batch_source_file(
 
     let mut imports = ImportCollector {
         file_path: &file.path,
-        css_path,
+        css_target: normalize_path(Path::new(css_path)),
         bindings: Vec::new(),
         unsupported_shape: false,
         warning_span: None,
@@ -337,7 +350,7 @@ struct ImportBinding {
 
 struct ImportCollector<'s> {
     file_path: &'s str,
-    css_path: &'s str,
+    css_target: PathBuf,
     bindings: Vec<ImportBinding>,
     unsupported_shape: bool,
     warning_span: Option<Span>,
@@ -346,7 +359,7 @@ struct ImportCollector<'s> {
 impl<'a> Visit<'a> for ImportCollector<'_> {
     fn visit_import_declaration(&mut self, declaration: &ImportDeclaration<'a>) {
         let resolved = resolve_import(self.file_path, declaration.source.value.as_str());
-        if resolved == normalize_path(Path::new(self.css_path)) {
+        if resolved == self.css_target {
             self.warning_span.get_or_insert(declaration.span);
             let Some(specifiers) = &declaration.specifiers else {
                 self.unsupported_shape = true;
@@ -374,8 +387,7 @@ impl<'a> Visit<'a> for ImportCollector<'_> {
 
     fn visit_export_named_declaration(&mut self, declaration: &ExportNamedDeclaration<'a>) {
         if declaration.source.as_ref().is_some_and(|source| {
-            resolve_import(self.file_path, source.value.as_str())
-                == normalize_path(Path::new(self.css_path))
+            resolve_import(self.file_path, source.value.as_str()) == self.css_target
         }) {
             self.unsupported_shape = true;
             self.warning_span.get_or_insert(declaration.span);
@@ -384,9 +396,7 @@ impl<'a> Visit<'a> for ImportCollector<'_> {
     }
 
     fn visit_export_all_declaration(&mut self, declaration: &ExportAllDeclaration<'a>) {
-        if resolve_import(self.file_path, declaration.source.value.as_str())
-            == normalize_path(Path::new(self.css_path))
-        {
+        if resolve_import(self.file_path, declaration.source.value.as_str()) == self.css_target {
             self.unsupported_shape = true;
             self.warning_span.get_or_insert(declaration.span);
         }
@@ -397,8 +407,7 @@ impl<'a> Visit<'a> for ImportCollector<'_> {
         if let Expression::Identifier(callee) = &call.callee
             && callee.name == "require"
             && let Some(Argument::StringLiteral(source)) = call.arguments.first()
-            && resolve_import(self.file_path, source.value.as_str())
-                == normalize_path(Path::new(self.css_path))
+            && resolve_import(self.file_path, source.value.as_str()) == self.css_target
         {
             self.unsupported_shape = true;
             self.warning_span.get_or_insert(call.span);
@@ -408,8 +417,7 @@ impl<'a> Visit<'a> for ImportCollector<'_> {
 
     fn visit_import_expression(&mut self, import: &ImportExpression<'a>) {
         if let Expression::StringLiteral(source) = &import.source
-            && resolve_import(self.file_path, source.value.as_str())
-                == normalize_path(Path::new(self.css_path))
+            && resolve_import(self.file_path, source.value.as_str()) == self.css_target
         {
             self.unsupported_shape = true;
             self.warning_span.get_or_insert(import.span);

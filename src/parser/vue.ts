@@ -6,8 +6,8 @@ import { utf8OffsetMap } from "./html.ts";
 import { loadProjectModule } from "./style-compiler.ts";
 import { staticImportBindings, staticImports, staticStringExpression } from "../native.ts";
 import type { StaticImportBinding } from "../native.ts";
-import type { SourceMapping } from "./style-compiler.ts";
 import type { MigrationWarning } from "../types.ts";
+import type { SourceMapping } from "./style-compiler.ts";
 
 const ESCAPE_SELECTOR = /(?:::v-|:)(?:deep|global|slotted)\(([^)]*)\)/g;
 const ESCAPE_RESIDUE = /(?:>>>|\/deep\/|::v-deep|:deep|::v-slotted|:slotted|::v-global|:global)/;
@@ -117,7 +117,7 @@ export interface VueCompiler {
   ) => { descriptor: SfcDescriptor; errors: SfcParseError[] };
 }
 
-export interface LoadedVueCompiler {
+interface LoadedVueCompiler {
   compiler?: VueCompiler;
   unsupportedVersion?: string;
 }

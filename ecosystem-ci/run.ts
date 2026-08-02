@@ -6,12 +6,12 @@ import { tmpdir } from "node:os";
 import { dirname, join, posix, resolve, win32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { stagePackages } from "./packages.ts";
+import { prepareCaseUpload } from "./lifecycle.ts";
+import { packageUploadRoot, stagePackages } from "./packages.ts";
 import { platformCommand } from "./shared.ts";
 import {
   controlledRuntimes,
   controlledStyles,
-  externalServers,
   selectorTypes as knownSelectorTypes,
 } from "./types.ts";
 import type { ControlledProject, Manifest, ProbedProject, Project } from "./types.ts";
@@ -24,7 +24,6 @@ const usage = "Usage: node ecosystem-ci/run.ts (--case <id> | --all)";
 const runtimes = new Set<string>(controlledRuntimes);
 const styles = new Set<string>(controlledStyles);
 const selectorTypes = new Set<string>(knownSelectorTypes);
-const servers = new Set<string>(externalServers);
 
 function object(value: unknown, label: string): Unknown {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -73,19 +72,6 @@ function validateSelector(value: unknown, label: string): void {
   }
 }
 
-function validateExpectation(value: unknown, label: string): void {
-  const expectation = exactKeys(
-    value,
-    ["selector", "cardinality"],
-    ["selector", "cardinality"],
-    label,
-  );
-  validateSelector(expectation.selector, `${label}.selector`);
-  if (!positiveInteger(expectation.cardinality)) {
-    throw new Error(`${label}.cardinality must be a positive integer`);
-  }
-}
-
 function validateViewport(value: unknown, label: string): void {
   const viewport = exactKeys(value, ["width", "height"], ["width", "height"], label);
   for (const dimension of ["width", "height"] as const) {
@@ -117,7 +103,16 @@ function validateProbe(value: unknown, label: string): void {
   );
   nonempty(probe.route, `${label}.route`);
   validateViewport(probe.viewport, `${label}.viewport`);
-  validateExpectation(probe.readiness, `${label}.readiness`);
+  const readiness = exactKeys(
+    probe.readiness,
+    ["selector", "cardinality"],
+    ["selector", "cardinality"],
+    `${label}.readiness`,
+  );
+  validateSelector(readiness.selector, `${label}.readiness.selector`);
+  if (!positiveInteger(readiness.cardinality)) {
+    throw new Error(`${label}.readiness.cardinality must be a positive integer`);
+  }
   validateSelector(probe.selector, `${label}.selector`);
   if (!positiveInteger(probe.cardinality)) {
     throw new Error(`${label}.cardinality must be a positive integer`);
@@ -336,8 +331,7 @@ function validateProject(value: unknown, index: number): void {
     if (new Set(project.runtimeWrites).size !== project.runtimeWrites.length)
       throw new Error(`${label}.runtimeWrites must be unique`);
     validateExternalStart(project.start, `${label}.start`);
-    if (!servers.has(project.server as string))
-      throw new Error(`${label}.server must be vite or next`);
+    if (project.server !== "next") throw new Error(`${label}.server must be next`);
   } else {
     throw new Error(`${label}.kind must be controlled, smoke, or external`);
   }
@@ -484,11 +478,10 @@ async function prepareUpload(caseId: string): Promise<void> {
   const manifest = await loadManifest();
   const project = manifest.projects.find(({ id }) => id === caseId);
   if (!project) throw new Error(`unknown case ${JSON.stringify(caseId)}`);
-  const { prepareCaseUpload } = await import("./lifecycle.ts");
   await prepareCaseUpload(
     resolveFixture(manifest, project),
     artifactRoot,
-    `${artifactRoot}-upload`,
+    packageUploadRoot(artifactRoot),
   );
 }
 

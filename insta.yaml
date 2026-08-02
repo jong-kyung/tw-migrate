@@ -1,4 +1,2 @@
-behavior:
-  output: diff
 test:
   runner: cargo-test

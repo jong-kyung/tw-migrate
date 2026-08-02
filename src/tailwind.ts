@@ -1,10 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { dirname, extname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { loadProjectModule } from "./parser/style-compiler.ts";
-import { isProjectInput, maskCssComments, snapshotFile } from "./util/shared.ts";
+import { extension, isProjectInput, maskCssComments, snapshotFile } from "./util/shared.ts";
 import type { DesignSystem, LoadedTailwind, StylesheetLoader } from "./types.ts";
 
 export function resolveTailwindEntry(
@@ -13,7 +13,7 @@ export function resolveTailwindEntry(
   configuredPath?: string,
 ): { path: string; entries: string[] } {
   const entries = stylePaths.filter((path) => {
-    if (extname(path) !== ".css") return false;
+    if (extension(path) !== ".css") return false;
     const source = maskCssComments(styleSources.get(path) ?? "");
     return /@import\s+["']tailwindcss(?:\/[^"']*)?["']/.test(source);
   });

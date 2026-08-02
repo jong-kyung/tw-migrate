@@ -71,15 +71,7 @@ export async function terminateTree(child: ChildProcess): Promise<void> {
 
 export async function waitForChild(
   child: ChildProcess,
-  {
-    timeoutMs,
-    teardownTimeoutMs = 7_000,
-    terminate = terminateTree,
-  }: {
-    timeoutMs: number;
-    teardownTimeoutMs?: number;
-    terminate?: (child: ChildProcess) => Promise<void>;
-  },
+  { timeoutMs }: { timeoutMs: number },
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
   const timedOut = Symbol("timed out");
   let timer: NodeJS.Timeout | undefined;
@@ -103,32 +95,10 @@ export async function waitForChild(
     return { code: result.code ?? null, signal: result.signal ?? null };
   }
 
-  let teardownTimer: NodeJS.Timeout | undefined;
-  try {
-    const teardown = await Promise.race([
-      Promise.resolve()
-        .then(() => terminate(child))
-        .then(
-          () => null,
-          (error) => error,
-        ),
-      new Promise<Error>((resolveTimeout) => {
-        teardownTimer = setTimeout(
-          () =>
-            resolveTimeout(new Error(`process teardown timed out after ${teardownTimeoutMs}ms`)),
-          teardownTimeoutMs,
-        );
-      }),
-    ]);
-    if (teardown)
-      throw new Error(
-        `command timed out after ${timeoutMs}ms and teardown failed: ${teardown.message}`,
-        { cause: teardown },
-      );
-    throw new Error(`command timed out after ${timeoutMs}ms`);
-  } finally {
-    clearTimeout(teardownTimer);
-  }
+  // terminateTree is internally bounded (two 3-second waits) and always
+  // settles, so no extra teardown timeout is needed here.
+  await terminateTree(child);
+  throw new Error(`command timed out after ${timeoutMs}ms`);
 }
 
 export async function run(

@@ -12,7 +12,9 @@ import type {
   ProbeSelector,
 } from "./types.ts";
 
-export const captureAttemptTimeoutMs = 20_000;
+// The attempt deadline exceeds the operation timeout so the finally-block
+// diagnostics and screenshot still have budget after an operation times out.
+const captureAttemptTimeoutMs = 20_000;
 const captureOperationTimeoutMs = 18_000;
 export const maxCaptureAttempts = 4;
 
@@ -217,6 +219,19 @@ export async function captureAll(
   );
 }
 
+/** Asserts two capture sets have deeply equal per-probe element sequences. */
+export function assertSameElements(
+  actual: CaptureSet,
+  expected: CaptureSet,
+  message: string,
+): void {
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(actual).map(([name, value]) => [name, value.elements])),
+    Object.fromEntries(Object.entries(expected).map(([name, value]) => [name, value.elements])),
+    message,
+  );
+}
+
 export function assertOracle({
   baseline,
   post,
@@ -228,11 +243,7 @@ export function assertOracle({
   withheld: CaptureSet;
   candidateTokens: string[];
 }): void {
-  assert.deepEqual(
-    Object.fromEntries(Object.entries(post).map(([name, value]) => [name, value.elements])),
-    Object.fromEntries(Object.entries(baseline).map(([name, value]) => [name, value.elements])),
-    "pre/post computed styles, identity, count, and order",
-  );
+  assertSameElements(post, baseline, "pre/post computed styles, identity, count, and order");
   assert.ok(candidateTokens.length > 0, "causal witness requires expected candidate tokens");
   for (const [probeName, capture] of Object.entries(baseline)) {
     // The captures the lifecycle passes are already normalized to standard

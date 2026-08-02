@@ -550,12 +550,44 @@ fn utility_property_mask(utility: &str) -> u64 {
     if let Some(mask) = spacing_utility_mask(utility, 'm', 6) {
         return mask;
     }
+    // Utility prefixes that restate one CSS property's mask; order matters
+    // where a longer prefix (gap-x-) must win over a shorter one (gap-).
+    // `font-` over-matches font-family utilities; over-matching only retains
+    // rules.
+    const PREFIX_PROPERTIES: &[(&str, &str)] = &[
+        ("gap-x-", "column-gap"),
+        ("gap-y-", "row-gap"),
+        ("gap-", "gap"),
+        ("w-", "width"),
+        ("h-", "height"),
+        ("inset-x-", "inset-inline"),
+        ("inset-y-", "inset-block"),
+        ("inset-", "inset"),
+        ("top-", "top"),
+        ("right-", "right"),
+        ("bottom-", "bottom"),
+        ("left-", "left"),
+        ("overflow-x-", "overflow-x"),
+        ("overflow-y-", "overflow-y"),
+        ("overflow-", "overflow"),
+        ("z-", "z-index"),
+        ("opacity-", "opacity"),
+        ("font-", "font-weight"),
+        ("leading-", "line-height"),
+        ("tracking-", "letter-spacing"),
+        ("items-", "align-items"),
+        ("min-w-", "min-width"),
+        ("max-w-", "max-width"),
+        ("min-h-", "min-height"),
+        ("max-h-", "max-height"),
+    ];
+    if let Some((_, property)) = PREFIX_PROPERTIES
+        .iter()
+        .find(|(prefix, _)| utility.starts_with(prefix))
+    {
+        return arbitrary_property_mask(property);
+    }
     match utility {
-        utility if utility.starts_with("gap-x-") => 1 << 13,
-        utility if utility.starts_with("gap-y-") => 1 << 12,
-        utility if utility.starts_with("gap-") => 3 << 12,
-        utility if utility.starts_with("w-") => 1 << 14,
-        utility if utility.starts_with("h-") => 1 << 15,
         utility if utility.starts_with("size-") => 3 << 14,
         utility if utility == "rounded" || utility.starts_with("rounded-") => {
             rounded_utility_mask(utility) << 16
@@ -563,25 +595,8 @@ fn utility_property_mask(utility: &str) -> u64 {
         "block" | "inline" | "inline-block" | "flow-root" | "flex" | "inline-flex" | "grid"
         | "inline-grid" | "contents" | "table" | "hidden" => 1 << 20,
         "static" | "relative" | "absolute" | "fixed" | "sticky" => 1 << 21,
-        utility if utility.starts_with("inset-x-") => 0b1010 << 22,
-        utility if utility.starts_with("inset-y-") => 0b0101 << 22,
-        utility if utility.starts_with("inset-") => 0b1111 << 22,
-        utility if utility.starts_with("top-") => 1 << 22,
-        utility if utility.starts_with("right-") => 1 << 23,
-        utility if utility.starts_with("bottom-") => 1 << 24,
-        utility if utility.starts_with("left-") => 1 << 25,
-        utility if utility.starts_with("overflow-x-") => 1 << 26,
-        utility if utility.starts_with("overflow-y-") => 1 << 27,
-        utility if utility.starts_with("overflow-") => 0b11 << 26,
-        utility if utility.starts_with("z-") => 1 << 28,
-        utility if utility.starts_with("opacity-") => 1 << 29,
-        // Over-matches font-family utilities; over-matching only retains rules.
-        utility if utility.starts_with("font-") => 1 << 30,
-        utility if utility.starts_with("leading-") => 1 << 31,
-        utility if utility.starts_with("tracking-") => 1 << 32,
         "text-left" | "text-center" | "text-right" | "text-justify" => 1 << 33,
         "flex-row" | "flex-col" | "flex-row-reverse" | "flex-col-reverse" => 1 << 34,
-        utility if utility.starts_with("items-") => 1 << 35,
         "flex-wrap" | "flex-nowrap" | "flex-wrap-reverse" => 1 << 37,
         utility
             if utility.starts_with("justify-items-") || utility.starts_with("justify-self-") =>
@@ -589,18 +604,10 @@ fn utility_property_mask(utility: &str) -> u64 {
             0
         }
         utility if utility.starts_with("justify-") => 1 << 36,
-        utility if utility.starts_with("min-w-") => 1 << 38,
-        utility if utility.starts_with("max-w-") => 1 << 39,
-        utility if utility.starts_with("min-h-") => 1 << 40,
-        utility if utility.starts_with("max-h-") => 1 << 41,
         "border-solid" | "border-dashed" | "border-dotted" | "border-double" | "border-hidden"
         | "border-none" => u64::from(border_property_mask("border-style")) << 42,
         "border" => u64::from(border_property_mask("border-width")) << 42,
-        utility
-            if utility
-                .strip_prefix("border-")
-                .is_some_and(is_integer) =>
-        {
+        utility if utility.strip_prefix("border-").is_some_and(is_integer) => {
             u64::from(border_property_mask("border-width")) << 42
         }
         // Remaining border utilities are colors or ambiguous arbitrary

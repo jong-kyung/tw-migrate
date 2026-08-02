@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    Argument, ArrowFunctionExpression, BindingIdentifier, BindingPattern, CallExpression,
-    Class, Declaration, ExportDefaultDeclarationKind, Expression, FormalParameters, Function,
+    Argument, ArrowFunctionExpression, BindingIdentifier, BindingPattern, CallExpression, Class,
+    Declaration, ExportDefaultDeclarationKind, Expression, FormalParameters, Function,
     FunctionBody, IdentifierReference, ImportDeclarationSpecifier, ImportExpression,
     JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXChild, JSXElement, JSXElementName,
     JSXExpression, JSXMemberExpression, JSXMemberExpressionObject, ModuleExportName, PropertyKey,
@@ -59,10 +59,7 @@ const R_UNRESOLVED: &str = "unresolved-component-import";
 const R_BOUNDARY: &str = "dynamic-content-boundary";
 const R_ANCESTRY: &str = "unproven-ancestry";
 const R_NO_USAGES: &str = "no-usages";
-const R_EXPORTED: &str = "exported-render-sites-unknown";
 
-/// With `closed_world: false`, exported components have unknown render sites
-/// (`exported-render-sites-unknown`).
 #[cfg(test)]
 pub(crate) fn prove_in_world(
     files: &[(&str, &str)],
@@ -70,15 +67,8 @@ pub(crate) fn prove_in_world(
     ancestor: &SelectorKey,
     relation: Relation,
     target: &SelectorKey,
-    closed_world: bool,
 ) -> ProofOutcome {
-    prove_prepared(
-        &prepare(files, css_path),
-        ancestor,
-        relation,
-        target,
-        closed_world,
-    )
+    prove_prepared(&prepare(files, css_path), ancestor, relation, target)
 }
 
 /// The extracted-and-linked world for one (files, css_path) pair: the
@@ -110,7 +100,6 @@ pub(crate) fn prove_prepared(
     ancestor: &SelectorKey,
     relation: Relation,
     target: &SelectorKey,
-    closed_world: bool,
 ) -> ProofOutcome {
     let PreparedWorld { world, linked } = prepared;
     let target_name = match target {
@@ -121,7 +110,6 @@ pub(crate) fn prove_prepared(
         world,
         relation,
         ancestor,
-        closed_world,
     };
     let mut usages = Vec::new();
     for (file_ix, file) in world.files.iter().enumerate() {
@@ -160,12 +148,8 @@ pub(crate) fn prove_prepared(
                         }
                         for (name, span) in class_keys {
                             if name == target_name {
-                                let result = prove_forward(
-                                    &query,
-                                    (file_ix, comp_ix),
-                                    node_ix,
-                                    tag,
-                                );
+                                let result =
+                                    prove_forward(&query, (file_ix, comp_ix), node_ix, tag);
                                 usages.push(usage_proof(&file.path, *span, result));
                             }
                         }
@@ -261,7 +245,6 @@ enum ImportedName {
 
 #[derive(Debug)]
 struct Comp {
-    exported: bool,
     body: Result<Vec<Node>, &'static str>,
     slots: Vec<usize>,
     forward: Forward,
@@ -455,7 +438,6 @@ fn extract_file(path: &str, source: &str, css_path: &str) -> Option<FileIr> {
                     &mut builds,
                     func.id.as_ref(),
                     FnRef::Function(func),
-                    false,
                 );
             }
             Statement::VariableDeclaration(decl) => {
@@ -483,7 +465,6 @@ fn extract_file(path: &str, source: &str, css_path: &str) -> Option<FileIr> {
                             &mut builds,
                             func.id.as_ref(),
                             FnRef::Function(func),
-                            true,
                         );
                         if let Some(id) = &func.id {
                             named_exports.insert(id.name.to_string(), ix);
@@ -517,7 +498,6 @@ fn extract_file(path: &str, source: &str, css_path: &str) -> Option<FileIr> {
                         &mut builds,
                         func.id.as_ref(),
                         FnRef::Function(func),
-                        true,
                     );
                     default_export = Some(ix);
                 }
@@ -528,7 +508,6 @@ fn extract_file(path: &str, source: &str, css_path: &str) -> Option<FileIr> {
                         &mut builds,
                         None,
                         FnRef::Arrow(arrow),
-                        true,
                     );
                     default_export = Some(ix);
                 }
@@ -559,7 +538,6 @@ fn extract_file(path: &str, source: &str, css_path: &str) -> Option<FileIr> {
             && let Some(sym) = symbol_of(local, syms.scoping)
             && let Some(&ix) = syms.comp_symbols.get(&sym)
         {
-            comps[ix].exported = true;
             let exported = specifier.exported.name().to_string();
             if exported == "default" {
                 default_export = Some(ix);
@@ -572,7 +550,6 @@ fn extract_file(path: &str, source: &str, css_path: &str) -> Option<FileIr> {
         && let Some(sym) = symbol_of(ident, syms.scoping)
         && let Some(&ix) = syms.comp_symbols.get(&sym)
     {
-        comps[ix].exported = true;
         default_export = Some(ix);
     }
 
@@ -607,11 +584,9 @@ fn register<'a>(
     builds: &mut Vec<(usize, FnRef<'a>)>,
     id: Option<&BindingIdentifier<'a>>,
     fnref: FnRef<'a>,
-    exported: bool,
 ) -> usize {
     let ix = comps.len();
     comps.push(Comp {
-        exported,
         body: Err(R_HOC),
         slots: Vec::new(),
         forward: Forward::No,
@@ -647,13 +622,13 @@ fn register_declarators<'a>(
         };
         match init.get_inner_expression() {
             Expression::ArrowFunctionExpression(arrow) => {
-                let ix = register(comps, syms, builds, Some(id), FnRef::Arrow(arrow), exported);
+                let ix = register(comps, syms, builds, Some(id), FnRef::Arrow(arrow));
                 if exported {
                     named_exports.insert(id.name.to_string(), ix);
                 }
             }
             Expression::FunctionExpression(func) => {
-                let ix = register(comps, syms, builds, Some(id), FnRef::Function(func), exported);
+                let ix = register(comps, syms, builds, Some(id), FnRef::Function(func));
                 if exported {
                     named_exports.insert(id.name.to_string(), ix);
                 }
@@ -662,7 +637,6 @@ fn register_declarators<'a>(
                 // HOC-produced binding: usable as a tag, never provable.
                 let ix = comps.len();
                 comps.push(Comp {
-                    exported,
                     body: Err(R_HOC),
                     slots: Vec::new(),
                     forward: Forward::No,
@@ -719,12 +693,10 @@ fn analyze_params(params: &FormalParameters<'_>) -> ParamInfo {
                 };
                 let binding = match &property.value {
                     BindingPattern::BindingIdentifier(id) => Some(id),
-                    BindingPattern::AssignmentPattern(assignment) => {
-                        match &assignment.left {
-                            BindingPattern::BindingIdentifier(id) => Some(id),
-                            _ => None,
-                        }
-                    }
+                    BindingPattern::AssignmentPattern(assignment) => match &assignment.left {
+                        BindingPattern::BindingIdentifier(id) => Some(id),
+                        _ => None,
+                    },
                     _ => None,
                 };
                 match key.name.as_str() {
@@ -822,9 +794,7 @@ impl<'a> Visit<'a> for PortalScan {
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
         let portal = match call.callee.get_inner_expression() {
             Expression::Identifier(ident) => ident.name == "createPortal",
-            Expression::StaticMemberExpression(member) => {
-                member.property.name == "createPortal"
-            }
+            Expression::StaticMemberExpression(member) => member.property.name == "createPortal",
             _ => false,
         };
         if portal {
@@ -1090,17 +1060,14 @@ impl<'s> CompBuilder<'_, 's> {
             Expression::StaticMemberExpression(member) => {
                 if let Some(name) = member_on(self.syms.scoping, self.syms.css_symbol, member) {
                     keys.push((SelectorKey::Class(name.to_string()), span2(member.span)));
-                } else if member_on(self.syms.scoping, self.props_sym, member)
-                    == Some("className")
+                } else if member_on(self.syms.scoping, self.props_sym, member) == Some("className")
                 {
                     *forward = true;
                 } else {
                     self.sweep_expr(expression, R_BOUNDARY);
                 }
             }
-            Expression::Identifier(ident)
-                if ident_is(self.syms.scoping, self.class_sym, ident) =>
-            {
+            Expression::Identifier(ident) if ident_is(self.syms.scoping, self.class_sym, ident) => {
                 *forward = true;
             }
             Expression::TemplateLiteral(template) => {
@@ -1123,8 +1090,7 @@ impl<'s> CompBuilder<'_, 's> {
             Expression::StaticMemberExpression(member) => {
                 if let Some(name) = member_on(self.syms.scoping, self.syms.css_symbol, member) {
                     class_keys.push((name.to_string(), span2(member.span)));
-                } else if member_on(self.syms.scoping, self.props_sym, member)
-                    == Some("className")
+                } else if member_on(self.syms.scoping, self.props_sym, member) == Some("className")
                 {
                     // Chained forwarding into another component is not proven.
                     self.forward_bad = true;
@@ -1132,9 +1098,7 @@ impl<'s> CompBuilder<'_, 's> {
                     self.sweep_expr(expression, R_BOUNDARY);
                 }
             }
-            Expression::Identifier(ident)
-                if ident_is(self.syms.scoping, self.class_sym, ident) =>
-            {
+            Expression::Identifier(ident) if ident_is(self.syms.scoping, self.class_sym, ident) => {
                 self.forward_bad = true;
             }
             Expression::TemplateLiteral(template) => {
@@ -1312,11 +1276,7 @@ struct Sweep<'x, 's> {
 }
 
 impl<'x, 's> Sweep<'x, 's> {
-    fn file_level(
-        syms: &'x FileSymbols<'s>,
-        out: &'x mut FileOut,
-        reason: &'static str,
-    ) -> Self {
+    fn file_level(syms: &'x FileSymbols<'s>, out: &'x mut FileOut, reason: &'static str) -> Self {
         Sweep {
             syms,
             out,
@@ -1379,7 +1339,9 @@ impl<'a> Visit<'a> for Sweep<'_, '_> {
             JSXElementName::IdentifierReference(reference) => {
                 if let Some(sym) = symbol_of(reference, self.syms.scoping) {
                     if let Some(&ix) = self.syms.comp_symbols.get(&sym) {
-                        self.out.rendered_marks.push((TagRef::Local(ix), self.reason));
+                        self.out
+                            .rendered_marks
+                            .push((TagRef::Local(ix), self.reason));
                     } else if let Some(local) = self.syms.import_symbols.get(&sym) {
                         self.out
                             .rendered_marks
@@ -1561,7 +1523,8 @@ fn resolve_tag(
                 ImportedName::Default => file.default_export,
                 ImportedName::Named(name) => file.named_exports.get(name).copied(),
             };
-            comp.map(|comp_ix| (*target_file, comp_ix)).ok_or(R_UNRESOLVED)
+            comp.map(|comp_ix| (*target_file, comp_ix))
+                .ok_or(R_UNRESOLVED)
         }
         TagRef::Unknown => Err(R_HOC),
     }
@@ -1585,7 +1548,6 @@ struct ProofQuery<'a> {
     world: &'a World,
     relation: Relation,
     ancestor: &'a SelectorKey,
-    closed_world: bool,
 }
 
 /// Walk up from `node` inside `comp` looking for the ancestor key. At a
@@ -1650,9 +1612,6 @@ fn prove_up(
     if visited.contains(&comp) {
         return Err(R_RECURSIVE);
     }
-    if !query.closed_world && comp_ir.exported {
-        return Err(R_EXPORTED);
-    }
     if let Some(reason) = query.linked.unanalyzable.get(&comp) {
         return Err(reason);
     }
@@ -1716,7 +1675,7 @@ mod tests {
         ancestor: &str,
         target: &str,
     ) -> ProofOutcome {
-        prove_in_world(files, CSS, &class(ancestor), relation, &class(target), true)
+        prove_in_world(files, CSS, &class(ancestor), relation, &class(target))
     }
 
     #[test]
@@ -1816,7 +1775,10 @@ export function App() {
         let outcome = run(&files, Relation::Descendant, "parent", "child");
         assert!(!outcome.aggregate_proven);
         assert_eq!(outcome.usages.len(), 1);
-        assert_eq!(outcome.usages[0].reason, Some("unresolved-component-import"));
+        assert_eq!(
+            outcome.usages[0].reason,
+            Some("unresolved-component-import")
+        );
     }
 
     #[test]
@@ -2147,38 +2109,5 @@ export function App() {
         assert!(!outcome.aggregate_proven, "{outcome:?}");
         assert_eq!(outcome.usages.len(), 1);
         assert_eq!(outcome.usages[0].reason, Some("hoc-or-dynamic-component"));
-    }
-
-    #[test]
-    fn partial_world_gates_exported_components() {
-        let files = [
-            (
-                "src/App.tsx",
-                r#"import styles from "./App.module.css";
-import Title from "./Title";
-export function App() {
-  return <div className={styles.parent}><Title /></div>;
-}
-"#,
-            ),
-            (
-                "src/Title.tsx",
-                r#"import styles from "./App.module.css";
-export default function Title() {
-  return <h1 className={styles.child} />;
-}
-"#,
-            ),
-        ];
-        let outcome = prove_in_world(
-            &files,
-            CSS,
-            &class("parent"),
-            Relation::Descendant,
-            &class("child"),
-            false,
-        );
-        assert!(!outcome.aggregate_proven);
-        assert_eq!(outcome.reason, Some("exported-render-sites-unknown"));
     }
 }
