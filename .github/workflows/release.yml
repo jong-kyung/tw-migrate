@@ -32,10 +32,37 @@ jobs:
 
       - name: Is this a new version to release?
         id: version
+        env:
+          BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
           version="$(node -p "require('./package.json').version")"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          # The trigger is a version bump, not any package.json edit. The
+          # comparison is against what main pointed at before this push, not
+          # HEAD^: a push can carry more than one commit, and then HEAD^ already
+          # holds the new version, which would read as "no change" and silently
+          # skip the only release run for that version. The registry check
+          # below cannot replace this gate: while an approved release is still
+          # waiting, its version is not on npm yet, so an unrelated
+          # package.json edit would otherwise start a duplicate release run
+          # for the same version.
+          previous=''
+          if [ -n "$BEFORE" ] && [ "$BEFORE" != '0000000000000000000000000000000000000000' ] \
+            && git fetch --no-tags --depth=1 origin "$BEFORE" 2>/dev/null; then
+            previous="$(git show "$BEFORE:package.json" | node -pe 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).version')"
+          fi
+
+          if [ -z "$previous" ]; then
+            # Only reachable if main was force-pushed or freshly created. Fall
+            # through to the registry check rather than blocking a real release.
+            echo "::warning::Could not read the version main held before this push; relying on the registry check alone"
+          elif [ "$version" = "$previous" ]; then
+            echo "package.json changed but the version is still $version; nothing to release."
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           # An absent package or version answers with E404, and npm can also
           # exit 0 with empty output for a version that does not exist; both
