@@ -12,6 +12,11 @@
   },
   "packageRules": [
     {
+      "matchDepNames": ["node"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
       "groupName": "napi-rs",
       "matchPackageNames": ["napi", "napi-derive", "napi-build", "@napi-rs/cli"]
     },
