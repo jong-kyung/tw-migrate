@@ -77,7 +77,7 @@ tw-migrate/
 3. `src/parser/style-compiler.ts` loads Sass or Less from the target project, not from `tw-migrate` itself.
 4. `src/native.ts` loads the local addon or the installed platform package and invokes the Rust planner.
 5. Rust analyzes CSS and source relationships, returning planned edits, candidates, warnings, and retained rules.
-6. `src/index.ts` verifies source integrity, renders the diff (`src/util/diff.ts`), and applies transactional writes (`src/util/write.ts`) only with `--write`.
+6. `src/index.ts` verifies source integrity, renders the diff (`src/util/diff.ts`), and applies transactional writes (`src/util/write.ts`) unless `--dry-run` is passed.
 
 ## Where to Start
 
@@ -138,10 +138,10 @@ No `.env` file or local service is required.
 vp run build:debug
 node src/bin.ts --help
 node src/bin.ts path/to/Button.module.css
-node src/bin.ts --workspaces --write
+node src/bin.ts --workspaces
 ```
 
-Preview is the default. Use `--write` only when a task explicitly requires filesystem changes.
+Write is the default. Use `--dry-run` while iterating unless a task explicitly requires filesystem changes.
 
 ### Validation
 
@@ -187,7 +187,7 @@ The workspace `default-members` excludes `crates/snapshots`, so plain `cargo tes
 
 ## Safety Invariants
 
-- Preserve preview-by-default behavior.
+- `--dry-run` must never modify the filesystem.
 - Treat source changes during planning and writing as fatal integrity errors.
 - `--force` may skip recoverable package input failures; it must not hide integrity, plan-collision, or write failures.
 - Reject symlink migration targets and preserve source file permissions.

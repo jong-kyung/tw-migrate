@@ -1,9 +1,9 @@
 [[steps]]
 name = "failure"
-args = ["legacy.css", "--tailwind-css", "globals.css"]
+args = ["legacy.css", "--tailwind-css", "globals.css", "--dry-run"]
 status = 1
 
 [[steps]]
 name = "force"
-args = ["legacy.css", "--tailwind-css", "globals.css", "--force"]
+args = ["legacy.css", "--tailwind-css", "globals.css", "--force", "--dry-run"]
 status = 0

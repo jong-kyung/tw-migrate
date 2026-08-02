@@ -1,14 +1,14 @@
 [[steps]]
 name = "preview"
-args = ["Button.module.css", "--tailwind-css", "globals.css"]
+args = ["Button.module.css", "--tailwind-css", "globals.css", "--dry-run"]
 status = 0
 
 [[steps]]
 name = "write"
-args = ["Button.module.css", "--tailwind-css", "globals.css", "--write"]
+args = ["Button.module.css", "--tailwind-css", "globals.css"]
 status = 0
 
 [[steps]]
 name = "second run"
-args = ["--tailwind-css", "globals.css", "--write"]
+args = ["--tailwind-css", "globals.css"]
 status = 0

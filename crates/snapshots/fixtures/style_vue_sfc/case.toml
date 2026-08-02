@@ -1,19 +1,19 @@
 [[steps]]
 name = "preview"
-args = ["--tailwind-css", "globals.css"]
+args = ["--tailwind-css", "globals.css", "--dry-run"]
 status = 0
 
 [[steps]]
 name = "explicit selection"
-args = ["Closed.vue", "--tailwind-css", "globals.css"]
+args = ["Closed.vue", "--tailwind-css", "globals.css", "--dry-run"]
 status = 0
 
 [[steps]]
 name = "write"
-args = ["--tailwind-css", "globals.css", "--write"]
+args = ["--tailwind-css", "globals.css"]
 status = 0
 
 [[steps]]
 name = "second run"
-args = ["--tailwind-css", "globals.css", "--write"]
+args = ["--tailwind-css", "globals.css"]
 status = 0

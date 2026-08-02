@@ -1,4 +1,4 @@
 [[steps]]
 name = "mutated planning source"
-args = ["--workspaces", "--force"]
+args = ["--workspaces", "--force", "--dry-run"]
 status = 1
