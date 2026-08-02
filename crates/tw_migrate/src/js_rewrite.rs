@@ -23,7 +23,7 @@ use oxc_syntax::symbol::SymbolId;
 use crate::{
     css_plan::SelectorKey,
     planner::{Edit, SourceFile, Warning},
-    utilities::tailwind_utilities_conflict,
+    utilities::{tailwind_utilities_conflict, utility_conflict},
 };
 
 pub(crate) struct CandidateMatch {
@@ -177,34 +177,17 @@ pub(crate) fn opaque_reference_plan(file: &SourceFile, css_path: &str, is_module
         matched_module_refs: HashMap::new(),
         module_references_safe: !referenced,
         warnings: if referenced {
-            vec![Warning {
-                code: "unsupported-css-module-reference",
-                file: file.path.clone(),
-                start: 0,
-                end: 0,
-                message: "The file could not be parsed, so its possible reference retains the CSS Module."
+            vec![Warning::new(
+                "unsupported-css-module-reference",
+                file.path.clone(),
+                (0, 0),
+                "The file could not be parsed, so its possible reference retains the CSS Module."
                     .to_string(),
-            }]
+            )]
         } else {
             Vec::new()
         },
     }
-}
-
-pub(crate) fn plan_source_file(
-    file: &SourceFile,
-    css_path: &str,
-    is_module: bool,
-    candidates: &HashMap<SelectorKey, Vec<String>>,
-) -> Result<SourcePlan, String> {
-    plan_source_file_with_mode(
-        file,
-        css_path,
-        is_module,
-        candidates,
-        &BTreeSet::new(),
-        false,
-    )
 }
 
 pub(crate) fn plan_batch_source_file(
@@ -213,24 +196,6 @@ pub(crate) fn plan_batch_source_file(
     is_module: bool,
     candidates: &HashMap<SelectorKey, Vec<String>>,
     preserved_module_classes: &BTreeSet<String>,
-) -> Result<SourcePlan, String> {
-    plan_source_file_with_mode(
-        file,
-        css_path,
-        is_module,
-        candidates,
-        preserved_module_classes,
-        true,
-    )
-}
-
-fn plan_source_file_with_mode(
-    file: &SourceFile,
-    css_path: &str,
-    is_module: bool,
-    candidates: &HashMap<SelectorKey, Vec<String>>,
-    preserved_module_classes: &BTreeSet<String>,
-    batch_mode: bool,
 ) -> Result<SourcePlan, String> {
     let allocator = Allocator::default();
     let source_type = source_type_for_path(&file.path)
@@ -303,7 +268,6 @@ fn plan_source_file_with_mode(
         global_module_symbols: &global_module_symbols,
         candidates,
         preserved_module_classes,
-        batch_mode,
         edits: Vec::new(),
         emitted_candidates: BTreeSet::new(),
         matches: Vec::new(),
@@ -328,14 +292,12 @@ fn plan_source_file_with_mode(
     if (imports.unsupported_shape || !counts_match)
         && let Some(span) = imports.warning_span
     {
-        collector.warnings.push(Warning {
-            code: "unsupported-css-module-reference",
-            file: file.path.clone(),
-            start: span.start as usize,
-            end: span.end as usize,
-            message: "The CSS Module has an import or reference that cannot be migrated safely."
-                .to_string(),
-        });
+        collector.warnings.push(Warning::new(
+            "unsupported-css-module-reference",
+            file.path.clone(),
+            (span.start as usize, span.end as usize),
+            "The CSS Module has an import or reference that cannot be migrated safely.".to_string(),
+        ));
     }
 
     let removable_import_edits = if is_module
@@ -475,7 +437,6 @@ struct UsageCollector<'s> {
     global_module_symbols: &'s [SymbolId],
     candidates: &'s HashMap<SelectorKey, Vec<String>>,
     preserved_module_classes: &'s BTreeSet<String>,
-    batch_mode: bool,
     edits: Vec<Edit>,
     emitted_candidates: BTreeSet<String>,
     matches: Vec<CandidateMatch>,
@@ -489,6 +450,18 @@ struct UsageCollector<'s> {
 }
 
 impl UsageCollector<'_> {
+    /// Record one emitted candidate and its match site.
+    fn record_match(&mut self, (start, end): (usize, usize), key: &SelectorKey, candidate: &str) {
+        self.emitted_candidates.insert(candidate.to_string());
+        self.matches.push(CandidateMatch {
+            start,
+            end,
+            key: key.clone(),
+            candidate: candidate.to_string(),
+            origin_candidate: candidate.to_string(),
+        });
+    }
+
     fn identifier_symbol(&self, expr: &Expression<'_>) -> Option<SymbolId> {
         let Expression::Identifier(identifier) = expr else {
             return None;
@@ -543,27 +516,21 @@ impl UsageCollector<'_> {
             match expression {
                 Expression::StaticMemberExpression(member) => {
                     let Some(name) = self.module_member_name(member).map(str::to_string) else {
-                        if self.batch_mode {
-                            partial = true;
-                            original.push('\0');
-                            continue;
-                        }
-                        return None;
+                        partial = true;
+                        original.push('\0');
+                        continue;
                     };
                     let Some(candidates) = self.candidates.get(&SelectorKey::Class(name.clone()))
                     else {
-                        if self.batch_mode {
-                            return Some(StaticTemplate {
-                                value: String::new(),
-                                members: Vec::new(),
-                                static_classes: Vec::new(),
-                                partial_edits: Vec::new(),
-                                preserved_candidates: Vec::new(),
-                                preserved_expression: None,
-                                append_at: None,
-                            });
-                        }
-                        return None;
+                        return Some(StaticTemplate {
+                            value: String::new(),
+                            members: Vec::new(),
+                            static_classes: Vec::new(),
+                            partial_edits: Vec::new(),
+                            preserved_candidates: Vec::new(),
+                            preserved_expression: None,
+                            append_at: None,
+                        });
                     };
                     original.push('\0');
                     members.push(name.clone());
@@ -581,7 +548,7 @@ impl UsageCollector<'_> {
                         });
                     }
                 }
-                Expression::StringLiteral(literal) if self.batch_mode => {
+                Expression::StringLiteral(literal) => {
                     value.push_str(literal.value.as_str());
                     original.push_str(literal.value.as_str());
                 }
@@ -609,15 +576,14 @@ impl UsageCollector<'_> {
         members: &[String],
         static_classes: &[String],
     ) -> Option<(String, String)> {
+        let existing = static_classes
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
         for member in members {
             let candidates = self.candidates.get(&SelectorKey::Class(member.clone()))?;
-            for candidate in candidates {
-                if let Some(existing) = static_classes
-                    .iter()
-                    .find(|existing| tailwind_utilities_conflict(candidate, existing))
-                {
-                    return Some((candidate.clone(), existing.clone()));
-                }
+            if let Some(conflict) = utility_conflict(candidates, &existing) {
+                return Some(conflict);
             }
         }
         None
@@ -678,14 +644,15 @@ impl UsageCollector<'_> {
                             }
                             expression => {
                                 if !self.is_global_module_member(expression) {
-                                    self.warnings.push(Warning {
-                                        code: "dynamic-class-name",
-                                        file: self.file_path.to_string(),
-                                        start: container.span.start as usize,
-                                        end: container.span.end as usize,
-                                        message: "Only static className values are supported."
-                                            .to_string(),
-                                    });
+                                    self.warnings.push(Warning::new(
+                                        "dynamic-class-name",
+                                        self.file_path.to_string(),
+                                        (
+                                            container.span.start as usize,
+                                            container.span.end as usize,
+                                        ),
+                                        "Only static className values are supported.".to_string(),
+                                    ));
                                 }
                             }
                         }
@@ -722,14 +689,7 @@ impl UsageCollector<'_> {
                 insertion -= 1;
             }
             for (key, candidate) in &id_candidates {
-                self.emitted_candidates.insert(candidate.clone());
-                self.matches.push(CandidateMatch {
-                    start: insertion,
-                    end: insertion,
-                    key: key.clone(),
-                    candidate: candidate.clone(),
-                    origin_candidate: candidate.clone(),
-                });
+                self.record_match((insertion, insertion), key, candidate);
             }
             self.edits.push(Edit {
                 start: insertion,
@@ -758,34 +718,22 @@ impl UsageCollector<'_> {
             .split_whitespace()
             .map(str::to_string)
             .collect::<Vec<_>>();
-        let original_classes = classes.clone();
-        for class in original_classes {
-            let key = SelectorKey::Class(class);
-            if let Some(candidates) = self.candidates.get(&key) {
-                for candidate in candidates {
-                    self.emitted_candidates.insert(candidate.clone());
-                    self.matches.push(CandidateMatch {
-                        start: span.start as usize,
-                        end: span.end as usize,
-                        key: key.clone(),
-                        candidate: candidate.clone(),
-                        origin_candidate: candidate.clone(),
-                    });
-                    if !classes.contains(candidate) {
-                        classes.push(candidate.clone());
-                    }
-                }
-            }
-        }
-        for (key, candidate) in extra_candidates {
-            self.emitted_candidates.insert(candidate.clone());
-            self.matches.push(CandidateMatch {
-                start: span.start as usize,
-                end: span.end as usize,
-                key: key.clone(),
-                candidate: candidate.clone(),
-                origin_candidate: candidate.clone(),
-            });
+        let class_candidates = classes
+            .iter()
+            .filter_map(|class| {
+                let key = SelectorKey::Class(class.clone());
+                self.candidates
+                    .get(&key)
+                    .map(|candidates| (key, candidates.clone()))
+            })
+            .flat_map(|(key, candidates)| {
+                candidates
+                    .into_iter()
+                    .map(move |candidate| (key.clone(), candidate))
+            })
+            .collect::<Vec<_>>();
+        for (key, candidate) in class_candidates.iter().chain(extra_candidates) {
+            self.record_match((span.start as usize, span.end as usize), key, candidate);
             if !classes.contains(candidate) {
                 classes.push(candidate.clone());
             }
@@ -826,24 +774,21 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
             if self.class_name_depth == 0 {
                 self.unsafe_reference = true;
                 if let Some(declarator) = self.alias_spans.get(&member.span.start) {
-                    self.warnings.push(Warning {
-                        code: "aliased-css-module-reference",
-                        file: self.file_path.to_string(),
-                        start: declarator.start as usize,
-                        end: declarator.end as usize,
-                        message:
-                            "A CSS Module class is aliased to a binding, so the module is retained."
-                                .to_string(),
-                    });
-                } else {
-                    self.warnings.push(Warning {
-                        code: "non-classname-css-module-reference",
-                        file: self.file_path.to_string(),
-                        start: member.span.start as usize,
-                        end: member.span.end as usize,
-                        message: "A CSS Module class is used outside a supported className, so the module is retained."
+                    self.warnings.push(Warning::new(
+                        "aliased-css-module-reference",
+                        self.file_path.to_string(),
+                        (declarator.start as usize, declarator.end as usize),
+                        "A CSS Module class is aliased to a binding, so the module is retained."
                             .to_string(),
-                    });
+                    ));
+                } else {
+                    self.warnings.push(Warning::new(
+                        "non-classname-css-module-reference",
+                        self.file_path.to_string(),
+                        (member.span.start as usize, member.span.end as usize),
+                        "A CSS Module class is used outside a supported className, so the module is retained."
+                            .to_string(),
+                    ));
                 }
             }
         }
@@ -854,15 +799,13 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
         if self.is_module_object(&member.object) {
             self.computed_refs += 1;
             self.unsafe_reference = true;
-            self.warnings.push(Warning {
-                code: "computed-css-module-reference",
-                file: self.file_path.to_string(),
-                start: member.span.start as usize,
-                end: member.span.end as usize,
-                message:
-                    "A computed CSS Module access cannot be verified, so the module is retained."
-                        .to_string(),
-            });
+            self.warnings.push(Warning::new(
+                "computed-css-module-reference",
+                self.file_path.to_string(),
+                (member.span.start as usize, member.span.end as usize),
+                "A computed CSS Module access cannot be verified, so the module is retained."
+                    .to_string(),
+            ));
         }
         walk::walk_computed_member_expression(self, member);
     }
@@ -940,14 +883,12 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
                 }
                 JSXExpression::TemplateLiteral(template) => {
                     let Some(result) = self.static_template(template) else {
-                        self.warnings.push(Warning {
-                            code: "dynamic-class-name",
-                            file: self.file_path.to_string(),
-                            start: container.span.start as usize,
-                            end: container.span.end as usize,
-                            message: "The template contains a dynamic or unsupported class."
-                                .to_string(),
-                        });
+                        self.warnings.push(Warning::new(
+                            "dynamic-class-name",
+                            self.file_path.to_string(),
+                            (container.span.start as usize, container.span.end as usize),
+                            "The template contains a dynamic or unsupported class.".to_string(),
+                        ));
                         continue;
                     };
                     if result.members.is_empty() {
@@ -958,13 +899,12 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
                     result
                 }
                 _ => {
-                    self.warnings.push(Warning {
-                        code: "dynamic-class-name",
-                        file: self.file_path.to_string(),
-                        start: container.span.start as usize,
-                        end: container.span.end as usize,
-                        message: "Only static className values are supported.".to_string(),
-                    });
+                    self.warnings.push(Warning::new(
+                        "dynamic-class-name",
+                        self.file_path.to_string(),
+                        (container.span.start as usize, container.span.end as usize),
+                        "Only static className values are supported.".to_string(),
+                    ));
                     continue;
                 }
             };
@@ -990,29 +930,25 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
                 }
             }
             if let Some((left, right)) = self.conflicting_member_utilities(&members) {
-                self.warnings.push(Warning {
-                    code: "module-utilities-conflict",
-                    file: self.file_path.to_string(),
-                    start: container.span.start as usize,
-                    end: container.span.end as usize,
-                    message: format!(
+                self.warnings.push(Warning::new(
+                    "module-utilities-conflict",
+                    self.file_path.to_string(),
+                    (container.span.start as usize, container.span.end as usize),
+                    format!(
                         "Generated utilities `{left}` and `{right}` overlap; the CSS Module source order would be lost."
                     ),
-                });
+                ));
                 continue;
             }
             if let Some((generated, existing)) =
                 self.conflicting_utilities(&members, &static_classes)
             {
-                self.warnings.push(Warning {
-                    code: "existing-tailwind-conflict",
-                    file: self.file_path.to_string(),
-                    start: container.span.start as usize,
-                    end: container.span.end as usize,
-                    message: format!(
-                        "Generated utility `{generated}` may conflict with existing `{existing}`."
-                    ),
-                });
+                self.warnings.push(Warning::existing_tailwind_conflict(
+                    self.file_path,
+                    (container.span.start as usize, container.span.end as usize),
+                    &generated,
+                    &existing,
+                ));
             }
             // A previous --write run may already have appended the preserved
             // candidates as a static segment; appending them again would grow

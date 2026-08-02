@@ -66,7 +66,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [linux, macos, windows]
-        case: [react-vite-css, react-vite-scss, react-vite-sass, react-vite-less, next-css, next-scss, next-sass, next-less, vite-html-css, vite-html-scss, vite-html-sass, vite-html-less, vue-vite-css]
+        case: [react-vite-css, react-vite-scss, react-vite-sass, react-vite-less, next-css, next-scss, next-sass, next-less, vite-html-css, vite-html-scss, vite-html-sass, vite-html-less, vue-vite-css, production-react-vite-css, external-namechecker, external-stylized-components]
         include:
           - os: linux
             runner: ubuntu-latest
@@ -74,26 +74,29 @@ jobs:
             runner: macos-latest
           - os: windows
             runner: windows-latest
+          - case: external-namechecker
+            external: true
+          - case: external-stylized-components
+            external: true
     runs-on: ${{ matrix.runner }}
     env:
       CI: true
+      ECOSYSTEM_EXTERNAL: ${{ matrix.external && '1' || '' }}
       ECOSYSTEM_ARTIFACT_ROOT: ecosystem-ci/case-artifacts/${{ matrix.case }}
       ECOSYSTEM_PACKAGE_ARTIFACT_ROOT: ecosystem-ci/package-artifacts
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      # Written before any toolchain step so a setup failure still uploads an
+      # attributable ledger; the lifecycle overwrites the artifact-root copy.
       - name: Initialize always-present phase ledger
         shell: bash
         run: |
-          node <<'NODE'
-          const fs = require('node:fs')
-          const ledger = JSON.stringify({ case: process.env.CASE_ID, phases: [] }, null, 2) + '\n'
-          for (const root of [process.env.ECOSYSTEM_ARTIFACT_ROOT, `${process.env.ECOSYSTEM_ARTIFACT_ROOT}-upload`]) {
-            fs.mkdirSync(root, { recursive: true })
-            fs.writeFileSync(`${root}/phase-ledger.json`, ledger)
-          }
-          NODE
+          for root in "$ECOSYSTEM_ARTIFACT_ROOT" "$ECOSYSTEM_ARTIFACT_ROOT-upload"; do
+            mkdir -p "$root"
+            printf '{\n  "case": "%s",\n  "phases": []\n}\n' "$CASE_ID" > "$root/phase-ledger.json"
+          done
         env:
           CASE_ID: ${{ matrix.case }}
       - uses: voidzero-dev/setup-vp@v1
@@ -107,137 +110,10 @@ jobs:
         with:
           name: ecosystem-package-${{ matrix.os }}
           path: ecosystem-ci/package-artifacts
-      - run: vp run test:ecosystem --case ${{ matrix.case }}
+      - run: vp run test:ecosystem ${{ matrix.external && '--external-case' || '--case' }} ${{ matrix.case }}
       - name: Validate reached-phase artifact allowlist
         if: always()
-        run: vp node -e "import('./ecosystem-ci/run.ts').then(async({loadManifest})=>{const {prepareCaseUpload}=await import('./ecosystem-ci/lifecycle.ts');const m=await loadManifest();const p=m.projects.find(x=>x.id===process.env.CASE_ID);await prepareCaseUpload(p,process.env.ECOSYSTEM_ARTIFACT_ROOT,process.env.ECOSYSTEM_ARTIFACT_ROOT+'-upload')})"
-        env:
-          CASE_ID: ${{ matrix.case }}
-      - uses: actions/upload-artifact@v7
-        if: failure()
-        with:
-          name: ecosystem-${{ matrix.os }}-${{ matrix.case }}
-          path: ecosystem-ci/case-artifacts/${{ matrix.case }}-upload/
-          if-no-files-found: error
-          retention-days: 7
-
-  smoke:
-    needs: package
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.label.name == 'test:e2e') }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [linux, macos, windows]
-        case: [production-react-vite-css]
-        include:
-          - os: linux
-            runner: ubuntu-latest
-          - os: macos
-            runner: macos-latest
-          - os: windows
-            runner: windows-latest
-    runs-on: ${{ matrix.runner }}
-    env:
-      CI: true
-      ECOSYSTEM_ARTIFACT_ROOT: ecosystem-ci/case-artifacts/${{ matrix.case }}
-      ECOSYSTEM_PACKAGE_ARTIFACT_ROOT: ecosystem-ci/package-artifacts
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - name: Initialize always-present phase ledger
-        shell: bash
-        run: |
-          node <<'NODE'
-          const fs = require('node:fs')
-          const ledger = JSON.stringify({ case: process.env.CASE_ID, phases: [] }, null, 2) + '\n'
-          for (const root of [process.env.ECOSYSTEM_ARTIFACT_ROOT, `${process.env.ECOSYSTEM_ARTIFACT_ROOT}-upload`]) {
-            fs.mkdirSync(root, { recursive: true })
-            fs.writeFileSync(`${root}/phase-ledger.json`, ledger)
-          }
-          NODE
-        env:
-          CASE_ID: ${{ matrix.case }}
-      - uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: .node-version
-          cache: true
-          run-install: false
-      - run: vp install --frozen-lockfile
-      - run: vp exec playwright install chromium
-      - uses: actions/download-artifact@v8
-        with:
-          name: ecosystem-package-${{ matrix.os }}
-          path: ecosystem-ci/package-artifacts
-      - run: vp run test:ecosystem --case ${{ matrix.case }}
-      - name: Validate reached-phase artifact allowlist
-        if: always()
-        run: vp node -e "import('./ecosystem-ci/run.ts').then(async({loadManifest,resolveFixture})=>{const {prepareCaseUpload}=await import('./ecosystem-ci/lifecycle.ts');const m=await loadManifest();const p=m.projects.find(x=>x.id===process.env.CASE_ID);await prepareCaseUpload(resolveFixture(m,p),process.env.ECOSYSTEM_ARTIFACT_ROOT,process.env.ECOSYSTEM_ARTIFACT_ROOT+'-upload')})"
-        env:
-          CASE_ID: ${{ matrix.case }}
-      - uses: actions/upload-artifact@v7
-        if: failure()
-        with:
-          name: ecosystem-${{ matrix.os }}-${{ matrix.case }}
-          path: ecosystem-ci/case-artifacts/${{ matrix.case }}-upload/
-          if-no-files-found: error
-          retention-days: 7
-
-  external:
-    needs: package
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.label.name == 'test:e2e') }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [linux, macos, windows]
-        case: [external-namechecker, external-stylized-components]
-        include:
-          - os: linux
-            runner: ubuntu-latest
-          - os: macos
-            runner: macos-latest
-          - os: windows
-            runner: windows-latest
-    runs-on: ${{ matrix.runner }}
-    env:
-      CI: true
-      ECOSYSTEM_EXTERNAL: 1
-      ECOSYSTEM_ARTIFACT_ROOT: ecosystem-ci/case-artifacts/${{ matrix.case }}
-      ECOSYSTEM_PACKAGE_ARTIFACT_ROOT: ecosystem-ci/package-artifacts
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - name: Initialize always-present phase ledger
-        shell: bash
-        run: |
-          node <<'NODE'
-          const fs = require('node:fs')
-          const ledger = JSON.stringify({ case: process.env.CASE_ID, phases: [] }, null, 2) + '\n'
-          for (const root of [process.env.ECOSYSTEM_ARTIFACT_ROOT, `${process.env.ECOSYSTEM_ARTIFACT_ROOT}-upload`]) {
-            fs.mkdirSync(root, { recursive: true })
-            fs.writeFileSync(`${root}/phase-ledger.json`, ledger)
-          }
-          NODE
-        env:
-          CASE_ID: ${{ matrix.case }}
-      - uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: .node-version
-          cache: true
-          run-install: false
-      - run: vp install --frozen-lockfile
-      - run: vp exec playwright install chromium
-      - uses: actions/download-artifact@v8
-        with:
-          name: ecosystem-package-${{ matrix.os }}
-          path: ecosystem-ci/package-artifacts
-      - run: vp run test:ecosystem --external-case ${{ matrix.case }}
-      - name: Validate reached-phase artifact allowlist
-        if: always()
-        run: vp node -e "import('./ecosystem-ci/run.ts').then(async({loadManifest})=>{const {prepareCaseUpload}=await import('./ecosystem-ci/lifecycle.ts');const m=await loadManifest();const p=m.projects.find(x=>x.id===process.env.CASE_ID);await prepareCaseUpload(p,process.env.ECOSYSTEM_ARTIFACT_ROOT,process.env.ECOSYSTEM_ARTIFACT_ROOT+'-upload')})"
-        env:
-          CASE_ID: ${{ matrix.case }}
+        run: vp node ecosystem-ci/run.ts --prepare-upload ${{ matrix.case }}
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

@@ -52,28 +52,56 @@ pub(crate) fn append_global_at_rules(
     at_rules: &[&GlobalAtRulePlan],
 ) -> Result<String, String> {
     let allocator = oxc_css_parser::Allocator::default();
-    let mut parser = CssParser::new(&allocator, source, Syntax::Css);
-    let stylesheet = parser
-        .parse::<Stylesheet>()
-        .map_err(|error| format!("Failed to parse Tailwind CSS: {error:?}"))?;
+    let stylesheet = parse_tailwind(&allocator, source)?;
     let mut existing = HashSet::new();
-    collect_at_rule_sources(&stylesheet.statements, source, &mut existing);
+    walk_at_rules(&stylesheet.statements, &mut |at_rule| {
+        existing.insert(source[at_rule.span.start..at_rule.span.end].trim());
+    });
 
     let mut output = source.to_string();
     for at_rule in at_rules {
-        if existing.contains(at_rule.source.trim()) {
-            continue;
+        if !existing.contains(at_rule.source.trim()) {
+            append_block(&mut output, &at_rule.source);
         }
-        if !output.ends_with('\n') {
-            output.push('\n');
-        }
-        if !output.ends_with("\n\n") {
-            output.push('\n');
-        }
-        output.push_str(at_rule.source.trim());
-        output.push('\n');
     }
     Ok(output)
+}
+
+pub(crate) fn parse_tailwind<'a>(
+    allocator: &'a oxc_css_parser::Allocator,
+    source: &'a str,
+) -> Result<Stylesheet<'a>, String> {
+    CssParser::new(allocator, source, Syntax::Css)
+        .parse::<Stylesheet>()
+        .map_err(|error| format!("Failed to parse Tailwind CSS: {error:?}"))
+}
+
+/// Walk every at-rule in document order, visiting each before its block.
+pub(crate) fn walk_at_rules<'a, 'b>(
+    statements: &'a [Statement<'b>],
+    visit: &mut impl FnMut(&'a AtRule<'b>),
+) {
+    for statement in statements {
+        let Statement::AtRule(at_rule) = statement else {
+            continue;
+        };
+        visit(at_rule);
+        if let Some(block) = &at_rule.block {
+            walk_at_rules(&block.statements, visit);
+        }
+    }
+}
+
+/// Append a moved block to the Tailwind source, separated by a blank line.
+pub(crate) fn append_block(output: &mut String, block: &str) {
+    if !output.ends_with('\n') {
+        output.push('\n');
+    }
+    if !output.ends_with("\n\n") {
+        output.push('\n');
+    }
+    output.push_str(block.trim());
+    output.push('\n');
 }
 
 fn has_relative_url(source: &str) -> bool {
@@ -97,22 +125,6 @@ fn has_relative_url(source: &str) -> bool {
         rest = &after_open[end + 1..];
     }
     false
-}
-
-fn collect_at_rule_sources<'a>(
-    statements: &[Statement<'_>],
-    source: &'a str,
-    at_rules: &mut HashSet<&'a str>,
-) {
-    for statement in statements {
-        let Statement::AtRule(at_rule) = statement else {
-            continue;
-        };
-        at_rules.insert(source[at_rule.span.start..at_rule.span.end].trim());
-        if let Some(block) = &at_rule.block {
-            collect_at_rule_sources(&block.statements, source, at_rules);
-        }
-    }
 }
 
 pub(crate) fn is_conditional(name: &str) -> bool {
@@ -233,43 +245,36 @@ fn simple_container_variant(
 
 fn supports_variant(at_rule: &AtRule<'_>, source: &str) -> Option<String> {
     let query = at_rule_query(at_rule, source, "supports")?;
+    let condition = strip_outer_parentheses(query).unwrap_or(query);
+    let condition = encode_arbitrary(&normalize_query(condition)?);
+    (!condition.is_empty()).then(|| format!("supports-[{condition}]"))
+}
+
+fn arbitrary_at_rule_variant(at_rule: &AtRule<'_>, source: &str) -> Option<String> {
+    let header = source[at_rule.span.start..at_rule.block.as_ref()?.span.start].trim();
+    let header = normalize_query(header)?.replace(", ", ",");
+    Some(format!("[{}]", encode_arbitrary(&header)))
+}
+
+/// Collapse whitespace in an at-rule query, or `None` when it is empty or
+/// contains characters an arbitrary variant cannot carry.
+fn normalize_query(query: &str) -> Option<String> {
     if query.is_empty()
         || query.contains(['[', ']', ';', '{', '}', '"', '\'', '\\'])
         || query.contains("/*")
     {
         return None;
     }
-    let condition = strip_outer_parentheses(query).unwrap_or(query);
-    let condition = condition
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .replace(": ", ":")
-        .replace(" :", ":")
-        .replace("( ", "(")
-        .replace(" )", ")");
-    let condition = encode_arbitrary(&condition);
-    (!condition.is_empty()).then(|| format!("supports-[{condition}]"))
-}
-
-fn arbitrary_at_rule_variant(at_rule: &AtRule<'_>, source: &str) -> Option<String> {
-    let header = source[at_rule.span.start..at_rule.block.as_ref()?.span.start].trim();
-    if header.is_empty()
-        || header.contains(['[', ']', ';', '{', '}', '"', '\'', '\\'])
-        || header.contains("/*")
-    {
-        return None;
-    }
-    let header = header
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .replace(": ", ":")
-        .replace(" :", ":")
-        .replace("( ", "(")
-        .replace(" )", ")")
-        .replace(", ", ",");
-    Some(format!("[{}]", encode_arbitrary(&header)))
+    Some(
+        query
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .replace(": ", ":")
+            .replace(" :", ":")
+            .replace("( ", "(")
+            .replace(" )", ")"),
+    )
 }
 
 fn at_rule_query<'a>(at_rule: &AtRule<'_>, source: &'a str, name: &str) -> Option<&'a str> {

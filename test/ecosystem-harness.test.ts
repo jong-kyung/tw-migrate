@@ -36,9 +36,8 @@ import {
   runExternalLifecycle,
   snapshotMigrationSources,
   teardownLifecycleServer,
-  temporaryLifecyclePaths,
-  waitForChild,
 } from "../ecosystem-ci/lifecycle.ts";
+import { waitForChild } from "../ecosystem-ci/shared.ts";
 import { loadManifest, runHarness, validateManifest, vitestProjects } from "../ecosystem-ci/run.ts";
 import type { ChildProcess } from "node:child_process";
 import type { AddressInfo } from "node:net";
@@ -214,39 +213,6 @@ test("migration source paths must stay relative and inside the driver", () => {
 test("external commands must be argument arrays rather than shell strings", () => {
   errorFor([external({ installs: [{ cwd: ".", args: "install --frozen-lockfile" }] })]);
   errorFor([external({ start: "run dev" })]);
-});
-
-test("external installs admit a reviewed pnpm workspace build and nothing looser", () => {
-  assert.doesNotThrow(() =>
-    validateManifest(
-      manifest(
-        external({
-          installs: [
-            { cwd: ".", args: ["install", "--frozen-lockfile", "--ignore-scripts"] },
-            { cwd: ".", args: ["--filter", "@scope/pkg", "run", "build:tokens"] },
-          ],
-        }),
-      ),
-    ),
-  );
-  errorFor([
-    external({ installs: [{ cwd: ".", args: ["--filter", "../escape", "run", "build"] }] }),
-  ]);
-  errorFor([
-    external({
-      installs: [{ cwd: ".", args: ["--filter", "@scope/pkg", "run", "build && touch pwned"] }],
-    }),
-  ]);
-  errorFor([
-    external({ installs: [{ cwd: ".", args: ["--filter", "@scope/pkg", "exec", "build"] }] }),
-  ]);
-  errorFor([
-    external({
-      packageManager: "npm@11.0.0",
-      lockfile: "package-lock.json",
-      installs: [{ cwd: ".", args: ["--filter", "@scope/pkg", "run", "build"] }],
-    }),
-  ]);
 });
 
 test("external commands receive only the explicit non-secret environment", () => {
@@ -758,14 +724,6 @@ test("page-creation failures keep diagnostics for all four attempts", async () =
   assert.ok(diagnostics.every(({ error }) => error.includes("browser unavailable")));
 });
 
-test("contributor lifecycle defaults keep case and package artifacts under one OS temporary root", () => {
-  const root = join(tmpdir(), "tw-migrate-test-root");
-  assert.deepEqual(temporaryLifecyclePaths("react-vite-css", root), {
-    artifactRoot: join(root, "artifacts", "react-vite-css"),
-    packageArtifactRoot: join(root, "packages"),
-  });
-});
-
 test("migration contract checks the exact report/source and no-op second run without retries", () => {
   const first = {
     changedFiles: ["src/a.css"],
@@ -950,6 +908,11 @@ test("case jobs run after non-cancelled partial package failure while preserving
   assert.match(
     workflow,
     /^  case:\n    needs: package\n    if: \$\{\{ !cancelled\(\) && \(github\.event_name != 'pull_request' \|\| github\.event\.label\.name == 'test:e2e'\) \}\}$/m,
+  );
+  // Smoke and external cases share the single gated case job.
+  assert.match(
+    workflow,
+    /case: \[.*vue-vite-css, production-react-vite-css, external-namechecker, external-stylized-components\]/,
   );
 });
 

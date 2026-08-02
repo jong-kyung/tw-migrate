@@ -5,7 +5,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
 
-import { availablePort } from "./shared.ts";
+import { availablePort, waitForHttpOk } from "./shared.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -50,19 +50,8 @@ log: { type: stdout, format: pretty, level: http }
 `;
 }
 
-async function waitForRegistry(url: string, child: ChildProcess, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) throw new Error(`registry exited with status ${child.exitCode}`);
-    try {
-      const response = await fetch(`${url}/-/ping`, { signal: AbortSignal.timeout(500) });
-      if (response.ok) return;
-    } catch {}
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`registry did not start within ${timeoutMs}ms`);
-}
-
+// Not shared/terminateTree: verdaccio is spawned non-detached, so a
+// process-group kill would take the harness process down with it.
 async function terminate(child: ChildProcess, timeoutMs = 5_000): Promise<void> {
   if (child.exitCode !== null) return;
   child.kill("SIGTERM");
@@ -79,7 +68,6 @@ async function terminate(child: ChildProcess, timeoutMs = 5_000): Promise<void> 
 
 export interface Registry {
   url: string;
-  logPath: string;
   stop: () => Promise<void>;
 }
 
@@ -117,7 +105,7 @@ export async function startRegistry({
   );
 
   try {
-    await waitForRegistry(url, child, timeoutMs);
+    await waitForHttpOk(`${url}/-/ping`, child, timeoutMs, "registry");
   } catch (error) {
     await terminate(child);
     closeSync(log);
@@ -129,7 +117,6 @@ export async function startRegistry({
   let stopped = false;
   return {
     url,
-    logPath,
     async stop() {
       if (stopped) return;
       stopped = true;

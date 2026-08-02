@@ -68,10 +68,11 @@ export async function resolveScope(options: MigrateOptions): Promise<Scope> {
     if (!allPackageRoots.includes(owner)) allPackageRoots.push(owner);
   }
   allPackageRoots.sort(compareStrings);
+  const rootsByDepth = [...allPackageRoots].sort((left, right) => right.length - left.length);
   const pathOwners = new Map(
     scannedPaths.map((path): [string, string | undefined] => [
       path,
-      owningPackage(path, allPackageRoots),
+      rootsByDepth.find((root) => isWithin(root, path)),
     ]),
   );
   if (explicitStyle && pathOwners.get(explicitStyle) !== currentPackage) {
@@ -90,7 +91,6 @@ export async function resolveScope(options: MigrateOptions): Promise<Scope> {
     configuredEntry,
     pathOwners,
     selectedPackages,
-    writablePackages: new Set(selectedPackages),
   };
 }
 
@@ -161,12 +161,6 @@ async function discoverPackageRoots(workspaceRoot: string, paths: string[]): Pro
     if (errorCode(error) !== "ENOENT") throw error;
   }
   return [...new Set(roots)].sort(compareStrings);
-}
-
-function owningPackage(path: string, packageRoots: string[]): string | undefined {
-  return packageRoots
-    .filter((root) => isWithin(root, path))
-    .sort((left, right) => right.length - left.length)[0];
 }
 
 function hasIgnoredDirectory(root: string, path: string): boolean {

@@ -28,7 +28,6 @@ interface SassCompileResult {
 }
 
 export interface SassCompiler {
-  compileAsync: (path: string, options: SassCompileOptions) => Promise<SassCompileResult>;
   compileStringAsync: (source: string, options: SassCompileOptions) => Promise<SassCompileResult>;
 }
 
@@ -78,7 +77,7 @@ export function isPreprocessorPath(path: string): boolean {
   return isSassPath(path) || extname(path) === ".less";
 }
 
-async function loadProjectModule<Compiler>(
+export async function loadProjectModule<Compiler>(
   packageRoot: string,
   name: string,
   errorMessage: string,
@@ -102,24 +101,41 @@ export function loadProjectLess(packageRoot: string): Promise<LessCompiler> {
   return loadProjectModule(packageRoot, "less", "Less must be installed in the target project.");
 }
 
+// Compiler reuse is scoped to one package-planning run so a later migrate()
+// call re-resolves the target project's compilers instead of reusing a
+// possibly uninstalled one from an earlier invocation.
+export interface StyleCompilers {
+  sass?: SassCompiler;
+  less?: LessCompiler;
+}
+
+export async function compileStyleEntry(
+  compilers: StyleCompilers,
+  packageRoot: string,
+  entryPath: string,
+  source: string,
+  options: { virtualEntry?: boolean } = {},
+): Promise<CompiledStyleEntry> {
+  if (isSassPath(entryPath)) {
+    const sass = (compilers.sass ??= await loadProjectSass(packageRoot));
+    return compileSassEntry(sass, entryPath, source, options);
+  }
+  const less = (compilers.less ??= await loadProjectLess(packageRoot));
+  return compileLessEntry(less, entryPath, source);
+}
+
 export async function compileSassEntry(
   sass: SassCompiler,
   entryPath: string,
-  source?: string,
+  source: string,
   { virtualEntry = false }: { virtualEntry?: boolean } = {},
 ): Promise<CompiledStyleEntry> {
-  const options: SassCompileOptions = {
+  const result = await sass.compileStringAsync(source, {
     sourceMap: true,
     sourceMapIncludeSources: true,
-  };
-  const result =
-    source === undefined
-      ? await sass.compileAsync(entryPath, options)
-      : await sass.compileStringAsync(source, {
-          ...options,
-          url: pathToFileURL(entryPath),
-          syntax: extname(entryPath) === ".sass" ? "indented" : "scss",
-        });
+    url: pathToFileURL(entryPath),
+    syntax: extname(entryPath) === ".sass" ? "indented" : "scss",
+  });
 
   if (!result.sourceMap) throw new Error(`Sass did not produce a source map for ${entryPath}`);
   const loadedPaths = result.loadedUrls

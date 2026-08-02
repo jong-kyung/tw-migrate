@@ -1,11 +1,11 @@
 use std::{collections::HashMap, ops::Range};
 
-use crate::arbitrary::encode as arbitrary_value;
-
-use oxc_css_parser::{
-    Parser as CssParser, Syntax,
-    ast::{AtRule, AtRulePrelude, InterpolableIdent, KeyframesName, Statement, Stylesheet},
+use crate::{
+    arbitrary::encode as arbitrary_value,
+    at_rules::{append_block, parse_tailwind, walk_at_rules},
 };
+
+use oxc_css_parser::ast::{AtRule, AtRulePrelude, InterpolableIdent, KeyframesName};
 
 pub(crate) struct KeyframePlan {
     pub(crate) span: Range<usize>,
@@ -82,12 +82,20 @@ pub(crate) fn append_keyframes(
     keyframes: &[&KeyframePlan],
 ) -> Result<String, String> {
     let allocator = oxc_css_parser::Allocator::default();
-    let mut parser = CssParser::new(&allocator, source, Syntax::Css);
-    let stylesheet = parser
-        .parse::<Stylesheet>()
-        .map_err(|error| format!("Failed to parse Tailwind CSS: {error:?}"))?;
+    let stylesheet = parse_tailwind(&allocator, source)?;
     let mut existing = HashMap::new();
-    collect_keyframes(&stylesheet.statements, source, &mut existing);
+    walk_at_rules(&stylesheet.statements, &mut |at_rule| {
+        if at_rule.name.name == "keyframes"
+            && let Some(AtRulePrelude::Keyframes(KeyframesName::Ident(InterpolableIdent::Literal(
+                name,
+            )))) = &at_rule.prelude
+        {
+            existing.insert(
+                name.name.to_string(),
+                source[at_rule.span.start..at_rule.span.end].to_string(),
+            );
+        }
+    });
 
     let mut output = source.to_string();
     for keyframe in keyframes {
@@ -100,41 +108,9 @@ pub(crate) fn append_keyframes(
             }
             continue;
         }
-        if !output.ends_with('\n') {
-            output.push('\n');
-        }
-        if !output.ends_with("\n\n") {
-            output.push('\n');
-        }
-        output.push_str(keyframe.source.trim());
-        output.push('\n');
+        append_block(&mut output, &keyframe.source);
     }
     Ok(output)
-}
-
-fn collect_keyframes(
-    statements: &[Statement<'_>],
-    source: &str,
-    keyframes: &mut HashMap<String, String>,
-) {
-    for statement in statements {
-        let Statement::AtRule(at_rule) = statement else {
-            continue;
-        };
-        if at_rule.name.name == "keyframes"
-            && let Some(AtRulePrelude::Keyframes(KeyframesName::Ident(InterpolableIdent::Literal(
-                name,
-            )))) = &at_rule.prelude
-        {
-            keyframes.insert(
-                name.name.to_string(),
-                source[at_rule.span.start..at_rule.span.end].to_string(),
-            );
-        }
-        if let Some(block) = &at_rule.block {
-            collect_keyframes(&block.statements, source, keyframes);
-        }
-    }
 }
 
 fn stable_hash(value: &str) -> u64 {

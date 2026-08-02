@@ -207,17 +207,22 @@ pub(crate) fn parse_css_rules(
         });
     }
     let mut overlapping_rules = BTreeSet::new();
-    for left in 0..rules.len() {
-        for right in left + 1..rules.len() {
-            if rules[left].key == rules[right].key
-                && rules[left].key.is_some()
-                && rules[left].candidates.iter().any(|left_candidate| {
+    let mut rules_by_key: HashMap<&SelectorKey, Vec<usize>> = HashMap::new();
+    for (index, rule) in rules.iter().enumerate() {
+        if let Some(key) = &rule.key {
+            rules_by_key.entry(key).or_default().push(index);
+        }
+    }
+    for indices in rules_by_key.values() {
+        for (position, &left) in indices.iter().enumerate() {
+            for &right in &indices[position + 1..] {
+                if rules[left].candidates.iter().any(|left_candidate| {
                     rules[right].candidates.iter().any(|right_candidate| {
                         tailwind_utilities_conflict(left_candidate, right_candidate)
                     })
-                })
-            {
-                overlapping_rules.extend([left, right]);
+                }) {
+                    overlapping_rules.extend([left, right]);
+                }
             }
         }
     }
@@ -385,63 +390,48 @@ fn collect_declaration_candidates(
                 source[span.start..span.end].trim()
             })
             .collect::<Vec<_>>();
-        let spacing_result = margin
-            .apply(
-                property,
+        let mut family_result = Ok(false);
+        for (values, family, longhands, properties) in [
+            (
+                &mut margin,
                 "margin",
                 ["margin-top", "margin-right", "margin-bottom", "margin-left"],
-                value,
-                &components,
-            )
-            .and_then(|handled| {
-                if handled {
-                    return Ok(true);
-                }
-                padding.apply(
-                    property,
-                    "padding",
-                    [
-                        "padding-top",
-                        "padding-right",
-                        "padding-bottom",
-                        "padding-left",
-                    ],
-                    value,
-                    &components,
-                )
-            })
-            .and_then(|handled| {
-                if handled {
-                    return Ok(true);
-                }
-                inset.apply(
-                    property,
-                    "inset",
-                    ["top", "right", "bottom", "left"],
-                    value,
-                    &components,
-                )
-            })
-            .and_then(|handled| {
-                if handled {
-                    return Ok(true);
-                }
-                overflow.apply(property, value, &components)
-            });
-        match spacing_result {
-            Ok(true) => {
-                let properties = if property == "margin" || property.starts_with("margin-") {
-                    &mut margin_properties
-                } else if property == "padding" || property.starts_with("padding-") {
-                    &mut padding_properties
-                } else if property == "overflow" || property.starts_with("overflow-") {
-                    &mut overflow_properties
-                } else {
-                    &mut inset_properties
-                };
+                &mut margin_properties,
+            ),
+            (
+                &mut padding,
+                "padding",
+                [
+                    "padding-top",
+                    "padding-right",
+                    "padding-bottom",
+                    "padding-left",
+                ],
+                &mut padding_properties,
+            ),
+            (
+                &mut inset,
+                "inset",
+                ["top", "right", "bottom", "left"],
+                &mut inset_properties,
+            ),
+        ] {
+            family_result = values.apply(property, family, longhands, value, &components);
+            if family_result == Ok(true) {
                 properties.insert(property.to_string());
-                continue;
             }
+            if family_result != Ok(false) {
+                break;
+            }
+        }
+        if family_result == Ok(false) {
+            family_result = overflow.apply(property, value, &components);
+            if family_result == Ok(true) {
+                overflow_properties.insert(property.to_string());
+            }
+        }
+        match family_result {
+            Ok(true) => continue,
             Err(()) => {
                 warning = Some("unsupported-overlap");
                 continue;

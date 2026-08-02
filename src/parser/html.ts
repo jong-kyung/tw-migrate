@@ -34,7 +34,6 @@ export interface HtmlAttribute {
   value: string;
   start: number;
   end: number;
-  quoted?: boolean;
   writable?: boolean;
   synthetic?: boolean;
 }
@@ -90,6 +89,10 @@ export function parseHtmlSource(path: string, source: string): ParsedHtml {
   const elements: HtmlElementAttributes[] = [];
   const dynamicAttributes: HtmlSpan[] = [];
   const scriptTexts: string[] = [];
+  // The value span of a quoted attribute starts right after its quote, so the
+  // preceding character distinguishes quoted from unquoted values.
+  const unquoted = (attribute: HtmlAttribute): boolean =>
+    source[attribute.start - 1] !== '"' && source[attribute.start - 1] !== "'";
 
   function visit(node: HtmlNode): void {
     if (node.tagName === "script") {
@@ -148,7 +151,7 @@ export function parseHtmlSource(path: string, source: string): ParsedHtml {
             (attribute) =>
               attribute && (!attribute.writable || TEMPLATE_MARKERS.test(attribute.value)),
           ) ??
-          (classAttribute && !classAttribute.quoted ? classAttribute : undefined);
+          (classAttribute && unquoted(classAttribute) ? classAttribute : undefined);
         if (dynamic) {
           dynamicAttributes.push({ start: dynamic.start, end: dynamic.end });
         } else if (classAttribute || idAttribute) {
@@ -271,7 +274,6 @@ function locatedAttribute(
   const value = raw.slice(start, end);
   return {
     value: value.includes("&") ? parsedValue : value,
-    quoted,
     writable: !value.includes("&"),
     start: location.startOffset + start,
     end: location.startOffset + end,

@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 
 import { utf8OffsetMap } from "./html.ts";
+import { loadProjectModule } from "./style-compiler.ts";
 import { staticImportBindings, staticImports, staticStringExpression } from "../native.ts";
 import type { StaticImportBinding } from "../native.ts";
 import type { SourceMapping } from "./style-compiler.ts";
@@ -249,14 +249,13 @@ export async function loadProjectVueCompiler(packageRoot: string): Promise<Loade
   }
   const { version } = JSON.parse(await readFile(packagePath, "utf8"));
   if (!String(version).startsWith("3.")) return { unsupportedVersion: String(version) };
-  let modulePath;
-  try {
-    modulePath = projectRequire.resolve("vue/compiler-sfc");
-  } catch {
-    throw new Error("Vue 3 with compiler-sfc must be installed in the target project.");
-  }
-  const imported = await import(pathToFileURL(modulePath).href);
-  return { compiler: imported.default ?? imported };
+  return {
+    compiler: await loadProjectModule<VueCompiler>(
+      packageRoot,
+      "vue/compiler-sfc",
+      "Vue 3 with compiler-sfc must be installed in the target project.",
+    ),
+  };
 }
 
 // Lower one SFC to the planner contract: plain-CSS scoped blocks in absolute
@@ -501,33 +500,34 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
   };
   const attribute = (value: VueTemplateAttribute | undefined): VueTemplateAttribute | undefined =>
     value && { ...value, start: offset(value.start), end: offset(value.end) };
+  const toByteBlock = (block: VueStyleBlock): VueStyleBlock => ({
+    ...block,
+    outerStart: offset(block.outerStart),
+    outerEnd: offset(block.outerEnd),
+    contentStart: offset(block.contentStart),
+    contentEnd: offset(block.contentEnd),
+  });
+  const toByteSite = (element: VueTemplateSite): VueTemplateSite => ({
+    tag: element.tag,
+    nodeStart: offset(element.nodeStart),
+    classAttribute: attribute(element.classAttribute),
+    idAttribute: attribute(element.idAttribute),
+    matchClasses: element.matchClasses,
+    moduleBinding: element.moduleBinding && {
+      name: element.moduleBinding.name,
+      start: offset(element.moduleBinding.start),
+      end: offset(element.moduleBinding.end),
+    },
+  });
   return {
     warnings: warnings.map((warning) => ({
       ...warning,
       start: offset(warning.start),
       end: offset(warning.end),
     })),
-    blocks: blocks.map((block) => ({
-      ...block,
-      outerStart: offset(block.outerStart),
-      outerEnd: offset(block.outerEnd),
-      contentStart: offset(block.contentStart),
-      contentEnd: offset(block.contentEnd),
-    })),
-    unscopedBlocks: unscopedBlocks.map((block) => ({
-      ...block,
-      outerStart: offset(block.outerStart),
-      outerEnd: offset(block.outerEnd),
-      contentStart: offset(block.contentStart),
-      contentEnd: offset(block.contentEnd),
-    })),
-    moduleBlocks: moduleBlocks.map((block) => ({
-      ...block,
-      outerStart: offset(block.outerStart),
-      outerEnd: offset(block.outerEnd),
-      contentStart: offset(block.contentStart),
-      contentEnd: offset(block.contentEnd),
-    })),
+    blocks: blocks.map(toByteBlock),
+    unscopedBlocks: unscopedBlocks.map(toByteBlock),
+    moduleBlocks: moduleBlocks.map(toByteBlock),
     // `$style` outside the proven direct member sites (any expression,
     // interpolation, or script text) makes the module's consumers
     // unprovable.
@@ -536,25 +536,8 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
       // An unreadable script could reference `$style` invisibly.
       scriptImportsUnverifiable ||
       /\$style|useCssModule/.test([...state.expressionTexts, scriptText].join("\n")),
-    htmlElements: state.elements.map((element) => ({
-      tag: element.tag,
-      nodeStart: offset(element.nodeStart),
-      classAttribute: attribute(element.classAttribute),
-      idAttribute: attribute(element.idAttribute),
-      matchClasses: element.matchClasses,
-      moduleBinding: element.moduleBinding && {
-        name: element.moduleBinding.name,
-        start: offset(element.moduleBinding.start),
-        end: offset(element.moduleBinding.end),
-      },
-    })),
-    componentSites: state.components.map((element) => ({
-      tag: element.tag,
-      nodeStart: offset(element.nodeStart),
-      classAttribute: attribute(element.classAttribute),
-      idAttribute: attribute(element.idAttribute),
-      matchClasses: element.matchClasses,
-    })),
+    htmlElements: state.elements.map(toByteSite),
+    componentSites: state.components.map(toByteSite),
     // Slot and template roots are element nodes without a template site, so
     // their starts were never fed into the offset map and stay undefined;
     // nodeStart comparisons in the caller then never match them.

@@ -1,14 +1,8 @@
 import { dirname, join, resolve } from "node:path";
 
 import { staticImports, validateCss } from "../native.ts";
-import {
-  compileLessEntry,
-  compileSassEntry,
-  isPreprocessorPath,
-  isSassPath,
-  loadProjectLess,
-  loadProjectSass,
-} from "../parser/style-compiler.ts";
+import { compileStyleEntry, isPreprocessorPath } from "../parser/style-compiler.ts";
+import type { StyleCompilers } from "../parser/style-compiler.ts";
 import { analyzeVueSource, loadProjectVueCompiler } from "../parser/vue.ts";
 import {
   STYLESHEET_SYNTAX,
@@ -22,7 +16,6 @@ import {
   snapshotLoadedSource,
   stylesheetReferenceTargets,
 } from "../util/shared.ts";
-import type { LessCompiler, SassCompiler } from "../parser/style-compiler.ts";
 import type {
   VueAnalysis,
   VueComponentEdge,
@@ -43,9 +36,6 @@ import type {
 function isLocalVueReference(reference: string): boolean {
   return (
     reference.startsWith(".") ||
-    reference.startsWith("/") ||
-    reference.startsWith("@/") ||
-    reference.startsWith("~/") ||
     reference.startsWith("#") ||
     reference.includes("/") ||
     reference.includes(".vue")
@@ -243,6 +233,7 @@ export function vueWarningsOnlyResult(preparedVue: PreparedVue): PlanResult {
 // blocks or templates cannot be analyzed keep their raw source and warn.
 export async function preparePackageVue({
   packageRoot,
+  styleCompilers,
   sourceFiles,
   styleSources,
   pathOwners,
@@ -254,6 +245,7 @@ export async function preparePackageVue({
   scannedPaths,
 }: {
   packageRoot: string;
+  styleCompilers: StyleCompilers;
   sourceFiles: SourceFile[];
   styleSources: Map<string, string>;
   pathOwners: Map<string, string | undefined>;
@@ -334,23 +326,16 @@ export async function preparePackageVue({
       }
     }
   }
-  let sass: SassCompiler | undefined;
-  let less: LessCompiler | undefined;
   const compileBlocks = async (file: SourceFile, blocks: VueStyleBlock[]): Promise<void> => {
     for (const block of blocks.filter((block) => block.syntax !== "css")) {
       const virtualPath = `${file.path}.${block.syntax}`;
-      const compiled = isSassPath(virtualPath)
-        ? await compileSassEntry(
-            (sass ??= await loadProjectSass(packageRoot)),
-            virtualPath,
-            block.content,
-            { virtualEntry: true },
-          )
-        : await compileLessEntry(
-            (less ??= await loadProjectLess(packageRoot)),
-            virtualPath,
-            block.content,
-          );
+      const compiled = await compileStyleEntry(
+        styleCompilers,
+        packageRoot,
+        virtualPath,
+        block.content,
+        { virtualEntry: true },
+      );
       validateCss(compiled.css);
       for (const loadedPath of compiled.loadedPaths) {
         if (loadedPath === virtualPath || !isProjectInput(workspaceRoot, loadedPath)) continue;
@@ -622,13 +607,15 @@ export async function preparePackageVue({
         const parent = analyses.get(edge.parent);
         return parent ? parent.retained || parent.dynamic : false;
       });
-    const retention = analysis.dynamic
-      ? "dynamic-template-class"
-      : componentOpen
-        ? "component-class-target"
-        : analysis.alwaysRenderedRoots < 2 && callerOpen
-          ? "open-root-fallthrough"
-          : undefined;
+    const retentionReason = (open: boolean): string | undefined =>
+      analysis.dynamic
+        ? "dynamic-template-class"
+        : open
+          ? "component-class-target"
+          : analysis.alwaysRenderedRoots < 2 && callerOpen
+            ? "open-root-fallthrough"
+            : undefined;
+    const retention = retentionReason(componentOpen);
     // ponytail: unscoped deletion is limited to private single-source packages;
     // widen it only when the dependency graph can prove stylesheet co-loading.
     const migrateUnscoped =
@@ -666,11 +653,7 @@ export async function preparePackageVue({
     // closed exactly like the scoped ones. `componentOpen` is exempt: a child
     // component's root can never carry the hashed class, because a `$style`
     // binding on a component tag is already an opaque (dynamic) surface.
-    const moduleRetention = analysis.dynamic
-      ? "dynamic-template-class"
-      : analysis.alwaysRenderedRoots < 2 && callerOpen
-        ? "open-root-fallthrough"
-        : undefined;
+    const moduleRetention = retentionReason(false);
     const migrateModule =
       analysis.moduleBlocks.length > 0 && !analysis.moduleClosureBroken && !moduleRetention;
     if (analysis.moduleBlocks.length > 0 && !migrateModule) {
@@ -776,7 +759,5 @@ export async function preparePackageVue({
     unscopedPaths,
     warnings,
     compiler,
-    sass,
-    less,
   };
 }

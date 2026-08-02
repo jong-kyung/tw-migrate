@@ -2,7 +2,8 @@
 // browser captures the lifecycle compares. `projects.json` is untrusted input
 // until `validateManifest` narrows it to `Manifest`.
 
-export type SelectorType = "role" | "name" | "text" | "data" | "id" | "tag" | "css";
+export const selectorTypes = ["role", "text", "data", "id", "tag", "css"] as const;
+export type SelectorType = (typeof selectorTypes)[number];
 
 export interface ProbeSelector {
   type: SelectorType;
@@ -40,11 +41,14 @@ export interface ProjectSource {
   after: string;
 }
 
+export const controlledRuntimes = ["react-vite", "next", "vite-html", "vue-vite"] as const;
+export const controlledStyles = ["css", "scss", "sass", "less"] as const;
+
 export interface ControlledProject {
   id: string;
   kind: "controlled";
-  runtime: "react-vite" | "next" | "vite-html" | "vue-vite";
-  style: "css" | "scss" | "sass" | "less";
+  runtime: (typeof controlledRuntimes)[number];
+  style: (typeof controlledStyles)[number];
   source: ProjectSource;
   probes: Record<string, Probe>;
 }
@@ -60,6 +64,8 @@ export interface ExternalInstall {
   args: string[];
 }
 
+export const externalServers = ["vite", "next"] as const;
+
 export interface ExternalProject {
   id: string;
   kind: "external";
@@ -71,7 +77,7 @@ export interface ExternalProject {
   installs: ExternalInstall[];
   runtimeWrites: string[];
   start: string[];
-  server: "vite" | "next";
+  server: (typeof externalServers)[number];
   tailwindCss: string;
   source: ProjectSource;
   probes: Record<string, Probe>;

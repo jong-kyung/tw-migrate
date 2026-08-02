@@ -4,7 +4,7 @@ use crate::{
     css_plan::SelectorKey,
     js_rewrite::{CandidateMatch, SourcePlan},
     planner::{element_classes, element_ids, Edit, HtmlAttribute, SourceFile, Warning},
-    utilities::tailwind_utilities_conflict,
+    utilities::utility_conflict,
 };
 
 pub(crate) fn plan_html_file(
@@ -50,23 +50,12 @@ pub(crate) fn plan_html_file(
                     .as_ref()
                     .map(|attribute| (attribute.start, attribute.end))
                     .unwrap_or((0, 0));
-                warnings.push(Warning {
-                    code: "existing-tailwind-conflict",
-                    file: file.path.clone(),
-                    start: span.0,
-                    end: span.1,
-                    message: format!(
-                        "Generated utility `{generated}` may conflict with existing `{existing}`."
-                    ),
-                });
+                warnings.push(Warning::existing_tailwind_conflict(
+                    &file.path, span, &generated, &existing,
+                ));
             }
             continue;
         };
-        let mut classes = class_attribute
-            .value
-            .split_whitespace()
-            .map(str::to_string)
-            .collect::<Vec<_>>();
         let mut additions = Vec::new();
 
         let quote = attribute_quote(&file.source, class_attribute);
@@ -112,48 +101,22 @@ pub(crate) fn plan_html_file(
         // a warning, and Tailwind's output order decides between them.
         let existing_classes = element_classes(element)
             .into_iter()
-            .chain(classes.iter().map(String::as_str))
-            .collect::<BTreeSet<_>>();
-        if let Some((generated, existing)) = additions.iter().find_map(|candidate| {
-            existing_classes
-                .iter()
-                .find(|existing| tailwind_utilities_conflict(candidate, existing))
-                .map(|existing| (candidate.clone(), (*existing).to_string()))
-        }) {
+            .chain(class_attribute.value.split_whitespace())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if let Some((generated, existing)) = utility_conflict(&additions, &existing_classes) {
             let authored = element
                 .class_attribute
                 .as_ref()
                 .map(|attribute| (attribute.start, attribute.end))
                 .unwrap_or((0, 0));
-            warnings.push(Warning {
-                code: "existing-tailwind-conflict",
-                file: file.path.clone(),
-                start: authored.0,
-                end: authored.1,
-                message: format!(
-                    "Generated utility `{generated}` may conflict with existing `{existing}`."
-                ),
-            });
+            warnings.push(Warning::existing_tailwind_conflict(
+                &file.path, authored, &generated, &existing,
+            ));
         }
-        for candidate in additions {
-            if !classes.contains(&candidate) {
-                classes.push(candidate);
-            }
-        }
-        let value = classes.join(" ");
-        let replacement = if class_attribute.synthetic {
-            format!(" class=\"{value}\"")
-        } else {
-            value
-        };
-        if (!class_attribute.synthetic || !classes.is_empty())
-            && replacement != class_attribute.value
-        {
-            edits.push(Edit {
-                start: class_attribute.start,
-                end: class_attribute.end,
-                replacement,
-            });
+        if let Some(edit) = merge_class_attribute(class_attribute, &additions) {
+            edits.push(edit);
         }
     }
 
@@ -211,6 +174,34 @@ fn collect_candidates(
     appended_all
 }
 
+/// Merge the missing additions into a class attribute value, materializing a
+/// synthetic attribute, and return the edit when the value changes.
+fn merge_class_attribute(attribute: &HtmlAttribute, additions: &[String]) -> Option<Edit> {
+    let mut classes = attribute
+        .value
+        .split_whitespace()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    for candidate in additions {
+        if !classes.contains(candidate) {
+            classes.push(candidate.clone());
+        }
+    }
+    let value = classes.join(" ");
+    let replacement = if attribute.synthetic {
+        format!(" class=\"{value}\"")
+    } else {
+        value
+    };
+    ((!attribute.synthetic || !classes.is_empty()) && replacement != attribute.value).then(|| {
+        Edit {
+            start: attribute.start,
+            end: attribute.end,
+            replacement,
+        }
+    })
+}
+
 /// The quote delimiter enclosing a live attribute value: the byte before the
 /// value span, or `"` for a synthetic attribute the planner itself inserts
 /// with double quotes.
@@ -230,13 +221,8 @@ fn readonly_conflict(
         let Some(generated) = candidates.get(&key) else {
             continue;
         };
-        for candidate in generated {
-            if let Some(existing) = classes
-                .iter()
-                .find(|existing| tailwind_utilities_conflict(candidate, existing))
-            {
-                return Some((candidate.clone(), (*existing).to_string()));
-            }
+        if let Some(conflict) = utility_conflict(generated, &classes) {
+            return Some(conflict);
         }
     }
     None
@@ -299,16 +285,15 @@ pub(crate) fn plan_vue_module_file(
                 };
                 *plan.module_refs.entry(binding.name.clone()).or_default() += 1;
                 if !rule_classes.contains(&binding.name) {
-                    plan.warnings.push(Warning {
-                        code: "unsupported-css-module-reference",
-                        file: file.path.clone(),
-                        start: binding.start,
-                        end: binding.end,
-                        message: format!(
+                    plan.warnings.push(Warning::new(
+                        "unsupported-css-module-reference",
+                        file.path.clone(),
+                        (binding.start, binding.end),
+                        format!(
                             "`$style.{}` names a class the module does not define, so the module is retained.",
                             binding.name
                         ),
-                    });
+                    ));
                 }
             }
             return plan;
@@ -361,28 +346,8 @@ pub(crate) fn plan_vue_module_file(
                 if !candidates_fit_attribute(&file.source, class_attribute, &additions) {
                     continue;
                 }
-                let mut classes = class_attribute
-                    .value
-                    .split_whitespace()
-                    .map(str::to_string)
-                    .collect::<Vec<_>>();
-                for candidate in &additions {
-                    if !classes.contains(candidate) {
-                        classes.push(candidate.clone());
-                    }
-                }
-                let value = classes.join(" ");
-                let replacement = if class_attribute.synthetic {
-                    format!(" class=\"{value}\"")
-                } else {
-                    value
-                };
-                if replacement != class_attribute.value {
-                    edits.push(Edit {
-                        start: class_attribute.start,
-                        end: class_attribute.end,
-                        replacement,
-                    });
+                if let Some(edit) = merge_class_attribute(class_attribute, &additions) {
+                    edits.push(edit);
                 }
                 edits.push(Edit {
                     start: binding_span.0,
@@ -438,26 +403,15 @@ pub(crate) fn plan_vue_module_file(
         // to authored coordinates, so use the element's analysis-time spans
         // rather than the rebased live site.
         let existing_classes = element_classes(element);
-        if let Some((generated, existing)) = additions.iter().find_map(|candidate| {
-            existing_classes
-                .iter()
-                .find(|existing| tailwind_utilities_conflict(candidate, existing))
-                .map(|existing| (candidate.clone(), (*existing).to_string()))
-        }) {
-            let (authored_start, authored_end) = element
+        if let Some((generated, existing)) = utility_conflict(&additions, &existing_classes) {
+            let authored = element
                 .class_attribute
                 .as_ref()
                 .map(|attribute| (attribute.start, attribute.end))
                 .unwrap_or((binding.start, binding.end));
-            warnings.push(Warning {
-                code: "existing-tailwind-conflict",
-                file: file.path.clone(),
-                start: authored_start,
-                end: authored_end,
-                message: format!(
-                    "Generated utility `{generated}` may conflict with existing `{existing}`."
-                ),
-            });
+            warnings.push(Warning::existing_tailwind_conflict(
+                &file.path, authored, &generated, &existing,
+            ));
         }
         *matched_module_refs.entry(binding.name.clone()).or_default() += 1;
     }
@@ -495,17 +449,15 @@ pub(crate) fn rebase_span(
     end: usize,
     prior_edits: &[Vec<Edit>],
 ) -> Option<(usize, usize)> {
-    let mut span = HtmlAttribute {
-        value: String::new(),
-        start,
-        end,
-        synthetic: false,
-        writable: true,
-    };
+    let mut span = (start, end);
     for edits in prior_edits {
-        span = rebase_attribute(span, edits)?;
+        let (start, end, exact) = shift_span(span.0, span.1, edits)?;
+        span = match exact {
+            Some(edit) => (start, start + edit.replacement.len()),
+            None => (start, end),
+        };
     }
-    Some((span.start, span.end))
+    Some(span)
 }
 
 pub(crate) fn candidates_fit_attribute(
@@ -583,29 +535,39 @@ fn rebased_attributes(file: &SourceFile) -> HashMap<usize, HtmlAttribute> {
     rebased
 }
 
-fn rebase_attribute(mut attribute: HtmlAttribute, edits: &[Edit]) -> Option<HtmlAttribute> {
-    let original_start = attribute.start;
-    let original_end = attribute.end;
+/// Shift a span through one edit round; `None` when an edit lands inside it.
+/// Returns the exact-cover edit when one replaces the span wholesale.
+fn shift_span<'e>(
+    start: usize,
+    end: usize,
+    edits: &'e [Edit],
+) -> Option<(usize, usize, Option<&'e Edit>)> {
     let exact = edits
         .iter()
-        .find(|edit| edit.start == original_start && edit.end == original_end);
+        .find(|edit| edit.start == start && edit.end == end);
     if edits.iter().any(|edit| {
-        !(edit.start == original_start && edit.end == original_end)
-            && edit.start < original_end
-            && (edit.end > original_start || edit.start == edit.end)
+        !(edit.start == start && edit.end == end)
+            && edit.start < end
+            && (edit.end > start || edit.start == edit.end)
     }) {
         return None;
     }
     let delta = edits
         .iter()
-        .filter(|edit| {
-            !(edit.start == original_start && edit.end == original_end)
-                && edit.end <= original_start
-        })
+        .filter(|edit| !(edit.start == start && edit.end == end) && edit.end <= start)
         .map(|edit| edit.replacement.len() as isize - (edit.end - edit.start) as isize)
         .sum::<isize>();
-    attribute.start = original_start.checked_add_signed(delta)?;
-    attribute.end = original_end.checked_add_signed(delta)?;
+    Some((
+        start.checked_add_signed(delta)?,
+        end.checked_add_signed(delta)?,
+        exact,
+    ))
+}
+
+fn rebase_attribute(mut attribute: HtmlAttribute, edits: &[Edit]) -> Option<HtmlAttribute> {
+    let (start, end, exact) = shift_span(attribute.start, attribute.end, edits)?;
+    attribute.start = start;
+    attribute.end = end;
     if let Some(edit) = exact {
         if attribute.synthetic {
             let value = edit.replacement.strip_prefix(" class=\"")?.strip_suffix('"')?;

@@ -1,4 +1,4 @@
-use tw_migrate_snapshots::{default_setup, run_case};
+use super::default_setup;
 
 snapshot_cases! {
     html_static_literals => default_setup,
