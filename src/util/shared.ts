@@ -1,5 +1,5 @@
 import { lstat, readFile } from "node:fs/promises";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 
 import { utf8OffsetMap } from "../parser/html.ts";
 import { isPreprocessorPath } from "../parser/style-compiler.ts";
@@ -29,9 +29,6 @@ export const IGNORED_DIRECTORIES = new Set([".git", ".next", "build", "dist", "n
 
 export const RECOVERABLE_INPUT_ERROR = "TW_MIGRATE_RECOVERABLE_INPUT:";
 
-export const compareStrings = (left: string, right: string): number =>
-  Number(left > right) - Number(left < right);
-
 export function errorCode(error: unknown): string | undefined {
   return error instanceof Error && "code" in error && typeof error.code === "string"
     ? error.code
@@ -43,11 +40,11 @@ export function isWithin(root: string, path: string): boolean {
 }
 
 export function isStylesheetPath(path: string): boolean {
-  return STYLESHEET_SYNTAX.has(extension(path));
+  return STYLESHEET_SYNTAX.has(extname(path));
 }
 
 export function stylesheetSyntax(path: string): string | undefined {
-  return STYLESHEET_SYNTAX.get(extension(path));
+  return STYLESHEET_SYNTAX.get(extname(path));
 }
 
 export function isStylesheetModule(path: string): boolean {
@@ -141,24 +138,6 @@ export function isIntegrityError(error: unknown): boolean {
   return message.startsWith("Source changed during planning:");
 }
 
-export async function readSources(
-  paths: string[],
-  snapshots: Map<string, string>,
-): Promise<Map<string, string>> {
-  return new Map(
-    await Promise.all(
-      paths.map(
-        async (path): Promise<[string, string]> => [path, await snapshotFile(snapshots, path)],
-      ),
-    ),
-  );
-}
-
-export function extension(path: string): string {
-  const match = /\.[^./]+$/.exec(path);
-  return match?.[0] ?? "";
-}
-
 export function normalizedRelativePath(root: string, path: string): string {
   return relative(root, path).split(sep).join("/");
 }
@@ -196,8 +175,7 @@ export function indexStylesheetDependents(
       }
     }
   }
-  for (const [target, paths] of dependents)
-    dependents.set(target, [...new Set(paths)].sort(compareStrings));
+  for (const [target, paths] of dependents) dependents.set(target, [...new Set(paths)].sort());
   return dependents;
 }
 
@@ -209,7 +187,7 @@ export function addStyleDependent(
   const paths = styleDependents.get(target) ?? [];
   if (paths.includes(importer)) return;
   paths.push(importer);
-  paths.sort(compareStrings);
+  paths.sort();
   styleDependents.set(target, paths);
 }
 
@@ -219,7 +197,7 @@ export function stylesheetReferenceTargets(
   styleSources: Map<string, string>,
 ): string[] {
   const target = resolve(dirname(importer), reference);
-  const candidates = STYLESHEET_SYNTAX.has(extension(target))
+  const candidates = STYLESHEET_SYNTAX.has(extname(target))
     ? [target]
     : [...STYLESHEET_SYNTAX.keys()].flatMap((syntax) => [
         `${target}${syntax}`,

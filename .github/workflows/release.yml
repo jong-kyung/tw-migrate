@@ -43,7 +43,11 @@ jobs:
           # comparison is against what main pointed at before this push, not
           # HEAD^: a push can carry more than one commit, and then HEAD^ already
           # holds the new version, which would read as "no change" and silently
-          # skip the only release run for that version.
+          # skip the only release run for that version. The registry check
+          # below cannot replace this gate: while an approved release is still
+          # waiting, its version is not on npm yet, so an unrelated
+          # package.json edit would otherwise start a duplicate release run
+          # for the same version.
           previous=''
           if [ -n "$BEFORE" ] && [ "$BEFORE" != '0000000000000000000000000000000000000000' ] \
             && git fetch --no-tags --depth=1 origin "$BEFORE" 2>/dev/null; then
@@ -160,7 +164,6 @@ jobs:
       id-token: write # OIDC exchange with npm, and provenance
     env:
       VERSION: ${{ needs.check.outputs.version }}
-      NPM_CONFIG_PROVENANCE: 'true'
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
@@ -197,15 +200,11 @@ jobs:
           name: dist
           path: dist
 
-      - name: Verify the published entrypoints are present
+      - name: Verify the published entrypoints and every target are present
         run: |
           set -euo pipefail
           test -f dist/bin.js
           test -f dist/index.js
-
-      - name: Verify every target is present
-        run: |
-          set -euo pipefail
           found="$(find npm -name '*.node' | sort)"
           count="$(printf '%s\n' "$found" | grep -c '\.node$' || true)"
           printf '%s\n' "$found"

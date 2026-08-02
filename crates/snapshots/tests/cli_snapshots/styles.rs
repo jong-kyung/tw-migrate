@@ -78,7 +78,8 @@ snapshot_cases! {
 // needed.
 fn setup_vue_two(context: &tw_migrate_snapshots::CaseContext<'_>) -> Result<(), String> {
     let root = context.workspace.join("node_modules").join("vue");
-    std::fs::create_dir_all(&root).map_err(|error| format!("create {}: {error}", root.display()))?;
+    std::fs::create_dir_all(&root)
+        .map_err(|error| format!("create {}: {error}", root.display()))?;
     std::fs::write(
         root.join("package.json"),
         "{\"name\":\"vue\",\"version\":\"2.7.16\",\"main\":\"index.js\"}\n",

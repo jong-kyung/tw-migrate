@@ -192,6 +192,16 @@ export function utf8OffsetMap(source: string, indices: number[]): Map<number, nu
   return map;
 }
 
+// Every queried index was fed into the offset map, so a miss is a bug in the
+// calling module rather than a recoverable input condition.
+export function offsetLookup(offsets: Map<number, number>): (index: number) => number {
+  return (index) => {
+    const byte = offsets.get(index);
+    if (byte === undefined) throw new Error(`No byte offset was mapped for index ${index}`);
+    return byte;
+  };
+}
+
 function toByteOffsets(
   source: string,
   parsed: Omit<ParsedHtml, "scriptText">,
@@ -206,18 +216,12 @@ function toByteOffsets(
     ),
     ...parsed.dynamicAttributes.flatMap((value) => [value.start, value.end]),
   ]);
-  // Every queried index was fed into the map above, so a miss is a bug in
-  // this module rather than a recoverable input condition.
-  const offset = (index: number): number => {
-    const byte = offsets.get(index);
-    if (byte === undefined) throw new Error(`No byte offset was mapped for index ${index}`);
-    return byte;
-  };
-  function attribute<T extends HtmlSpan>(value: T): T;
-  function attribute<T extends HtmlSpan>(value: T | undefined): T | undefined;
-  function attribute<T extends HtmlSpan>(value: T | undefined): T | undefined {
-    return value && { ...value, start: offset(value.start), end: offset(value.end) };
-  }
+  const offset = offsetLookup(offsets);
+  const attribute = <T extends HtmlSpan>(value: T): T => ({
+    ...value,
+    start: offset(value.start),
+    end: offset(value.end),
+  });
   return {
     links: parsed.links.map((link) => ({
       ...link,
@@ -228,8 +232,8 @@ function toByteOffsets(
     })),
     bases: parsed.bases.map((base) => attribute(base)),
     elements: parsed.elements.map((element) => ({
-      classAttribute: attribute(element.classAttribute),
-      idAttribute: attribute(element.idAttribute),
+      classAttribute: element.classAttribute && attribute(element.classAttribute),
+      idAttribute: element.idAttribute && attribute(element.idAttribute),
     })),
     dynamicAttributes: parsed.dynamicAttributes.map((value) => attribute(value)),
   };

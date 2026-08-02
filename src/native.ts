@@ -1,5 +1,7 @@
 import { createRequire } from "node:module";
 
+import { errorCode } from "./util/shared.ts";
+
 // Mirrors the generated binding.d.ts (napi build --dts), inlined so type
 // checking does not depend on the addon having been built.
 export interface StaticImportBinding {
@@ -28,27 +30,21 @@ const target = targets[`${process.platform}-${process.arch}`];
 
 if (!target) throw new Error(`Unsupported platform: ${process.platform}-${process.arch}`);
 
-let binding: Binding | undefined;
-const loaders: (() => Binding)[] = [
+let binding: Binding;
+try {
   // One level up is the repository root in development (src/) and the package
   // root in the installed layout (dist/); both hold the locally built addon.
-  () => require(`../tw-migrate.${target}.node`),
-  () => require(`tw-migrate-${target}`),
-];
-for (const load of loaders) {
+  binding = require(`../tw-migrate.${target}.node`);
+} catch (localError) {
+  if (errorCode(localError) !== "MODULE_NOT_FOUND") throw localError;
   try {
-    binding = load();
-    break;
-  } catch (error) {
-    const code = error instanceof Error && "code" in error ? error.code : undefined;
-    if (code !== "MODULE_NOT_FOUND") throw error;
+    binding = require(`tw-migrate-${target}`);
+  } catch (packageError) {
+    if (errorCode(packageError) !== "MODULE_NOT_FOUND") throw packageError;
+    throw new Error(
+      `No tw-migrate native addon was found for ${target}. Reinstall the package or build it locally.`,
+    );
   }
-}
-
-if (!binding) {
-  throw new Error(
-    `No tw-migrate native addon was found for ${target}. Reinstall the package or build it locally.`,
-  );
 }
 
 export const {

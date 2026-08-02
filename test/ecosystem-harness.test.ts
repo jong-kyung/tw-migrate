@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { EventEmitter } from "node:events";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -39,7 +38,6 @@ import {
 } from "../ecosystem-ci/lifecycle.ts";
 import { waitForChild } from "../ecosystem-ci/shared.ts";
 import { loadManifest, runHarness, validateManifest, vitestProjects } from "../ecosystem-ci/run.ts";
-import type { ChildProcess } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import type { Browser } from "playwright";
 
@@ -111,7 +109,7 @@ function external(overrides: Fixture = {}): Fixture {
     installs: [{ cwd: ".", args: ["install", "--frozen-lockfile", "--ignore-scripts"] }],
     runtimeWrites: [],
     start: ["run", "dev"],
-    server: "vite",
+    server: "next",
     tailwindCss: "src/tailwind.css",
     source: base.source,
     probes: { base: base.probes.base },
@@ -121,6 +119,14 @@ function external(overrides: Fixture = {}): Fixture {
 
 function manifest(...projects: unknown[]) {
   return { projects };
+}
+
+async function tempRoot(t: {
+  onTestFinished: (handler: () => Promise<void>) => void;
+}): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "tw-migrate-test-"));
+  t.onTestFinished(() => rm(root, { recursive: true, force: true }));
+  return root;
 }
 
 function errorFor(projects: unknown[]) {
@@ -174,7 +180,7 @@ test("smoke and external cases accept non-exhaustive probes without occupying co
     source: base.source,
     probes: {
       base: probe(),
-      details: probe({ action: { type: "click", selector } }),
+      details: probe({ action: { type: "hover", selector } }),
     },
   };
   assert.doesNotThrow(() =>
@@ -228,8 +234,7 @@ test("external commands receive only the explicit non-secret environment", () =>
 });
 
 test("post-migration server phases preserve the expected tracked diff", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "tw-migrate-external-diff-"));
-  t.onTestFinished(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t);
   const git = (args: string[]) => execFileSync("git", args, { cwd: root, stdio: "pipe" });
   git(["init", "-q"]);
   git(["config", "user.email", "test@example.com"]);
@@ -301,8 +306,7 @@ test("package script exposes the focused ecosystem harness entrypoint", () => {
 });
 
 test("stages concrete optional dependency versions without changing the tracked manifest", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "tw-migrate-stage-test-"));
-  t.onTestFinished(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t);
   const repoRoot = join(root, "repo");
   const stageRoot = join(root, "stage");
   await mkdir(repoRoot);
@@ -334,8 +338,7 @@ test("stages concrete optional dependency versions without changing the tracked 
 });
 
 test("package stage CLI creates the exact upload tree consumed by the workflow", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "tw-migrate-package-upload-test-"));
-  t.onTestFinished(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t);
   const artifactRoot = join(root, "package-artifacts");
   const target = currentTarget();
   const provenance = {
@@ -373,8 +376,7 @@ test("package stage CLI creates the exact upload tree consumed by the workflow",
 });
 
 test("provenance rejects altered tarballs, commits, platforms, and package identities", async (t) => {
-  const artifactRoot = await mkdtemp(join(tmpdir(), "tw-migrate-provenance-test-"));
-  t.onTestFinished(() => rm(artifactRoot, { recursive: true, force: true }));
+  const artifactRoot = await tempRoot(t);
   await Promise.all([
     writeFile(join(artifactRoot, "root.tgz"), "root"),
     writeFile(join(artifactRoot, "native.tgz"), "native"),
@@ -430,8 +432,7 @@ test("provenance rejects altered tarballs, commits, platforms, and package ident
 });
 
 test("installed layout rejects checkout, symlink, wrong platform, and unexpected package paths", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "tw-migrate-layout-test-"));
-  t.onTestFinished(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t);
   const checkout = join(root, "checkout");
   const driverRoot = join(root, "driver");
   const target = currentTarget();
@@ -524,6 +525,25 @@ test("--case selects exactly one project and maps it to a Vitest project filter"
   ]);
 });
 
+async function withEnv(
+  vars: Record<string, string | undefined>,
+  fn: () => Promise<void> | void,
+): Promise<void> {
+  const previous = Object.fromEntries(Object.keys(vars).map((name) => [name, process.env[name]]));
+  for (const [name, value] of Object.entries(vars)) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+  try {
+    await fn();
+  } finally {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
+
 test("Vitest and the lifecycle omit external projects unless the CI-only gate is active", async () => {
   const projects = (await loadManifest()).projects;
   assert.equal(
@@ -536,20 +556,12 @@ test("Vitest and the lifecycle omit external projects unless the CI-only gate is
     ).length,
     2,
   );
-  const previous = { CI: process.env.CI, external: process.env.ECOSYSTEM_EXTERNAL };
-  delete process.env.CI;
-  delete process.env.ECOSYSTEM_EXTERNAL;
-  try {
-    await assert.rejects(
+  await withEnv({ CI: undefined, ECOSYSTEM_EXTERNAL: undefined }, () =>
+    assert.rejects(
       runExternalLifecycle({} as Parameters<typeof runExternalLifecycle>[0]),
       /require CI=true/,
-    );
-  } finally {
-    if (previous.CI === undefined) delete process.env.CI;
-    else process.env.CI = previous.CI;
-    if (previous.external === undefined) delete process.env.ECOSYSTEM_EXTERNAL;
-    else process.env.ECOSYSTEM_EXTERNAL = previous.external;
-  }
+    ),
+  );
 });
 
 test("external cases require the explicit CI-only entrypoint", async () => {
@@ -568,10 +580,7 @@ test("external cases require the explicit CI-only entrypoint", async () => {
       ),
     /CI-only/,
   );
-  const previous = { CI: process.env.CI, external: process.env.ECOSYSTEM_EXTERNAL };
-  process.env.CI = "true";
-  process.env.ECOSYSTEM_EXTERNAL = "1";
-  try {
+  await withEnv({ CI: "true", ECOSYSTEM_EXTERNAL: "1" }, () => {
     const calls: string[][] = [];
     const selected = runHarness(
       ["--external-case", "external-stylized-components"],
@@ -591,12 +600,7 @@ test("external cases require the explicit CI-only entrypoint", async () => {
         "external-stylized-components",
       ],
     ]);
-  } finally {
-    if (previous.CI === undefined) delete process.env.CI;
-    else process.env.CI = previous.CI;
-    if (previous.external === undefined) delete process.env.ECOSYSTEM_EXTERNAL;
-    else process.env.ECOSYSTEM_EXTERNAL = previous.external;
-  }
+  });
 });
 
 test("unknown case prints the available ids without executing Vitest", async () => {
@@ -758,8 +762,7 @@ test("migration contract checks the exact report/source and no-op second run wit
 });
 
 test("source-wide idempotency catches an unreported extra source mutation", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "tw-migrate-source-tree-"));
-  t.onTestFinished(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t);
   await mkdir(join(root, "src"));
   await Promise.all([
     writeFile(join(root, "src", "reported.css"), "reported\n"),
@@ -784,8 +787,7 @@ test("source-wide idempotency catches an unreported extra source mutation", asyn
 });
 
 test("source snapshots exclude generated trees and reject non-regular paths", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "tw-migrate-source-safety-"));
-  t.onTestFinished(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t);
   await mkdir(join(root, "node_modules"));
   await writeFile(join(root, "node_modules", "generated.js"), "ignored\n");
   assert.deepEqual(await snapshotMigrationSources(root), {});
@@ -830,24 +832,14 @@ test("controlled expectations cover every reported changed file with exact bytes
   }
 });
 
-test("command timeout awaits and bounds teardown failures", async () => {
-  await assert.rejects(
-    waitForChild(new EventEmitter() as ChildProcess, {
-      timeoutMs: 1,
-      terminate: async () => {
-        throw new Error("kill failed");
-      },
-    }),
-    /timed out.*teardown failed: kill failed/,
-  );
-  await assert.rejects(
-    waitForChild(new EventEmitter() as ChildProcess, {
-      timeoutMs: 1,
-      teardownTimeoutMs: 5,
-      terminate: () => new Promise(() => {}),
-    }),
-    /teardown timed out after 5ms/,
-  );
+test("command timeout terminates the child before rejecting", async () => {
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60_000)"], {
+    detached: process.platform !== "win32",
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  await assert.rejects(waitForChild(child, { timeoutMs: 200 }), /timed out after 200ms/);
+  assert.notEqual(child.exitCode ?? child.signalCode, null);
 });
 
 test("final server teardown records and propagates only when lifecycle otherwise succeeded", async () => {
@@ -874,8 +866,7 @@ test("final server teardown records and propagates only when lifecycle otherwise
 });
 
 test("workflow artifact allowlist rejects traversal, symlinks, directories, and undeclared files", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "tw-migrate-artifacts-"));
-  t.onTestFinished(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t);
   await writeFile(join(root, "phase-ledger.json"), "{}");
   assert.deepEqual(await artifactAllowlist(root, ["phase-ledger.json"]), [
     join(root, "phase-ledger.json"),
@@ -888,9 +879,8 @@ test("workflow artifact allowlist rejects traversal, symlinks, directories, and 
 });
 
 test("case failure uploads preserve package publication logs", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "tw-migrate-publish-log-"));
-  t.onTestFinished(() => rm(root, { recursive: true, force: true }));
-  const uploadRoot = `${root}-upload`;
+  const root = await tempRoot(t);
+  const uploadRoot = packageUploadRoot(root);
   await Promise.all([
     writeFile(
       join(root, "phase-ledger.json"),

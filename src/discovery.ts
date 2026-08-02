@@ -1,14 +1,12 @@
 import { execFile } from "node:child_process";
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import {
   IGNORED_DIRECTORIES,
   SOURCE_EXTENSIONS,
-  compareStrings,
   errorCode,
-  extension,
   isStylesheetPath,
   isWithin,
   rejectSymlinkTarget,
@@ -37,10 +35,10 @@ export async function resolveScope(options: MigrateOptions): Promise<Scope> {
       : [...allPaths];
   const explicitStyle = options.styleFile ? resolve(cwd, options.styleFile) : undefined;
   const configuredEntry = options.tailwindCss ? resolve(cwd, options.tailwindCss) : undefined;
-  if (explicitStyle && !isStylesheetPath(explicitStyle) && extension(explicitStyle) !== ".vue") {
+  if (explicitStyle && !isStylesheetPath(explicitStyle) && extname(explicitStyle) !== ".vue") {
     throw new TypeError("Only .css, .scss, .sass, .less, and .vue files can be migrated");
   }
-  if (configuredEntry && extension(configuredEntry) !== ".css") {
+  if (configuredEntry && extname(configuredEntry) !== ".css") {
     throw new TypeError("The Tailwind CSS entry must be a .css file");
   }
   if (configuredEntry && !(await stat(configuredEntry)).isFile()) {
@@ -56,8 +54,8 @@ export async function resolveScope(options: MigrateOptions): Promise<Scope> {
     if (path && !allPaths.includes(path)) allPaths.push(path);
     if (path && !scannedPaths.includes(path)) scannedPaths.push(path);
   }
-  allPaths.sort(compareStrings);
-  scannedPaths.sort(compareStrings);
+  allPaths.sort();
+  scannedPaths.sort();
   const targetable = new Set(allPaths);
 
   const allPackageRoots = await discoverPackageRoots(workspaceRoot, allPaths);
@@ -67,7 +65,7 @@ export async function resolveScope(options: MigrateOptions): Promise<Scope> {
     const owner = await findPackageRoot(dirname(path));
     if (!allPackageRoots.includes(owner)) allPackageRoots.push(owner);
   }
-  allPackageRoots.sort(compareStrings);
+  allPackageRoots.sort();
   const rootsByDepth = [...allPackageRoots].sort((left, right) => right.length - left.length);
   const pathOwners = new Map(
     scannedPaths.map((path): [string, string | undefined] => [
@@ -149,7 +147,7 @@ async function discoverFiles(root: string, useGit: boolean): Promise<string[]> {
       }
     }),
   );
-  return existing.flatMap((path) => (path ? [path] : [])).sort(compareStrings);
+  return existing.flatMap((path) => (path ? [path] : [])).sort();
 }
 
 async function discoverPackageRoots(workspaceRoot: string, paths: string[]): Promise<string[]> {
@@ -160,7 +158,7 @@ async function discoverPackageRoots(workspaceRoot: string, paths: string[]): Pro
   } catch (error) {
     if (errorCode(error) !== "ENOENT") throw error;
   }
-  return [...new Set(roots)].sort(compareStrings);
+  return [...new Set(roots)].sort();
 }
 
 function hasIgnoredDirectory(root: string, path: string): boolean {
@@ -173,7 +171,7 @@ function isRelevantDiscoveredFile(path: string): boolean {
   return (
     basename(path) === "package.json" ||
     isStylesheetPath(path) ||
-    SOURCE_EXTENSIONS.has(extension(path))
+    SOURCE_EXTENSIONS.has(extname(path))
   );
 }
 

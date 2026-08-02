@@ -57,10 +57,7 @@ pub fn static_imports(path: String, source: String) -> napi::Result<Vec<String>>
 }
 
 #[napi]
-pub fn static_string_expression(
-    path: String,
-    source: String,
-) -> napi::Result<Option<String>> {
+pub fn static_string_expression(path: String, source: String) -> napi::Result<Option<String>> {
     js_rewrite::static_string_expression(&path, &source).map_err(napi::Error::from_reason)
 }
 

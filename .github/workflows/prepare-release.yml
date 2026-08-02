@@ -74,35 +74,16 @@ jobs:
               fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");
             }
 
-            const cargo = "crates/tw_migrate/Cargo.toml";
-            fs.writeFileSync(cargo, fs.readFileSync(cargo, "utf8").replace(/^version = "[^"]*"$/m, `version = "${version}"`));
-
-            const lock = "Cargo.lock";
-            fs.writeFileSync(lock, fs.readFileSync(lock, "utf8").replace(/(\[\[package\]\]\nname = "tw-migrate"\nversion = ")[^"]*/, `$1${version}`));
+            // replace() silently no-ops on a non-matching pattern, so fail
+            // the run instead of opening a PR with a stale crate version.
+            const rewrite = (file, pattern, replacement) => {
+              const content = fs.readFileSync(file, "utf8");
+              if (!pattern.test(content)) throw new Error(`version pattern did not match in ${file}`);
+              fs.writeFileSync(file, content.replace(pattern, replacement));
+            };
+            rewrite("crates/tw_migrate/Cargo.toml", /^version = "[^"]*"$/m, `version = "${version}"`);
+            rewrite("Cargo.lock", /(\[\[package\]\]\nname = "tw-migrate"\nversion = ")[^"]*/, `$1${version}`);
           '
-
-      - name: Verify bump
-        run: |
-          set -euo pipefail
-          for file in package.json npm/*/package.json; do
-            actual="$(node -p "require('./$file').version")"
-            if [ "$actual" != "$VERSION" ]; then
-              echo "::error::$file is at $actual, expected $VERSION"
-              exit 1
-            fi
-          done
-          grep -qF "version = \"$VERSION\"" crates/tw_migrate/Cargo.toml \
-            || { echo "::error::crates/tw_migrate/Cargo.toml was not updated"; exit 1; }
-          node -e '
-            const fs = require("node:fs");
-            const entry = fs.readFileSync("Cargo.lock", "utf8").match(/\[\[package\]\]\nname = "tw-migrate"\nversion = "([^"]*)"/);
-            if (entry?.[1] !== process.env.VERSION) {
-              console.log(`::error::Cargo.lock is at ${entry?.[1]}, expected ${process.env.VERSION}`);
-              process.exit(1);
-            }
-          '
-          echo 'Files changed:'
-          git diff --name-only
 
       # This PR is authored with GITHUB_TOKEN, so it will not trigger CI. That
       # is acceptable: the diff is version strings only, and both CI and the
@@ -133,17 +114,6 @@ jobs:
 
           CI does not run on this PR because it was authored by GITHUB_TOKEN. Confirm CI is green on the merge commit before approving the release run.
           EOF
-
-          # npm renders the root README on the package page, so a warning that
-          # the package is not published yet has to go before the first release
-          # ships -- and only then. The check is against the file rather than a
-          # version, so this reminder disappears by itself once it is done.
-          if grep -q 'Not on npm yet' README.md; then
-            cat >> "$body_file" <<'EOF'
-
-          **Before merging:** remove the "Not on npm yet" warning from `README.md` -- npm publishes that README onto the package page, where it would tell users the CLI they just installed does not exist.
-          EOF
-          fi
 
           # Reuse the PR if one is already open for this branch, so a rerun
           # after a partial failure updates it instead of erroring out.

@@ -2,7 +2,7 @@ use super::*;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use tw_migrate_snapshots::{CaseContext, copy_tree, run_case_with};
+use tw_migrate_snapshots::{CaseContext, copy_tree};
 
 snapshot_cases! {
     safety_gitignored_html_entity => git_init,
@@ -33,24 +33,13 @@ snapshot_cases! {
 
 #[test]
 fn safety_permissions() {
-    assert_case_with("safety_permissions", setup_permissions, verify_permissions);
+    assert_case_with!("safety_permissions", setup_permissions, verify_permissions);
 }
 
 #[cfg(unix)]
 #[test]
 fn safety_write_rollback() {
-    assert_case_with("safety_write_rollback", setup_rollback, verify_rollback);
-}
-
-fn assert_case_with(
-    case: &str,
-    setup: impl FnOnce(&CaseContext<'_>) -> Result<(), String>,
-    verify: impl FnOnce(&CaseContext<'_>) -> Result<(), String>,
-) {
-    let document = run_case_with(case, setup, verify).unwrap_or_else(|error| panic!("{error}"));
-    let mut settings = insta::Settings::clone_current();
-    settings.set_snapshot_path(concat!(env!("CARGO_MANIFEST_DIR"), "/snapshots"));
-    settings.bind(|| insta::assert_snapshot!(case, document));
+    assert_case_with!("safety_write_rollback", setup_rollback, verify_rollback);
 }
 
 fn git_init(context: &CaseContext<'_>) -> Result<(), String> {
@@ -81,7 +70,6 @@ fn install_tailwind_only(context: &CaseContext<'_>, missing: &str) -> Result<(),
     copy_tree(
         &context.install_root.join("node_modules/tailwindcss"),
         &modules.join("tailwindcss"),
-        None,
     )?;
     let script = format!(
         "require.resolve('tailwindcss/package.json'); try {{ require.resolve({missing:?}); process.exit(2) }} catch (error) {{ if (error.code !== 'MODULE_NOT_FOUND') throw error }}"
@@ -112,13 +100,21 @@ fn setup_missing_vue_sass(context: &CaseContext<'_>) -> Result<(), String> {
     copy_tree(
         &context.install_root.join("node_modules/vue"),
         &modules.join("vue"),
-        None,
     )?;
-    for dependency in ["@vue", "@babel", "@jridgewell", "estree-walker", "magic-string", "postcss", "source-map-js", "picocolors", "nanoid"] {
+    for dependency in [
+        "@vue",
+        "@babel",
+        "@jridgewell",
+        "estree-walker",
+        "magic-string",
+        "postcss",
+        "source-map-js",
+        "picocolors",
+        "nanoid",
+    ] {
         copy_tree(
             &context.install_root.join("node_modules").join(dependency),
             &modules.join(dependency),
-            None,
         )?;
     }
     Ok(())
@@ -168,30 +164,43 @@ fn write_fake_package(context: &CaseContext<'_>, name: &str, source: &str) -> Re
         .map_err(|error| format!("write fake {name} compiler: {error}"))
 }
 
-fn setup_planning_mutation(context: &CaseContext<'_>) -> Result<(), String> {
+fn write_mutation_plugin(
+    context: &CaseContext<'_>,
+    plugin: &str,
+    target: &str,
+    comment: &str,
+    label: &str,
+) -> Result<(), String> {
     git_init(context)?;
-    let target = context.workspace.join("bbb/globals.css");
+    let target = context.workspace.join(target);
     fs::write(
-        context.workspace.join("aaa/mutate.cjs"),
+        context.workspace.join(plugin),
         format!(
-            "const fs = require('node:fs');\nfs.appendFileSync({}, '/* mutated */\\n');\nmodule.exports = () => {{}};\n",
+            "const fs = require('node:fs');\nfs.appendFileSync({}, '{comment}\\n');\nmodule.exports = () => {{}};\n",
             serde_json::to_string(&target.to_string_lossy()).unwrap()
         ),
     )
-    .map_err(|error| format!("write planning mutation plugin: {error}"))
+    .map_err(|error| format!("write {label} mutation plugin: {error}"))
+}
+
+fn setup_planning_mutation(context: &CaseContext<'_>) -> Result<(), String> {
+    write_mutation_plugin(
+        context,
+        "aaa/mutate.cjs",
+        "bbb/globals.css",
+        "/* mutated */",
+        "planning",
+    )
 }
 
 fn setup_reference_mutation(context: &CaseContext<'_>) -> Result<(), String> {
-    git_init(context)?;
-    let target = context.workspace.join("external/Note.tsx");
-    fs::write(
-        context.workspace.join("mutate.cjs"),
-        format!(
-            "const fs = require('node:fs');\nfs.appendFileSync({}, '// changed during planning\\n');\nmodule.exports = () => {{}};\n",
-            serde_json::to_string(&target.to_string_lossy()).unwrap()
-        ),
+    write_mutation_plugin(
+        context,
+        "mutate.cjs",
+        "external/Note.tsx",
+        "// changed during planning",
+        "reference",
     )
-    .map_err(|error| format!("write reference mutation plugin: {error}"))
 }
 
 fn setup_symlinks(context: &CaseContext<'_>) -> Result<(), String> {
@@ -205,21 +214,20 @@ fn setup_symlinks(context: &CaseContext<'_>) -> Result<(), String> {
     )
 }
 
+// Unix has one symlink kind; only Windows distinguishes file and directory
+// links.
 #[cfg(unix)]
 fn create_file_symlink(target: &Path, link: &Path) -> Result<(), String> {
     std::os::unix::fs::symlink(target, link)
         .map_err(|error| format!("create symlink {}: {error}", link.display()))
 }
+
+#[cfg(unix)]
+use create_file_symlink as create_directory_symlink;
 
 #[cfg(windows)]
 fn create_file_symlink(target: &Path, link: &Path) -> Result<(), String> {
     std::os::windows::fs::symlink_file(target, link)
-        .map_err(|error| format!("create symlink {}: {error}", link.display()))
-}
-
-#[cfg(unix)]
-fn create_directory_symlink(target: &Path, link: &Path) -> Result<(), String> {
-    std::os::unix::fs::symlink(target, link)
         .map_err(|error| format!("create symlink {}: {error}", link.display()))
 }
 

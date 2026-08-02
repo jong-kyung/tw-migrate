@@ -97,7 +97,7 @@ export function loadProjectSass(packageRoot: string): Promise<SassCompiler> {
   return loadProjectModule(packageRoot, "sass", "Sass must be installed in the target project.");
 }
 
-export function loadProjectLess(packageRoot: string): Promise<LessCompiler> {
+function loadProjectLess(packageRoot: string): Promise<LessCompiler> {
   return loadProjectModule(packageRoot, "less", "Less must be installed in the target project.");
 }
 
@@ -179,7 +179,7 @@ async function normalizeEntryPaths(
   );
 }
 
-export async function compileLessEntry(
+async function compileLessEntry(
   less: LessCompiler,
   entryPath: string,
   source: string,

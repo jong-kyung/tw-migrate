@@ -1,16 +1,12 @@
-/// CSS whitespace per CSS Syntax. Other Unicode whitespace (NBSP, em space,
-/// ...) are ident code points and must be preserved verbatim: Tailwind passes
-/// them through candidates unchanged.
-fn is_css_whitespace(character: char) -> bool {
-    matches!(character, ' ' | '\t' | '\n' | '\r' | '\x0C')
-}
-
 pub(crate) fn encode(value: &str) -> String {
     let mut encoded = String::with_capacity(value.len());
     let mut whitespace = false;
 
     for character in value.chars() {
-        if is_css_whitespace(character) {
+        // CSS whitespace is exactly ASCII whitespace; other Unicode
+        // whitespace (NBSP, em space, ...) are ident code points and must be
+        // preserved verbatim: Tailwind passes them through unchanged.
+        if character.is_ascii_whitespace() {
             whitespace = !encoded.is_empty();
             continue;
         }
@@ -63,7 +59,7 @@ pub(crate) fn encode_value(value: &str) -> Option<String> {
     let mut hex_digits = 0u8;
 
     while let Some((index, character)) = chars.next() {
-        if is_css_whitespace(character) {
+        if character.is_ascii_whitespace() {
             if hex_digits > 0 {
                 // The escape terminator: consumed by the hex escape, so it is
                 // part of the token and must round-trip as its own space.
@@ -152,7 +148,7 @@ fn push_escape(
     encoded: &mut String,
 ) -> Option<bool> {
     let (_, escaped) = chars.next()?;
-    if is_css_whitespace(escaped) {
+    if escaped.is_ascii_whitespace() {
         return None;
     }
     encoded.push('\\');
@@ -177,7 +173,7 @@ fn encode_quoted(
             }
             '_' => encoded.push_str("\\_"),
             ' ' => encoded.push('_'),
-            character if is_css_whitespace(character) => return None,
+            character if character.is_ascii_whitespace() => return None,
             character => encoded.push(character),
         }
     }
@@ -190,7 +186,7 @@ fn encode_url_body(
     let mut quote: Option<char> = None;
     loop {
         let (_, character) = chars.next()?;
-        if is_css_whitespace(character) {
+        if character.is_ascii_whitespace() {
             return None;
         }
         match quote {
@@ -300,7 +296,10 @@ mod tests {
         // NBSP is a CSS ident code point, not whitespace; Tailwind passes it
         // through candidates verbatim.
         assert_eq!(encode_value("A\u{a0}B").as_deref(), Some("A\u{a0}B"));
-        assert_eq!(encode_value("\"A\u{a0}B\"").as_deref(), Some("\"A\u{a0}B\""));
+        assert_eq!(
+            encode_value("\"A\u{a0}B\"").as_deref(),
+            Some("\"A\u{a0}B\"")
+        );
         // NBSP glues to a following ident, so this is not a `url()` function
         // and Tailwind decodes underscores inside its parentheses.
         assert_eq!(

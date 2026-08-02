@@ -26,7 +26,9 @@ pub(crate) fn exact_theme_token(
     {
         let multiplier = value_number / base_number;
         if multiplier.is_finite() && multiplier >= 0.0 {
-            return Some(format_number(multiplier));
+            // f64 Display already renders integral values without a trailing
+            // ".0" ("2", not "2.0").
+            return Some(multiplier.to_string());
         }
     }
     None
@@ -41,10 +43,3 @@ pub(crate) fn parse_dimension(value: &str) -> Option<(f64, &str)> {
     Some((number.parse().ok()?, unit))
 }
 
-fn format_number(number: f64) -> String {
-    if number.fract() == 0.0 {
-        format!("{number:.0}")
-    } else {
-        number.to_string()
-    }
-}

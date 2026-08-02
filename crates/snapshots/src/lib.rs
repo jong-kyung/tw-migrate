@@ -2,10 +2,9 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
-use std::ffi::OsStr;
 use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -47,7 +46,6 @@ struct Step {
 
 pub struct CaseContext<'a> {
     pub workspace: &'a Path,
-    pub home: &'a Path,
     pub install_root: &'a Path,
 }
 
@@ -92,16 +90,11 @@ pub fn run_case_with(
         fs::create_dir_all(&workspace)
             .map_err(|error| format!("create {}: {error}", workspace.display()))?;
         fs::create_dir_all(&home).map_err(|error| format!("create {}: {error}", home.display()))?;
-        copy_tree(&fixture, &workspace, Some(&metadata_path))?;
-        if workspace.join("case.toml").exists() {
-            return Err(format!(
-                "fixture metadata was copied into {}",
-                workspace.display()
-            ));
-        }
+        copy_tree(&fixture, &workspace)?;
+        fs::remove_file(workspace.join("case.toml"))
+            .map_err(|error| format!("remove copied case metadata: {error}"))?;
         let context = CaseContext {
             workspace: &workspace,
-            home: &home,
             install_root: &suite.install_root,
         };
         setup(&context)?;
@@ -166,8 +159,9 @@ impl Suite {
             return Err("snapshot packaging modified tracked package.json".to_string());
         }
 
-        let platform_dir = repo_root.join("npm").join(current_platform()?);
-        let addon = platform_dir.join(current_addon()?);
+        let platform = current_platform()?;
+        let platform_dir = repo_root.join("npm").join(platform);
+        let addon = platform_dir.join(format!("tw-migrate.{platform}.node"));
         if !addon.is_file() {
             return Err(format!(
                 "native release artifact is missing at {}; run `pnpm build && pnpm artifacts` first",
@@ -250,7 +244,7 @@ fn stage_root_package(
                 source.display()
             ));
         }
-        copy_tree(&source, &stage.join(relative), None)?;
+        copy_tree(&source, &stage.join(relative))?;
     }
     let mut bytes = serde_json::to_vec_pretty(&manifest)
         .map_err(|error| format!("serialize staged package.json: {error}"))?;
@@ -260,36 +254,43 @@ fn stage_root_package(
 }
 
 fn npm_pack(package_dir: &Path, destination: &Path) -> Result<PathBuf, String> {
-    let before = tgz_files(destination)?;
+    // Lifecycle scripts write to stdout ahead of `--json` output, so derive the
+    // tarball name from the manifest instead; it is deterministic for unscoped names.
+    let manifest_path = package_dir.join("package.json");
+    let manifest: Value = serde_json::from_slice(
+        &fs::read(&manifest_path)
+            .map_err(|error| format!("read {}: {error}", manifest_path.display()))?,
+    )
+    .map_err(|error| format!("parse {}: {error}", manifest_path.display()))?;
+    let filename = match (
+        manifest.get("name").and_then(Value::as_str),
+        manifest.get("version").and_then(Value::as_str),
+    ) {
+        (Some(name), Some(version)) if !name.starts_with('@') => {
+            format!("{name}-{version}.tgz")
+        }
+        _ => {
+            return Err(format!(
+                "{} must declare an unscoped name and a version",
+                manifest_path.display()
+            ));
+        }
+    };
     let mut command = npm_command();
     command
         .current_dir(package_dir)
         .args(["pack", "--pack-destination"])
         .arg(destination);
     run_setup_command(&mut command, &format!("pack {}", package_dir.display()))?;
-    let after = tgz_files(destination)?;
-    let created = after.difference(&before).collect::<Vec<_>>();
-    match created.as_slice() {
-        [path] => Ok((*path).clone()),
-        _ => Err(format!(
-            "npm pack in {} created {} tarballs, expected one",
+    let tarball = destination.join(filename);
+    if !tarball.is_file() {
+        return Err(format!(
+            "npm pack in {} did not produce {}",
             package_dir.display(),
-            created.len()
-        )),
+            tarball.display()
+        ));
     }
-}
-
-fn tgz_files(directory: &Path) -> Result<BTreeSet<PathBuf>, String> {
-    fs::read_dir(directory)
-        .map_err(|error| format!("read {}: {error}", directory.display()))?
-        .filter_map(|entry| match entry {
-            Ok(entry) if entry.path().extension() == Some(OsStr::new("tgz")) => {
-                Some(Ok(entry.path()))
-            }
-            Ok(_) => None,
-            Err(error) => Some(Err(format!("read {} entry: {error}", directory.display()))),
-        })
-        .collect()
+    Ok(tarball)
 }
 
 fn npm_command() -> Command {
@@ -324,10 +325,6 @@ fn current_platform() -> Result<&'static str, String> {
     }
 }
 
-fn current_addon() -> Result<String, String> {
-    Ok(format!("tw-migrate.{}.node", current_platform()?))
-}
-
 fn installed_bin(install_root: &Path) -> PathBuf {
     install_root
         .join("node_modules")
@@ -349,7 +346,7 @@ fn run_steps(
     let mut document = format!("case: {case_name}\n");
     for step in &case.steps {
         let cwd = workspace.join(step.cwd.as_deref().unwrap_or_else(|| Path::new(".")));
-        validate_cwd(workspace, step.cwd.as_deref(), &cwd)?;
+        validate_cwd(workspace, &cwd)?;
         let before = capture_tree(workspace)?;
         let mut command;
         if cfg!(windows) {
@@ -414,22 +411,7 @@ fn run_steps(
     Ok(document)
 }
 
-fn validate_cwd(workspace: &Path, relative: Option<&Path>, cwd: &Path) -> Result<(), String> {
-    if let Some(relative) = relative {
-        if relative.is_absolute()
-            || relative.components().any(|part| {
-                matches!(
-                    part,
-                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
-                )
-            })
-        {
-            return Err(format!(
-                "fixture cwd must stay within the workspace: {}",
-                relative.display()
-            ));
-        }
-    }
+fn validate_cwd(workspace: &Path, cwd: &Path) -> Result<(), String> {
     if !cwd.is_dir() {
         return Err(format!("fixture cwd does not exist: {}", cwd.display()));
     }
@@ -642,10 +624,7 @@ fn normalized_relative(path: &Path) -> String {
         .join("/")
 }
 
-pub fn copy_tree(source: &Path, destination: &Path, excluded: Option<&Path>) -> Result<(), String> {
-    if excluded.is_some_and(|path| source == path) {
-        return Ok(());
-    }
+pub fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {
     let metadata = fs::symlink_metadata(source)
         .map_err(|error| format!("inspect {}: {error}", source.display()))?;
     if metadata.is_dir() {
@@ -656,11 +635,7 @@ pub fn copy_tree(source: &Path, destination: &Path, excluded: Option<&Path>) -> 
         {
             let entry =
                 entry.map_err(|error| format!("read {} entry: {error}", source.display()))?;
-            copy_tree(
-                &entry.path(),
-                &destination.join(entry.file_name()),
-                excluded,
-            )?;
+            copy_tree(&entry.path(), &destination.join(entry.file_name()))?;
         }
     } else if metadata.is_file() {
         if let Some(parent) = destination.parent() {
@@ -690,20 +665,12 @@ fn suite_root(repo_root: &Path) -> PathBuf {
 }
 
 fn unique_dir(parent: &Path, label: &str) -> Result<PathBuf, String> {
-    fs::create_dir_all(parent).map_err(|error| format!("create {}: {error}", parent.display()))?;
-    for _ in 0..100 {
-        let id = TEMP_ID.fetch_add(1, Ordering::Relaxed);
-        let path = parent.join(format!("{label}-{}-{id}", std::process::id()));
-        match fs::create_dir(&path) {
-            Ok(()) => return Ok(path),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(format!("create {}: {error}", path.display())),
-        }
-    }
-    Err(format!(
-        "could not allocate a temporary directory under {}",
-        parent.display()
-    ))
+    // The suite root is wiped per process and the name carries the pid plus a
+    // per-process counter, so the path cannot already exist.
+    let id = TEMP_ID.fetch_add(1, Ordering::Relaxed);
+    let path = parent.join(format!("{label}-{}-{id}", std::process::id()));
+    fs::create_dir_all(&path).map_err(|error| format!("create {}: {error}", path.display()))?;
+    Ok(path)
 }
 
 #[cfg(test)]

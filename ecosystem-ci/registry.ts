@@ -1,11 +1,11 @@
 import { spawn } from "node:child_process";
-import type { ChildProcess } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
 
-import { availablePort, waitForHttpOk } from "./shared.ts";
+import { availablePort, terminateTree, waitForHttpOk } from "./shared.ts";
+import type { RunningServer } from "./types.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -50,38 +50,16 @@ log: { type: stdout, format: pretty, level: http }
 `;
 }
 
-// Not shared/terminateTree: verdaccio is spawned non-detached, so a
-// process-group kill would take the harness process down with it.
-async function terminate(child: ChildProcess, timeoutMs = 5_000): Promise<void> {
-  if (child.exitCode !== null) return;
-  child.kill("SIGTERM");
-  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
-  const timedOut = await Promise.race([
-    exited.then(() => false),
-    new Promise<boolean>((resolve) => setTimeout(() => resolve(true), timeoutMs)),
-  ]);
-  if (timedOut && child.exitCode === null) {
-    child.kill("SIGKILL");
-    await exited;
-  }
-}
-
-export interface Registry {
-  url: string;
-  stop: () => Promise<void>;
-}
-
 export async function startRegistry({
   root,
   artifactRoot,
   allowPublish,
-  timeoutMs = 15_000,
 }: {
   root: string;
   artifactRoot: string;
   allowPublish: boolean;
-  timeoutMs?: number;
-}): Promise<Registry> {
+}): Promise<RunningServer> {
+  const timeoutMs = 15_000;
   const verdaccioBin = join(dirname(require.resolve("verdaccio/package.json")), "bin", "verdaccio");
   await Promise.all([mkdir(root, { recursive: true }), mkdir(artifactRoot, { recursive: true })]);
   const storage = join(root, "storage");
@@ -99,6 +77,7 @@ export async function startRegistry({
     process.execPath,
     [verdaccioBin, "--config", configPath, "--listen", `127.0.0.1:${port}`],
     {
+      detached: process.platform !== "win32",
       stdio: ["ignore", log, log],
       windowsHide: true,
     },
@@ -107,7 +86,7 @@ export async function startRegistry({
   try {
     await waitForHttpOk(`${url}/-/ping`, child, timeoutMs, "registry");
   } catch (error) {
-    await terminate(child);
+    await terminateTree(child);
     closeSync(log);
     const output = await readFile(logPath, "utf8").catch(() => "");
     const message = error instanceof Error ? error.message : String(error);
@@ -120,7 +99,7 @@ export async function startRegistry({
     async stop() {
       if (stopped) return;
       stopped = true;
-      await terminate(child);
+      await terminateTree(child);
       closeSync(log);
     },
   };

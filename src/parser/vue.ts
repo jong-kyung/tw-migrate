@@ -2,10 +2,11 @@ import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 
-import { utf8OffsetMap } from "./html.ts";
+import { offsetLookup, utf8OffsetMap } from "./html.ts";
 import { loadProjectModule } from "./style-compiler.ts";
 import { staticImportBindings, staticImports, staticStringExpression } from "../native.ts";
 import type { StaticImportBinding } from "../native.ts";
+import type { MigrationWarning } from "../types.ts";
 import type { SourceMapping } from "./style-compiler.ts";
 
 const ESCAPE_SELECTOR = /(?:::v-|:)(?:deep|global|slotted)\(([^)]*)\)/g;
@@ -116,17 +117,9 @@ export interface VueCompiler {
   ) => { descriptor: SfcDescriptor; errors: SfcParseError[] };
 }
 
-export interface LoadedVueCompiler {
+interface LoadedVueCompiler {
   compiler?: VueCompiler;
   unsupportedVersion?: string;
-}
-
-export interface VueWarning {
-  code: string;
-  file: string;
-  start: number;
-  end: number;
-  message: string;
 }
 
 export interface VueStyleBlock {
@@ -183,7 +176,7 @@ export interface VueComponentEdge {
 // The orchestrator-owned fields are populated by index.ts while building the
 // package component graph, after analysis produced the object.
 interface VueAnalysisBase {
-  warnings: VueWarning[];
+  warnings: MigrationWarning[];
   resolvedComponents?: VueComponentEdge[];
   componentsOpen?: boolean;
   setupImports?: Set<string>;
@@ -262,7 +255,7 @@ export async function loadProjectVueCompiler(packageRoot: string): Promise<Loade
 // byte offsets and literal template class sites for the HTML matching model.
 // Returns `retained: true` when the whole file must stay untouched.
 export function analyzeVueSource(compiler: VueCompiler, path: string, source: string): VueAnalysis {
-  const warnings: VueWarning[] = [];
+  const warnings: MigrationWarning[] = [];
   const warn = (code: string, start: number, end: number, message: string): number =>
     warnings.push({ code, file: path, start, end, message });
 
@@ -491,13 +484,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
       ),
     ),
   ]);
-  // Every queried index was fed into the map above, so a miss is a bug in
-  // this module rather than a recoverable input condition.
-  const offset = (index: number): number => {
-    const byte = offsets.get(index);
-    if (byte === undefined) throw new Error(`No byte offset was mapped for index ${index}`);
-    return byte;
-  };
+  const offset = offsetLookup(offsets);
   const attribute = (value: VueTemplateAttribute | undefined): VueTemplateAttribute | undefined =>
     value && { ...value, start: offset(value.start), end: offset(value.end) };
   const toByteBlock = (block: VueStyleBlock): VueStyleBlock => ({
@@ -754,7 +741,7 @@ function classInsertionOffset(source: string, node: TemplateNode): number | unde
   return offset;
 }
 
-function toByteWarnings(source: string, warnings: VueWarning[]): VueWarning[] {
+function toByteWarnings(source: string, warnings: MigrationWarning[]): MigrationWarning[] {
   const offsets = utf8OffsetMap(
     source,
     warnings.flatMap((warning) => [warning.start, warning.end]),

@@ -5,17 +5,18 @@ import { errorCode } from "./shared.ts";
 import type { SourceFile } from "../types.ts";
 
 export async function verifySnapshots(snapshots: Map<string, string>): Promise<void> {
-  for (const [path, before] of [...snapshots].sort(([left], [right]) =>
-    left.localeCompare(right),
-  )) {
-    let current;
-    try {
-      current = await readFile(path, "utf8");
-    } catch (error) {
+  const entries = [...snapshots].sort(([left], [right]) => left.localeCompare(right));
+  // Reads run concurrently, but failures are reported in sorted path order so
+  // the surfaced integrity error stays deterministic.
+  const reads = await Promise.allSettled(entries.map(([path]) => readFile(path, "utf8")));
+  for (const [index, [path, before]] of entries.entries()) {
+    const read = reads[index];
+    if (read.status === "rejected") {
+      const error: unknown = read.reason;
       const detail = errorCode(error) ?? (error instanceof Error ? error.message : String(error));
       throw new Error(`Source changed after planning: ${path} (${detail})`);
     }
-    if (current !== before) throw new Error(`Source changed after planning: ${path}`);
+    if (read.value !== before) throw new Error(`Source changed after planning: ${path}`);
   }
 }
 

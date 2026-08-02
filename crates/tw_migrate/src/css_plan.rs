@@ -665,6 +665,7 @@ fn selector_classes(rule: &oxc_css_parser::ast::QualifiedRule<'_>) -> Vec<String
 /// element types its rules can match, plus whether anything defied
 /// classification. Used to decide if deleting a Vue scoped rule could hand
 /// the cascade to an unlayered competitor.
+#[derive(Default)]
 pub(crate) struct ShadowIndex {
     pub(crate) classes: HashSet<String>,
     pub(crate) ids: HashSet<String>,
@@ -673,12 +674,7 @@ pub(crate) struct ShadowIndex {
 }
 
 pub(crate) fn index_shadow_selectors(pieces: &[String], module_pieces: &[String]) -> ShadowIndex {
-    let mut index = ShadowIndex {
-        classes: HashSet::new(),
-        ids: HashSet::new(),
-        types: HashSet::new(),
-        unverifiable: false,
-    };
+    let mut index = ShadowIndex::default();
     for (piece, module) in pieces
         .iter()
         .map(|piece| (piece, false))
@@ -742,10 +738,15 @@ fn index_shadow_complex(
         index.unverifiable = true;
         return;
     }
-    let Some(compound) = selector.children.iter().rev().find_map(|child| match child {
-        ComplexSelectorChild::CompoundSelector(compound) => Some(compound),
-        ComplexSelectorChild::Combinator(_) => None,
-    }) else {
+    let Some(compound) = selector
+        .children
+        .iter()
+        .rev()
+        .find_map(|child| match child {
+            ComplexSelectorChild::CompoundSelector(compound) => Some(compound),
+            ComplexSelectorChild::Combinator(_) => None,
+        })
+    else {
         index.unverifiable = true;
         return;
     };
@@ -757,9 +758,10 @@ fn index_shadow_compound(compound: &CompoundSelector<'_>, module: bool, index: &
     // either can never match a template element; only its bare type and
     // attribute selectors stay global.
     if module
-        && compound.children.iter().any(|simple| {
-            matches!(simple, SimpleSelector::Class(_) | SimpleSelector::Id(_))
-        })
+        && compound
+            .children
+            .iter()
+            .any(|simple| matches!(simple, SimpleSelector::Class(_) | SimpleSelector::Id(_)))
     {
         return;
     }
@@ -786,8 +788,7 @@ fn index_shadow_compound(compound: &CompoundSelector<'_>, module: bool, index: &
             SimpleSelector::Type(TypeSelector::Universal(_)) => index.unverifiable = true,
             // Attribute selectors and pseudo-classes only narrow a match
             // that already has a base; pseudo-elements style separate boxes.
-            SimpleSelector::Attribute(_)
-            | SimpleSelector::PseudoElement(_) => {}
+            SimpleSelector::Attribute(_) | SimpleSelector::PseudoElement(_) => {}
             SimpleSelector::PseudoClass(pseudo) => match literal_ident(&pseudo.name) {
                 // `:root` alone can only match the document element, which a
                 // template can never contain.

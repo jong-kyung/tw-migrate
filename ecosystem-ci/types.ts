@@ -11,11 +11,6 @@ export interface ProbeSelector {
   name?: string;
 }
 
-export interface Expectation {
-  selector: ProbeSelector;
-  cardinality: number;
-}
-
 export interface Viewport {
   width: number;
   height: number;
@@ -23,12 +18,12 @@ export interface Viewport {
 
 export type ProbeAction =
   | { type: "press"; key: string }
-  | { type: "click" | "hover" | "focus"; selector: ProbeSelector };
+  | { type: "hover" | "focus"; selector: ProbeSelector };
 
 export interface Probe {
   route: string;
   viewport: Viewport;
-  readiness: Expectation;
+  readiness: { selector: ProbeSelector; cardinality: number };
   selector: ProbeSelector;
   cardinality: number;
   identity: string[];
@@ -64,8 +59,6 @@ export interface ExternalInstall {
   args: string[];
 }
 
-export const externalServers = ["vite", "next"] as const;
-
 export interface ExternalProject {
   id: string;
   kind: "external";
@@ -77,7 +70,7 @@ export interface ExternalProject {
   installs: ExternalInstall[];
   runtimeWrites: string[];
   start: string[];
-  server: (typeof externalServers)[number];
+  server: "next";
   tailwindCss: string;
   source: ProjectSource;
   probes: Record<string, Probe>;
@@ -104,12 +97,6 @@ export interface Provenance {
   platform: string;
   packages: { root: PackageEntry; native: PackageEntry };
   addon: { file: string; sha256: string };
-}
-
-export interface InstalledLayout {
-  root: string;
-  native: string;
-  addon: string;
 }
 
 export interface CapturedElement {

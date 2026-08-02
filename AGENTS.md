@@ -24,7 +24,6 @@ High-signal repository map:
 tw-migrate/
 ├── src/                       # Published TypeScript layer, bundled into dist/ by vp pack
 │   ├── bin.ts                 # CLI entrypoint and argument parsing
-│   ├── diagnostics.ts         # CLI diagnostic coloring
 │   ├── index.ts               # Public migrate() API, planning orchestration, plan merging
 │   ├── types.ts               # Public API and shared internal type declarations
 │   ├── discovery.ts           # Package/workspace discovery and Git-aware file scanning

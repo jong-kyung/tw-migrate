@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
+import type { Stats } from "node:fs";
 import {
   appendFile,
   cp,
@@ -25,7 +26,7 @@ import {
   validateProvenance,
 } from "./packages.ts";
 import { startRegistry } from "./registry.ts";
-import { assertOracle, captureAll, maxCaptureAttempts } from "./oracle.ts";
+import { assertOracle, assertSameElements, captureAll, maxCaptureAttempts } from "./oracle.ts";
 import {
   availablePort,
   inside,
@@ -40,7 +41,6 @@ import type {
   CaptureSet,
   ControlledProject,
   ExternalProject,
-  InstalledLayout,
   MigrationReport,
   PhaseLedger,
   Probe,
@@ -114,13 +114,10 @@ export async function artifactAllowlist(
   const paths: string[] = [];
   let bytes = 0;
   for (const entry of entries) {
-    const path = resolve(root, entry);
-    if (!inside(path, root)) throw new Error(`artifact path escapes root: ${entry}`);
-    const stat = await lstat(path);
-    if (!stat.isFile() || stat.isSymbolicLink())
-      throw new Error(`artifact is not a regular file: ${entry}`);
-    if (!inside(await realpath(path), canonicalRoot))
-      throw new Error(`artifact path escapes root through a symlink: ${entry}`);
+    const { path, stat } = await checkedPath(root, canonicalRoot, entry, {
+      escapes: "artifact path escapes root",
+      notRegular: "artifact is not a regular file",
+    });
     bytes += stat.size;
     if (bytes > maxBytes) throw new Error(`artifact allowlist exceeds ${maxBytes} bytes`);
     paths.push(path);
@@ -278,10 +275,8 @@ async function startExternalServer(
   phase: string,
 ): Promise<RunningServer> {
   const port = await availablePort();
-  const serverArgs =
-    project.server === "next"
-      ? ["--hostname", "127.0.0.1", "--port", String(port)]
-      : ["--host", "127.0.0.1", "--port", String(port), "--strictPort"];
+  // `project.server` is always "next"; both external manifest cases run Next.
+  const serverArgs = ["--hostname", "127.0.0.1", "--port", String(port)];
   const separator = project.packageManager.startsWith("npm@") ? ["--"] : [];
   const invocation = packageManagerInvocation(project, [
     ...project.start,
@@ -408,14 +403,34 @@ export async function restoreRuntimeWrites(
   }
 }
 
-async function checkedProjectDirectory(root: string, relativePath: string): Promise<string> {
+// Shared resolve -> inside -> lstat -> realpath -> inside sequence; each call
+// site keeps its own error wording via `escapes`/`notRegular` prefixes.
+async function checkedPath(
+  root: string,
+  canonicalRoot: string,
+  relativePath: string,
+  {
+    directory = false,
+    escapes,
+    notRegular,
+  }: { directory?: boolean; escapes: string; notRegular: string },
+): Promise<{ path: string; stat: Stats }> {
   const path = resolve(root, relativePath);
-  if (!inside(path, root)) throw new Error(`project directory escapes checkout: ${relativePath}`);
+  if (!inside(path, root)) throw new Error(`${escapes}: ${relativePath}`);
   const stat = await lstat(path);
-  if (!stat.isDirectory() || stat.isSymbolicLink())
-    throw new Error(`project path is not a regular directory: ${relativePath}`);
-  if (!inside(await realpath(path), await realpath(root)))
-    throw new Error(`project directory escapes checkout through a symlink: ${relativePath}`);
+  if ((directory ? !stat.isDirectory() : !stat.isFile()) || stat.isSymbolicLink())
+    throw new Error(`${notRegular}: ${relativePath}`);
+  if (!inside(await realpath(path), canonicalRoot))
+    throw new Error(`${escapes} through a symlink: ${relativePath}`);
+  return { path, stat };
+}
+
+async function checkedProjectDirectory(root: string, relativePath: string): Promise<string> {
+  const { path } = await checkedPath(root, await realpath(root), relativePath, {
+    directory: true,
+    escapes: "project directory escapes checkout",
+    notRegular: "project path is not a regular directory",
+  });
   return path;
 }
 
@@ -424,27 +439,26 @@ async function checkedMigrationPath(
   canonicalRoot: string,
   relativePath: string,
 ): Promise<string> {
-  const path = resolve(root, relativePath);
-  if (!inside(path, root)) throw new Error(`migration-owned path escapes project: ${relativePath}`);
-  const stat = await lstat(path);
-  if (!stat.isFile() || stat.isSymbolicLink())
-    throw new Error(`migration-owned path is not a regular file: ${relativePath}`);
-  if (!inside(await realpath(path), canonicalRoot))
-    throw new Error(`migration-owned path escapes project through a symlink: ${relativePath}`);
+  const { path } = await checkedPath(root, canonicalRoot, relativePath, {
+    escapes: "migration-owned path escapes project",
+    notRegular: "migration-owned path is not a regular file",
+  });
   return path;
 }
 
 async function readMigrationPaths(root: string, paths: string[]): Promise<Record<string, string>> {
   root = resolve(root);
   const canonicalRoot = await realpath(root);
-  const result: Record<string, string> = {};
-  for (const relativePath of [...paths].sort()) {
-    result[relativePath] = await readFile(
-      await checkedMigrationPath(root, canonicalRoot, relativePath),
-      "utf8",
-    );
-  }
-  return result;
+  return Object.fromEntries(
+    await Promise.all(
+      [...paths]
+        .sort()
+        .map(async (relativePath) => [
+          relativePath,
+          await readFile(await checkedMigrationPath(root, canonicalRoot, relativePath), "utf8"),
+        ]),
+    ),
+  );
 }
 
 export async function clearGeneratedCaches(root: string): Promise<void> {
@@ -474,20 +488,22 @@ export async function snapshotMigrationSources(root: string): Promise<FileDigest
       throw new Error(
         `migration source path escapes project through a symlink: ${relative(root, directory)}`,
       );
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
-      if (generatedDirectories.has(entry.name)) continue;
-      const path = resolve(directory, entry.name);
-      if (!inside(path, root)) throw new Error(`migration source path escapes project: ${path}`);
-      if (entry.isSymbolicLink())
-        throw new Error(`migration source path is not regular: ${relative(root, path)}`);
-      if (entry.isDirectory()) {
-        await walk(path);
-      } else if (migrationSourceExtensions.has(extname(entry.name).toLowerCase())) {
-        const relativePath = relative(root, path);
-        const checked = await checkedMigrationPath(root, canonicalRoot, relativePath);
-        result[relativePath] = await sha256(checked);
-      }
-    }
+    await Promise.all(
+      (await readdir(directory, { withFileTypes: true })).map(async (entry) => {
+        if (generatedDirectories.has(entry.name)) return;
+        const path = resolve(directory, entry.name);
+        if (!inside(path, root)) throw new Error(`migration source path escapes project: ${path}`);
+        if (entry.isSymbolicLink())
+          throw new Error(`migration source path is not regular: ${relative(root, path)}`);
+        if (entry.isDirectory()) {
+          await walk(path);
+        } else if (migrationSourceExtensions.has(extname(entry.name).toLowerCase())) {
+          const relativePath = relative(root, path);
+          const checked = await checkedMigrationPath(root, canonicalRoot, relativePath);
+          result[relativePath] = await sha256(checked);
+        }
+      }),
+    );
   };
   await walk(root);
   return Object.fromEntries(
@@ -500,7 +516,7 @@ async function prepareDriver(
   runRoot: string,
   packageArtifactRoot: string,
   artifactRoot: string,
-): Promise<{ driverRoot: string; installed: InstalledLayout }> {
+): Promise<{ driverRoot: string; installedRoot: string }> {
   await mkdir(packageArtifactRoot, { recursive: true });
   const provenancePath = join(packageArtifactRoot, "provenance.json");
   let provenance: Provenance;
@@ -571,7 +587,7 @@ async function prepareDriver(
   } finally {
     await sealedRegistry.stop();
   }
-  const installed = await assertInstalledLayout({
+  const installedRoot = await assertInstalledLayout({
     driverRoot,
     checkoutRoot: repoRoot,
     expected: {
@@ -580,7 +596,7 @@ async function prepareDriver(
       addonSha256: provenance.addon.sha256,
     },
   });
-  return { driverRoot, installed };
+  return { driverRoot, installedRoot };
 }
 
 // The installed layout is owned by the root package manifest, so resolve the
@@ -665,12 +681,20 @@ function captureArtifactNames(probes: Record<string, Probe>, phase: string): str
 }
 
 async function existingArtifactNames(artifactRoot: string, names: string[]): Promise<string[]> {
-  const existing: string[] = [];
-  for (const name of names) {
-    if ((await lstat(join(artifactRoot, name)).catch(() => null))?.isFile()) existing.push(name);
-  }
-  return existing;
+  const checked = await Promise.all(
+    names.map(async (name) =>
+      (await lstat(join(artifactRoot, name)).catch(() => null))?.isFile() ? name : undefined,
+    ),
+  );
+  return checked.filter((name) => name !== undefined);
 }
+
+const installLogNames = [
+  "install.log",
+  "publish.log",
+  "registry-bootstrap.log",
+  "registry-install.log",
+];
 
 function caseArtifactNames(project: ProbedProject): string[] {
   return [
@@ -710,11 +734,10 @@ export async function prepareCaseUpload(
   const declared = new Set(["phase-ledger.json", ...(ledger.failureFiles ?? [])]);
   for (const phase of ledger.phases) for (const file of phase.files) declared.add(file);
   if (ledger.failure) declared.add("failure.log");
-  const existing: string[] = [];
   for (const name of declared) {
     if (!allowed.has(name)) throw new Error(`phase ledger declared forbidden artifact: ${name}`);
-    if ((await lstat(join(artifactRoot, name)).catch(() => null))?.isFile()) existing.push(name);
   }
+  const existing = await existingArtifactNames(artifactRoot, [...declared]);
   await artifactAllowlist(artifactRoot, existing);
   await rm(uploadRoot, { recursive: true, force: true });
   for (const name of existing) {
@@ -773,11 +796,10 @@ async function executeLifecycle<T>(
       `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
     ).catch(() => {});
     ledger.failure = error instanceof Error ? error.message : String(error);
-    ledger.failureFiles = [];
-    for (const name of caseArtifactNames(artifactCase)) {
-      if ((await lstat(join(artifactRoot, name)).catch(() => null))?.isFile())
-        ledger.failureFiles.push(name);
-    }
+    ledger.failureFiles = await existingArtifactNames(
+      artifactRoot,
+      caseArtifactNames(artifactCase),
+    );
     await writeFile(ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`).catch(() => {});
   };
   const diagnostic = (phase: string, name: string, attempt: number): CaptureArtifact => {
@@ -857,18 +879,13 @@ export async function runLifecycle({
     { project, artifactRoot, temporaryRoot, activeServer: () => server },
     async ({ ledger, mark, diagnostic, runRoot }) => {
       const capture = capturePhase(browser, project.probes, artifactRoot, { mark, diagnostic });
-      const { driverRoot, installed } = await prepareDriver(
+      const { driverRoot, installedRoot } = await prepareDriver(
         project,
         runRoot,
         packageArtifactRoot,
         artifactRoot,
       );
-      await mark("installed", [
-        "install.log",
-        "publish.log",
-        "registry-bootstrap.log",
-        "registry-install.log",
-      ]);
+      await mark("installed", installLogNames);
 
       await mark("baseline-started");
       server = await startServer(project, driverRoot, artifactRoot, "baseline");
@@ -900,7 +917,7 @@ export async function runLifecycle({
 
       await mark("migration-started");
       const module = await import(
-        `${pathToFileURL(await installedEntrypoint(installed.root, "main")).href}?case=${Date.now()}`
+        `${pathToFileURL(await installedEntrypoint(installedRoot, "main")).href}?case=${Date.now()}`
       );
       const first = await module.migrate({
         cwd: driverRoot,
@@ -948,13 +965,9 @@ export async function runLifecycle({
           server.url,
           "utilities-only-captured",
         );
-        assert.deepEqual(
-          Object.fromEntries(
-            Object.entries(utilitiesOnly).map(([name, value]) => [name, value.elements]),
-          ),
-          Object.fromEntries(
-            Object.entries(baseline).map(([name, value]) => [name, value.elements]),
-          ),
+        assertSameElements(
+          utilitiesOnly,
+          baseline,
           "utilities-only computed capture exactly equals baseline",
         );
       } finally {
@@ -1001,18 +1014,13 @@ export async function runProductionSmoke({
     { project, artifactCase: fixture, artifactRoot, temporaryRoot, activeServer: () => server },
     async ({ ledger, mark, diagnostic, runRoot }) => {
       const capture = capturePhase(browser, fixture.probes, artifactRoot, { mark, diagnostic });
-      const { driverRoot, installed } = await prepareDriver(
+      const { driverRoot, installedRoot } = await prepareDriver(
         fixture,
         runRoot,
         packageArtifactRoot,
         artifactRoot,
       );
-      await mark("installed", [
-        "install.log",
-        "publish.log",
-        "registry-bootstrap.log",
-        "registry-install.log",
-      ]);
+      await mark("installed", installLogNames);
       const npm = platformCommand("npm");
 
       await mark("baseline-build-started");
@@ -1037,7 +1045,7 @@ export async function runProductionSmoke({
         "production smoke source token before migration",
       );
       const treeBeforeFirst = await snapshotMigrationSources(driverRoot);
-      const cli = await installedEntrypoint(installed.root, "bin");
+      const cli = await installedEntrypoint(installedRoot, "bin");
       await mark("first-cli-started");
       await run(process.execPath, [cli], {
         cwd: driverRoot,
@@ -1076,9 +1084,9 @@ export async function runProductionSmoke({
       await mark("post-build", ["post-build.log"]);
       server = await startServer(fixture, driverRoot, artifactRoot, "post", "preview");
       const post = await capture("post", server.url);
-      assert.deepEqual(
-        Object.fromEntries(Object.entries(post).map(([name, value]) => [name, value.elements])),
-        Object.fromEntries(Object.entries(baseline).map(([name, value]) => [name, value.elements])),
+      assertSameElements(
+        post,
+        baseline,
         "production pre/post computed styles, identity, count, and order",
       );
       await mark("complete");
@@ -1104,37 +1112,29 @@ export async function runExternalLifecycle({
     throw new Error("external ecosystem cases require CI=true and ECOSYSTEM_EXTERNAL=1");
   }
   let temporaryRoot: string | undefined;
-  if (!artifactRoot) {
-    temporaryRoot = await temporaryDirectory(`tw-migrate-${project.id}-artifacts-`);
-    artifactRoot = join(temporaryRoot, "artifacts", project.id);
-  }
-  artifactRoot = resolve(artifactRoot);
-  packageArtifactRoot = resolve(packageArtifactRoot as string);
-  await rm(artifactRoot, { recursive: true, force: true });
-  await mkdir(artifactRoot, { recursive: true });
+  ({ artifactRoot, packageArtifactRoot, temporaryRoot } = await prepareArtifactRoots(
+    project.id,
+    artifactRoot,
+    packageArtifactRoot,
+  ));
   let server: RunningServer | undefined;
   return executeLifecycle(
     { project, artifactRoot, temporaryRoot, activeServer: () => server },
     async ({ ledger, mark, diagnostic, runRoot }) => {
-      const capture = capturePhase(browser, project.probes, artifactRoot as string, {
+      const capture = capturePhase(browser, project.probes, artifactRoot, {
         mark,
         diagnostic,
       });
-      const { installed } = await prepareDriver(
+      const { installedRoot } = await prepareDriver(
         packageFixture,
         runRoot,
-        packageArtifactRoot as string,
-        artifactRoot as string,
+        packageArtifactRoot,
+        artifactRoot,
       );
       const { migrate } = await import(
-        `${pathToFileURL(await installedEntrypoint(installed.root, "main")).href}?case=${Date.now()}`
+        `${pathToFileURL(await installedEntrypoint(installedRoot, "main")).href}?case=${Date.now()}`
       );
-      await mark("package-installed", [
-        "install.log",
-        "publish.log",
-        "registry-bootstrap.log",
-        "registry-install.log",
-      ]);
+      await mark("package-installed", installLogNames);
       const checkoutRoot = await checkoutExternalProject(project, runRoot, artifactRoot);
       await checkedMigrationPath(checkoutRoot, await realpath(checkoutRoot), project.lockfile);
       const runtimeWriteOriginals = await snapshotRuntimeWrites(
@@ -1252,13 +1252,9 @@ export async function runExternalLifecycle({
         utilitiesExpectedDiff = trackedCheckoutDiff(checkoutRoot);
         server = await startExternalServer(project, packageRoot, artifactRoot, "utilities-only");
         const utilitiesOnly = await capture("utilities-only", server.url);
-        assert.deepEqual(
-          Object.fromEntries(
-            Object.entries(utilitiesOnly).map(([name, value]) => [name, value.elements]),
-          ),
-          Object.fromEntries(
-            Object.entries(baseline).map(([name, value]) => [name, value.elements]),
-          ),
+        assertSameElements(
+          utilitiesOnly,
+          baseline,
           "external utilities-only computed capture exactly equals baseline",
         );
       } finally {
