@@ -40,28 +40,28 @@ Preprocessor extensions must not be treated as CSS merely because they are disco
 ### CLI
 
 ```bash
-# Preview every eligible CSS file in the current package.
+# Migrate every eligible CSS file in the current package.
 tw-migrate
 
-# Preview one CSS file while scanning all relevant source references.
+# Migrate one CSS file while scanning all relevant source references.
 tw-migrate src/components/Button.module.css
 
-# Apply the current package migration.
-tw-migrate --write
+# Preview the current package migration without modifying files.
+tw-migrate --dry-run
 
-# Apply every discovered workspace package.
-tw-migrate --workspaces --write
+# Migrate every discovered workspace package.
+tw-migrate --workspaces
 
 # Skip recoverably failed package groups and apply successful groups.
-tw-migrate --workspaces --write --force
+tw-migrate --workspaces --force
 
 # Resolve a package with an ambiguous Tailwind entry.
-tw-migrate --tailwind-css src/app/globals.css --write
+tw-migrate --tailwind-css src/app/globals.css
 ```
 
 The command accepts at most one positional CSS file. `--workspaces` cannot be combined with a positional CSS file because the positional path already defines the requested scope.
 
-Preview remains the default. `--force` has no effect on unsupported rules that are already represented as warnings; those rules remain unchanged in every mode.
+Write is the default and `--dry-run` previews the same plan without modifying files. `--force` has no effect on unsupported rules that are already represented as warnings; those rules remain unchanged in every mode.
 
 ### Node.js API
 
@@ -275,7 +275,7 @@ If benchmarks show CSS parsing is material, a later implementation may use a bou
 
 ## Success Criteria
 
-1. `tw-migrate` previews every eligible CSS target in the current package.
+1. `tw-migrate` migrates every eligible CSS target in the current package, and `--dry-run` previews the same scope.
 2. `tw-migrate <file>` preserves exact single-file scope.
 3. `--workspaces` processes package groups with their own Tailwind entries.
 4. No batch edit can overwrite another edit produced from a different source version.
