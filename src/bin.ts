@@ -17,15 +17,15 @@ Options:
                              has multiple entries. Cannot be used with --workspaces.
   --workspaces               Migrate every package in the workspace.
   --force                    Skip packages with recoverable discovery or input errors.
-  --write                    Apply changes instead of previewing them.
+  --dry-run                  Preview changes without applying them.
   -h, --help                 Show this help message.
   -v, --version              Show the version number.
 
 Examples:
   tw-migrate
-  tw-migrate --write
+  tw-migrate --dry-run
   tw-migrate path/to/Button.module.scss
-  tw-migrate --workspaces --write`;
+  tw-migrate --workspaces`;
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
@@ -40,13 +40,13 @@ async function main(): Promise<void> {
 
   let styleFile: string | undefined;
   let tailwindCss: string | undefined;
-  let write = false;
+  let write = true;
   let force = false;
   let workspaces = false;
 
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
-    if (argument === "--write") write = true;
+    if (argument === "--dry-run") write = false;
     else if (argument === "--force") force = true;
     else if (argument === "--workspaces") workspaces = true;
     else if (argument === "--tailwind-css") {

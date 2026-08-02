@@ -59,17 +59,17 @@ Static HTML support is limited to literal `class` and `id` attributes reached th
 The positional argument becomes a stylesheet path rather than a CSS-only path:
 
 ```bash
-# Preview all reachable stylesheets in the current package.
+# Migrate all reachable stylesheets in the current package.
 tw-migrate
 
-# Preview one authored stylesheet.
+# Migrate one authored stylesheet.
 tw-migrate src/components/Button.module.scss
 
-# Migrate a package and its static HTML consumers.
-tw-migrate --write
+# Preview a package and its static HTML consumers without modifying files.
+tw-migrate --dry-run
 
 # Tailwind's entry remains plain CSS.
-tw-migrate src/styles/site.less --tailwind-css src/tailwind.css --write
+tw-migrate src/styles/site.less --tailwind-css src/tailwind.css
 ```
 
 The usage text changes from `[css-file]` to `[style-file]`.

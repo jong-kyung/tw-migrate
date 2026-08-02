@@ -25,7 +25,7 @@ This RFC proposes `tw-migrate`, a one-shot codemod distributed as an npm package
 3. Resolve static global class/id references and CSS Module imports.
 4. Prefer exact Tailwind theme utilities and fall back to arbitrary values or properties.
 5. Preserve unrelated source formatting through span-based edits.
-6. Preview all changes by default and write only with an explicit flag.
+6. Apply changes by default and keep a non-modifying preview behind an explicit `--dry-run` flag.
 7. Expose the same operation through a high-level Node.js API.
 8. Publish prebuilt native packages for the main macOS, Linux, and Windows targets.
 
@@ -46,16 +46,15 @@ This RFC proposes `tw-migrate`, a one-shot codemod distributed as an npm package
 ### CLI
 
 ```bash
-# Preview a migration and print its diff.
+# Apply a migration and print its diff.
 npx tw-migrate src/components/Button.module.css
 
-# Apply the previewed migration.
-npx tw-migrate src/components/Button.module.css --write
+# Preview the migration without modifying files.
+npx tw-migrate src/components/Button.module.css --dry-run
 
 # Select a Tailwind entry when auto-detection is ambiguous.
 npx tw-migrate src/components/Button.module.css \
-  --tailwind-css src/app/globals.css \
-  --write
+  --tailwind-css src/app/globals.css
 ```
 
 The command accepts exactly one positional CSS file in the first release. Directory and glob migration are deferred until single-file behavior is reliable.
@@ -480,7 +479,7 @@ Fixtures use multiple representative React and Next.js directory layouts without
 
 - Generate span-based JSX and CSS edits.
 - Remove eligible CSS Module rules, references, and imports.
-- Add preview diff and `--write` preflight.
+- Add the diff output and write preflight, with `--dry-run` as the non-modifying mode.
 
 ### Phase 5: Distribution
 
@@ -490,8 +489,8 @@ Fixtures use multiple representative React and Next.js directory layouts without
 
 ## Success Criteria
 
-1. `tw-migrate <file>` produces a deterministic preview without modifying files.
-2. `--write` applies only a fully validated edit plan.
+1. `tw-migrate <file> --dry-run` produces a deterministic preview without modifying files.
+2. `tw-migrate <file>` applies only a fully validated edit plan.
 3. Supported static global and CSS Module references are found without name collisions.
 4. Every generated utility compiles with the target project's Tailwind v4 installation.
 5. Exact theme values are never replaced by approximate tokens.

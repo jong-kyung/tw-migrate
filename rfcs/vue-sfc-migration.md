@@ -112,14 +112,14 @@ Vue major version other than 3 retains the package's SFCs with
 `.vue` joins the supported `styleFile` extensions:
 
 ```bash
-# Preview all reachable inputs, including SFCs, in the current package.
+# Migrate all reachable inputs, including SFCs, in the current package.
 tw-migrate
 
-# Preview one SFC.
+# Migrate one SFC.
 tw-migrate src/components/Button.vue
 
-# Migrate a package including SFCs.
-tw-migrate --write
+# Preview a package including SFCs without modifying files.
+tw-migrate --dry-run
 ```
 
 ### Node.js API

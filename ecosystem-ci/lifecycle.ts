@@ -1039,7 +1039,7 @@ export async function runProductionSmoke({
       const treeBeforeFirst = await snapshotMigrationSources(driverRoot);
       const cli = await installedEntrypoint(installed.root, "bin");
       await mark("first-cli-started");
-      await run(process.execPath, [cli, "--write"], {
+      await run(process.execPath, [cli], {
         cwd: driverRoot,
         logPath: join(artifactRoot, "first-cli.log"),
       });
@@ -1056,7 +1056,7 @@ export async function runProductionSmoke({
       await mark("first-cli", ["first-cli.log"]);
 
       await mark("second-cli-started");
-      await run(process.execPath, [cli, "--write"], {
+      await run(process.execPath, [cli], {
         cwd: driverRoot,
         logPath: join(artifactRoot, "second-cli.log"),
       });

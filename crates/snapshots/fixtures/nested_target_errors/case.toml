@@ -1,9 +1,9 @@
 [[steps]]
 name = "nested positional"
-args = ["nested/Nested.module.css", "--tailwind-css", "globals.css"]
+args = ["nested/Nested.module.css", "--tailwind-css", "globals.css", "--dry-run"]
 status = 1
 
 [[steps]]
 name = "nested tailwind"
-args = ["--tailwind-css", "nested/globals.css"]
+args = ["--tailwind-css", "nested/globals.css", "--dry-run"]
 status = 1

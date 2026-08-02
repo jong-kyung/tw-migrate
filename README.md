@@ -1,22 +1,22 @@
 # tw-migrate
 
-Preview and migrate static React/Next.js, Vue 3 SFC, and HTML stylesheet references to Tailwind v4 utilities.
+Migrate static React/Next.js, Vue 3 SFC, and HTML stylesheet references to Tailwind v4 utilities.
 
 ## Usage
 
 Run it in the package you want to migrate — no install step:
 
 ```bash
-npx tw-migrate                                    # Preview the current package
-npx tw-migrate --write                            # Migrate the current package
-npx tw-migrate path/to/Button.module.scss         # Preview one stylesheet
-npx tw-migrate path/to/Button.module.scss --write # Migrate one stylesheet
-npx tw-migrate --workspaces --write               # Migrate every package
+npx tw-migrate                                      # Migrate the current package
+npx tw-migrate --dry-run                            # Preview the current package
+npx tw-migrate path/to/Button.module.scss           # Migrate one stylesheet
+npx tw-migrate path/to/Button.module.scss --dry-run # Preview one stylesheet
+npx tw-migrate --workspaces                         # Migrate every package
 ```
 
 `pnpm dlx tw-migrate` and `yarn dlx tw-migrate` take the same arguments.
 
-The CLI previews changes by default. Pass `--tailwind-css path/to/globals.css` when the current package has multiple Tailwind entries. `--force` skips package groups that fail discovery or input parsing; plan-integrity and write failures always stop the run.
+The CLI applies changes by default; `--dry-run` prints the diff without touching files. Pass `--tailwind-css path/to/globals.css` when the current package has multiple Tailwind entries. `--force` skips package groups that fail discovery or input parsing; plan-integrity and write failures always stop the run.
 
 ## Run from a clone
 
@@ -32,7 +32,7 @@ Then use `node src/bin.ts` wherever the commands above use `npx tw-migrate`. The
 
 ```bash
 cd ../some-app
-node /path/to/tw-migrate/src/bin.ts --write
+node /path/to/tw-migrate/src/bin.ts
 ```
 
 ## Current support

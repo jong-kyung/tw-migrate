@@ -1,12 +1,12 @@
 [[steps]]
 name = "explicit file symlink"
-args = ["linked.module.css", "--tailwind-css", "globals.css", "--write"]
+args = ["linked.module.css", "--tailwind-css", "globals.css"]
 status = 1
 [[steps]]
 name = "discovered file symlink"
-args = ["--tailwind-css", "globals.css", "--write"]
+args = ["--tailwind-css", "globals.css"]
 status = 1
 [[steps]]
 name = "directory symlink"
-args = ["linked-directory/external.module.css", "--tailwind-css", "globals.css", "--write"]
+args = ["linked-directory/external.module.css", "--tailwind-css", "globals.css"]
 status = 1

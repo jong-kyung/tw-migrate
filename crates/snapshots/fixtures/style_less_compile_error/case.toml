@@ -1,9 +1,9 @@
 [[steps]]
 name = "without force"
-args = ["Button.module.less", "--tailwind-css", "globals.css"]
+args = ["Button.module.less", "--tailwind-css", "globals.css", "--dry-run"]
 status = 1
 
 [[steps]]
 name = "with force"
-args = ["Button.module.less", "--tailwind-css", "globals.css", "--force"]
+args = ["Button.module.less", "--tailwind-css", "globals.css", "--force", "--dry-run"]
 status = 0
