@@ -7,6 +7,7 @@ import { loadProjectModule } from "./style-compiler.ts";
 import { staticImportBindings, staticImports, staticStringExpression } from "../native.ts";
 import type { StaticImportBinding } from "../native.ts";
 import type { SourceMapping } from "./style-compiler.ts";
+import type { MigrationWarning } from "../types.ts";
 
 const ESCAPE_SELECTOR = /(?:::v-|:)(?:deep|global|slotted)\(([^)]*)\)/g;
 const ESCAPE_RESIDUE = /(?:>>>|\/deep\/|::v-deep|:deep|::v-slotted|:slotted|::v-global|:global)/;
@@ -121,14 +122,6 @@ export interface LoadedVueCompiler {
   unsupportedVersion?: string;
 }
 
-export interface VueWarning {
-  code: string;
-  file: string;
-  start: number;
-  end: number;
-  message: string;
-}
-
 export interface VueStyleBlock {
   outerStart: number;
   outerEnd: number;
@@ -183,7 +176,7 @@ export interface VueComponentEdge {
 // The orchestrator-owned fields are populated by index.ts while building the
 // package component graph, after analysis produced the object.
 interface VueAnalysisBase {
-  warnings: VueWarning[];
+  warnings: MigrationWarning[];
   resolvedComponents?: VueComponentEdge[];
   componentsOpen?: boolean;
   setupImports?: Set<string>;
@@ -262,7 +255,7 @@ export async function loadProjectVueCompiler(packageRoot: string): Promise<Loade
 // byte offsets and literal template class sites for the HTML matching model.
 // Returns `retained: true` when the whole file must stay untouched.
 export function analyzeVueSource(compiler: VueCompiler, path: string, source: string): VueAnalysis {
-  const warnings: VueWarning[] = [];
+  const warnings: MigrationWarning[] = [];
   const warn = (code: string, start: number, end: number, message: string): number =>
     warnings.push({ code, file: path, start, end, message });
 
@@ -754,7 +747,7 @@ function classInsertionOffset(source: string, node: TemplateNode): number | unde
   return offset;
 }
 
-function toByteWarnings(source: string, warnings: VueWarning[]): VueWarning[] {
+function toByteWarnings(source: string, warnings: MigrationWarning[]): MigrationWarning[] {
   const offsets = utf8OffsetMap(
     source,
     warnings.flatMap((warning) => [warning.start, warning.end]),

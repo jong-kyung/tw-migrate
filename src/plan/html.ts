@@ -1,4 +1,4 @@
-import { basename, dirname, resolve } from "node:path";
+import { basename, dirname, extname, resolve } from "node:path";
 
 import { parseHtmlSource } from "../parser/html.ts";
 import { isPreprocessorPath } from "../parser/style-compiler.ts";
@@ -6,7 +6,6 @@ import {
   addStyleDependent,
   cssImports,
   errorCode,
-  extension,
   isStylesheetModule,
   isStylesheetPath,
   isWithin,
@@ -43,7 +42,7 @@ export async function preparePackageHtml({
   const removableLinks: RemovableLink[] = [];
   const warnings: MigrationWarning[] = [];
 
-  const htmlFiles = sourceFiles.filter((file) => extension(file.path) === ".html");
+  const htmlFiles = sourceFiles.filter((file) => extname(file.path) === ".html");
   // Package-owned HTML goes first so stylesheets it discovers are claimed for
   // this package before foreign consumers are matched against that ownership.
   const orderedFiles = [
@@ -228,7 +227,7 @@ async function collectHtmlStyleContexts(state: HtmlContextState): Promise<void> 
       state.styleSources.get(state.path) ?? (await snapshotFile(state.snapshots, state.path));
   } catch (error) {
     if (errorCode(error) === "ENOENT") {
-      if (extension(state.path) === ".css") addInferredPreprocessorContext(state);
+      if (extname(state.path) === ".css") addInferredPreprocessorContext(state);
       return;
     }
     throw error;
@@ -236,7 +235,7 @@ async function collectHtmlStyleContexts(state: HtmlContextState): Promise<void> 
   if (!state.styleSources.has(state.path)) state.styleSources.set(state.path, source);
   if (!owner) state.pathOwners.set(state.path, state.packageRoot);
 
-  if (extension(state.path) === ".css" && addInferredPreprocessorContext(state)) return;
+  if (extname(state.path) === ".css" && addInferredPreprocessorContext(state)) return;
 
   state.stylePaths.add(state.path);
   state.contexts.push({
@@ -245,7 +244,7 @@ async function collectHtmlStyleContexts(state: HtmlContextState): Promise<void> 
     direct: state.direct,
     analyzable: true,
   });
-  if (extension(state.path) !== ".css") return;
+  if (extname(state.path) !== ".css") return;
 
   for (const imported of cssImports(source)) {
     const variants = mediaVariants(imported.media);
@@ -296,7 +295,7 @@ function inferredPreprocessorPath(
       state.pathOwners.get(path) === state.packageRoot &&
       !basename(path).startsWith("_") &&
       !state.styleDependents.has(path) &&
-      basename(path, extension(path)) === stem,
+      basename(path, extname(path)) === stem,
   );
   return matches.length === 1 ? matches[0] : undefined;
 }
@@ -308,7 +307,7 @@ function addInferredPreprocessorContext(state: HtmlContextState): boolean {
   if (
     state.styleSources.has(state.path) &&
     state.sourceFiles.some(
-      (file) => extension(file.path) !== ".html" && sourceReferencesStyle(file, state.path),
+      (file) => extname(file.path) !== ".html" && sourceReferencesStyle(file, state.path),
     )
   ) {
     return false;
