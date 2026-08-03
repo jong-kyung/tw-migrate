@@ -46,8 +46,7 @@ pub(crate) fn plan_html_file(
                 let span = element
                     .class_attribute
                     .as_ref()
-                    .map(|attribute| (attribute.start, attribute.end))
-                    .unwrap_or((0, 0));
+                    .map_or((0, 0), |attribute| (attribute.start, attribute.end));
                 warnings.push(Warning::existing_tailwind_conflict(
                     &file.path, span, &generated, &existing,
                 ));
@@ -57,8 +56,9 @@ pub(crate) fn plan_html_file(
         let mut additions = Vec::new();
 
         let quote = attribute_quote(&file.source, class_attribute);
-        for class in element_classes(element) {
-            let class = class.to_string();
+        let classes = element_classes(element);
+        for class in &classes {
+            let class = (*class).to_string();
             let key = SelectorKey::Class(class.clone());
             let matched = candidates.contains_key(&key);
             if matched {
@@ -97,7 +97,7 @@ pub(crate) fn plan_html_file(
         // Parity with the JS rewrite path: a generated utility that overlaps
         // an existing Tailwind class on the rendered element is appended with
         // a warning, and Tailwind's output order decides between them.
-        let existing_classes = element_classes(element)
+        let existing_classes = classes
             .into_iter()
             .chain(class_attribute.value.split_whitespace())
             .collect::<BTreeSet<_>>()
@@ -107,8 +107,7 @@ pub(crate) fn plan_html_file(
             let authored = element
                 .class_attribute
                 .as_ref()
-                .map(|attribute| (attribute.start, attribute.end))
-                .unwrap_or((0, 0));
+                .map_or((0, 0), |attribute| (attribute.start, attribute.end));
             warnings.push(Warning::existing_tailwind_conflict(
                 &file.path, authored, &generated, &existing,
             ));
@@ -190,13 +189,13 @@ fn merge_class_attribute(attribute: &HtmlAttribute, additions: &[String]) -> Opt
     } else {
         value
     };
-    ((!attribute.synthetic || !classes.is_empty()) && replacement != attribute.value).then(|| {
+    ((!attribute.synthetic || !classes.is_empty()) && replacement != attribute.value).then_some(
         Edit {
             start: attribute.start,
             end: attribute.end,
             replacement,
-        }
-    })
+        },
+    )
 }
 
 /// The first (generated, existing) utility conflict on a record whose
@@ -403,8 +402,9 @@ pub(crate) fn plan_vue_module_file(
             let authored = element
                 .class_attribute
                 .as_ref()
-                .map(|attribute| (attribute.start, attribute.end))
-                .unwrap_or((binding.start, binding.end));
+                .map_or((binding.start, binding.end), |attribute| {
+                    (attribute.start, attribute.end)
+                });
             warnings.push(Warning::existing_tailwind_conflict(
                 &file.path, authored, &generated, &existing,
             ));
@@ -523,11 +523,7 @@ fn rebased_attributes(file: &SourceFile) -> HashMap<usize, HtmlAttribute> {
 
 /// Shift a span through one edit round; `None` when an edit lands inside it.
 /// Returns the exact-cover edit when one replaces the span wholesale.
-fn shift_span<'e>(
-    start: usize,
-    end: usize,
-    edits: &'e [Edit],
-) -> Option<(usize, usize, Option<&'e Edit>)> {
+fn shift_span(start: usize, end: usize, edits: &[Edit]) -> Option<(usize, usize, Option<&Edit>)> {
     let exact = edits
         .iter()
         .find(|edit| edit.start == start && edit.end == end);
@@ -630,7 +626,9 @@ fn contextual_candidate(
     }
     let variants = variants.join(":");
     if let Some(prefix) = utility_prefix.filter(|prefix| !prefix.is_empty())
-        && let Some(rest) = candidate.strip_prefix(&format!("{prefix}:"))
+        && let Some(rest) = candidate
+            .strip_prefix(prefix)
+            .and_then(|rest| rest.strip_prefix(':'))
     {
         return format!("{prefix}:{variants}:{rest}");
     }
