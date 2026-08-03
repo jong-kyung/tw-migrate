@@ -826,9 +826,6 @@ fn index_shadow_global_arg(
 ) {
     use oxc_css_parser::ast::PseudoClassSelectorArgKind;
     match &arg.kind {
-        PseudoClassSelectorArgKind::CompoundSelector(compound) => {
-            index_shadow_compound(compound, false, index);
-        }
         PseudoClassSelectorArgKind::CompoundSelectorList(list) => {
             for compound in &list.selectors {
                 index_shadow_compound(compound, false, index);
