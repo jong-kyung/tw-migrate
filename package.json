@@ -44,7 +44,7 @@
     "prepare": "vp config"
   },
   "dependencies": {
-    "parse5": "7.3.0"
+    "parse5": "8.0.1"
   },
   "devDependencies": {
     "@napi-rs/cli": "catalog:",
