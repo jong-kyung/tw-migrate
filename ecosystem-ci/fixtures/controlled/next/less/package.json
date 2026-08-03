@@ -1,7 +1,7 @@
 {
   "private": true,
   "scripts": {
-    "dev": "next dev"
+    "dev": "next dev --webpack"
   },
   "dependencies": {
     "@tailwindcss/postcss": "4.3.3",
