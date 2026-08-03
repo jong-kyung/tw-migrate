@@ -9,7 +9,7 @@ use napi_derive::napi;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     Argument, CallExpression, ComputedMemberExpression, ExportAllDeclaration,
-    ExportNamedDeclaration, Expression, ImportDeclaration, ImportDeclarationSpecifier,
+    ExportFromDeclaration, Expression, ImportDeclaration, ImportDeclarationSpecifier,
     ImportExpression, ImportOrExportKind, JSXAttribute, JSXAttributeItem, JSXAttributeName,
     JSXAttributeValue, JSXExpression, JSXOpeningElement, Statement, StaticMemberExpression,
     TemplateLiteral, VariableDeclarator,
@@ -385,14 +385,12 @@ impl<'a> Visit<'a> for ImportCollector<'_> {
         walk::walk_import_declaration(self, declaration);
     }
 
-    fn visit_export_named_declaration(&mut self, declaration: &ExportNamedDeclaration<'a>) {
-        if declaration.source.as_ref().is_some_and(|source| {
-            resolve_import(self.file_path, source.value.as_str()) == self.css_target
-        }) {
+    fn visit_export_from_declaration(&mut self, declaration: &ExportFromDeclaration<'a>) {
+        if resolve_import(self.file_path, declaration.source.value.as_str()) == self.css_target {
             self.unsupported_shape = true;
             self.warning_span.get_or_insert(declaration.span);
         }
-        walk::walk_export_named_declaration(self, declaration);
+        walk::walk_export_from_declaration(self, declaration);
     }
 
     fn visit_export_all_declaration(&mut self, declaration: &ExportAllDeclaration<'a>) {
