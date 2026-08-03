@@ -451,41 +451,39 @@ fn extract_file(path: &str, source: &str, css_path: &str) -> Option<FileIr> {
                     false,
                 );
             }
+            // Re-exports (`export { x } from '...'`) are not followed; importers
+            // fail to resolve, which is the conservative direction.
+            Statement::ExportFromDeclaration(_) => {}
+            Statement::ExportDeclaration(export) => match &export.declaration {
+                Declaration::FunctionDeclaration(func) => {
+                    let ix = register(
+                        &mut comps,
+                        &mut syms,
+                        &mut builds,
+                        func.id.as_ref(),
+                        FnRef::Function(func),
+                    );
+                    if let Some(id) = &func.id {
+                        named_exports.insert(id.name.to_string(), ix);
+                    }
+                }
+                Declaration::VariableDeclaration(decl) => {
+                    register_declarators(
+                        &mut comps,
+                        &mut syms,
+                        &mut builds,
+                        &mut sweeps,
+                        &mut named_exports,
+                        decl,
+                        true,
+                    );
+                }
+                Declaration::ClassDeclaration(class) => {
+                    sweeps.push((SweepTarget::Class(class), R_BOUNDARY));
+                }
+                _ => {}
+            },
             Statement::ExportNamedDeclaration(export) => {
-                if export.source.is_some() {
-                    // Re-exports are not followed; importers fail to resolve,
-                    // which is the conservative direction.
-                    continue;
-                }
-                match &export.declaration {
-                    Some(Declaration::FunctionDeclaration(func)) => {
-                        let ix = register(
-                            &mut comps,
-                            &mut syms,
-                            &mut builds,
-                            func.id.as_ref(),
-                            FnRef::Function(func),
-                        );
-                        if let Some(id) = &func.id {
-                            named_exports.insert(id.name.to_string(), ix);
-                        }
-                    }
-                    Some(Declaration::VariableDeclaration(decl)) => {
-                        register_declarators(
-                            &mut comps,
-                            &mut syms,
-                            &mut builds,
-                            &mut sweeps,
-                            &mut named_exports,
-                            decl,
-                            true,
-                        );
-                    }
-                    Some(Declaration::ClassDeclaration(class)) => {
-                        sweeps.push((SweepTarget::Class(class), R_BOUNDARY));
-                    }
-                    _ => {}
-                }
                 for specifier in &export.specifiers {
                     deferred_specifiers.push(specifier);
                 }
@@ -720,7 +718,7 @@ fn analyze_params(params: &FormalParameters<'_>) -> ParamInfo {
 fn block_body<'a>(fnref: FnRef<'a>) -> Option<&'a FunctionBody<'a>> {
     match fnref {
         FnRef::Function(func) => func.body.as_deref(),
-        FnRef::Arrow(arrow) => (!arrow.expression).then(|| &*arrow.body),
+        FnRef::Arrow(arrow) => arrow.get_function_body(),
     }
 }
 
@@ -734,13 +732,13 @@ fn qualify<'a>(fnref: FnRef<'a>) -> Result<&'a Expression<'a>, &'static str> {
                 portals.visit_function_body(body);
             }
         }
-        FnRef::Arrow(arrow) => portals.visit_function_body(&arrow.body),
+        FnRef::Arrow(arrow) => portals.visit_arrow_function_body(&arrow.body),
     }
     if portals.found {
         return Err(R_PORTAL);
     }
     let argument = match fnref {
-        FnRef::Arrow(arrow) if arrow.expression => arrow.get_expression().ok_or(R_HOC)?,
+        FnRef::Arrow(arrow) if arrow.is_expression() => arrow.get_expression().ok_or(R_HOC)?,
         _ => {
             let body = block_body(fnref).ok_or(R_HOC)?;
             let mut counter = ReturnCounter { count: 0 };
@@ -832,7 +830,7 @@ fn build_component(
                 }
                 FnRef::Arrow(arrow) => {
                     sweep.visit_formal_parameters(&arrow.params);
-                    sweep.visit_function_body(&arrow.body);
+                    sweep.visit_arrow_function_body(&arrow.body);
                 }
             }
         }
