@@ -280,7 +280,8 @@ fn normalize_query(query: &str) -> Option<String> {
 fn at_rule_query<'a>(at_rule: &AtRule<'_>, source: &'a str, name: &str) -> Option<&'a str> {
     source[at_rule.span.start..at_rule.block.as_ref()?.span.start]
         .trim()
-        .strip_prefix(&format!("@{name}"))
+        .strip_prefix('@')?
+        .strip_prefix(name)
         .map(str::trim)
 }
 
