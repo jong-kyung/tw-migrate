@@ -155,7 +155,11 @@
     "file": "src/App.vue",
     "start": 705,
     "end": 736,
-    "message": "No exclusively supported className references were found."
+    "message": "No exclusively supported className references were found.",
+    "line": 29,
+    "column": 1,
+    "endLine": 31,
+    "endColumn": 2
    }
   ],
   "failures": []

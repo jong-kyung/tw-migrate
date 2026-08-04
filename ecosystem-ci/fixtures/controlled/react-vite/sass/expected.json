@@ -144,7 +144,11 @@
         "file": "src/App.module.sass",
         "start": 278,
         "end": 304,
-        "message": "No exclusively supported className references were found."
+        "message": "No exclusively supported className references were found.",
+        "line": 15,
+        "column": 1,
+        "endLine": 16,
+        "endColumn": 17
       }
     ],
     "failures": []
