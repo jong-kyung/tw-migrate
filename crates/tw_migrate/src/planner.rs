@@ -5149,6 +5149,33 @@ mod tests {
     }
 
     #[test]
+    fn batch_converts_a_rule_unrelated_to_a_dynamic_class_name() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".blocked { color: red; }\n.safe { padding: 13px; }\n",
+            "isModule": true,
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "import styles from './Card.module.css';\nexport const App = ({ active }) => <>\n  <div className={active ? styles.blocked : ''} />\n  <div className={styles.safe} />\n</>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(response["retainedRules"], 1);
+        assert_eq!(response["candidates"], serde_json::json!(["p-[13px]"]));
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| warning["code"] == "dynamic-class-name")
+        );
+    }
+
+    #[test]
     fn batch_blocks_only_the_conflicting_rule_for_a_shared_selector_key() {
         let request = serde_json::json!({
             "stylesheets": [
