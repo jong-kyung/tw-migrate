@@ -175,6 +175,7 @@ export interface PreparedHtml {
 export interface PreparedVue {
   files: Map<string, PreparedSourceFile>;
   stylesheets: StylesheetEntry[];
+  styleRanges: Map<string, RuleSpan[]>;
   stylePaths: Set<string>;
   unscopedPaths: Set<string>;
   warnings: MigrationWarning[];

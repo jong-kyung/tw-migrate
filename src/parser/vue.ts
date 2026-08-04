@@ -177,6 +177,7 @@ export interface VueComponentEdge {
 // package component graph, after analysis produced the object.
 interface VueAnalysisBase {
   warnings: MigrationWarning[];
+  styleRanges: { start: number; end: number }[];
   resolvedComponents?: VueComponentEdge[];
   componentsOpen?: boolean;
   setupImports?: Set<string>;
@@ -260,6 +261,29 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     warnings.push({ code, file: path, start, end, message });
 
   const { descriptor, errors } = compiler.parse(source, { filename: path });
+  const styleRanges = descriptor.styles.map((style) => ({
+    start: style.loc.start.offset,
+    end: style.loc.end.offset,
+  }));
+  const retained = (): VueAnalysis => {
+    const offsets = utf8OffsetMap(
+      source,
+      [...warnings, ...styleRanges].flatMap((range) => [range.start, range.end]),
+    );
+    const offset = offsetLookup(offsets);
+    return {
+      retained: true,
+      warnings: warnings.map((warning) => ({
+        ...warning,
+        start: offset(warning.start),
+        end: offset(warning.end),
+      })),
+      styleRanges: styleRanges.map((range) => ({
+        start: offset(range.start),
+        end: offset(range.end),
+      })),
+    };
+  };
   if (errors.length > 0) {
     const offset = errors[0]?.loc?.start?.offset ?? 0;
     warn(
@@ -271,7 +295,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     if (errors[0]?.loc?.start?.offset === 0) {
       Object.assign(warnings[0], { line: 1, column: 1, endLine: 1, endColumn: 1 });
     }
-    return { warnings: toByteWarnings(source, warnings), retained: true };
+    return retained();
   }
 
   const template = descriptor.template;
@@ -280,7 +304,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
       ? "The SFC has no template block, so its class usage cannot be analyzed."
       : "Only the default template language with inline content is analyzed.";
     warn("unsupported-sfc-block", 0, 0, reason);
-    return { warnings: toByteWarnings(source, warnings), retained: true };
+    return retained();
   }
   if (descriptor.customBlocks.length > 0) {
     const block = descriptor.customBlocks[0];
@@ -290,7 +314,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
       block.loc.end.offset,
       `The custom <${block.type}> block is not analyzed.`,
     );
-    return { warnings: toByteWarnings(source, warnings), retained: true };
+    return retained();
   }
   const blocks: VueStyleBlock[] = [];
   const unscopedBlocks: VueStyleBlock[] = [];
@@ -469,6 +493,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
 
   const offsets = utf8OffsetMap(source, [
     ...warnings.flatMap((warning) => [warning.start, warning.end]),
+    ...styleRanges.flatMap((range) => [range.start, range.end]),
     ...[...blocks, ...unscopedBlocks, ...moduleBlocks].flatMap((block) => [
       block.outerStart,
       block.outerEnd,
@@ -514,6 +539,10 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
       ...warning,
       start: offset(warning.start),
       end: offset(warning.end),
+    })),
+    styleRanges: styleRanges.map((range) => ({
+      start: offset(range.start),
+      end: offset(range.end),
     })),
     blocks: blocks.map(toByteBlock),
     unscopedBlocks: unscopedBlocks.map(toByteBlock),
@@ -742,16 +771,4 @@ function classInsertionOffset(source: string, node: TemplateNode): number | unde
   if (source[offset - 1] === "/") offset -= 1;
   while (offset > node.loc.start.offset && /\s/.test(source[offset - 1])) offset -= 1;
   return offset;
-}
-
-function toByteWarnings(source: string, warnings: MigrationWarning[]): MigrationWarning[] {
-  const offsets = utf8OffsetMap(
-    source,
-    warnings.flatMap((warning) => [warning.start, warning.end]),
-  );
-  return warnings.map((warning) => ({
-    ...warning,
-    start: offsets.get(warning.start) ?? warning.start,
-    end: offsets.get(warning.end) ?? warning.end,
-  }));
 }

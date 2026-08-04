@@ -367,16 +367,11 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
   } catch (error) {
     return recover(error, isIntegrityError(error));
   }
-  for (const stylesheet of preparedVue.stylesheets) {
-    const ranges = vueStyleRanges.get(stylesheet.cssPath) ?? [];
-    ranges.push(
-      ...(stylesheet.vueBlocks ?? []).map((block) => ({
-        start: block.contentStart,
-        end: block.contentEnd,
-      })),
-    );
+  for (const [path, preparedRanges] of preparedVue.styleRanges) {
+    const ranges = vueStyleRanges.get(path) ?? [];
+    ranges.push(...preparedRanges);
     ranges.sort((left, right) => left.start - right.start);
-    vueStyleRanges.set(stylesheet.cssPath, ranges);
+    vueStyleRanges.set(path, ranges);
   }
   // An explicit .vue selection that produced nothing to plan must surface
   // its retention warnings without requiring an unrelated Tailwind entry.

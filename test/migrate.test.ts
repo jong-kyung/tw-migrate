@@ -1223,6 +1223,18 @@ test("counts form feeds within Vue style warning locations", async () => {
   assert.equal(warning.line, 6);
 });
 
+test("counts form feeds within retained Vue style warning ranges", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n</template>\n<style>\f.card { color: red; }\n</style>\n';
+  await writeFile(join(cwd, "Card.vue"), vue);
+
+  const report = await migrate({ cwd, styleFile: "Card.vue" });
+  const warning = report.warnings.find((entry) => entry.code === "unscoped-style-block")!;
+
+  assert.deepEqual([warning.line, warning.endLine], [4, 6]);
+});
+
 test("rewrites proven $style bindings and deletes the emptied module block", async () => {
   const cwd = await fixture();
   const vue =
