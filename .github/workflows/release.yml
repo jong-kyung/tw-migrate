@@ -175,7 +175,7 @@ jobs:
       # npm token to leak or rotate.
       #
       # setup-node still runs -- it is what points npm at the public registry.
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
           registry-url: 'https://registry.npmjs.org'
@@ -345,7 +345,7 @@ jobs:
       VERSION: ${{ needs.check.outputs.version }}
     steps:
       - uses: actions/checkout@v7 # for .node-version only
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
       - run: npm install --global pnpm@11.15.1
