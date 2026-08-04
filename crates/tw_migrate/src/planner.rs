@@ -298,7 +298,7 @@ fn shift_offset(edits: &[Edit], offset: usize) -> usize {
     offset.checked_add_signed(delta).unwrap_or(offset)
 }
 
-fn original_offset(edit_batches: &[Vec<Edit>], mut offset: usize) -> usize {
+pub(crate) fn original_offset(edit_batches: &[Vec<Edit>], mut offset: usize) -> usize {
     for edits in edit_batches.iter().rev() {
         let mut edits = edits.iter().collect::<Vec<_>>();
         edits.sort_by_key(|edit| (edit.start, edit.end));
@@ -5146,6 +5146,69 @@ mod tests {
                 .iter()
                 .any(|warning| warning["code"] == "dynamic-class-name")
         );
+    }
+
+    #[test]
+    fn batch_converts_a_rule_unrelated_to_a_dynamic_class_name() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".blocked { color: red; }\n.safe { padding: 13px; }\n",
+            "isModule": true,
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "import styles from './Card.module.css';\nexport const App = ({ active }) => <>\n  <div className={active ? styles.blocked : ''} />\n  <div className={styles.safe} />\n</>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(response["retainedRules"], 1);
+        assert_eq!(response["candidates"], serde_json::json!(["p-[13px]"]));
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| warning["code"] == "dynamic-class-name")
+        );
+    }
+
+    #[test]
+    fn batch_rebases_source_warnings_after_prior_stylesheet_edits() {
+        let source = "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = ({ active }) => <>\n  <div className={a.a} />\n  <div className={active ? b.b : ''} />\n</>;\n";
+        let request = serde_json::json!({
+            "stylesheets": [{
+                "cssPath": "/project/A.module.css",
+                "cssSource": ".a { padding: 13px; }\n",
+                "isModule": true
+            }, {
+                "cssPath": "/project/B.module.css",
+                "cssSource": ".b { color: red; }\n",
+                "isModule": true
+            }],
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": source
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let warnings = response["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|warning| warning["code"] == "dynamic-class-name")
+            .collect::<Vec<_>>();
+        let start = source.find("{active ? b.b : ''}").unwrap();
+
+        assert!(!warnings.is_empty());
+        for warning in warnings {
+            assert_eq!(warning["start"], start);
+            assert_eq!(warning["end"], start + "{active ? b.b : ''}".len());
+        }
     }
 
     #[test]

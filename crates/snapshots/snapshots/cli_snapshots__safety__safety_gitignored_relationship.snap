@@ -7,6 +7,6 @@ case: safety_gitignored_relationship
 --- step: write ---
 status: 0
 stdout: "Applied 0 file(s); 0 rule(s) converted, 1 retained.\n"
-stderr: "warning[unproven-css-module-relationship] Button.module.css:0-33 The selector `.button .label` requires a relationship that could not be proven for every usage (unproven-ancestry at [WORKSPACE]/Button.tsx:86), so the rule is retained.\n"
+stderr: "warning[unproven-css-module-relationship] Button.module.css:1:1-1:34 The selector `.button .label` requires a relationship that could not be proven for every usage (unproven-ancestry at [WORKSPACE]/Button.tsx:86), so the rule is retained.\n"
 workspace delta:
   unchanged

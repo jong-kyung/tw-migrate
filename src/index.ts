@@ -57,6 +57,47 @@ export type {
   RuleReport,
 } from "./types.ts";
 
+function indexWarningPositions(
+  source: string,
+  offsets: Set<number>,
+  unicodeSeparatorsAreNewlines: boolean,
+  formFeedIsNewline: boolean,
+  initial = { line: 1, column: 1 },
+) {
+  const targets = [...offsets].sort((left, right) => left - right);
+  const positions = new Map<number, { line: number; column: number }>();
+  let target = 0;
+  let byte = 0;
+  let { line, column } = initial;
+  let previousWasCarriageReturn = false;
+  const record = (): void => {
+    while (targets[target] === byte) {
+      positions.set(byte, { line, column });
+      target += 1;
+    }
+  };
+
+  record();
+  for (const character of source) {
+    byte += Buffer.byteLength(character);
+    while ((targets[target] ?? Infinity) < byte) target += 1;
+    const newline =
+      character === "\r" ||
+      (character === "\n" && !previousWasCarriageReturn) ||
+      (unicodeSeparatorsAreNewlines && (character === "\u2028" || character === "\u2029")) ||
+      (formFeedIsNewline && character === "\f");
+    if (newline) {
+      line += 1;
+      column = 1;
+    } else if (character !== "\n") {
+      column += character.length;
+    }
+    previousWasCarriageReturn = character === "\r";
+    record();
+  }
+  return positions;
+}
+
 export async function migrate(options: MigrateOptions = {}): Promise<MigrationReport> {
   if (options.styleFile && options.workspaces) {
     throw new TypeError("styleFile cannot be combined with workspaces");
@@ -122,6 +163,7 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
     styleSources.set(configuredEntry, await snapshotFile(snapshots, configuredEntry));
   }
 
+  const vueStyleRanges = new Map<string, RuleSpan[]>();
   const context: MigrationContext = {
     ...scope,
     options,
@@ -129,6 +171,7 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
     styleSources,
     sourceFiles,
     styleDependents: indexStylesheetDependents(styleSources),
+    vueStyleRanges,
   };
   const failures: MigrationFailure[] = [];
   const plans: Plan[] = [];
@@ -172,6 +215,55 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
       left.end - right.end ||
       left.code.localeCompare(right.code),
   );
+  const warningOffsets = new Map<string, Set<number>>();
+  for (const warning of warnings) {
+    if (warning.start === 0 && warning.end === 0) continue;
+    const offsets = warningOffsets.get(warning.file) ?? new Set<number>();
+    offsets.add(warning.start).add(warning.end);
+    warningOffsets.set(warning.file, offsets);
+  }
+  const warningPositions = new Map(
+    [...warningOffsets].flatMap(([file, offsets]) => {
+      const source = snapshots.get(file);
+      if (!source) return [];
+      const extension = extname(file);
+      const javascriptSource =
+        SOURCE_EXTENSIONS.has(extension) && extension !== ".html" && extension !== ".vue";
+      const styleRanges = vueStyleRanges.get(file) ?? [];
+      const defaultOffsets = new Set(offsets);
+      for (const range of styleRanges) defaultOffsets.add(range.start);
+      const defaultPositions = indexWarningPositions(
+        source,
+        defaultOffsets,
+        javascriptSource,
+        isStylesheetPath(file),
+      );
+      const bytes = Buffer.from(source);
+      const sortedOffsets = [...offsets].sort((left, right) => left - right);
+      const stylePositions = new Map<number, { line: number; column: number }>();
+      let offsetIndex = 0;
+      for (const range of styleRanges) {
+        while ((sortedOffsets[offsetIndex] ?? Infinity) < range.start) offsetIndex += 1;
+        const relativeOffsets = new Set<number>();
+        while ((sortedOffsets[offsetIndex] ?? Infinity) <= range.end) {
+          relativeOffsets.add(sortedOffsets[offsetIndex] - range.start);
+          offsetIndex += 1;
+        }
+        const initial = defaultPositions.get(range.start);
+        if (!initial) continue;
+        for (const [offset, position] of indexWarningPositions(
+          bytes.subarray(range.start, range.end).toString(),
+          relativeOffsets,
+          false,
+          true,
+          initial,
+        )) {
+          stylePositions.set(range.start + offset, position);
+        }
+      }
+      return [[file, { default: defaultPositions, style: stylePositions }] as const];
+    }),
+  );
   failures.sort((left, right) => left.package.localeCompare(right.package));
   return {
     changedFiles,
@@ -184,10 +276,25 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
       file: normalizedRelativePath(cwd, rule.file),
     })),
     candidates: [...candidates].sort(),
-    warnings: warnings.map((warning) => ({
-      ...warning,
-      file: normalizedRelativePath(cwd, warning.file),
-    })),
+    warnings: warnings.map((warning) => {
+      const indexed = warningPositions.get(warning.file);
+      const styleFrom = indexed?.style.get(warning.start);
+      const styleTo = indexed?.style.get(warning.end);
+      const located = warning.start !== 0 || warning.end !== 0;
+      const from = located ? (styleFrom ?? indexed?.default.get(warning.start)) : undefined;
+      const to = located
+        ? styleFrom && styleTo
+          ? styleTo
+          : indexed?.default.get(warning.end)
+        : undefined;
+      return {
+        ...warning,
+        ...(from && to
+          ? { line: from.line, column: from.column, endLine: to.line, endColumn: to.column }
+          : {}),
+        file: normalizedRelativePath(cwd, warning.file),
+      };
+    }),
     failures,
   };
 }
@@ -206,6 +313,7 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
     targetable,
     selectedPackages,
     scannedPaths,
+    vueStyleRanges,
   } = context;
   const recover = (error: unknown, fatal = false): PlanResult => {
     if (!options.force || fatal) throw error;
@@ -242,6 +350,12 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
     });
   } catch (error) {
     return recover(error, isIntegrityError(error));
+  }
+  for (const [path, preparedRanges] of preparedVue.styleRanges) {
+    const ranges = vueStyleRanges.get(path) ?? [];
+    ranges.push(...preparedRanges);
+    ranges.sort((left, right) => left.start - right.start);
+    vueStyleRanges.set(path, ranges);
   }
   // An explicit .vue selection that produced nothing to plan must surface
   // its retention warnings without requiring an unrelated Tailwind entry.
@@ -604,7 +718,7 @@ function mergePlans(plans: Plan[], originals: Map<string, string>) {
     // Per-stylesheet planning repeats the same source-site warning once per
     // stylesheet; the user-facing report keeps the first of each.
     for (const warning of plan.warnings) {
-      const key = `${warning.code}\0${warning.file}\0${warning.start}\0${warning.end}`;
+      const key = `${warning.code}\0${warning.file}\0${warning.start}\0${warning.end}\0${warning.message}`;
       if (seenWarnings.has(key)) continue;
       seenWarnings.add(key);
       warnings.push(warning);

@@ -7,6 +7,6 @@ case: style_scss_disproven
 --- step: migrate ---
 status: 0
 stdout: "Applied 0 file(s); 0 rule(s) converted, 2 retained.\n"
-stderr: "warning[unresolved-selector-target] Card.module.scss:10-36 No exclusively supported className references were found.\nwarning[unproven-css-module-relationship] Card.module.scss:37-67 The selector `.parent .child` requires a relationship that could not be proven for every usage (unproven-ancestry at [WORKSPACE]/Card.tsx:119), so the rule is retained.\n"
+stderr: "warning[unresolved-selector-target] Card.module.scss:2:1-2:27 No exclusively supported className references were found.\nwarning[unproven-css-module-relationship] Card.module.scss:3:1-3:31 The selector `.parent .child` requires a relationship that could not be proven for every usage (unproven-ancestry at [WORKSPACE]/Card.tsx:119), so the rule is retained.\n"
 workspace delta:
   unchanged

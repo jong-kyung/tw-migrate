@@ -22,7 +22,7 @@ use oxc_syntax::symbol::SymbolId;
 
 use crate::{
     css_plan::SelectorKey,
-    planner::{Edit, SourceFile, Warning},
+    planner::{Edit, SourceFile, Warning, original_offset},
     utilities::{tailwind_utilities_conflict, utility_conflict},
 };
 
@@ -330,6 +330,13 @@ pub(crate) fn plan_batch_source_file(
     } else {
         Vec::new()
     };
+
+    for warning in &mut collector.warnings {
+        if (warning.start, warning.end) != (0, 0) {
+            warning.start = original_offset(&file.prior_edits, warning.start);
+            warning.end = original_offset(&file.prior_edits, warning.end);
+        }
+    }
 
     Ok(SourcePlan {
         edits: collector.edits,

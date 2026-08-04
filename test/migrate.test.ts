@@ -75,6 +75,70 @@ test("returns structured migration report fields", async () => {
   ]);
 });
 
+test("reports warning line and column while converting independent rules", async () => {
+  const template = `import styles from './Button.module.css';
+export const Button = ({ active }) => (
+  <>
+    <button aria-label="저장 😀" className={
+      active ? styles.blocked : ""
+    }>Blocked</button>
+    <button className={styles.button}>Safe</button>
+  </>
+);
+`;
+
+  for (const [lineEnding, expected] of [
+    ["\r\n", [4, 42, 6, 6]],
+    ["\r", [4, 42, 6, 6]],
+    ["\u2028", [4, 42, 6, 6]],
+    ["\u2029", [4, 42, 6, 6]],
+    ["\r\u2028", [7, 42, 11, 6]],
+    ["\r\u2029", [7, 42, 11, 6]],
+  ] as const) {
+    const cwd = await fixture({
+      css: ".blocked { color: red; }\n.button { padding: 13px; }\n",
+      tsx: template.replaceAll("\n", lineEnding),
+    });
+    const report = await migrate({ cwd });
+    const warning = report.warnings.find((entry) => entry.code === "dynamic-class-name")!;
+
+    assert.equal(report.convertedRules, 1);
+    assert.equal(report.retainedRules, 1);
+    assert.deepEqual([warning.line, warning.column, warning.endLine, warning.endColumn], expected);
+  }
+});
+
+test("counts CSS form feeds in warning locations", async () => {
+  const cwd = await fixture({
+    css: ".unused { padding: 13px; }\f.button { color: v-bind(theme); }\n",
+  });
+
+  const report = await migrate({ cwd });
+  const warning = report.warnings.find((entry) => entry.code === "unsupported-value")!;
+
+  assert.equal(warning.line, 2);
+});
+
+test("keeps distinct conflict warnings at the same source span", async () => {
+  const cwd = await fixture({
+    css: ".a { padding: 13px; }\n",
+    tsx: `import a from './Button.module.css';
+import b from './Other.module.css';
+export const Button = () => (
+  <button className={\`p-4 m-4 \${a.a} \${b.b}\`}>Save</button>
+);
+`,
+  });
+  await writeFile(join(cwd, "Other.module.css"), ".b { margin: 7px; }\n");
+
+  const report = await migrate({ cwd });
+  const warnings = report.warnings.filter((entry) => entry.code === "existing-tailwind-conflict");
+
+  assert.equal(warnings.length, 2);
+  assert.equal(new Set(warnings.map((warning) => `${warning.start}:${warning.end}`)).size, 1);
+  assert.equal(new Set(warnings.map((warning) => warning.message)).size, 2);
+});
+
 test("validates API-only migration options", async () => {
   const cwd = await fixture();
   await assert.rejects(
@@ -140,8 +204,16 @@ test("retains nested SCSS rules whose expansion prevents a unique authored mappi
   ]);
   const report = await migrate({ cwd, styleFile: "Card.module.scss" });
   assert.deepEqual(
-    report.warnings.map((warning) => [warning.code, warning.start, warning.end]),
-    [["unproven-source-map", 0, 0]],
+    report.warnings.map((warning) => [
+      warning.code,
+      warning.start,
+      warning.end,
+      warning.line,
+      warning.column,
+      warning.endLine,
+      warning.endColumn,
+    ]),
+    [["unproven-source-map", 0, 0, undefined, undefined, undefined, undefined]],
   );
 });
 
@@ -291,14 +363,28 @@ test("locates scoped blocks with whitespace in their closing tags", async () => 
   );
 });
 
+test("reports a Vue parse error at the first byte", async () => {
+  const cwd = await fixture();
+  await writeFile(join(cwd, "Broken.vue"), "<template>");
+
+  const report = await migrate({ cwd, styleFile: "Broken.vue" });
+  const warning = report.warnings.find((entry) => entry.code === "unsupported-sfc-block")!;
+
+  assert.deepEqual(
+    [warning.start, warning.end, warning.line, warning.column, warning.endLine, warning.endColumn],
+    [0, 0, 1, 1, 1, 1],
+  );
+});
+
 test("retains an SFC with a custom block", async () => {
   const cwd = await fixture();
   const vue =
-    '<template>\n  <p class="card">A</p>\n  <p class="note">B</p>\n</template>\n<docs>runtime transform</docs>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+    '<template>\n  <p class="card">A\u2028B</p>\n  <p class="note">B</p>\n</template>\n<docs>runtime transform</docs>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
   await writeFile(join(cwd, "Card.vue"), vue);
   const report = await migrate({ cwd, styleFile: "Card.vue" });
+  const warning = report.warnings.find((entry) => entry.code === "unsupported-sfc-block")!;
   assert.deepEqual(report.changedFiles, []);
-  assert.ok(report.warnings.some((entry) => entry.code === "unsupported-sfc-block"));
+  assert.equal(warning.line, 5);
 });
 
 test("retains scoped styles with unsupported behavioral attributes", async () => {
@@ -1123,6 +1209,42 @@ test("CSS v-bind declarations retain across plain and preprocessor blocks", asyn
       .every((rule) => rule.status === "retained"),
   );
   assert.ok(report.warnings.some((entry) => entry.code === "unsupported-value"));
+});
+
+test("counts form feeds within Vue style warning locations", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\f.card { color: v-bind(theme); }\n</style>\n';
+  await writeFile(join(cwd, "Card.vue"), vue);
+
+  const report = await migrate({ cwd, styleFile: "Card.vue" });
+  const warning = report.warnings.find((entry) => entry.code === "unsupported-value")!;
+
+  assert.equal(warning.line, 6);
+});
+
+test("isolates Vue form-feed line counts to the warning block", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="first second">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\f.first { padding: 13px; }\n</style>\n<style scoped>\n.second { color: v-bind(theme); }\n</style>\n';
+  await writeFile(join(cwd, "Card.vue"), vue);
+
+  const report = await migrate({ cwd, styleFile: "Card.vue" });
+  const warning = report.warnings.find((entry) => entry.code === "unsupported-value")!;
+
+  assert.equal(warning.line, 8);
+});
+
+test("counts form feeds within retained Vue style warning ranges", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n</template>\n<style>\f.card { color: red; }\n</style>\n';
+  await writeFile(join(cwd, "Card.vue"), vue);
+
+  const report = await migrate({ cwd, styleFile: "Card.vue" });
+  const warning = report.warnings.find((entry) => entry.code === "unscoped-style-block")!;
+
+  assert.deepEqual([warning.line, warning.endLine], [4, 6]);
 });
 
 test("rewrites proven $style bindings and deletes the emptied module block", async () => {

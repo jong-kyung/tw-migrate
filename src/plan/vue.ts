@@ -258,6 +258,7 @@ export async function preparePackageVue({
   const none: PreparedVue = {
     files: new Map(),
     stylesheets: [],
+    styleRanges: new Map(),
     stylePaths: new Set(),
     unscopedPaths: new Set(),
     warnings: [],
@@ -750,6 +751,9 @@ export async function preparePackageVue({
   return {
     files,
     stylesheets,
+    styleRanges: new Map(
+      [...analyses].map(([path, analysis]) => [path, analysis.styleRanges] as const),
+    ),
     stylePaths,
     unscopedPaths,
     warnings,
