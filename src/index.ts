@@ -246,35 +246,29 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
         isStylesheetPath(file),
       );
       const bytes = Buffer.from(source);
-      return [
-        [
-          file,
-          {
-            default: defaultPositions,
-            styles: styleRanges.flatMap((range) => {
-              const initial = defaultPositions.get(range.start);
-              if (!initial) return [];
-              const relativeOffsets = new Set(
-                [...offsets]
-                  .filter((offset) => range.start <= offset && offset <= range.end)
-                  .map((offset) => offset - range.start),
-              );
-              return [
-                {
-                  range,
-                  positions: indexWarningPositions(
-                    bytes.subarray(range.start, range.end).toString(),
-                    relativeOffsets,
-                    false,
-                    true,
-                    initial,
-                  ),
-                },
-              ];
-            }),
-          },
-        ] as const,
-      ];
+      const sortedOffsets = [...offsets].sort((left, right) => left - right);
+      const stylePositions = new Map<number, { line: number; column: number }>();
+      let offsetIndex = 0;
+      for (const range of styleRanges) {
+        while ((sortedOffsets[offsetIndex] ?? Infinity) < range.start) offsetIndex += 1;
+        const relativeOffsets = new Set<number>();
+        while ((sortedOffsets[offsetIndex] ?? Infinity) <= range.end) {
+          relativeOffsets.add(sortedOffsets[offsetIndex] - range.start);
+          offsetIndex += 1;
+        }
+        const initial = defaultPositions.get(range.start);
+        if (!initial) continue;
+        for (const [offset, position] of indexWarningPositions(
+          bytes.subarray(range.start, range.end).toString(),
+          relativeOffsets,
+          false,
+          true,
+          initial,
+        )) {
+          stylePositions.set(range.start + offset, position);
+        }
+      }
+      return [[file, { default: defaultPositions, style: stylePositions }] as const];
     }),
   );
   failures.sort((left, right) => left.package.localeCompare(right.package));
@@ -291,15 +285,15 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
     candidates: [...candidates].sort(),
     warnings: warnings.map((warning) => {
       const indexed = warningPositions.get(warning.file);
-      const style = indexed?.styles.find(
-        ({ range }) => range.start <= warning.start && warning.start < range.end,
-      );
-      const positions = style?.positions ?? indexed?.default;
-      const start = style ? warning.start - style.range.start : warning.start;
-      const end = style ? warning.end - style.range.start : warning.end;
+      const styleFrom = indexed?.style.get(warning.start);
+      const styleTo = indexed?.style.get(warning.end);
       const located = warning.start !== 0 || warning.end !== 0;
-      const from = located ? positions?.get(start) : undefined;
-      const to = located ? positions?.get(end) : undefined;
+      const from = located ? (styleFrom ?? indexed?.default.get(warning.start)) : undefined;
+      const to = located
+        ? styleFrom && styleTo
+          ? styleTo
+          : indexed?.default.get(warning.end)
+        : undefined;
       return {
         ...warning,
         ...(from && to
