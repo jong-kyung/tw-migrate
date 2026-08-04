@@ -57,20 +57,15 @@ export type {
   RuleReport,
 } from "./types.ts";
 
-interface WarningPosition {
-  line: number;
-  column: number;
-}
-
 function indexWarningPositions(
   source: string,
   offsets: Set<number>,
   unicodeSeparatorsAreNewlines: boolean,
   formFeedIsNewline: boolean,
   formFeedRanges: RuleSpan[] = [],
-): Map<number, WarningPosition> {
+) {
   const targets = [...offsets].sort((left, right) => left - right);
-  const positions = new Map<number, WarningPosition>();
+  const positions = new Map<number, { line: number; column: number }>();
   let target = 0;
   let byte = 0;
   let line = 1;
@@ -117,19 +112,6 @@ function indexWarningPositions(
     record();
   }
   return positions;
-}
-
-function warningLocation(
-  positions: Map<number, WarningPosition> | undefined,
-  start: number,
-  end: number,
-): Pick<MigrationWarning, "line" | "column" | "endLine" | "endColumn"> {
-  if ((start === 0 && end === 0) || !positions) return {};
-  const from = positions.get(start);
-  const to = positions.get(end);
-  return from && to
-    ? { line: from.line, column: from.column, endLine: to.line, endColumn: to.column }
-    : {};
 }
 
 export async function migrate(options: MigrateOptions = {}): Promise<MigrationReport> {
@@ -301,13 +283,14 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
       const styleWarning = indexed?.styleRanges.some(
         (range) => range.start <= warning.start && warning.start < range.end,
       );
+      const positions = styleWarning ? indexed?.style : indexed?.default;
+      const from = positions?.get(warning.start);
+      const to = positions?.get(warning.end);
       return {
         ...warning,
-        ...warningLocation(
-          styleWarning ? indexed?.style : indexed?.default,
-          warning.start,
-          warning.end,
-        ),
+        ...(from && to
+          ? { line: from.line, column: from.column, endLine: to.line, endColumn: to.column }
+          : {}),
         file: normalizedRelativePath(cwd, warning.file),
       };
     }),

@@ -265,24 +265,23 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     start: style.loc.start.offset,
     end: style.loc.end.offset,
   }));
+  const byteRanges = (offset: (value: number) => number) => ({
+    warnings: warnings.map((warning) => ({
+      ...warning,
+      start: offset(warning.start),
+      end: offset(warning.end),
+    })),
+    styleRanges: styleRanges.map((range) => ({
+      start: offset(range.start),
+      end: offset(range.end),
+    })),
+  });
   const retained = (): VueAnalysis => {
     const offsets = utf8OffsetMap(
       source,
       [...warnings, ...styleRanges].flatMap((range) => [range.start, range.end]),
     );
-    const offset = offsetLookup(offsets);
-    return {
-      retained: true,
-      warnings: warnings.map((warning) => ({
-        ...warning,
-        start: offset(warning.start),
-        end: offset(warning.end),
-      })),
-      styleRanges: styleRanges.map((range) => ({
-        start: offset(range.start),
-        end: offset(range.end),
-      })),
-    };
+    return { retained: true, ...byteRanges(offsetLookup(offsets)) };
   };
   if (errors.length > 0) {
     const offset = errors[0]?.loc?.start?.offset ?? 0;
@@ -535,15 +534,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     },
   });
   return {
-    warnings: warnings.map((warning) => ({
-      ...warning,
-      start: offset(warning.start),
-      end: offset(warning.end),
-    })),
-    styleRanges: styleRanges.map((range) => ({
-      start: offset(range.start),
-      end: offset(range.end),
-    })),
+    ...byteRanges(offset),
     blocks: blocks.map(toByteBlock),
     unscopedBlocks: unscopedBlocks.map(toByteBlock),
     moduleBlocks: moduleBlocks.map(toByteBlock),
