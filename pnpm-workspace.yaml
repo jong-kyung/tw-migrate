@@ -11,7 +11,7 @@ catalog:
   sass: 1.102.0
   tailwindcss: 4.3.3
   typescript: 7.0.2
-  verdaccio: 6.8.0
+  verdaccio: 6.9.2
   vite: npm:@voidzero-dev/vite-plus-core@0.2.7
   vite-plus: 0.2.7
   vitest: 4.1.10
