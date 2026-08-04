@@ -35,7 +35,7 @@ jobs:
           run-install: false
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.95.0
+          toolchain: 1.97.1
       - run: vp install --frozen-lockfile
       - run: vp run typecheck
       - run: vp run test
@@ -104,7 +104,7 @@ jobs:
           run-install: false
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.95.0
+          toolchain: 1.97.1
       - run: vp install --frozen-lockfile
       - run: vp run snapshots:prepare
       - name: Install snapshot review CLI
