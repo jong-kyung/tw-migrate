@@ -137,7 +137,11 @@
         "file": "src/App.module.css",
         "start": 315,
         "end": 346,
-        "message": "No exclusively supported className references were found."
+        "message": "No exclusively supported className references were found.",
+        "line": 22,
+        "column": 1,
+        "endLine": 24,
+        "endColumn": 2
       }
     ],
     "failures": []
