@@ -1223,6 +1223,18 @@ test("counts form feeds within Vue style warning locations", async () => {
   assert.equal(warning.line, 6);
 });
 
+test("isolates Vue form-feed line counts to the warning block", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="first second">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\f.first { padding: 13px; }\n</style>\n<style scoped>\n.second { color: v-bind(theme); }\n</style>\n';
+  await writeFile(join(cwd, "Card.vue"), vue);
+
+  const report = await migrate({ cwd, styleFile: "Card.vue" });
+  const warning = report.warnings.find((entry) => entry.code === "unsupported-value")!;
+
+  assert.equal(warning.line, 8);
+});
+
 test("counts form feeds within retained Vue style warning ranges", async () => {
   const cwd = await fixture();
   const vue =

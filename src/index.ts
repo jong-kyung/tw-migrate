@@ -62,16 +62,14 @@ function indexWarningPositions(
   offsets: Set<number>,
   unicodeSeparatorsAreNewlines: boolean,
   formFeedIsNewline: boolean,
-  formFeedRanges: RuleSpan[] = [],
+  initial = { line: 1, column: 1 },
 ) {
   const targets = [...offsets].sort((left, right) => left - right);
   const positions = new Map<number, { line: number; column: number }>();
   let target = 0;
   let byte = 0;
-  let line = 1;
-  let column = 1;
+  let { line, column } = initial;
   let previousWasCarriageReturn = false;
-  let formFeedRange = 0;
   const record = (): void => {
     while (targets[target] === byte) {
       positions.set(byte, { line, column });
@@ -81,15 +79,8 @@ function indexWarningPositions(
 
   record();
   for (const character of source) {
-    const characterStart = byte;
     byte += Buffer.byteLength(character);
     while ((targets[target] ?? Infinity) < byte) target += 1;
-    while ((formFeedRanges[formFeedRange]?.end ?? Infinity) <= characterStart) {
-      formFeedRange += 1;
-    }
-    const range = formFeedRanges[formFeedRange];
-    const formFeedInRange =
-      range !== undefined && range.start <= characterStart && characterStart < range.end;
     if (character === "\r") {
       line += 1;
       column = 1;
@@ -100,7 +91,7 @@ function indexWarningPositions(
       previousWasCarriageReturn = false;
     } else if (
       (unicodeSeparatorsAreNewlines && (character === "\u2028" || character === "\u2029")) ||
-      ((formFeedIsNewline || formFeedInRange) && character === "\f")
+      (formFeedIsNewline && character === "\f")
     ) {
       line += 1;
       column = 1;
@@ -246,21 +237,41 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
       const javascriptSource =
         SOURCE_EXTENSIONS.has(extension) && extension !== ".html" && extension !== ".vue";
       const styleRanges = vueStyleRanges.get(file) ?? [];
+      const defaultOffsets = new Set(offsets);
+      for (const range of styleRanges) defaultOffsets.add(range.start);
+      const defaultPositions = indexWarningPositions(
+        source,
+        defaultOffsets,
+        javascriptSource,
+        isStylesheetPath(file),
+      );
+      const bytes = Buffer.from(source);
       return [
         [
           file,
           {
-            default: indexWarningPositions(
-              source,
-              offsets,
-              javascriptSource,
-              isStylesheetPath(file),
-            ),
-            style:
-              styleRanges.length > 0
-                ? indexWarningPositions(source, offsets, false, false, styleRanges)
-                : undefined,
-            styleRanges,
+            default: defaultPositions,
+            styles: styleRanges.flatMap((range) => {
+              const initial = defaultPositions.get(range.start);
+              if (!initial) return [];
+              const relativeOffsets = new Set(
+                [...offsets]
+                  .filter((offset) => range.start <= offset && offset <= range.end)
+                  .map((offset) => offset - range.start),
+              );
+              return [
+                {
+                  range,
+                  positions: indexWarningPositions(
+                    bytes.subarray(range.start, range.end).toString(),
+                    relativeOffsets,
+                    false,
+                    true,
+                    initial,
+                  ),
+                },
+              ];
+            }),
           },
         ] as const,
       ];
@@ -280,12 +291,15 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
     candidates: [...candidates].sort(),
     warnings: warnings.map((warning) => {
       const indexed = warningPositions.get(warning.file);
-      const styleWarning = indexed?.styleRanges.some(
-        (range) => range.start <= warning.start && warning.start < range.end,
+      const style = indexed?.styles.find(
+        ({ range }) => range.start <= warning.start && warning.start < range.end,
       );
-      const positions = styleWarning ? indexed?.style : indexed?.default;
-      const from = positions?.get(warning.start);
-      const to = positions?.get(warning.end);
+      const positions = style?.positions ?? indexed?.default;
+      const start = style ? warning.start - style.range.start : warning.start;
+      const end = style ? warning.end - style.range.start : warning.end;
+      const located = warning.start !== 0 || warning.end !== 0;
+      const from = located ? positions?.get(start) : undefined;
+      const to = located ? positions?.get(end) : undefined;
       return {
         ...warning,
         ...(from && to
