@@ -81,25 +81,18 @@ function indexWarningPositions(
   for (const character of source) {
     byte += Buffer.byteLength(character);
     while ((targets[target] ?? Infinity) < byte) target += 1;
-    if (character === "\r") {
-      line += 1;
-      column = 1;
-      previousWasCarriageReturn = true;
-    } else if (character === "\n") {
-      if (!previousWasCarriageReturn) line += 1;
-      column = 1;
-      previousWasCarriageReturn = false;
-    } else if (
+    const newline =
+      character === "\r" ||
+      (character === "\n" && !previousWasCarriageReturn) ||
       (unicodeSeparatorsAreNewlines && (character === "\u2028" || character === "\u2029")) ||
-      (formFeedIsNewline && character === "\f")
-    ) {
+      (formFeedIsNewline && character === "\f");
+    if (newline) {
       line += 1;
       column = 1;
-      previousWasCarriageReturn = false;
-    } else {
+    } else if (character !== "\n") {
       column += character.length;
-      previousWasCarriageReturn = false;
     }
+    previousWasCarriageReturn = character === "\r";
     record();
   }
   return positions;
