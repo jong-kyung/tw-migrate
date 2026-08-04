@@ -9,7 +9,7 @@
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "tailwindcss": "4.3.3",
-    "less": "4.7.0",
+    "less": "4.8.1",
     "next-with-less": "3.0.1"
   }
 }
