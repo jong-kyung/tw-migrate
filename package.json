@@ -35,7 +35,7 @@
   "scripts": {
     "build": "vp pack && napi build --manifest-path crates/tw_migrate/Cargo.toml --package-json-path package.json --output-dir . --platform --release --no-js --dts binding.d.ts",
     "build:debug": "napi build --manifest-path crates/tw_migrate/Cargo.toml --package-json-path package.json --output-dir . --platform --no-js --dts binding.d.ts",
-    "artifacts": "napi artifacts --output-dir . --npm-dir npm",
+    "artifacts": "node -e \"const fs=require('node:fs'); const files=fs.readdirSync('.').filter((file)=>file.startsWith('tw-migrate.')&&file.endsWith('.node')); if(files.length===0) throw new Error('no tw-migrate.*.node artifact in the package root; run build first'); for(const file of files) fs.copyFileSync(file, 'npm/'+file.slice('tw-migrate.'.length, -'.node'.length)+'/'+file)\"",
     "test": "cargo test && pnpm build:debug && vp test",
     "test:ecosystem": "node ecosystem-ci/run.ts",
     "typecheck": "tsc --noEmit",
