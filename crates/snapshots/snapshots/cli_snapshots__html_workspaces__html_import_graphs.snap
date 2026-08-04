@@ -7,7 +7,7 @@ case: html_import_graphs
 --- step: write ---
 status: 0
 stdout: "--- a/index.html\n+++ b/index.html\n@@ -1,2 +1,2 @@\n-<link rel=\"stylesheet\" href=\"./base.css\" media=\"print\"><link rel=\"stylesheet\" href=\"./a.css\"><div class=\"card note\"></div>\n \n+<link rel=\"stylesheet\" href=\"./base.css\" media=\"print\"><link rel=\"stylesheet\" href=\"./a.css\"><div class=\"card note print:text-[red] print:p-[13px]\"></div>\n \nApplied 1 file(s); 0 rule(s) converted, 5 retained.\n"
-stderr: "warning[unsupported-at-rule] a.css:0-23 The rule is outside the supported declaration or selector subset.\nwarning[unsupported-at-rule] b.css:0-17 The rule is outside the supported declaration or selector subset.\nwarning[retained-global-rule] b.css:19-40 Global CSS is never deleted automatically.\nwarning[unsupported-at-rule] base.css:0-21 The rule is outside the supported declaration or selector subset.\nwarning[retained-global-rule] print.css:0-24 Global CSS is never deleted automatically.\n"
+stderr: "warning[unsupported-at-rule] a.css:1:1-1:24 The rule is outside the supported declaration or selector subset.\nwarning[unsupported-at-rule] b.css:1:1-1:18 The rule is outside the supported declaration or selector subset.\nwarning[retained-global-rule] b.css:2:1-2:22 Global CSS is never deleted automatically.\nwarning[unsupported-at-rule] base.css:1:1-1:22 The rule is outside the supported declaration or selector subset.\nwarning[retained-global-rule] print.css:1:1-1:25 Global CSS is never deleted automatically.\n"
 workspace delta:
   modified index.html
     before: "<link rel=\"stylesheet\" href=\"./base.css\" media=\"print\"><link rel=\"stylesheet\" href=\"./a.css\"><div class=\"card note\"></div>\n"

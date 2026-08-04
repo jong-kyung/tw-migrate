@@ -17,6 +17,11 @@ export interface MigrationWarning {
   /** Byte offsets into the authored file, or (0, 0) when no unique mapping exists. */
   start: number;
   end: number;
+  /** 1-based UTF-16 positions, omitted when no unique authored mapping exists. */
+  line?: number;
+  column?: number;
+  endLine?: number;
+  endColumn?: number;
   message: string;
 }
 
@@ -149,6 +154,7 @@ export interface MigrationContext extends Scope {
   styleSources: Map<string, string>;
   sourceFiles: SourceFile[];
   styleDependents: Map<string, string[]>;
+  vueStyleRanges: Map<string, RuleSpan[]>;
 }
 
 export interface RemovableLink {

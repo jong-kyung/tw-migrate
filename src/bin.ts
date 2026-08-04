@@ -62,12 +62,13 @@ async function main(): Promise<void> {
   const report = await migrate({ styleFile, tailwindCss, write, force, workspaces });
   if (report.diff) process.stdout.write(report.diff);
   for (const warning of report.warnings) {
+    const location = warning.line
+      ? `${warning.file}:${warning.line}:${warning.column}-${warning.endLine}:${warning.endColumn}`
+      : warning.file;
     console.warn(
-      styleText(
-        "yellow",
-        `warning[${warning.code}] ${warning.file}:${warning.start}-${warning.end} ${warning.message}`,
-        { stream: process.stderr },
-      ),
+      styleText("yellow", `warning[${warning.code}] ${location} ${warning.message}`, {
+        stream: process.stderr,
+      }),
     );
   }
   for (const failure of report.failures) {

@@ -268,6 +268,9 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
       offset,
       `The SFC could not be parsed: ${errors[0].message}`,
     );
+    if (errors[0]?.loc?.start?.offset === 0) {
+      Object.assign(warnings[0], { line: 1, column: 1, endLine: 1, endColumn: 1 });
+    }
     return { warnings: toByteWarnings(source, warnings), retained: true };
   }
 

@@ -57,6 +57,81 @@ export type {
   RuleReport,
 } from "./types.ts";
 
+interface WarningPosition {
+  line: number;
+  column: number;
+}
+
+function indexWarningPositions(
+  source: string,
+  offsets: Set<number>,
+  unicodeSeparatorsAreNewlines: boolean,
+  formFeedIsNewline: boolean,
+  formFeedRanges: RuleSpan[] = [],
+): Map<number, WarningPosition> {
+  const targets = [...offsets].sort((left, right) => left - right);
+  const positions = new Map<number, WarningPosition>();
+  let target = 0;
+  let byte = 0;
+  let line = 1;
+  let column = 1;
+  let previousWasCarriageReturn = false;
+  let formFeedRange = 0;
+  const record = (): void => {
+    while (targets[target] === byte) {
+      positions.set(byte, { line, column });
+      target += 1;
+    }
+  };
+
+  record();
+  for (const character of source) {
+    const characterStart = byte;
+    byte += Buffer.byteLength(character);
+    while ((targets[target] ?? Infinity) < byte) target += 1;
+    while ((formFeedRanges[formFeedRange]?.end ?? Infinity) <= characterStart) {
+      formFeedRange += 1;
+    }
+    const range = formFeedRanges[formFeedRange];
+    const formFeedInRange =
+      range !== undefined && range.start <= characterStart && characterStart < range.end;
+    if (character === "\r") {
+      line += 1;
+      column = 1;
+      previousWasCarriageReturn = true;
+    } else if (character === "\n") {
+      if (!previousWasCarriageReturn) line += 1;
+      column = 1;
+      previousWasCarriageReturn = false;
+    } else if (
+      (unicodeSeparatorsAreNewlines && (character === "\u2028" || character === "\u2029")) ||
+      ((formFeedIsNewline || formFeedInRange) && character === "\f")
+    ) {
+      line += 1;
+      column = 1;
+      previousWasCarriageReturn = false;
+    } else {
+      column += character.length;
+      previousWasCarriageReturn = false;
+    }
+    record();
+  }
+  return positions;
+}
+
+function warningLocation(
+  positions: Map<number, WarningPosition> | undefined,
+  start: number,
+  end: number,
+): Pick<MigrationWarning, "line" | "column" | "endLine" | "endColumn"> {
+  if ((start === 0 && end === 0) || !positions) return {};
+  const from = positions.get(start);
+  const to = positions.get(end);
+  return from && to
+    ? { line: from.line, column: from.column, endLine: to.line, endColumn: to.column }
+    : {};
+}
+
 export async function migrate(options: MigrateOptions = {}): Promise<MigrationReport> {
   if (options.styleFile && options.workspaces) {
     throw new TypeError("styleFile cannot be combined with workspaces");
@@ -122,6 +197,7 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
     styleSources.set(configuredEntry, await snapshotFile(snapshots, configuredEntry));
   }
 
+  const vueStyleRanges = new Map<string, RuleSpan[]>();
   const context: MigrationContext = {
     ...scope,
     options,
@@ -129,6 +205,7 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
     styleSources,
     sourceFiles,
     styleDependents: indexStylesheetDependents(styleSources),
+    vueStyleRanges,
   };
   const failures: MigrationFailure[] = [];
   const plans: Plan[] = [];
@@ -172,6 +249,41 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
       left.end - right.end ||
       left.code.localeCompare(right.code),
   );
+  const warningOffsets = new Map<string, Set<number>>();
+  for (const warning of warnings) {
+    if (warning.start === 0 && warning.end === 0) continue;
+    const offsets = warningOffsets.get(warning.file) ?? new Set<number>();
+    offsets.add(warning.start).add(warning.end);
+    warningOffsets.set(warning.file, offsets);
+  }
+  const warningPositions = new Map(
+    [...warningOffsets].flatMap(([file, offsets]) => {
+      const source = snapshots.get(file);
+      if (!source) return [];
+      const extension = extname(file);
+      const javascriptSource =
+        SOURCE_EXTENSIONS.has(extension) && extension !== ".html" && extension !== ".vue";
+      const styleRanges = vueStyleRanges.get(file) ?? [];
+      return [
+        [
+          file,
+          {
+            default: indexWarningPositions(
+              source,
+              offsets,
+              javascriptSource,
+              isStylesheetPath(file),
+            ),
+            style:
+              styleRanges.length > 0
+                ? indexWarningPositions(source, offsets, false, false, styleRanges)
+                : undefined,
+            styleRanges,
+          },
+        ] as const,
+      ];
+    }),
+  );
   failures.sort((left, right) => left.package.localeCompare(right.package));
   return {
     changedFiles,
@@ -184,10 +296,21 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
       file: normalizedRelativePath(cwd, rule.file),
     })),
     candidates: [...candidates].sort(),
-    warnings: warnings.map((warning) => ({
-      ...warning,
-      file: normalizedRelativePath(cwd, warning.file),
-    })),
+    warnings: warnings.map((warning) => {
+      const indexed = warningPositions.get(warning.file);
+      const styleWarning = indexed?.styleRanges.some(
+        (range) => range.start <= warning.start && warning.start < range.end,
+      );
+      return {
+        ...warning,
+        ...warningLocation(
+          styleWarning ? indexed?.style : indexed?.default,
+          warning.start,
+          warning.end,
+        ),
+        file: normalizedRelativePath(cwd, warning.file),
+      };
+    }),
     failures,
   };
 }
@@ -206,6 +329,7 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
     targetable,
     selectedPackages,
     scannedPaths,
+    vueStyleRanges,
   } = context;
   const recover = (error: unknown, fatal = false): PlanResult => {
     if (!options.force || fatal) throw error;
@@ -242,6 +366,17 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
     });
   } catch (error) {
     return recover(error, isIntegrityError(error));
+  }
+  for (const stylesheet of preparedVue.stylesheets) {
+    const ranges = vueStyleRanges.get(stylesheet.cssPath) ?? [];
+    ranges.push(
+      ...(stylesheet.vueBlocks ?? []).map((block) => ({
+        start: block.contentStart,
+        end: block.contentEnd,
+      })),
+    );
+    ranges.sort((left, right) => left.start - right.start);
+    vueStyleRanges.set(stylesheet.cssPath, ranges);
   }
   // An explicit .vue selection that produced nothing to plan must surface
   // its retention warnings without requiring an unrelated Tailwind entry.
@@ -604,7 +739,7 @@ function mergePlans(plans: Plan[], originals: Map<string, string>) {
     // Per-stylesheet planning repeats the same source-site warning once per
     // stylesheet; the user-facing report keeps the first of each.
     for (const warning of plan.warnings) {
-      const key = `${warning.code}\0${warning.file}\0${warning.start}\0${warning.end}`;
+      const key = `${warning.code}\0${warning.file}\0${warning.start}\0${warning.end}\0${warning.message}`;
       if (seenWarnings.has(key)) continue;
       seenWarnings.add(key);
       warnings.push(warning);

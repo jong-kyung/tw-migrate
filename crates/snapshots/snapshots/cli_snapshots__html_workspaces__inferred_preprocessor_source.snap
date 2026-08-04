@@ -7,7 +7,7 @@ case: inferred_preprocessor_source
 --- step: write ---
 status: 0
 stdout: "--- a/index.html\n+++ b/index.html\n@@ -1,2 +1,2 @@\n-<link rel=\"stylesheet\" href=\"./dist/app.css\"><div class=\"card\"></div>\n \n+<link rel=\"stylesheet\" href=\"./dist/app.css\"><div class=\"card p-[13px]\"></div>\n \nApplied 1 file(s); 0 rule(s) converted, 1 retained.\n"
-stderr: "warning[inferred-preprocessor-source] dist/app.css:0-0 The linked CSS was matched to the unique preprocessor filename app.scss.\nwarning[retained-global-rule] src/app.scss:0-24 Global CSS is never deleted automatically.\n"
+stderr: "warning[inferred-preprocessor-source] dist/app.css The linked CSS was matched to the unique preprocessor filename app.scss.\nwarning[retained-global-rule] src/app.scss:1:1-1:25 Global CSS is never deleted automatically.\n"
 workspace delta:
   modified index.html
     before: "<link rel=\"stylesheet\" href=\"./dist/app.css\"><div class=\"card\"></div>\n"
