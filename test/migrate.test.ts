@@ -80,7 +80,7 @@ test("reports warning line and column while converting independent rules", async
 export const Button = ({ active }) => (
   <>
     <button aria-label="저장 😀" className={
-      active ? styles.blocked : ""
+      getClass(active, styles.blocked)
     }>Blocked</button>
     <button className={styles.button}>Safe</button>
   </>

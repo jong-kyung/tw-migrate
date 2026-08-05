@@ -47,6 +47,7 @@ node /path/to/tw-migrate/src/bin.ts
 - Vue `<style module>` blocks migrate against direct `:class="$style.x"` member bindings; any other `$style`/`useCssModule` appearance or a named module retains the block
 - direct CSS Module members, static template literals, and static expression literals
 - global `className` and `id` literals
+- React/Next.js `className` logical (`&&`, `||`, `??`) and conditional (`?:`) expressions: string and direct CSS Module member result leaves migrate without evaluating their conditions, `null`/`undefined`/`false`/empty-string results are warning-free, and unsupported result leaves retain with a warning while supported siblings still migrate
 - multi-compound CSS Module selectors whose element relationships are proven from the JSX graph
 - common state pseudo-classes, global arbitrary descendant variants, and conditional at-rules (`@media`, `@supports`, `@container`, `@starting-style`)
 - the tier-1 property mapping families with shorthand/longhand normalization
@@ -68,7 +69,7 @@ Everything outside this subset is retained and reported with one of the warning 
 | `computed-css-module-reference`      | A computed CSS Module access cannot be verified, so the module is retained.                                            |
 | `cross-package-stylesheet-link`      | A linked stylesheet is owned by another package, so it is not analyzed outside workspace mode.                         |
 | `css-module-composes`                | The rule uses or is targeted by `composes`, so it is retained.                                                         |
-| `dynamic-class-name`                 | A `className` value is dynamic, so the element cannot be migrated.                                                     |
+| `dynamic-class-name`                 | A `className` value or expression result is dynamic, so that class site cannot be migrated.                            |
 | `dynamic-html-attribute`             | An HTML attribute is not a safely writable quoted literal, so the element cannot be migrated.                          |
 | `dynamic-template-class`             | A dynamic class binding makes a Vue template's class set unprovable, so its scoped rules are retained.                 |
 | `existing-tailwind-conflict`         | A generated utility may conflict with a Tailwind class already on the element.                                         |
