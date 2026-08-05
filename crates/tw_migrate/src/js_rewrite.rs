@@ -524,6 +524,16 @@ struct UsageCollector<'s> {
 }
 
 impl UsageCollector<'_> {
+    /// Record a `dynamic-class-name` warning for an unsupported class site.
+    fn warn_dynamic_class_name(&mut self, span: Span, message: &str) {
+        self.warnings.push(Warning::new(
+            "dynamic-class-name",
+            self.file_path.to_string(),
+            (span.start as usize, span.end as usize),
+            message.to_string(),
+        ));
+    }
+
     /// Record one emitted candidate and its match site.
     fn record_match(&mut self, (start, end): (usize, usize), key: &SelectorKey, candidate: &str) {
         self.emitted_candidates.insert(candidate.to_string());
@@ -727,15 +737,10 @@ impl UsageCollector<'_> {
                                         self.global_result_leaf(leaf);
                                     }
                                 } else if !self.is_global_module_member(expression) {
-                                    self.warnings.push(Warning::new(
-                                        "dynamic-class-name",
-                                        self.file_path.to_string(),
-                                        (
-                                            container.span.start as usize,
-                                            container.span.end as usize,
-                                        ),
-                                        "Only static className values are supported.".to_string(),
-                                    ));
+                                    self.warn_dynamic_class_name(
+                                        container.span,
+                                        "Only static className values are supported.",
+                                    );
                                 }
                             }
                         }
@@ -876,13 +881,10 @@ impl UsageCollector<'_> {
                 if self.is_global_module_object(&member.object) => {}
             leaf if is_noop_class_leaf(leaf) => {}
             leaf => {
-                let span = leaf.span();
-                self.warnings.push(Warning::new(
-                    "dynamic-class-name",
-                    self.file_path.to_string(),
-                    (span.start as usize, span.end as usize),
-                    "Only static className values are supported.".to_string(),
-                ));
+                self.warn_dynamic_class_name(
+                    leaf.span(),
+                    "Only static className values are supported.",
+                );
             }
         }
     }
@@ -1006,12 +1008,10 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
                 }
                 JSXExpression::TemplateLiteral(template) => {
                     let Some(result) = self.static_template(template) else {
-                        self.warnings.push(Warning::new(
-                            "dynamic-class-name",
-                            self.file_path.to_string(),
-                            (container.span.start as usize, container.span.end as usize),
-                            "The template contains a dynamic or unsupported class.".to_string(),
-                        ));
+                        self.warn_dynamic_class_name(
+                            container.span,
+                            "The template contains a dynamic or unsupported class.",
+                        );
                         continue;
                     };
                     if result.members.is_empty() {
@@ -1022,12 +1022,10 @@ impl<'a> Visit<'a> for UsageCollector<'_> {
                     result
                 }
                 _ => {
-                    self.warnings.push(Warning::new(
-                        "dynamic-class-name",
-                        self.file_path.to_string(),
-                        (container.span.start as usize, container.span.end as usize),
-                        "Only static className values are supported.".to_string(),
-                    ));
+                    self.warn_dynamic_class_name(
+                        container.span,
+                        "Only static className values are supported.",
+                    );
                     continue;
                 }
             };
@@ -1074,12 +1072,10 @@ impl UsageCollector<'_> {
             }
             Expression::TemplateLiteral(template) => {
                 let Some(result) = self.static_template(template) else {
-                    self.warnings.push(Warning::new(
-                        "dynamic-class-name",
-                        self.file_path.to_string(),
-                        (template.span.start as usize, template.span.end as usize),
-                        "The template contains a dynamic or unsupported class.".to_string(),
-                    ));
+                    self.warn_dynamic_class_name(
+                        template.span,
+                        "The template contains a dynamic or unsupported class.",
+                    );
                     return;
                 };
                 if result.members.is_empty() {
@@ -1090,13 +1086,10 @@ impl UsageCollector<'_> {
             Expression::StringLiteral(_) => {}
             leaf if is_noop_class_leaf(leaf) => {}
             leaf => {
-                let span = leaf.span();
-                self.warnings.push(Warning::new(
-                    "dynamic-class-name",
-                    self.file_path.to_string(),
-                    (span.start as usize, span.end as usize),
-                    "Only static className values are supported.".to_string(),
-                ));
+                self.warn_dynamic_class_name(
+                    leaf.span(),
+                    "Only static className values are supported.",
+                );
             }
         }
     }
