@@ -2098,6 +2098,11 @@ fn plan_request(
             }
         }
     }
+    // A module file may only disappear when every reference is matched and
+    // safe; an emptied stylesheet with a dangling member reference must stay
+    // on disk so the consumer's retained import keeps resolving.
+    let module_removable =
+        is_module && module_references_safe && all_module_refs_migrated && retained_rules == 0;
     let stylesheet_changed = !css_edits.is_empty();
     let mut deleted_files = Vec::new();
     let mut applied_edits = HashMap::new();
@@ -2118,7 +2123,7 @@ fn plan_request(
                 source
             };
             validate_stylesheet(&source, request.sheet.syntax.parser_syntax())?;
-            if is_module && source.trim().is_empty() {
+            if module_removable && source.trim().is_empty() {
                 deleted_files.push(request.sheet.css_path.clone());
             } else {
                 planned_files.push(PlannedFile {
@@ -2130,11 +2135,7 @@ fn plan_request(
     }
 
     let css_module_deleted = deleted_files.contains(&request.sheet.css_path);
-    let module_import_is_unused = !vue_mode
-        && is_module
-        && module_references_safe
-        && all_module_refs_migrated
-        && retained_rules == 0;
+    let module_import_is_unused = !vue_mode && module_removable;
     for (file, mut result) in source_plans {
         if css_module_deleted || module_import_is_unused {
             result.edits.append(&mut result.removable_import_edits);
@@ -2784,6 +2785,69 @@ mod tests {
             .find(|warning| warning["code"] == "dynamic-class-name")
             .unwrap();
         assert_eq!(dynamic["file"], "/project/Card.tsx");
+    }
+
+    #[test]
+    fn keeps_an_emptied_module_and_import_for_a_dangling_member_leaf() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = ({ maybe }) => <div className={maybe ? styles.card : styles.missing} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        // `styles.missing` has no rule, so nothing retains the stylesheet,
+        // but deleting it would leave the source importing a missing file.
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        let files = response["files"].as_array().unwrap();
+        let migrated = files
+            .iter()
+            .find(|file| file["path"] == "/project/Card.tsx")
+            .unwrap()["source"]
+            .as_str()
+            .unwrap();
+        assert!(migrated.contains("import styles from './Card.module.css';"));
+        assert!(migrated.contains("className={maybe ? \"p-[13px]\" : styles.missing}"));
+        let emptied = files
+            .iter()
+            .find(|file| file["path"] == "/project/Card.module.css")
+            .unwrap()["source"]
+            .as_str()
+            .unwrap();
+        assert!(emptied.trim().is_empty());
+    }
+
+    #[test]
+    fn keeps_an_emptied_module_and_import_for_a_dangling_static_member() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <><div className={styles.card} /><span className={styles.missing} /></>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        let files = response["files"].as_array().unwrap();
+        let migrated = files
+            .iter()
+            .find(|file| file["path"] == "/project/Card.tsx")
+            .unwrap()["source"]
+            .as_str()
+            .unwrap();
+        assert!(migrated.contains("import styles from './Card.module.css';"));
+        assert!(migrated.contains("className={styles.missing}"));
     }
 
     #[test]
