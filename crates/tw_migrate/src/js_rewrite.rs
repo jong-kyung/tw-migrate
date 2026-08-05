@@ -855,30 +855,48 @@ impl UsageCollector<'_> {
         (replacement_value != value).then_some(replacement_value)
     }
 
+    /// Append candidates to a string-like leaf and rewrite it as a JS string
+    /// literal delimited by `quote` when the value permits it.
+    fn global_string_leaf(&mut self, span: Span, value: &str, quote: u8) {
+        let has_candidates = value.split_whitespace().any(|class| {
+            self.candidates
+                .contains_key(&SelectorKey::Class(class.to_string()))
+        });
+        if !has_candidates {
+            return;
+        }
+        let Some(replacement_value) = self.appended_class_value(span, value, &[]) else {
+            return;
+        };
+        self.edits.push(Edit {
+            start: span.start as usize,
+            end: span.end as usize,
+            replacement: js_string_literal(&replacement_value, quote),
+        });
+    }
+
     /// Plan one supported result leaf of a global className expression.
     fn global_result_leaf(&mut self, leaf: &Expression<'_>) {
         match leaf {
             Expression::StringLiteral(literal) => {
-                let has_candidates = literal.value.split_whitespace().any(|class| {
-                    self.candidates
-                        .contains_key(&SelectorKey::Class(class.to_string()))
-                });
-                if !has_candidates {
-                    return;
-                }
-                let Some(replacement_value) =
-                    self.appended_class_value(literal.span, literal.value.as_str(), &[])
-                else {
-                    return;
-                };
-                self.edits.push(Edit {
-                    start: literal.span.start as usize,
-                    end: literal.span.end as usize,
-                    replacement: js_string_literal(
-                        &replacement_value,
-                        self.source.as_bytes()[literal.span.start as usize],
-                    ),
-                });
+                self.global_string_leaf(
+                    literal.span,
+                    literal.value.as_str(),
+                    self.source.as_bytes()[literal.span.start as usize],
+                );
+            }
+            Expression::TemplateLiteral(template)
+                if template.expressions.is_empty()
+                    && template
+                        .quasis
+                        .first()
+                        .is_some_and(|quasi| quasi.value.cooked.is_some()) =>
+            {
+                // A substitution-free template is a static value; like the
+                // whole-attribute template handling, the rewrite emits a
+                // plain string literal.
+                let cooked = template.quasis[0].value.cooked.as_ref().unwrap().as_str();
+                self.global_string_leaf(template.span, cooked, b'"');
             }
             Expression::StaticMemberExpression(member)
                 if self.is_global_module_object(&member.object) => {}

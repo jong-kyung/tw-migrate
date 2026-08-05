@@ -2759,6 +2759,33 @@ mod tests {
     }
 
     #[test]
+    fn migrates_a_static_template_result_leaf() {
+        let request = serde_json::json!({
+            "cssPath": "/project/global.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "export const Card = ({ ready }) => <div className={ready ? `card` : ''} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(
+            response["files"][0]["source"],
+            "export const Card = ({ ready }) => <div className={ready ? \"card p-[13px]\" : ''} />;\n"
+        );
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|warning| warning["code"] != "dynamic-class-name")
+        );
+    }
+
+    #[test]
     fn warns_on_a_shadowed_undefined_result_leaf() {
         let request = serde_json::json!({
             "cssPath": "/project/global.css",
