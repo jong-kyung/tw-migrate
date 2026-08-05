@@ -478,16 +478,6 @@ fn class_expression_leaves<'b, 'a>(
     })
 }
 
-/// `null`, `undefined`, and `false` are warning-free no-op class leaves.
-fn is_noop_class_leaf(expression: &Expression<'_>) -> bool {
-    match expression {
-        Expression::NullLiteral(_) => true,
-        Expression::BooleanLiteral(literal) => !literal.value,
-        Expression::Identifier(identifier) => identifier.name == "undefined",
-        _ => false,
-    }
-}
-
 /// A JS string literal for an expression position, keeping the original
 /// quote style when the value permits it.
 fn js_string_literal(value: &str, preferred_quote: u8) -> String {
@@ -524,6 +514,21 @@ struct UsageCollector<'s> {
 }
 
 impl UsageCollector<'_> {
+    /// `null`, `undefined`, and `false` are warning-free no-op class leaves.
+    /// `undefined` qualifies only as the unbound global; a local binding
+    /// named `undefined` can hold a runtime class value, so it stays an
+    /// unsupported leaf.
+    fn is_noop_class_leaf(&self, expression: &Expression<'_>) -> bool {
+        match expression {
+            Expression::NullLiteral(_) => true,
+            Expression::BooleanLiteral(literal) => !literal.value,
+            Expression::Identifier(identifier) => {
+                identifier.name == "undefined" && self.identifier_symbol(expression).is_none()
+            }
+            _ => false,
+        }
+    }
+
     /// Record a `dynamic-class-name` warning for an unsupported class site.
     fn warn_dynamic_class_name(&mut self, span: Span, message: &str) {
         self.warnings.push(Warning::new(
@@ -879,7 +884,7 @@ impl UsageCollector<'_> {
                 if self.is_global_module_object(&member.object) => {}
             Expression::ComputedMemberExpression(member)
                 if self.is_global_module_object(&member.object) => {}
-            leaf if is_noop_class_leaf(leaf) => {}
+            leaf if self.is_noop_class_leaf(leaf) => {}
             leaf => {
                 self.warn_dynamic_class_name(
                     leaf.span(),
@@ -1084,7 +1089,7 @@ impl UsageCollector<'_> {
                 self.module_class_site(template.span, result, true);
             }
             Expression::StringLiteral(_) => {}
-            leaf if is_noop_class_leaf(leaf) => {}
+            leaf if self.is_noop_class_leaf(leaf) => {}
             leaf => {
                 self.warn_dynamic_class_name(
                     leaf.span(),

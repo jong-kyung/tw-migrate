@@ -2758,6 +2758,82 @@ mod tests {
     }
 
     #[test]
+    fn warns_on_a_shadowed_undefined_result_leaf() {
+        let request = serde_json::json!({
+            "cssPath": "/project/global.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "export const Card = (maybe, undefined) => <div className={maybe ? 'card' : undefined} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        // A local binding named `undefined` can hold a runtime class value,
+        // so only the unbound global counts as a warning-free no-op leaf.
+        assert_eq!(
+            response["files"][0]["source"],
+            "export const Card = (maybe, undefined) => <div className={maybe ? 'card p-[13px]' : undefined} />;\n"
+        );
+        let dynamic = response["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|warning| warning["code"] == "dynamic-class-name")
+            .unwrap();
+        assert_eq!(dynamic["file"], "/project/Card.tsx");
+    }
+
+    #[test]
+    fn warns_once_on_a_foreign_member_leaf_beside_a_module_branch() {
+        let request = serde_json::json!({
+            "stylesheets": [
+                {
+                    "cssPath": "/project/Card.module.css",
+                    "cssSource": ".card { padding: 13px; }\n"
+                },
+                {
+                    "cssPath": "/project/global.css",
+                    "cssSource": ".base { margin: 7px; }\n"
+                }
+            ],
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "import styles from './Card.module.css';\nexport const App = ({ maybe, ...rest }) => <div className={maybe ? styles.card : rest.className} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        // The module pass keeps foreign members silent so another module's
+        // binding never draws a spurious warning from this stylesheet's plan;
+        // the global pass owns the dynamic-class-name diagnostic for the
+        // opaque member leaf.
+        assert_eq!(response["convertedRules"], 1);
+        let migrated = response["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == "/project/App.tsx")
+            .unwrap()["source"]
+            .as_str()
+            .unwrap();
+        assert!(migrated.contains("className={maybe ? \"p-[13px]\" : rest.className}"));
+        assert_eq!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|warning| warning["code"] == "dynamic-class-name")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn treats_nullish_leaves_as_warning_free_noops() {
         let request = serde_json::json!({
             "cssPath": "/project/global.css",
