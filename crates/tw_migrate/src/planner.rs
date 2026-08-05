@@ -2630,10 +2630,10 @@ mod tests {
     }
 
     #[test]
-    fn warns_on_an_unsupported_global_class_name_expression() {
+    fn migrates_both_branches_of_a_global_conditional_class_name() {
         let request = serde_json::json!({
             "cssPath": "/project/global.css",
-            "cssSource": ".a { padding: 13px; }\n",
+            "cssSource": ".a { padding: 13px; }\n.b { margin: 7px; }\n",
             "files": [{
                 "path": "/project/Card.tsx",
                 "source": "export const Card = ({ maybe }) => <div className={maybe ? 'a' : 'b'} />;\n"
@@ -2643,7 +2643,64 @@ mod tests {
         let response: serde_json::Value =
             serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
 
-        assert_eq!(response["files"], serde_json::json!([]));
+        assert_eq!(
+            response["files"][0]["source"],
+            "export const Card = ({ maybe }) => <div className={maybe ? 'a p-[13px]' : 'b m-[7px]'} />;\n"
+        );
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|warning| warning["code"] != "dynamic-class-name")
+        );
+    }
+
+    #[test]
+    fn migrates_the_right_operand_of_global_logical_expressions() {
+        let request = serde_json::json!({
+            "cssPath": "/project/global.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "export const Card = ({ active, preferred, chosen }) => <div>\n<span className={active && 'card'} />\n<span className={preferred || 'card'} />\n<span className={chosen ?? 'card'} />\n</div>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(
+            response["files"][0]["source"],
+            "export const Card = ({ active, preferred, chosen }) => <div>\n<span className={active && 'card p-[13px]'} />\n<span className={preferred || 'card p-[13px]'} />\n<span className={chosen ?? 'card p-[13px]'} />\n</div>;\n"
+        );
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|warning| warning["code"] != "dynamic-class-name")
+        );
+    }
+
+    #[test]
+    fn keeps_a_logical_left_operand_opaque() {
+        let request = serde_json::json!({
+            "cssPath": "/project/global.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "export const Card = ({ active }) => <div className={active ? 'card' : active} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(
+            response["files"][0]["source"],
+            "export const Card = ({ active }) => <div className={active ? 'card p-[13px]' : active} />;\n"
+        );
         let dynamic = response["warnings"]
             .as_array()
             .unwrap()
@@ -2651,6 +2708,327 @@ mod tests {
             .find(|warning| warning["code"] == "dynamic-class-name")
             .unwrap();
         assert_eq!(dynamic["file"], "/project/Card.tsx");
+    }
+
+    #[test]
+    fn treats_nullish_leaves_as_warning_free_noops() {
+        let request = serde_json::json!({
+            "cssPath": "/project/global.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "export const Card = ({ a, b, c, d }) => <div>\n<span className={a ? 'card' : null} />\n<span className={b ? 'card' : undefined} />\n<span className={c ? 'card' : false} />\n<span className={d ? 'card' : ''} />\n</div>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(
+            response["files"][0]["source"],
+            "export const Card = ({ a, b, c, d }) => <div>\n<span className={a ? 'card p-[13px]' : null} />\n<span className={b ? 'card p-[13px]' : undefined} />\n<span className={c ? 'card p-[13px]' : false} />\n<span className={d ? 'card p-[13px]' : ''} />\n</div>;\n"
+        );
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|warning| warning["code"] == "retained-global-rule")
+        );
+    }
+
+    #[test]
+    fn migrates_nested_and_wrapped_expression_results() {
+        let request = serde_json::json!({
+            "cssPath": "/project/global.css",
+            "cssSource": ".a { padding: 13px; }\n.b { margin: 7px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "export const Card = ({ maybe, ready }: { maybe: boolean, ready: boolean }) => <div className={(maybe ? ('a' as string) : (ready && 'b'))} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(
+            response["files"][0]["source"],
+            "export const Card = ({ maybe, ready }: { maybe: boolean, ready: boolean }) => <div className={(maybe ? ('a p-[13px]' as string) : (ready && 'b m-[7px]'))} />;\n"
+        );
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|warning| warning["code"] != "dynamic-class-name")
+        );
+    }
+
+    #[test]
+    fn a_second_run_over_a_migrated_conditional_expression_is_a_no_op() {
+        let request = serde_json::json!({
+            "cssPath": "/project/global.css",
+            "cssSource": ".a { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "export const Card = ({ maybe }) => <div className={maybe ? 'a p-[13px]' : 'b'} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["files"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn migrates_conditional_css_module_branches() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".a { padding: 13px; }\n.b { margin: 7px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = ({ maybe }) => <div className={maybe ? styles.a : styles.b} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 2);
+        assert_eq!(
+            response["deletedFiles"],
+            serde_json::json!(["/project/Card.module.css"])
+        );
+        assert_eq!(
+            response["files"][0]["source"],
+            "export const Card = ({ maybe }) => <div className={maybe ? \"p-[13px]\" : \"m-[7px]\"} />;\n"
+        );
+    }
+
+    #[test]
+    fn allows_overlapping_utilities_in_opposite_conditional_branches() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".a { padding: 8px; }\n.b { padding: 4px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = ({ maybe }) => <div className={maybe ? styles.a : styles.b} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 2);
+        assert_eq!(
+            response["deletedFiles"],
+            serde_json::json!(["/project/Card.module.css"])
+        );
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|warning| warning["code"] != "module-utilities-conflict")
+        );
+    }
+
+    #[test]
+    fn keeps_an_opaque_module_condition_and_its_rule() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".enabled { color: red; }\n.a { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.enabled ? styles.a : null} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(response["retainedRules"], 1);
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        let source = response["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == "/project/Card.tsx")
+            .unwrap()["source"]
+            .as_str()
+            .unwrap();
+        assert!(source.contains("import styles from './Card.module.css';"));
+        assert!(source.contains("className={styles.enabled ? \"p-[13px]\" : null}"));
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|warning| warning["code"] != "dynamic-class-name")
+        );
+    }
+
+    #[test]
+    fn permits_partial_conversion_beside_an_unsupported_branch() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".a { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = ({ maybe }) => <div className={maybe ? styles.a : getClass()} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(
+            response["deletedFiles"],
+            serde_json::json!(["/project/Card.module.css"])
+        );
+        assert_eq!(
+            response["files"][0]["source"],
+            "export const Card = ({ maybe }) => <div className={maybe ? \"p-[13px]\" : getClass()} />;\n"
+        );
+        let dynamic = response["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|warning| warning["code"] == "dynamic-class-name")
+            .unwrap();
+        assert_eq!(dynamic["file"], "/project/Card.tsx");
+    }
+
+    #[test]
+    fn warns_when_a_conditional_leaf_utility_conflicts_with_its_own_classes() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = ({ maybe }) => <div className={maybe ? `${styles.card} p-2` : null} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(
+            response["warnings"][0]["code"],
+            "existing-tailwind-conflict"
+        );
+        let source = response["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == "/project/Card.tsx")
+            .unwrap()["source"]
+            .as_str()
+            .unwrap();
+        assert!(source.contains("className={maybe ? \"p-[13px] p-2\" : null}"));
+    }
+
+    #[test]
+    fn keeps_a_preserved_module_member_inside_its_conditional_branch() {
+        let css = ".a { padding: 8px; }\n.a:hover { color: red; }\n";
+        let blocked_end = ".a { padding: 8px; }".len();
+        let source = "import styles from './A.module.css';\nexport const App = ({ maybe }) => <div className={maybe ? styles.a : null} />;\n";
+        let request = serde_json::json!({
+            "stylesheets": [{
+                "cssPath": "/project/A.module.css",
+                "cssSource": css,
+                "blockedRules": [{ "start": 0, "end": blocked_end }]
+            }],
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": source
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(response["retainedRules"], 1);
+        let migrated = response["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == "/project/App.tsx")
+            .unwrap()["source"]
+            .as_str()
+            .unwrap();
+        // The candidate joins the member inside the branch; hoisting it to a
+        // static class attribute would apply it unconditionally.
+        assert!(
+            migrated.contains("className={maybe ? `${styles.a}${\" hover:text-[red]\"}` : null}")
+        );
+
+        let second = serde_json::json!({
+            "stylesheets": [{
+                "cssPath": "/project/A.module.css",
+                "cssSource": ".a { padding: 8px; }\n",
+                "blockedRules": [{ "start": 0, "end": blocked_end }]
+            }],
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": migrated
+            }]
+        });
+        let second: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&second.to_string()).unwrap()).unwrap();
+        assert_eq!(second["files"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn a_second_run_over_a_partially_migrated_module_expression_is_a_no_op() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".enabled { color: red; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.enabled ? \"p-[13px]\" : null} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["files"], serde_json::json!([]));
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn retains_unsupported_result_forms_in_expressions() {
+        let request = serde_json::json!({
+            "cssPath": "/project/global.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "export const Card = ({ a, b, c, d }) => <div>\n<span className={a ? ['card'] : 'card'} />\n<span className={b ? { card: true } : 'card'} />\n<span className={c ? clsx('card') : 'card'} />\n<span className={d ? `card-${d}` : 'card'} />\n</div>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|warning| warning["code"] == "dynamic-class-name")
+                .count(),
+            4
+        );
+        assert_eq!(
+            response["files"][0]["source"],
+            "export const Card = ({ a, b, c, d }) => <div>\n<span className={a ? ['card'] : 'card p-[13px]'} />\n<span className={b ? { card: true } : 'card p-[13px]'} />\n<span className={c ? clsx('card') : 'card p-[13px]'} />\n<span className={d ? `card-${d}` : 'card p-[13px]'} />\n</div>;\n"
+        );
     }
 
     #[test]
@@ -5043,6 +5421,46 @@ mod tests {
     }
 
     #[test]
+    fn batch_allows_opposite_branch_utilities_from_different_modules() {
+        let request = serde_json::json!({
+            "stylesheets": [
+                {
+                    "cssPath": "/project/A.module.css",
+                    "cssSource": ".a { padding: 8px; }\n"
+                },
+                {
+                    "cssPath": "/project/B.module.css",
+                    "cssSource": ".b { padding: 16px; }\n"
+                }
+            ],
+            "files": [{
+                "path": "/project/App.tsx",
+                "source": "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = ({ maybe }) => <div className={maybe ? a.a : b.b} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 2);
+        assert_eq!(
+            response["deletedFiles"],
+            serde_json::json!(["/project/A.module.css", "/project/B.module.css"])
+        );
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|warning| warning["code"] != "batch-stylesheet-conflict")
+        );
+        assert_eq!(
+            response["files"][0]["source"],
+            "export const App = ({ maybe }) => <div className={maybe ? \"p-[8px]\" : \"p-[16px]\"} />;\n"
+        );
+    }
+
+    #[test]
     fn batch_retains_same_css_property_even_when_tailwind_prefix_is_ambiguous() {
         let request = serde_json::json!({
             "stylesheets": [
@@ -5156,7 +5574,7 @@ mod tests {
             "isModule": true,
             "files": [{
                 "path": "/project/App.tsx",
-                "source": "import styles from './Card.module.css';\nexport const App = ({ active }) => <>\n  <div className={active ? styles.blocked : ''} />\n  <div className={styles.safe} />\n</>;\n"
+                "source": "import styles from './Card.module.css';\nexport const App = ({ active }) => <>\n  <div className={getClass(active, styles.blocked)} />\n  <div className={styles.safe} />\n</>;\n"
             }]
         });
 
@@ -5177,7 +5595,7 @@ mod tests {
 
     #[test]
     fn batch_rebases_source_warnings_after_prior_stylesheet_edits() {
-        let source = "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = ({ active }) => <>\n  <div className={a.a} />\n  <div className={active ? b.b : ''} />\n</>;\n";
+        let source = "import a from './A.module.css';\nimport b from './B.module.css';\nexport const App = ({ active }) => <>\n  <div className={a.a} />\n  <div className={pickClass(active, b.b)} />\n</>;\n";
         let request = serde_json::json!({
             "stylesheets": [{
                 "cssPath": "/project/A.module.css",
@@ -5202,12 +5620,12 @@ mod tests {
             .iter()
             .filter(|warning| warning["code"] == "dynamic-class-name")
             .collect::<Vec<_>>();
-        let start = source.find("{active ? b.b : ''}").unwrap();
+        let start = source.find("{pickClass(active, b.b)}").unwrap();
 
         assert!(!warnings.is_empty());
         for warning in warnings {
             assert_eq!(warning["start"], start);
-            assert_eq!(warning["end"], start + "{active ? b.b : ''}".len());
+            assert_eq!(warning["end"], start + "{pickClass(active, b.b)}".len());
         }
     }
 
