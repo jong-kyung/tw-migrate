@@ -2684,7 +2684,7 @@ mod tests {
     }
 
     #[test]
-    fn keeps_a_logical_left_operand_opaque() {
+    fn warns_on_an_unsupported_identifier_result_leaf() {
         let request = serde_json::json!({
             "cssPath": "/project/global.css",
             "cssSource": ".card { padding: 13px; }\n",
@@ -2708,6 +2708,53 @@ mod tests {
             .find(|warning| warning["code"] == "dynamic-class-name")
             .unwrap();
         assert_eq!(dynamic["file"], "/project/Card.tsx");
+    }
+
+    #[test]
+    fn keeps_a_logical_left_operand_opaque() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".active { color: red; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.active && 'card'} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 1);
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        assert_eq!(response["files"], serde_json::json!([]));
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|warning| warning["code"] != "dynamic-class-name")
+        );
+    }
+
+    #[test]
+    fn converts_only_the_final_operand_of_chained_logicals() {
+        let request = serde_json::json!({
+            "cssPath": "/project/global.css",
+            "cssSource": ".legacy { padding: 13px; }\n.base { margin: 7px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "export const Card = ({ variant }) => <div className={variant || 'legacy' || 'base'} />;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(
+            response["files"][0]["source"],
+            "export const Card = ({ variant }) => <div className={variant || 'legacy' || 'base m-[7px]'} />;\n"
+        );
     }
 
     #[test]
