@@ -1,0 +1,24 @@
+---
+source: crates/snapshots/tests/cli_snapshots/styles.rs
+expression: document
+---
+case: style_dynamic_expressions
+
+--- step: migrate ---
+status: 0
+stdout: "--- a/Card.module.css\n+++ b/Card.module.css\n@@ -1,4 +1,4 @@\n-.active { padding: 8px; }\n-.inactive { margin: 4px; }\n-.enabled { color: red; }\n \n+\n+\n+.enabled { color: red; }\n \n--- a/Card.tsx\n+++ b/Card.tsx\n@@ -1,9 +1,9 @@\n-import styles from './Card.module.css';\n-\n-export const Card = ({ active, ready, variant }: { active: boolean; ready: boolean; variant: string }) => (\n-  <div className={active ? styles.active : styles.inactive}>\n-    <span className={ready && 'card'} />\n-    <span className={styles.enabled ? 'card' : getClass(variant)} />\n-  </div>\n-);\n \n+import styles from './Card.module.css';\n+\n+export const Card = ({ active, ready, variant }: { active: boolean; ready: boolean; variant: string }) => (\n+  <div className={active ? \"p-[8px]\" : \"m-[4px]\"}>\n+    <span className={ready && 'card p-[13px]'} />\n+    <span className={styles.enabled ? 'card p-[13px]' : getClass(variant)} />\n+  </div>\n+);\n \nApplied 2 file(s); 2 rule(s) converted, 2 retained.\n"
+stderr: "warning[unresolved-selector-target] Card.module.css:3:1-3:25 No exclusively supported className references were found.\nwarning[dynamic-class-name] Card.tsx:6:48-6:65 Only static className values are supported.\nwarning[retained-global-rule] legacy.css:1:1-1:25 Global CSS is never deleted automatically.\n"
+workspace delta:
+  modified Card.module.css
+    before: ".active { padding: 8px; }\n.inactive { margin: 4px; }\n.enabled { color: red; }\n"
+    after: "\n\n.enabled { color: red; }\n"
+  modified Card.tsx
+    before: "import styles from './Card.module.css';\n\nexport const Card = ({ active, ready, variant }: { active: boolean; ready: boolean; variant: string }) => (\n  <div className={active ? styles.active : styles.inactive}>\n    <span className={ready && 'card'} />\n    <span className={styles.enabled ? 'card' : getClass(variant)} />\n  </div>\n);\n"
+    after: "import styles from './Card.module.css';\n\nexport const Card = ({ active, ready, variant }: { active: boolean; ready: boolean; variant: string }) => (\n  <div className={active ? \"p-[8px]\" : \"m-[4px]\"}>\n    <span className={ready && 'card p-[13px]'} />\n    <span className={styles.enabled ? 'card p-[13px]' : getClass(variant)} />\n  </div>\n);\n"
+
+--- step: second run ---
+status: 0
+stdout: "Applied 0 file(s); 0 rule(s) converted, 2 retained.\n"
+stderr: "warning[unresolved-selector-target] Card.module.css:3:1-3:25 No exclusively supported className references were found.\nwarning[dynamic-class-name] Card.tsx:6:57-6:74 Only static className values are supported.\nwarning[retained-global-rule] legacy.css:1:1-1:25 Global CSS is never deleted automatically.\n"
+workspace delta:
+  unchanged
