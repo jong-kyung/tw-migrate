@@ -107,6 +107,12 @@ The Vue parser lowers each supported leaf to an authored-file byte span. The nat
 
 Only the default `$style.name` binding is supported. Named module bindings remain covered by `unsupported-sfc-block`. An opaque `$style` use keeps the module live under the existing module-closure rules.
 
+Dynamic leaf support applies to `:class` bindings on plain template elements. A binding on a component tag stays under the existing component graph rules, so it remains opaque and retaining unless the child-root proof already covers it.
+
+An opaque condition or logical left operand does not count as a class application, but it keeps the template's class surface open. Scoped and unscoped retention treat that surface like any other dynamic binding, so a rule remains when only an opaque position could still apply its class at runtime.
+
+A leaf rewrite must also fit the surrounding directive attribute. A generated utility that cannot be written inside the attribute's quotes follows the existing quote-blocked retention rule instead of producing an invalid template.
+
 An unsupported result leaf produces `dynamic-template-class`. For scoped and unscoped Vue rules, the unsupported leaf also keeps any class reachability that it could represent opaque. Supported sibling leaves may receive candidates, but a rule or token remains when the opaque branch prevents safe cleanup.
 
 ## Rewrite Semantics
@@ -340,7 +346,7 @@ Each phase merges separately. Public documentation describes only implemented ph
 
 ## Accepted Trade-offs
 
-1. Logical-expression traversal treats only the right operand as a class result. This covers the requested trailing-class patterns without interpreting the left operand's runtime role.
+1. Logical-expression traversal treats only the right operand as a class result. This covers the requested trailing-class patterns without interpreting the left operand's runtime role. For `||` and `??` the left operand can still become the runtime result, so its classes stay untouched and its retention follows the opaque-position rules: global rules are never deleted, an unmatched CSS Module reference keeps its rules and import, and Vue treats the position as an open class surface.
 2. Runtime users of DOM class names, including selectors in application scripts and external tools, do not block non-module token removal. The removal proof covers stylesheet semantics within the supported package boundary.
 3. Package-local shadow analysis can retain tokens for selectors whose full ancestry could never match. Conservative false retention is preferable to removing a live styling hook.
 4. Global CSS files can contain dead rules after proven consumer tokens disappear because automatic global rule deletion remains outside the migration contract.
