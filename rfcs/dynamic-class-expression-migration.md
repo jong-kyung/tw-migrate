@@ -87,6 +87,7 @@ In this example, `styles.enabled` remains an opaque condition. It does not count
 Supported leaves are:
 
 - string literals containing zero or more whitespace-separated class tokens;
+- template literals without substitutions, treated like string literals;
 - direct members of the selected CSS Module binding, such as `styles.active`; and
 - `null`, `undefined`, `false`, and empty strings as warning-free no-op leaves.
 
