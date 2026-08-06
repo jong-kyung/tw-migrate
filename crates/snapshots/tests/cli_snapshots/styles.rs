@@ -19,6 +19,7 @@ snapshot_cases! {
     style_direct_less => default_setup,
     style_direct_sass => default_setup,
     style_direct_scss => default_setup,
+    style_dynamic_expressions => default_setup,
     style_dynamic_global_warning => default_setup,
     style_eof => default_setup,
     style_explicit_selection => default_setup,
