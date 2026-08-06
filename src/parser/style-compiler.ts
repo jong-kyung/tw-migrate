@@ -93,12 +93,21 @@ export async function loadProjectModule<Compiler>(
   return imported.default ?? imported;
 }
 
+// Shared with isMissingStyleCompilerError so `--force` recognizes exactly the
+// messages thrown here.
+const missingCompilerMessage = (name: string): string =>
+  `${name} must be installed in the target project.`;
+export const MISSING_STYLE_COMPILER_MESSAGES = new Set([
+  missingCompilerMessage("Sass"),
+  missingCompilerMessage("Less"),
+]);
+
 export function loadProjectSass(packageRoot: string): Promise<SassCompiler> {
-  return loadProjectModule(packageRoot, "sass", "Sass must be installed in the target project.");
+  return loadProjectModule(packageRoot, "sass", missingCompilerMessage("Sass"));
 }
 
 function loadProjectLess(packageRoot: string): Promise<LessCompiler> {
-  return loadProjectModule(packageRoot, "less", "Less must be installed in the target project.");
+  return loadProjectModule(packageRoot, "less", missingCompilerMessage("Less"));
 }
 
 // Compiler reuse is scoped to one package-planning run so a later migrate()
