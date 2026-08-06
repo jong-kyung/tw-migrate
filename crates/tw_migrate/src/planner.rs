@@ -3,15 +3,12 @@ use std::{
     path::Path,
 };
 
-use oxc_css_parser::{
-    Parser as CssParser, Syntax,
-    ast::{Statement, Stylesheet},
-};
+use oxc_css_parser::{Syntax, ast::Statement};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     animations::append_keyframes,
-    at_rules::{append_global_at_rules, is_conditional},
+    at_rules::{append_global_at_rules, is_conditional, parse_css},
     css_plan::{
         ParseOptions, ParsedCss, RulePlan, SelectorKey, index_shadow_selectors, parse_css_rules,
     },
@@ -43,9 +40,10 @@ impl StylesheetSyntax {
 }
 
 fn is_stylesheet_module(path: &str) -> bool {
-    ["css", "scss", "sass", "less"]
-        .iter()
-        .any(|extension| path.ends_with(&format!(".module.{extension}")))
+    matches!(
+        path.rsplit_once(".module."),
+        Some((_, "css" | "scss" | "sass" | "less"))
+    )
 }
 
 fn is_vue_path(path: &str) -> bool {
@@ -499,6 +497,23 @@ pub(crate) struct SourceFile {
     pub(crate) prior_edits: Vec<Vec<Edit>>,
 }
 
+impl SourceFile {
+    /// The stylesheet-link contexts through which this file consumes
+    /// `css_path` with an analyzable relationship.
+    pub(crate) fn analyzable_contexts(&self, css_path: &str) -> Vec<&HtmlStylesheet> {
+        self.html_stylesheets
+            .iter()
+            .filter(|context| context.analyzable && context.css_path == css_path)
+            .collect()
+    }
+
+    pub(crate) fn has_analyzable_context(&self, css_path: &str) -> bool {
+        self.html_stylesheets
+            .iter()
+            .any(|context| context.analyzable && context.css_path == css_path)
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PlanResponse {
@@ -833,12 +848,7 @@ fn plan_consumer_file(
     let stylesheet_is_vue = is_vue_path(css_path);
     let file_is_vue = is_vue_path(&file.path);
     if stylesheet_is_vue && vue_module {
-        if file_is_vue
-            && file
-                .html_stylesheets
-                .iter()
-                .any(|context| context.analyzable && context.css_path == css_path)
-        {
+        if file_is_vue && file.has_analyzable_context(css_path) {
             return Ok(plan_vue_module_file(
                 file,
                 css_path,
@@ -860,12 +870,7 @@ fn plan_consumer_file(
         return plan_batch_source_file(file, css_path, false, candidates, preserved_module_classes);
     }
     if stylesheet_is_vue || file_is_vue {
-        if file_is_vue
-            && file
-                .html_stylesheets
-                .iter()
-                .any(|context| context.analyzable && context.css_path == css_path)
-        {
+        if file_is_vue && file.has_analyzable_context(css_path) {
             return Ok(plan_html_file(file, css_path, candidates, utility_prefix));
         }
         if file_is_vue && !stylesheet_is_vue {
@@ -912,7 +917,13 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
     let externally_blocked = request
         .stylesheets
         .iter()
-        .map(|stylesheet| stylesheet.blocked_rules.iter().copied().collect::<HashSet<_>>())
+        .map(|stylesheet| {
+            stylesheet
+                .blocked_rules
+                .iter()
+                .copied()
+                .collect::<HashSet<_>>()
+        })
         .collect::<Vec<_>>();
     for (index, stylesheet) in request.stylesheets.iter().enumerate() {
         let plan_request = batch_stylesheet_request(&request, stylesheet, snapshot_files);
@@ -1274,11 +1285,7 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
         let vue_files = request
             .files
             .iter()
-            .filter(|file| {
-                file.html_stylesheets
-                    .iter()
-                    .any(|context| context.analyzable && context.css_path == request.sheet.css_path)
-            })
+            .filter(|file| file.has_analyzable_context(&request.sheet.css_path))
             .collect::<Vec<_>>();
         for rule in &mut parsed.rules {
             if rule.warning.is_some() {
@@ -1435,10 +1442,8 @@ fn map_rule_spans(
     authored_base: usize,
 ) -> Result<(), String> {
     let allocator = oxc_css_parser::Allocator::default();
-    let mut parser = CssParser::new(&allocator, authored_source, syntax.parser_syntax());
-    let stylesheet = parser
-        .parse::<Stylesheet>()
-        .map_err(|error| format!("Failed to parse {source_path}: {error:?}"))?;
+    let stylesheet = parse_css(&allocator, authored_source, syntax.parser_syntax())
+        .map_err(|error| format!("Failed to parse {source_path}: {error}"))?;
     let mut authored_rules = Vec::new();
     collect_qualified_rule_spans(&stylesheet.statements, &mut authored_rules);
     let mappings = source_mappings
@@ -1739,11 +1744,7 @@ fn plan_request(
         let vue_files = request
             .files
             .iter()
-            .filter(|file| {
-                file.html_stylesheets
-                    .iter()
-                    .any(|context| context.analyzable && context.css_path == request.sheet.css_path)
-            })
+            .filter(|file| file.has_analyzable_context(&request.sheet.css_path))
             .collect::<Vec<_>>();
         let quote_blocked = rules
             .iter()
@@ -1966,63 +1967,63 @@ fn plan_request(
             "retained"
         } else {
             retained_rules += 1;
-            let (code, message) = if rule.warning == Some("batch-stylesheet-conflict") {
-                let conflicts = blocked_rules
-                    .get(&rule_id)
-                    .expect("conflicting rule must retain its candidates")
-                    .iter()
-                    .map(|(left, right)| format!("`{left}` and `{right}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                (
-                    "batch-stylesheet-conflict",
-                    format!(
-                        "Generated utilities {conflicts} conflict on the same source element, so the contributing rule is retained."
-                    ),
-                )
-            } else if rule.warning == Some("unproven-css-module-relationship") {
-                (
-                    "unproven-css-module-relationship",
+            let (code, message) = match rule.warning {
+                Some(code @ "batch-stylesheet-conflict") => {
+                    let conflicts = blocked_rules
+                        .get(&rule_id)
+                        .expect("conflicting rule must retain its candidates")
+                        .iter()
+                        .map(|(left, right)| format!("`{left}` and `{right}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    (
+                        code,
+                        format!(
+                            "Generated utilities {conflicts} conflict on the same source element, so the contributing rule is retained."
+                        ),
+                    )
+                }
+                Some(code @ "unproven-css-module-relationship") => (
+                    code,
                     unproven_rules.get(&rule_id).cloned().unwrap_or_else(|| {
                         "The CSS Module selector relationship could not be proven for every usage."
                             .to_string()
                     }),
-                )
-            } else if rule.warning == Some("unproven-source-map") {
-                (
-                    "unproven-source-map",
+                ),
+                Some(code @ "unproven-source-map") => (
+                    code,
                     "The generated rule does not map uniquely to one authored source rule, so it is retained."
                         .to_string(),
-                )
-            } else if rule.warning == Some("shared-preprocessor-source") {
-                (
-                    "shared-preprocessor-source",
+                ),
+                Some(code @ "shared-preprocessor-source") => (
+                    code,
                     "A Sass partial must be analyzed through every consuming entry, so it is retained."
                         .to_string(),
-                )
-            } else if rule.warning == Some("shadowed-scoped-rule") {
-                (
-                    "shadowed-scoped-rule",
+                ),
+                Some(code @ "shadowed-scoped-rule") => (
+                    code,
                     "Other package CSS also targets a class this scoped rule matches, so deleting it could change the cascade; the rule is retained."
                         .to_string(),
-                )
-            } else if let Some(code) = rule.warning {
-                (
+                ),
+                Some(code) => (
                     code,
                     "The rule is outside the supported declaration or selector subset.".to_string(),
-                )
-            } else if let Some((code, message)) = vue_retention {
-                (code, message.to_string())
-            } else if !is_module {
-                (
-                    "retained-global-rule",
-                    "Global CSS is never deleted automatically.".to_string(),
-                )
-            } else {
-                (
-                    "unresolved-selector-target",
-                    "No exclusively supported className references were found.".to_string(),
-                )
+                ),
+                None => {
+                    if let Some((code, message)) = vue_retention {
+                        (code, message.to_string())
+                    } else if !is_module {
+                        (
+                            "retained-global-rule",
+                            "Global CSS is never deleted automatically.".to_string(),
+                        )
+                    } else {
+                        (
+                            "unresolved-selector-target",
+                            "No exclusively supported className references were found.".to_string(),
+                        )
+                    }
+                }
             };
             warnings.push(Warning::new(
                 code,
@@ -2100,9 +2101,9 @@ fn plan_request(
     }
     // A module file may only disappear when every reference is matched and
     // safe; an emptied stylesheet with a dangling member reference must stay
-    // on disk so the consumer's retained import keeps resolving.
-    let module_removable =
-        is_module && module_references_safe && all_module_refs_migrated && retained_rules == 0;
+    // on disk so the consumer's retained import keeps resolving. This is the
+    // same condition that allows removing the module's at-rules.
+    let module_removable = remove_at_rules;
     let stylesheet_changed = !css_edits.is_empty();
     let mut deleted_files = Vec::new();
     let mut applied_edits = HashMap::new();
@@ -2245,10 +2246,8 @@ fn finish_vue_stylesheet(
     // conditionals the migration itself empties may be removed.
     let mut preexisting_empty = {
         let allocator = oxc_css_parser::Allocator::default();
-        let mut parser = CssParser::new(&allocator, masked, Syntax::Css);
-        let stylesheet = parser
-            .parse::<Stylesheet>()
-            .map_err(|error| format!("Failed to parse edited CSS: {error:?}"))?;
+        let stylesheet = parse_css(&allocator, masked, Syntax::Css)
+            .map_err(|error| format!("Failed to parse edited CSS: {error}"))?;
         let mut already_empty = Vec::new();
         collect_empty_conditionals(&stylesheet.statements, &mut already_empty);
         already_empty
@@ -2266,10 +2265,8 @@ fn finish_vue_stylesheet(
 
     loop {
         let allocator = oxc_css_parser::Allocator::default();
-        let mut parser = CssParser::new(&allocator, &masked, Syntax::Css);
-        let stylesheet = parser
-            .parse::<Stylesheet>()
-            .map_err(|error| format!("Failed to parse edited CSS: {error:?}"))?;
+        let stylesheet = parse_css(&allocator, &masked, Syntax::Css)
+            .map_err(|error| format!("Failed to parse edited CSS: {error}"))?;
         let mut conditional_edits = Vec::new();
         collect_empty_conditionals(&stylesheet.statements, &mut conditional_edits);
         conditional_edits.retain(|edit| !preexisting_empty.contains(&(edit.start, edit.end)));
@@ -2386,10 +2383,8 @@ fn apply_edits(source: &str, mut edits: Vec<Edit>) -> Result<String, String> {
 fn remove_empty_conditionals(mut source: String, syntax: Syntax) -> Result<String, String> {
     loop {
         let allocator = oxc_css_parser::Allocator::default();
-        let mut parser = CssParser::new(&allocator, &source, syntax);
-        let stylesheet = parser
-            .parse::<Stylesheet>()
-            .map_err(|error| format!("Failed to parse edited CSS: {error:?}"))?;
+        let stylesheet = parse_css(&allocator, &source, syntax)
+            .map_err(|error| format!("Failed to parse edited CSS: {error}"))?;
         let mut edits = Vec::new();
         collect_empty_conditionals(&stylesheet.statements, &mut edits);
         if edits.is_empty() {
@@ -2425,10 +2420,9 @@ pub(crate) fn validate_css(source: &str) -> Result<(), String> {
 
 fn validate_stylesheet(source: &str, syntax: Syntax) -> Result<(), String> {
     let allocator = oxc_css_parser::Allocator::default();
-    CssParser::new(&allocator, source, syntax)
-        .parse::<Stylesheet>()
+    parse_css(&allocator, source, syntax)
         .map(|_| ())
-        .map_err(|error| format!("Edited stylesheet no longer parses: {error:?}"))
+        .map_err(|error| format!("Edited stylesheet no longer parses: {error}"))
 }
 
 #[cfg(test)]

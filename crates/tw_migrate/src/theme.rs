@@ -42,4 +42,3 @@ pub(crate) fn parse_dimension(value: &str) -> Option<(f64, &str)> {
     let (number, unit) = value.split_at(split);
     Some((number.parse().ok()?, unit))
 }
-

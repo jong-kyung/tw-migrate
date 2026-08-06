@@ -1027,7 +1027,11 @@ impl<'s> CompBuilder<'_, 's> {
                                     &attribute.value
                                     && let Some(inner) = container.expression.as_expression()
                                 {
-                                    self.component_class_part(inner, &mut class_keys);
+                                    // Chained forwarding into another
+                                    // component is not proven.
+                                    let mut forwarded = false;
+                                    self.class_part(inner, &mut class_keys, &mut forwarded);
+                                    self.forward_bad |= forwarded;
                                 }
                             } else {
                                 self.sweep_attribute_value(&attribute.value);
@@ -1046,18 +1050,20 @@ impl<'s> CompBuilder<'_, 's> {
         }
     }
 
-    /// One part of a host element `className`: a module key, a forwarded
-    /// `props.className`, a nested template, or an opaque expression.
+    /// One part of a `className` value: a module key, a forwarded
+    /// `props.className`, a nested template, or an opaque expression. The
+    /// caller decides what forwarding means at its site: fall-through on a
+    /// host element, an unproven chain on a component invocation.
     fn class_part(
         &mut self,
         expression: &Expression<'_>,
-        keys: &mut Vec<(SelectorKey, (usize, usize))>,
+        keys: &mut Vec<(String, (usize, usize))>,
         forward: &mut bool,
     ) {
         match expression {
             Expression::StaticMemberExpression(member) => {
                 if let Some(name) = member_on(self.syms.scoping, self.syms.css_symbol, member) {
-                    keys.push((SelectorKey::Class(name.to_string()), span2(member.span)));
+                    keys.push((name.to_string(), span2(member.span)));
                 } else if member_on(self.syms.scoping, self.props_sym, member) == Some("className")
                 {
                     *forward = true;
@@ -1078,37 +1084,6 @@ impl<'s> CompBuilder<'_, 's> {
         }
     }
 
-    /// One part of a `className` passed to a component invocation.
-    fn component_class_part(
-        &mut self,
-        expression: &Expression<'_>,
-        class_keys: &mut Vec<(String, (usize, usize))>,
-    ) {
-        match expression {
-            Expression::StaticMemberExpression(member) => {
-                if let Some(name) = member_on(self.syms.scoping, self.syms.css_symbol, member) {
-                    class_keys.push((name.to_string(), span2(member.span)));
-                } else if member_on(self.syms.scoping, self.props_sym, member) == Some("className")
-                {
-                    // Chained forwarding into another component is not proven.
-                    self.forward_bad = true;
-                } else {
-                    self.sweep_expr(expression, R_BOUNDARY);
-                }
-            }
-            Expression::Identifier(ident) if ident_is(self.syms.scoping, self.class_sym, ident) => {
-                self.forward_bad = true;
-            }
-            Expression::TemplateLiteral(template) => {
-                for part in &template.expressions {
-                    self.component_class_part(part, class_keys);
-                }
-            }
-            Expression::StringLiteral(_) => {}
-            _ => self.sweep_expr(expression, R_BOUNDARY),
-        }
-    }
-
     fn element_class_value(
         &mut self,
         value: &Option<JSXAttributeValue<'_>>,
@@ -1122,8 +1097,14 @@ impl<'s> CompBuilder<'_, 's> {
             JSXExpression::EmptyExpression(_) => {}
             expression => {
                 if let Some(inner) = expression.as_expression() {
+                    let mut parts = Vec::new();
                     let mut forward_here = false;
-                    self.class_part(inner, keys, &mut forward_here);
+                    self.class_part(inner, &mut parts, &mut forward_here);
+                    keys.extend(
+                        parts
+                            .into_iter()
+                            .map(|(name, span)| (SelectorKey::Class(name), span)),
+                    );
                     *forward |= forward_here;
                 }
             }

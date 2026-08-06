@@ -67,13 +67,24 @@ pub(crate) fn append_global_at_rules(
     Ok(output)
 }
 
+/// Parse a stylesheet with the allocator the caller owns; the error is the
+/// parser diagnostics rendered as text, so callers prepend their own context.
+pub(crate) fn parse_css<'a>(
+    allocator: &'a oxc_css_parser::Allocator,
+    source: &'a str,
+    syntax: Syntax,
+) -> Result<Stylesheet<'a>, String> {
+    CssParser::new(allocator, source, syntax)
+        .parse::<Stylesheet>()
+        .map_err(|error| format!("{error:?}"))
+}
+
 pub(crate) fn parse_tailwind<'a>(
     allocator: &'a oxc_css_parser::Allocator,
     source: &'a str,
 ) -> Result<Stylesheet<'a>, String> {
-    CssParser::new(allocator, source, Syntax::Css)
-        .parse::<Stylesheet>()
-        .map_err(|error| format!("Failed to parse Tailwind CSS: {error:?}"))
+    parse_css(allocator, source, Syntax::Css)
+        .map_err(|error| format!("Failed to parse Tailwind CSS: {error}"))
 }
 
 /// Walk every at-rule in document order, visiting each before its block.
