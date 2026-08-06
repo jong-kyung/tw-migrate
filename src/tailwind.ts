@@ -47,13 +47,26 @@ export async function loadTailwind(
   }>(packageRoot, "tailwindcss", "Tailwind v4 must be installed in the target project.");
   const css = await snapshotFile(snapshots, tailwindCss);
   const base = dirname(tailwindCss);
-  const loadModule = createModuleLoader(snapshots, workspaceRoot);
-  const loadStylesheet = createStylesheetLoader(
-    projectRequire,
-    packagePath,
-    snapshots,
-    workspaceRoot,
-  );
+  const tailwindRoot = dirname(packagePath);
+  const loadModule = async (id: string, moduleBase: string) => {
+    const path = createRequire(join(moduleBase, "package.json")).resolve(id);
+    if (isProjectInput(workspaceRoot, path)) await snapshotFile(snapshots, path);
+    const imported = await import(pathToFileURL(path).href);
+    return { path, base: dirname(path), module: imported.default ?? imported };
+  };
+  const loadStylesheet: StylesheetLoader = async (id, sheetBase) => {
+    let path;
+    if (id === "tailwindcss") path = join(tailwindRoot, "index.css");
+    else if (id.startsWith("tailwindcss/")) {
+      const subpath = id.slice("tailwindcss/".length);
+      path = join(tailwindRoot, subpath.endsWith(".css") ? subpath : `${subpath}.css`);
+    } else if (id.startsWith(".") || isAbsolute(id)) path = resolve(sheetBase, id);
+    else path = projectRequire.resolve(id);
+    const content = isProjectInput(workspaceRoot, path)
+      ? await snapshotFile(snapshots, path)
+      : await readFile(path, "utf8");
+    return { content, base: dirname(path) };
+  };
   const defaultTheme = await readFile(join(dirname(packagePath), "theme.css"), "utf8");
   const themeTokens = {
     ...extractThemeTokens(defaultTheme),
@@ -95,35 +108,4 @@ async function extractThemeTokensFromGraph(
 export function invalidCandidates(tailwind: LoadedTailwind, candidates: string[]): string[] {
   const generated = tailwind.designSystem.candidatesToCss(candidates);
   return candidates.filter((_, index) => generated[index] === null);
-}
-
-function createModuleLoader(snapshots: Map<string, string>, workspaceRoot: string) {
-  return async (id: string, base: string) => {
-    const path = createRequire(join(base, "package.json")).resolve(id);
-    if (isProjectInput(workspaceRoot, path)) await snapshotFile(snapshots, path);
-    const imported = await import(pathToFileURL(path).href);
-    return { path, base: dirname(path), module: imported.default ?? imported };
-  };
-}
-
-function createStylesheetLoader(
-  projectRequire: NodeJS.Require,
-  tailwindPackagePath: string,
-  snapshots: Map<string, string>,
-  workspaceRoot: string,
-): StylesheetLoader {
-  const tailwindRoot = dirname(tailwindPackagePath);
-  return async (id, base) => {
-    let path;
-    if (id === "tailwindcss") path = join(tailwindRoot, "index.css");
-    else if (id.startsWith("tailwindcss/")) {
-      const subpath = id.slice("tailwindcss/".length);
-      path = join(tailwindRoot, subpath.endsWith(".css") ? subpath : `${subpath}.css`);
-    } else if (id.startsWith(".") || isAbsolute(id)) path = resolve(base, id);
-    else path = projectRequire.resolve(id);
-    const content = isProjectInput(workspaceRoot, path)
-      ? await snapshotFile(snapshots, path)
-      : await readFile(path, "utf8");
-    return { content, base: dirname(path) };
-  };
 }

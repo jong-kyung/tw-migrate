@@ -2,7 +2,7 @@ import { lstat, readFile } from "node:fs/promises";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 
 import { utf8OffsetMap } from "../parser/html.ts";
-import { isPreprocessorPath } from "../parser/style-compiler.ts";
+import { MISSING_STYLE_COMPILER_MESSAGES, isPreprocessorPath } from "../parser/style-compiler.ts";
 import type { CssImport, MigrationFailure, SourceFile } from "../types.ts";
 
 export const SOURCE_EXTENSIONS = new Set([
@@ -33,6 +33,10 @@ export function errorCode(error: unknown): string | undefined {
   return error instanceof Error && "code" in error && typeof error.code === "string"
     ? error.code
     : undefined;
+}
+
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export function isWithin(root: string, path: string): boolean {
@@ -114,7 +118,7 @@ export function packageFailure(
   packageRoot: string,
   error: unknown,
 ): MigrationFailure {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessage(error);
   return {
     package: normalizedRelativePath(workspaceRoot, packageRoot) || ".",
     message: message.startsWith(RECOVERABLE_INPUT_ERROR)
@@ -124,18 +128,15 @@ export function packageFailure(
 }
 
 export function isRecoverablePlanningError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.startsWith(RECOVERABLE_INPUT_ERROR);
+  return errorMessage(error).startsWith(RECOVERABLE_INPUT_ERROR);
 }
 
 export function isMissingStyleCompilerError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /^(?:Sass|Less) must be installed in the target project\.$/.test(message);
+  return MISSING_STYLE_COMPILER_MESSAGES.has(errorMessage(error));
 }
 
 export function isIntegrityError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.startsWith("Source changed during planning:");
+  return errorMessage(error).startsWith("Source changed during planning:");
 }
 
 export function normalizedRelativePath(root: string, path: string): string {

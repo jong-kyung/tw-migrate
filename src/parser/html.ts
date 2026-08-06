@@ -1,36 +1,20 @@
-import { parse } from "parse5";
+import { parse, type Token } from "parse5";
 
-const RECOVERABLE_PARSE_ERRORS = new Set(["missing-doctype"]);
 const TEMPLATE_MARKERS = /\{\{|\}\}|\$\{|<%|%>|<#|#>|\[%|%\]/;
 
 // Minimal structural view of the parse5 tree; the walk duck-types nodes the
 // same way the untyped implementation did.
-interface ParsedAttribute {
-  name: string;
-  value: string;
-}
-
-interface OffsetRange {
-  startOffset: number;
-  endOffset: number;
-}
-
-interface NodeLocation extends OffsetRange {
-  attrs?: Record<string, OffsetRange | undefined>;
-  startTag?: OffsetRange;
-}
-
 interface HtmlNode {
   nodeName: string;
   tagName?: string;
   value?: string;
-  attrs?: ParsedAttribute[];
+  attrs?: Token.Attribute[];
   childNodes?: HtmlNode[];
   content?: HtmlNode;
-  sourceCodeLocation?: NodeLocation | null;
+  sourceCodeLocation?: Token.ElementLocation | null;
 }
 
-export interface HtmlAttribute {
+interface HtmlAttribute {
   value: string;
   start: number;
   end: number;
@@ -38,7 +22,7 @@ export interface HtmlAttribute {
   synthetic?: boolean;
 }
 
-export interface HtmlLink {
+interface HtmlLink {
   href: string;
   media: string;
   start: number;
@@ -47,7 +31,7 @@ export interface HtmlLink {
   tagEnd: number;
 }
 
-export interface HtmlBase {
+interface HtmlBase {
   href: string;
   writable?: boolean;
   start: number;
@@ -59,12 +43,12 @@ export interface HtmlElementAttributes {
   idAttribute?: HtmlAttribute;
 }
 
-export interface HtmlSpan {
+interface HtmlSpan {
   start: number;
   end: number;
 }
 
-export interface ParsedHtml {
+interface ParsedHtml {
   links: HtmlLink[];
   bases: HtmlBase[];
   elements: HtmlElementAttributes[];
@@ -77,7 +61,7 @@ export function parseHtmlSource(path: string, source: string): ParsedHtml {
   const document = parse(source, {
     sourceCodeLocationInfo: true,
     onParseError(error) {
-      if (!RECOVERABLE_PARSE_ERRORS.has(error.code)) errors.push(error);
+      if (error.code !== "missing-doctype") errors.push(error);
     },
   });
   if (errors.length > 0) {
@@ -156,8 +140,13 @@ export function parseHtmlSource(path: string, source: string): ParsedHtml {
           dynamicAttributes.push({ start: dynamic.start, end: dynamic.end });
         } else if (classAttribute || idAttribute) {
           if (!classAttribute && idAttribute) {
-            const insertion = classInsertionOffset(source, node.sourceCodeLocation?.startTag);
-            if (insertion !== undefined) {
+            const startTag = node.sourceCodeLocation?.startTag;
+            if (startTag && source[startTag.endOffset - 1] === ">") {
+              const insertion = classInsertionOffset(
+                source,
+                startTag.startOffset,
+                startTag.endOffset - 1,
+              );
               classAttribute = { value: "", start: insertion, end: insertion, synthetic: true };
             }
           }
@@ -239,12 +228,13 @@ function toByteOffsets(
   };
 }
 
-function classInsertionOffset(source: string, startTag?: OffsetRange): number | undefined {
-  if (!startTag) return undefined;
-  let offset = startTag.endOffset - 1;
-  if (source[offset] !== ">") return undefined;
-  while (offset > startTag.startOffset && /\s/.test(source[offset - 1] ?? "")) offset -= 1;
+// Walk back from the `>` at tagEnd across a self-closing `/` and trailing
+// whitespace to where a synthesized class attribute can be inserted. Shared
+// with the Vue template planner so both migrate `<br />` the same way.
+export function classInsertionOffset(source: string, floor: number, tagEnd: number): number {
+  let offset = tagEnd;
   if (source[offset - 1] === "/") offset -= 1;
+  while (offset > floor && /\s/.test(source[offset - 1] ?? "")) offset -= 1;
   return offset;
 }
 
@@ -255,7 +245,7 @@ function stylesheetRel(value = ""): boolean {
 
 function locatedAttribute(
   source: string,
-  location: OffsetRange | undefined,
+  location: Token.Location | undefined,
   parsedValue: string | undefined,
 ): HtmlAttribute | undefined {
   if (!location || parsedValue === undefined) return undefined;

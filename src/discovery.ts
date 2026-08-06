@@ -21,7 +21,10 @@ export async function resolveScope(options: MigrateOptions): Promise<Scope> {
   const gitRoot = await findGitRoot(currentPackage);
   const workspaceRoot =
     gitRoot && !(await isIgnoredByGit(gitRoot, currentPackage)) ? gitRoot : currentPackage;
-  const allPaths = await discoverFiles(workspaceRoot, workspaceRoot === gitRoot);
+  const allPaths =
+    workspaceRoot === gitRoot
+      ? await discoverGitFiles(workspaceRoot)
+      : await collectFiles(workspaceRoot, isRelevantDiscoveredFile);
   // Ignore filtering scopes what gets migrated, never what gets scanned:
   // gitignored consumers and stylesheets must still block unsafe deletion.
   const scannedPaths =
@@ -126,9 +129,7 @@ async function isIgnoredByGit(gitRoot: string, path: string): Promise<boolean> {
   }
 }
 
-async function discoverFiles(root: string, useGit: boolean): Promise<string[]> {
-  if (!useGit) return collectFiles(root, isRelevantDiscoveredFile);
-
+async function discoverGitFiles(root: string): Promise<string[]> {
   const { stdout } = await run("git", ["ls-files", "-co", "--exclude-standard", "-z", "--", "."], {
     cwd: root,
     maxBuffer: 64 * 1024 * 1024,
@@ -180,9 +181,9 @@ export async function collectFiles(
   include: (path: string) => boolean,
 ): Promise<string[]> {
   const files: string[] = [];
+  // Traversal order is filesystem-dependent; every caller sorts the result.
   async function visit(directory: string): Promise<void> {
     const entries = await readdir(directory, { withFileTypes: true });
-    entries.sort((left, right) => left.name.localeCompare(right.name));
     for (const entry of entries) {
       const path = join(directory, entry.name);
       if (entry.isDirectory()) {

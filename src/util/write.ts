@@ -1,7 +1,7 @@
 import { chmod, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
-import { errorCode } from "./shared.ts";
+import { errorCode, errorMessage } from "./shared.ts";
 import type { SourceFile } from "../types.ts";
 
 export async function verifySnapshots(snapshots: Map<string, string>): Promise<void> {
@@ -13,7 +13,7 @@ export async function verifySnapshots(snapshots: Map<string, string>): Promise<v
     const read = reads[index];
     if (read.status === "rejected") {
       const error: unknown = read.reason;
-      const detail = errorCode(error) ?? (error instanceof Error ? error.message : String(error));
+      const detail = errorCode(error) ?? errorMessage(error);
       throw new Error(`Source changed after planning: ${path} (${detail})`);
     }
     if (read.value !== before) throw new Error(`Source changed after planning: ${path}`);

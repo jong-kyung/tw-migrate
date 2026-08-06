@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 
-import { offsetLookup, utf8OffsetMap } from "./html.ts";
+import { classInsertionOffset, offsetLookup, utf8OffsetMap } from "./html.ts";
 import { loadProjectModule } from "./style-compiler.ts";
 import { staticImportBindings, staticImports, staticStringExpression } from "../native.ts";
 import type { StaticImportBinding } from "../native.ts";
@@ -18,6 +18,13 @@ const SUPPORTED_STYLE_LANGUAGES = new Set<string | undefined>([
   "scss",
   "sass",
   "less",
+]);
+const SUPPORTED_SCRIPT_LANGUAGES = new Set<string | undefined>([
+  undefined,
+  "js",
+  "jsx",
+  "ts",
+  "tsx",
 ]);
 
 // @vue/compiler-core node and element kinds; @vue/compiler-sfc does not
@@ -146,7 +153,7 @@ export interface VueTemplateAttribute {
   writable?: boolean;
 }
 
-export interface VueModuleBinding {
+interface VueModuleBinding {
   name: string;
   start: number;
   end: number;
@@ -161,7 +168,7 @@ export interface VueTemplateSite {
   moduleBinding?: VueModuleBinding;
 }
 
-export interface VueStyleImport {
+interface VueStyleImport {
   reference: string;
   start: number;
   end: number;
@@ -462,7 +469,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
   let scriptImportsUnverifiable = false;
   const styleImports = [descriptor.script, descriptor.scriptSetup].flatMap((script) => {
     if (!script) return [];
-    if (script.src || ![undefined, "js", "jsx", "ts", "tsx"].includes(script.lang)) {
+    if (script.src || !SUPPORTED_SCRIPT_LANGUAGES.has(script.lang)) {
       scriptImportsUnverifiable = true;
       return [];
     }
@@ -478,7 +485,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
   if (
     descriptor.scriptSetup &&
     !descriptor.scriptSetup.src &&
-    [undefined, "js", "jsx", "ts", "tsx"].includes(descriptor.scriptSetup.lang)
+    SUPPORTED_SCRIPT_LANGUAGES.has(descriptor.scriptSetup.lang)
   ) {
     try {
       componentImports = staticImportBindings(
@@ -725,7 +732,7 @@ function templateSite(
     !classAttribute &&
     (bindingClasses.length > 0 || (!classOpaque && (node.tagType === TAG_COMPONENT || idAttribute)))
   ) {
-    const insertion = classInsertionOffset(source, node);
+    const insertion = nodeClassInsertionOffset(source, node);
     if (insertion === undefined) state.dynamic = true;
     else classAttribute = { value: "", start: insertion, end: insertion, synthetic: true };
   }
@@ -751,15 +758,12 @@ function literalAttribute(
   return { value, start: start + 1, end: end - 1 };
 }
 
-function classInsertionOffset(source: string, node: TemplateNode): number | undefined {
+function nodeClassInsertionOffset(source: string, node: TemplateNode): number | undefined {
   const propsEnd = Math.max(
     node.loc.start.offset + 1 + node.tag.length,
     ...(node.props ?? []).map((prop) => prop.loc.end.offset),
   );
   const tagEnd = source.indexOf(">", propsEnd);
   if (tagEnd < 0) return undefined;
-  let offset = tagEnd;
-  if (source[offset - 1] === "/") offset -= 1;
-  while (offset > node.loc.start.offset && /\s/.test(source[offset - 1])) offset -= 1;
-  return offset;
+  return classInsertionOffset(source, node.loc.start.offset, tagEnd);
 }
