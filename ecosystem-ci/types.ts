@@ -3,17 +3,11 @@
 // until `validateManifest` narrows it to `Manifest`.
 
 export const selectorTypes = ["role", "text", "data", "id", "tag", "css"] as const;
-export type SelectorType = (typeof selectorTypes)[number];
 
 export interface ProbeSelector {
-  type: SelectorType;
+  type: (typeof selectorTypes)[number];
   value: string;
   name?: string;
-}
-
-export interface Viewport {
-  width: number;
-  height: number;
 }
 
 export type ProbeAction =
@@ -22,7 +16,7 @@ export type ProbeAction =
 
 export interface Probe {
   route: string;
-  viewport: Viewport;
+  viewport: { width: number; height: number };
   readiness: { selector: ProbeSelector; cardinality: number };
   selector: ProbeSelector;
   cardinality: number;
@@ -30,7 +24,7 @@ export interface Probe {
   action?: ProbeAction;
 }
 
-export interface ProjectSource {
+interface ProjectSource {
   path: string;
   before: string;
   after: string;
@@ -54,11 +48,6 @@ export interface SmokeProject {
   fixture: string;
 }
 
-export interface ExternalInstall {
-  cwd: string;
-  args: string[];
-}
-
 export interface ExternalProject {
   id: string;
   kind: "external";
@@ -67,10 +56,9 @@ export interface ExternalProject {
   packageManager: string;
   lockfile: string;
   packageRoot: string;
-  installs: ExternalInstall[];
+  installs: { cwd: string; args: string[] }[];
   runtimeWrites: string[];
   start: string[];
-  server: "next";
   tailwindCss: string;
   source: ProjectSource;
   probes: Record<string, Probe>;

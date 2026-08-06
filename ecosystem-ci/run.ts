@@ -249,7 +249,6 @@ function validateProject(value: unknown, index: number): void {
         "installs",
         "runtimeWrites",
         "start",
-        "server",
         "tailwindCss",
         "source",
         "probes",
@@ -265,7 +264,6 @@ function validateProject(value: unknown, index: number): void {
         "installs",
         "runtimeWrites",
         "start",
-        "server",
         "tailwindCss",
         "source",
         "probes",
@@ -331,7 +329,6 @@ function validateProject(value: unknown, index: number): void {
     if (new Set(project.runtimeWrites).size !== project.runtimeWrites.length)
       throw new Error(`${label}.runtimeWrites must be unique`);
     validateExternalStart(project.start, `${label}.start`);
-    if (project.server !== "next") throw new Error(`${label}.server must be next`);
   } else {
     throw new Error(`${label}.kind must be controlled, smoke, or external`);
   }
