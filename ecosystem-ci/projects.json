@@ -2149,7 +2149,6 @@
           "identity": ["main"]
         }
       },
-      "server": "next",
       "runtimeWrites": ["tsconfig.json"]
     },
     {
@@ -2167,7 +2166,6 @@
         }
       ],
       "start": ["run", "dev"],
-      "server": "next",
       "tailwindCss": "src/app/globals.css",
       "source": {
         "path": "src/app/landing.module.css",

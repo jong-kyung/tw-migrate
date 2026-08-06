@@ -275,7 +275,7 @@ async function startExternalServer(
   phase: string,
 ): Promise<RunningServer> {
   const port = await availablePort();
-  // `project.server` is always "next"; both external manifest cases run Next.
+  // Both external manifest cases run Next, so its CLI flags are assumed here.
   const serverArgs = ["--hostname", "127.0.0.1", "--port", String(port)];
   const separator = project.packageManager.startsWith("npm@") ? ["--"] : [];
   const invocation = packageManagerInvocation(project, [
@@ -680,13 +680,14 @@ function captureArtifactNames(probes: Record<string, Probe>, phase: string): str
   ];
 }
 
+// One directory listing instead of an lstat probe per synthesized name.
 async function existingArtifactNames(artifactRoot: string, names: string[]): Promise<string[]> {
-  const checked = await Promise.all(
-    names.map(async (name) =>
-      (await lstat(join(artifactRoot, name)).catch(() => null))?.isFile() ? name : undefined,
-    ),
+  const present = new Set(
+    (await readdir(artifactRoot, { withFileTypes: true }))
+      .filter((entry) => entry.isFile())
+      .map((entry) => entry.name),
   );
-  return checked.filter((name) => name !== undefined);
+  return names.filter((name) => present.has(name));
 }
 
 const installLogNames = [

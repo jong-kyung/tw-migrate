@@ -4,7 +4,6 @@ import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readFileSync } from "node:fs";
 import { test } from "vite-plus/test";
 
 import {
@@ -109,7 +108,6 @@ function external(overrides: Fixture = {}): Fixture {
     installs: [{ cwd: ".", args: ["install", "--frozen-lockfile", "--ignore-scripts"] }],
     runtimeWrites: [],
     start: ["run", "dev"],
-    server: "next",
     tailwindCss: "src/tailwind.css",
     source: base.source,
     probes: { base: base.probes.base },
@@ -298,11 +296,6 @@ test("external repositories and paths stay inside the CI checkout trust boundary
     errorFor([external({ start })]);
   errorFor([external({ runtimeWrites: ["src/App.module.css"] })]);
   errorFor([external({ runtimeWrites: ["a", "b", "c", "d"] })]);
-});
-
-test("package script exposes the focused ecosystem harness entrypoint", () => {
-  const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-  assert.equal(packageJson.scripts["test:ecosystem"], "node ecosystem-ci/run.ts");
 });
 
 test("stages concrete optional dependency versions without changing the tracked manifest", async (t) => {

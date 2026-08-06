@@ -29,7 +29,8 @@ const targets: Record<string, string> = {
   "win32-x64": "win32-x64-msvc",
 };
 
-function targetFor(platform: string, arch: string): Target {
+export function currentTarget(): Target {
+  const { platform, arch } = process;
   const target = targets[`${platform}-${arch}`];
   if (!target) throw new Error(`Unsupported platform: ${platform}-${arch}`);
   return {
@@ -37,10 +38,6 @@ function targetFor(platform: string, arch: string): Target {
     packageName: `tw-migrate-${target}`,
     addon: `tw-migrate.${target}.node`,
   };
-}
-
-export function currentTarget(): Target {
-  return targetFor(process.platform, process.arch);
 }
 
 // npm's tarball filename is deterministic for the unscoped names packed here.
