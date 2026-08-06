@@ -3,7 +3,9 @@ use std::collections::{BTreeSet, HashMap};
 use crate::{
     css_plan::SelectorKey,
     js_rewrite::{CandidateMatch, SourcePlan},
-    planner::{Edit, HtmlAttribute, SourceFile, Warning, element_classes, element_has_context, element_ids},
+    planner::{
+        Edit, HtmlAttribute, SourceFile, Warning, element_classes, element_has_context, element_ids,
+    },
     utilities::utility_conflict,
 };
 
@@ -13,11 +15,7 @@ pub(crate) fn plan_html_file(
     candidates: &HashMap<SelectorKey, Vec<String>>,
     utility_prefix: Option<&str>,
 ) -> SourcePlan {
-    let contexts = file
-        .html_stylesheets
-        .iter()
-        .filter(|context| context.analyzable && context.css_path == css_path)
-        .collect::<Vec<_>>();
+    let contexts = file.analyzable_contexts(css_path);
     if contexts.is_empty() {
         return SourcePlan::default();
     }
@@ -103,15 +101,17 @@ pub(crate) fn plan_html_file(
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        if let Some((generated, existing)) = utility_conflict(&additions, &existing_classes) {
-            let authored = element
-                .class_attribute
-                .as_ref()
-                .map_or((0, 0), |attribute| (attribute.start, attribute.end));
-            warnings.push(Warning::existing_tailwind_conflict(
-                &file.path, authored, &generated, &existing,
-            ));
-        }
+        let authored = element
+            .class_attribute
+            .as_ref()
+            .map_or((0, 0), |attribute| (attribute.start, attribute.end));
+        push_utility_conflict(
+            &mut warnings,
+            &file.path,
+            authored,
+            &additions,
+            &existing_classes,
+        );
         if let Some(edit) = merge_class_attribute(class_attribute, &additions) {
             edits.push(edit);
         }
@@ -247,11 +247,7 @@ pub(crate) fn plan_vue_module_file(
     module_rule_classes: Option<&BTreeSet<String>>,
     utility_prefix: Option<&str>,
 ) -> SourcePlan {
-    let contexts = file
-        .html_stylesheets
-        .iter()
-        .filter(|context| context.analyzable && context.css_path == css_path)
-        .collect::<Vec<_>>();
+    let contexts = file.analyzable_contexts(css_path);
     if contexts.is_empty() {
         return SourcePlan::default();
     }
@@ -265,9 +261,7 @@ pub(crate) fn plan_vue_module_file(
         let unresolved = file
             .html_elements
             .iter()
-            .filter(|element| {
-                element_has_context(element, css_path) && !is_shadow_only(element)
-            })
+            .filter(|element| element_has_context(element, css_path) && !is_shadow_only(element))
             .filter_map(|element| element.module_binding.as_ref())
             .any(|binding| !rule_classes.contains(&binding.name));
         if unresolved {
@@ -397,18 +391,19 @@ pub(crate) fn plan_vue_module_file(
         // overlaps a Tailwind class already on the element. Warnings anchor
         // to authored coordinates, so use the element's analysis-time spans
         // rather than the rebased live site.
-        let existing_classes = element_classes(element);
-        if let Some((generated, existing)) = utility_conflict(&additions, &existing_classes) {
-            let authored = element
-                .class_attribute
-                .as_ref()
-                .map_or((binding.start, binding.end), |attribute| {
-                    (attribute.start, attribute.end)
-                });
-            warnings.push(Warning::existing_tailwind_conflict(
-                &file.path, authored, &generated, &existing,
-            ));
-        }
+        let authored = element
+            .class_attribute
+            .as_ref()
+            .map_or((binding.start, binding.end), |attribute| {
+                (attribute.start, attribute.end)
+            });
+        push_utility_conflict(
+            &mut warnings,
+            &file.path,
+            authored,
+            &additions,
+            &element_classes(element),
+        );
         *matched_module_refs.entry(binding.name.clone()).or_default() += 1;
     }
 
@@ -420,6 +415,22 @@ pub(crate) fn plan_vue_module_file(
         matched_module_refs,
         warnings,
         ..Default::default()
+    }
+}
+
+/// Warn when a generated utility overlaps a Tailwind class already present at
+/// the rewrite site; parity across the HTML and Vue module rewrite paths.
+fn push_utility_conflict(
+    warnings: &mut Vec<Warning>,
+    path: &str,
+    span: (usize, usize),
+    additions: &[String],
+    existing: &[&str],
+) {
+    if let Some((generated, existing)) = utility_conflict(additions, existing) {
+        warnings.push(Warning::existing_tailwind_conflict(
+            path, span, &generated, &existing,
+        ));
     }
 }
 

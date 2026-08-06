@@ -3,10 +3,10 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use oxc_css_parser::{
-    Parser as CssParser, Syntax,
+    Syntax,
     ast::{
         CombinatorKind, ComplexSelectorChild, CompoundSelector, InterpolableIdent, SimpleSelector,
-        Statement, Stylesheet, TypeSelector,
+        Statement, TypeSelector,
     },
 };
 
@@ -14,7 +14,7 @@ use crate::{
     animations::{KeyframePlan, animation_candidate, keyframe_plan},
     arbitrary::encode as encode_arbitrary,
     at_rules::{
-        GlobalAtRulePlan, conditional_variant, global_at_rule_plan, is_conditional,
+        GlobalAtRulePlan, conditional_variant, global_at_rule_plan, is_conditional, parse_css,
         unsupported_warning,
     },
     jsx_graph::Relation,
@@ -95,10 +95,8 @@ pub(crate) fn parse_css_rules(
         relative_urls_stable,
     } = options;
     let allocator = oxc_css_parser::Allocator::default();
-    let mut parser = CssParser::new(&allocator, source, syntax);
-    let stylesheet = parser
-        .parse::<Stylesheet>()
-        .map_err(|error| format!("Failed to parse {path}: {error:?}"))?;
+    let stylesheet = parse_css(&allocator, source, syntax)
+        .map_err(|error| format!("Failed to parse {path}: {error}"))?;
 
     let keyframes = if is_module && can_move_at_rules {
         stylesheet
@@ -261,9 +259,7 @@ fn declaration_is_plain_css(
     }
     let wrapped = format!("a{{{raw}}}");
     let allocator = oxc_css_parser::Allocator::default();
-    CssParser::new(&allocator, &wrapped, Syntax::Css)
-        .parse::<Stylesheet>()
-        .is_ok()
+    parse_css(&allocator, &wrapped, Syntax::Css).is_ok()
 }
 
 fn collect_declaration_candidates(
@@ -681,8 +677,7 @@ pub(crate) fn index_shadow_selectors(pieces: &[String], module_pieces: &[String]
         .chain(module_pieces.iter().map(|piece| (piece, true)))
     {
         let allocator = oxc_css_parser::Allocator::default();
-        let mut parser = CssParser::new(&allocator, piece, Syntax::Css);
-        match parser.parse::<Stylesheet>() {
+        match parse_css(&allocator, piece, Syntax::Css) {
             Ok(stylesheet) => index_shadow_statements(&stylesheet.statements, module, &mut index),
             // A piece that is not plain CSS cannot prove its selectors.
             Err(_) => index.unverifiable = true,
@@ -879,7 +874,7 @@ fn selector_match(
         }
         let key = selector_key(compound.children.first()?)?;
         let variant = arbitrary_selector_variant(rule, source, compound)?;
-        return Some((key, variant));
+        return Some((key, Some(variant)));
     }
 
     if is_module {
@@ -890,7 +885,7 @@ fn selector_match(
     };
     let key = selector_key(target.children.first()?)?;
     let variant = arbitrary_selector_variant(rule, source, target)?;
-    Some((key, variant))
+    Some((key, Some(variant)))
 }
 
 fn supported_pseudo_state(name: &str) -> bool {
@@ -995,7 +990,7 @@ fn arbitrary_selector_variant(
     rule: &oxc_css_parser::ast::QualifiedRule<'_>,
     source: &str,
     target: &oxc_css_parser::ast::CompoundSelector<'_>,
-) -> Option<Option<String>> {
+) -> Option<String> {
     // Replace the target simple selector by its parsed span. Searching the
     // selector text for ".name" matched the wrong occurrence when the name
     // recurred later (e.g. inside `:not(.abc)` for `.a:not(.abc)`).
@@ -1010,7 +1005,7 @@ fn arbitrary_selector_variant(
         target_span.start - selector_span.start..target_span.end - selector_span.start,
         "&",
     );
-    Some(Some(format!("[{}]", encode_arbitrary(&condition))))
+    Some(format!("[{}]", encode_arbitrary(&condition)))
 }
 
 fn literal_ident<'a>(ident: &'a InterpolableIdent<'a>) -> Option<&'a str> {

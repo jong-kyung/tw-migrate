@@ -11,8 +11,8 @@ use oxc_ast::ast::{
     Argument, CallExpression, ComputedMemberExpression, ExportAllDeclaration,
     ExportFromDeclaration, Expression, ImportDeclaration, ImportDeclarationSpecifier,
     ImportExpression, ImportOrExportKind, JSXAttribute, JSXAttributeItem, JSXAttributeName,
-    JSXAttributeValue, JSXExpression, JSXOpeningElement, Statement, StaticMemberExpression,
-    TemplateLiteral, VariableDeclarator,
+    JSXAttributeValue, JSXExpression, JSXOpeningElement, Program, Statement,
+    StaticMemberExpression, TemplateLiteral, VariableDeclarator,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::Parser;
@@ -85,18 +85,27 @@ pub(crate) fn static_string_expression(path: &str, source: &str) -> Result<Optio
     })
 }
 
+/// Parse a whole source file, treating any diagnostic as a parse failure.
+fn parse_program<'a>(
+    allocator: &'a Allocator,
+    path: &str,
+    source: &'a str,
+) -> Result<Program<'a>, String> {
+    let source_type = source_type_for_path(path)?;
+    let parsed = Parser::new(allocator, source, source_type).parse();
+    if parsed.diagnostics.is_empty() {
+        Ok(parsed.program)
+    } else {
+        Err(format!("Failed to parse {path}: {:?}", parsed.diagnostics))
+    }
+}
+
 pub(crate) fn static_import_bindings(
     path: &str,
     source: &str,
 ) -> Result<Vec<StaticImportBinding>, String> {
     let allocator = Allocator::default();
-    let source_type = source_type_for_path(path)?;
-    let parsed = Parser::new(&allocator, source, source_type).parse();
-    if !parsed.diagnostics.is_empty() {
-        return Err(format!("Failed to parse {path}: {:?}", parsed.diagnostics));
-    }
-    Ok(parsed
-        .program
+    Ok(parse_program(&allocator, path, source)?
         .body
         .iter()
         .filter_map(|statement| {
@@ -127,13 +136,7 @@ pub(crate) fn static_import_bindings(
 
 pub(crate) fn static_imports(path: &str, source: &str) -> Result<Vec<String>, String> {
     let allocator = Allocator::default();
-    let source_type = source_type_for_path(path)?;
-    let parsed = Parser::new(&allocator, source, source_type).parse();
-    if !parsed.diagnostics.is_empty() {
-        return Err(format!("Failed to parse {path}: {:?}", parsed.diagnostics));
-    }
-    Ok(parsed
-        .program
+    Ok(parse_program(&allocator, path, source)?
         .body
         .iter()
         .filter_map(|statement| {
