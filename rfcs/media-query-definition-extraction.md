@@ -257,7 +257,7 @@ Generated breakpoints follow a separate ordering rule. Tailwind orders responsiv
 
 An entry group owns one mutable in-memory entry source initialized from the shared snapshot. Each package plan receives the current source and may return a new source containing moved keyframes or global at-rules. The orchestration layer adopts that planned source before adding media definitions or processing the next package. It removes intermediate Tailwind entry files from package plans and emits only the group's final composed entry file. Media extraction must never add a second planned file for a path already changed by the native planner.
 
-Moved keyframes and global at-rules follow the same proof standard as generated definitions. Within one package, moved blocks keep their source order. When two packages in one group move colliding order-sensitive definitions, such as registrations for the same `@property` name or overlapping `@page` rules, their original precedence depends on the import order that loaded those packages, which normalized package-path order does not prove. The composition detects such collisions and retains the affected modules and at-rules instead of emitting an order that may flip the winning definition.
+Moved keyframes and global at-rules follow the same proof standard as generated definitions. Order is proven only inside one compiled stylesheet, where moved blocks keep their source order. When two distinct stylesheets move colliding order-sensitive definitions, such as registrations for the same `@property` name or overlapping `@page` rules, their original precedence depends on the import order that loaded those stylesheets. Neither stylesheet-path nor normalized package-path order proves that, and belonging to one package proves nothing more, because a package's modules are still loaded by consumer imports. The composition detects such collisions across every pair of distinct stylesheets and retains the affected modules and at-rules instead of emitting an order that may flip the winning definition.
 
 Imported theme files remain untouched. Generated definitions live in the resolved entry because that file already defines the design system used to validate migration candidates.
 
@@ -455,7 +455,7 @@ Phase 3 adds runtime confidence without changing the CLI contract introduced and
 - sibling entries and implicit source coverage are never inferred;
 - Tailwind loads from the entry owner while preprocessors load from each migrated package;
 - variant prefixes found in the entry's scanned candidate corpus are reserved before allocation;
-- colliding order-sensitive global at-rules moved from two packages are retained;
+- colliding order-sensitive global at-rules moved from two distinct stylesheets are retained regardless of package;
 - shared workspace entries receive one merged edit that preserves native keyframe and global at-rule additions; and
 - a second run produces no diff.
 
