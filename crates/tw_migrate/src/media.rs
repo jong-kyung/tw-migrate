@@ -7,9 +7,16 @@
 //! `768px` stay distinct keys even when a typical browser renders them at the
 //! same width.
 
-// The native collection pass added in the next change consumes this module;
-// until then only the in-module tests exercise it.
-#![allow(dead_code)]
+use std::collections::HashMap;
+
+use oxc_css_parser::ast::{AtRule, Statement};
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    at_rules::{at_rule_query, media_breakpoint_variant, media_feature_variant, parse_css},
+    planner::StylesheetSyntax,
+    theme::{exact_theme_token, parse_dimension},
+};
 
 /// The longest generated name emitted without a digest suffix.
 const MAX_NAME_LENGTH: usize = 48;
@@ -1369,5 +1376,421 @@ mod tests {
             condition_digest("(width >= 52rem)"),
             condition_digest("(width >= 60rem)")
         );
+    }
+}
+
+/// One stylesheet supplied to the collection pass. Preprocessor stylesheets
+/// pass their compiled CSS as `analysis_source`, matching the planner.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CollectionStylesheet {
+    css_path: String,
+    css_source: String,
+    #[serde(default)]
+    analysis_source: Option<String>,
+    #[serde(default)]
+    syntax: StylesheetSyntax,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TailwindSource {
+    path: String,
+    source: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MediaCollectionRequest {
+    stylesheets: Vec<CollectionStylesheet>,
+    #[serde(default)]
+    theme_tokens: HashMap<String, String>,
+    /// Project-owned stylesheet sources retained from the Tailwind entry
+    /// import graph, parsed for authored `@custom-variant` reservations.
+    #[serde(default)]
+    tailwind_sources: Vec<TailwindSource>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MediaCollectionResponse {
+    conditions: Vec<CollectedCondition>,
+    authored_variants: Vec<AuthoredVariant>,
+    /// The single unit shared by every active breakpoint token, when one is
+    /// provable. Mixed or absent units disable generated breakpoints.
+    breakpoint_unit: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CollectedCondition {
+    key: String,
+    kind: &'static str,
+    preferred_name: String,
+    digest: String,
+    css_path: String,
+    /// Scan position of the first rule that uses this condition, in request
+    /// stylesheet order; later cascade-position ordering builds on it.
+    order: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuthoredVariant {
+    name: String,
+    definition: String,
+    /// The normalized condition key when the definition is exactly one
+    /// `@media` wrapper around `@slot`; `None` for opaque definitions.
+    media_query_key: Option<String>,
+    path: String,
+}
+
+/// Collect every unmatched, representable media condition from the request
+/// stylesheets, in resolution order: conditions covered by a Tailwind
+/// built-in variant or an exact existing breakpoint are skipped, simple
+/// minimum-width queries in the active breakpoint unit become generated
+/// breakpoints, and every other representable condition becomes a generated
+/// custom variant. Also returns authored custom-variant reservations parsed
+/// from the supplied Tailwind sources.
+pub fn collect_media_conditions_json(request: &str) -> Result<String, String> {
+    let request: MediaCollectionRequest =
+        serde_json::from_str(request).map_err(|error| format!("Invalid request: {error}"))?;
+    let breakpoint_unit = common_breakpoint_unit(&request.theme_tokens);
+
+    let mut conditions: Vec<CollectedCondition> = Vec::new();
+    let mut seen: HashMap<String, ()> = HashMap::new();
+    let mut order = 0usize;
+    for stylesheet in &request.stylesheets {
+        let (source, syntax) = match &stylesheet.analysis_source {
+            Some(analysis) => (analysis.as_str(), StylesheetSyntax::default()),
+            None => (stylesheet.css_source.as_str(), stylesheet.syntax),
+        };
+        let allocator = oxc_css_parser::Allocator::default();
+        let parsed = parse_css(&allocator, source, syntax.parser_syntax())
+            .map_err(|error| format!("Failed to parse {}: {error}", stylesheet.css_path))?;
+        let mut at_rules = Vec::new();
+        walk_media_at_rules(&parsed.statements, &mut |at_rule| at_rules.push(at_rule));
+        for at_rule in at_rules {
+            if at_rule.block.is_none() {
+                continue;
+            }
+            if media_feature_variant(at_rule, source).is_some()
+                || media_breakpoint_variant(at_rule, source, &request.theme_tokens).is_some()
+            {
+                continue;
+            }
+            let Some(query) = at_rule_query(at_rule, source, "media") else {
+                continue;
+            };
+            let Some(condition) = parse_media_condition(query) else {
+                continue;
+            };
+            order += 1;
+            if seen.contains_key(&condition.key) {
+                continue;
+            }
+            let (kind, preferred_name) = match &condition.simple_min_width {
+                Some(simple)
+                    if breakpoint_unit.as_deref() == Some(simple.unit.as_str())
+                        && exact_theme_token(
+                            "breakpoint",
+                            &simple.value,
+                            &request.theme_tokens,
+                        )
+                        .is_none() =>
+                {
+                    ("breakpoint", breakpoint_name(&simple.value))
+                }
+                Some(simple)
+                    if exact_theme_token("breakpoint", &simple.value, &request.theme_tokens)
+                        .is_some() =>
+                {
+                    // An exact existing breakpoint needs no generated
+                    // definition; the resolution order reuses it.
+                    continue;
+                }
+                _ => (
+                    "customVariant",
+                    limit_name(&condition.preferred_custom_name, &condition.key),
+                ),
+            };
+            seen.insert(condition.key.clone(), ());
+            conditions.push(CollectedCondition {
+                digest: condition_digest(&condition.key),
+                key: condition.key,
+                kind,
+                preferred_name,
+                css_path: stylesheet.css_path.clone(),
+                order,
+            });
+        }
+    }
+    conditions.sort_by(|left, right| left.key.cmp(&right.key));
+
+    let mut authored_variants = Vec::new();
+    for tailwind_source in &request.tailwind_sources {
+        collect_authored_variants(
+            &tailwind_source.path,
+            &tailwind_source.source,
+            &mut authored_variants,
+        )?;
+    }
+    authored_variants.sort_by(|left: &AuthoredVariant, right: &AuthoredVariant| {
+        left.name.cmp(&right.name).then(left.path.cmp(&right.path))
+    });
+
+    serde_json::to_string(&MediaCollectionResponse {
+        conditions,
+        authored_variants,
+        breakpoint_unit,
+    })
+    .map_err(|error| error.to_string())
+}
+
+/// The one unit every `--breakpoint-*` token shares, or `None` when the
+/// namespace is empty or mixes units. No unit conversion is attempted.
+fn common_breakpoint_unit(theme_tokens: &HashMap<String, String>) -> Option<String> {
+    let mut unit: Option<&str> = None;
+    for (name, value) in theme_tokens {
+        if !name.starts_with("breakpoint-") {
+            continue;
+        }
+        let (_, token_unit) = parse_dimension(value.trim())?;
+        match unit {
+            None => unit = Some(token_unit),
+            Some(existing) if existing == token_unit => {}
+            Some(_) => return None,
+        }
+    }
+    unit.map(str::to_string)
+}
+
+/// Visit every `@media` at-rule in document order, at any nesting depth.
+fn walk_media_at_rules<'a, 'b>(
+    statements: &'a [Statement<'b>],
+    visit: &mut impl FnMut(&'a AtRule<'b>),
+) {
+    for statement in statements {
+        match statement {
+            Statement::AtRule(at_rule) => {
+                if at_rule.name.name == "media" {
+                    visit(at_rule);
+                }
+                if let Some(block) = &at_rule.block {
+                    walk_media_at_rules(&block.statements, visit);
+                }
+            }
+            Statement::QualifiedRule(rule) => {
+                walk_media_at_rules(&rule.block.statements, visit);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_authored_variants(
+    path: &str,
+    source: &str,
+    variants: &mut Vec<AuthoredVariant>,
+) -> Result<(), String> {
+    let allocator = oxc_css_parser::Allocator::default();
+    let parsed = parse_css(&allocator, source, oxc_css_parser::Syntax::Css)
+        .map_err(|error| format!("Failed to parse {path}: {error}"))?;
+    let mut at_rules = Vec::new();
+    walk_custom_variant_at_rules(&parsed.statements, &mut |at_rule| at_rules.push(at_rule));
+    for at_rule in at_rules {
+        let prelude_end = at_rule
+            .block
+            .as_ref()
+            .map_or(at_rule.span.end, |block| block.span.start);
+        let prelude = source[at_rule.span.start..prelude_end]
+            .trim()
+            .trim_start_matches('@')
+            .trim_start_matches("custom-variant")
+            .trim();
+        let Some(name) = prelude.split_whitespace().next() else {
+            continue;
+        };
+        variants.push(AuthoredVariant {
+            name: name.trim_end_matches(';').to_string(),
+            definition: collapse_whitespace(&source[at_rule.span.start..at_rule.span.end]),
+            media_query_key: authored_media_wrapper_key(at_rule, source),
+            path: path.to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn walk_custom_variant_at_rules<'a, 'b>(
+    statements: &'a [Statement<'b>],
+    visit: &mut impl FnMut(&'a AtRule<'b>),
+) {
+    for statement in statements {
+        let Statement::AtRule(at_rule) = statement else {
+            continue;
+        };
+        if at_rule.name.name == "custom-variant" {
+            visit(at_rule);
+        } else if let Some(block) = &at_rule.block {
+            walk_custom_variant_at_rules(&block.statements, visit);
+        }
+    }
+}
+
+/// The normalized condition key of an authored definition shaped exactly as
+/// one `@media` block whose only statement is `@slot`.
+fn authored_media_wrapper_key(at_rule: &AtRule<'_>, source: &str) -> Option<String> {
+    let block = at_rule.block.as_ref()?;
+    let [Statement::AtRule(media)] = block.statements.as_slice() else {
+        return None;
+    };
+    if media.name.name != "media" {
+        return None;
+    }
+    let media_block = media.block.as_ref()?;
+    let [Statement::AtRule(slot)] = media_block.statements.as_slice() else {
+        return None;
+    };
+    if slot.name.name != "slot" || slot.block.is_some() {
+        return None;
+    }
+    let query = at_rule_query(media, source, "media")?;
+    Some(parse_media_condition(query)?.key)
+}
+
+#[cfg(test)]
+mod collection_tests {
+    use serde_json::{Value, json};
+
+    fn collect(request: Value) -> Value {
+        let response = super::collect_media_conditions_json(&request.to_string()).unwrap();
+        serde_json::from_str(&response).unwrap()
+    }
+
+    fn rem_tokens() -> Value {
+        json!({ "breakpoint-md": "48rem", "breakpoint-lg": "64rem" })
+    }
+
+    #[test]
+    fn skips_built_in_and_existing_breakpoint_conditions() {
+        let response = collect(json!({
+            "stylesheets": [{
+                "cssPath": "card.css",
+                "cssSource": "@media print { .card { margin: 0; } }\n\
+                    @media (prefers-color-scheme: dark) { .card { color: white; } }\n\
+                    @media (min-width: 48rem) { .card { padding: 1rem; } }\n\
+                    @media (width >= 64rem) { .card { padding: 2rem; } }\n\
+                    @media (min-width: 52rem) { .card { padding: 3rem; } }",
+            }],
+            "themeTokens": rem_tokens(),
+        }));
+        let conditions = response["conditions"].as_array().unwrap();
+        assert_eq!(conditions.len(), 1);
+        assert_eq!(conditions[0]["key"], "(width >= 52rem)");
+        assert_eq!(conditions[0]["kind"], "breakpoint");
+        assert_eq!(conditions[0]["preferredName"], "min-52rem");
+    }
+
+    #[test]
+    fn incompatible_units_become_custom_variants() {
+        let response = collect(json!({
+            "stylesheets": [{
+                "cssPath": "card.css",
+                "cssSource": "@media (min-width: 768px) { .card { margin: 0; } }",
+            }],
+            "themeTokens": rem_tokens(),
+        }));
+        let conditions = response["conditions"].as_array().unwrap();
+        assert_eq!(conditions.len(), 1);
+        assert_eq!(conditions[0]["kind"], "customVariant");
+        assert_eq!(conditions[0]["preferredName"], "width-gte-768px");
+        assert_eq!(response["breakpointUnit"], "rem");
+    }
+
+    #[test]
+    fn mixed_breakpoint_units_disable_generated_breakpoints() {
+        let response = collect(json!({
+            "stylesheets": [{
+                "cssPath": "card.css",
+                "cssSource": "@media (min-width: 52rem) { .card { margin: 0; } }",
+            }],
+            "themeTokens": { "breakpoint-md": "48rem", "breakpoint-wide": "900px" },
+        }));
+        let conditions = response["conditions"].as_array().unwrap();
+        assert_eq!(conditions[0]["kind"], "customVariant");
+        assert_eq!(response["breakpointUnit"], Value::Null);
+    }
+
+    #[test]
+    fn collects_nested_conditions_and_dedupes_by_key() {
+        let response = collect(json!({
+            "stylesheets": [
+                {
+                    "cssPath": "a.css",
+                    "cssSource": ".card { @media screen and (width <= 768px) { margin: 0; } }",
+                },
+                {
+                    "cssPath": "b.css",
+                    "cssSource": "@media screen and (max-width: 768px) { .other { margin: 1px; } }\n\
+                        @media (hover: hover) and (pointer: fine) { .other { color: red; } }",
+                },
+            ],
+            "themeTokens": rem_tokens(),
+        }));
+        let conditions = response["conditions"].as_array().unwrap();
+        assert_eq!(conditions.len(), 2);
+        assert_eq!(conditions[0]["key"], "(hover: hover) and (pointer: fine)");
+        assert_eq!(conditions[0]["cssPath"], "b.css");
+        assert_eq!(conditions[1]["key"], "screen and (width <= 768px)");
+        assert_eq!(conditions[1]["preferredName"], "screen-width-lte-768px");
+        assert_eq!(conditions[1]["cssPath"], "a.css");
+        assert_eq!(conditions[1]["order"], 1);
+    }
+
+    #[test]
+    fn unrepresentable_conditions_are_left_to_existing_handling() {
+        let response = collect(json!({
+            "stylesheets": [{
+                "cssPath": "card.css",
+                "cssSource": "@media (--narrow) { .card { margin: 0; } }",
+            }],
+            "themeTokens": rem_tokens(),
+        }));
+        assert_eq!(response["conditions"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn parses_authored_custom_variant_reservations() {
+        let response = collect(json!({
+            "stylesheets": [],
+            "themeTokens": rem_tokens(),
+            "tailwindSources": [{
+                "path": "app.css",
+                "source": "@custom-variant narrow {\n  @media (width <= 768px) {\n    @slot;\n  }\n}\n\
+                    @custom-variant hocus (&:hover, &:focus);\n\
+                    @custom-variant themed {\n  &:where([data-theme]) {\n    @slot;\n  }\n}",
+            }],
+        }));
+        let variants = response["authoredVariants"].as_array().unwrap();
+        assert_eq!(variants.len(), 3);
+        assert_eq!(variants[0]["name"], "hocus");
+        assert_eq!(variants[0]["mediaQueryKey"], Value::Null);
+        assert_eq!(variants[1]["name"], "narrow");
+        assert_eq!(variants[1]["mediaQueryKey"], "(width <= 768px)");
+        assert_eq!(variants[2]["name"], "themed");
+        assert_eq!(variants[2]["mediaQueryKey"], Value::Null);
+    }
+
+    #[test]
+    fn output_is_deterministic() {
+        let request = json!({
+            "stylesheets": [{
+                "cssPath": "card.css",
+                "cssSource": "@media (width <= 900px) { .a { margin: 0; } }\n\
+                    @media (width <= 768px) { .b { margin: 0; } }",
+            }],
+            "themeTokens": rem_tokens(),
+        });
+        assert_eq!(collect(request.clone()), collect(request));
     }
 }

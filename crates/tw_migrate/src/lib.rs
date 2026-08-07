@@ -70,6 +70,11 @@ pub fn static_import_bindings(
     js_rewrite::static_import_bindings(&path, &source).map_err(napi::Error::from_reason)
 }
 
+#[napi]
+pub fn collect_media_conditions(request: String) -> napi::Result<String> {
+    media::collect_media_conditions_json(&request).map_err(napi::Error::from_reason)
+}
+
 const RECOVERABLE_INPUT_ERROR: &str = "TW_MIGRATE_RECOVERABLE_INPUT:";
 
 #[napi]

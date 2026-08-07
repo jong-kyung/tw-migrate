@@ -10,6 +10,7 @@ export interface StaticImportBinding {
 }
 
 interface Binding {
+  collectMediaConditions: (request: string) => string;
   decodeSourceMap: (sourceMap: string) => string;
   planBatchMigration: (request: string) => string;
   staticImportBindings: (path: string, source: string) => StaticImportBinding[];
@@ -48,6 +49,7 @@ try {
 }
 
 export const {
+  collectMediaConditions,
   decodeSourceMap,
   planBatchMigration,
   staticImportBindings,

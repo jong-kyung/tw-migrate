@@ -176,7 +176,7 @@ fn media_variant(
         .or_else(|| arbitrary_at_rule_variant(at_rule, source))
 }
 
-fn media_feature_variant(at_rule: &AtRule<'_>, source: &str) -> Option<String> {
+pub(crate) fn media_feature_variant(at_rule: &AtRule<'_>, source: &str) -> Option<String> {
     let query = at_rule_query(at_rule, source, "media")?;
     let normalized = query
         .chars()
@@ -207,7 +207,7 @@ fn media_feature_variant(at_rule: &AtRule<'_>, source: &str) -> Option<String> {
     Some(variant.to_string())
 }
 
-fn media_breakpoint_variant(
+pub(crate) fn media_breakpoint_variant(
     at_rule: &AtRule<'_>,
     source: &str,
     theme_tokens: &HashMap<String, String>,
@@ -288,7 +288,11 @@ fn normalize_query(query: &str) -> Option<String> {
     )
 }
 
-fn at_rule_query<'a>(at_rule: &AtRule<'_>, source: &'a str, name: &str) -> Option<&'a str> {
+pub(crate) fn at_rule_query<'a>(
+    at_rule: &AtRule<'_>,
+    source: &'a str,
+    name: &str,
+) -> Option<&'a str> {
     source[at_rule.span.start..at_rule.block.as_ref()?.span.start]
         .trim()
         .strip_prefix('@')?
