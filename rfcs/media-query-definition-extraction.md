@@ -145,10 +145,14 @@ Before package planning, workspace discovery builds a catalog of Tailwind entrie
 
 Package ancestry identifies candidates but does not prove consumption. Selecting an ancestor entry requires both of these proofs:
 
-- **Loading proof**: a child-owned writable JavaScript, TypeScript, Vue, or HTML source directly imports or links the ancestor Tailwind entry, so the entry's CSS output reaches the child.
+- **Loading proof**: a child-owned writable JavaScript, TypeScript, Vue, or HTML source directly imports or links the ancestor Tailwind entry, and every consumer of the migrated stylesheet is statically reachable from such a source through child-owned imports, so the entry's CSS output provably reaches the flows being rewritten.
 - **Scan proof**: the entry's utility detection provably covers the child package, so utilities generated for migrated child sources are emitted. A literal `@source` or `source(...)` scope that contains the child package proves this. Automatic detection also proves it when its base directory contains the child package and the entry does not disable detection with `source(none)`.
 
-Neither proof substitutes for the other. A direct import does not prove that the child's newly generated utility classes are scanned, and a `@source` scope does not prove that the child loads the entry's output, because a scanned library may be consumed by a different application that never loads this entry. An entry whose literal source scope excludes the child fails scan proof even though the child imports it. Dynamic paths, package dependency declarations, and a shared repository root prove neither fact. Explicit package-to-entry mappings remain deferred. A package without both proofs fails entry resolution and stays unchanged, or is skipped as a recoverable package failure under `--force`.
+Neither proof substitutes for the other. A direct import does not prove that the child's newly generated utility classes are scanned, and a `@source` scope does not prove that the child loads the entry's output, because a scanned library may be consumed by a different application that never loads this entry. An entry whose literal source scope excludes the child fails scan proof even though the child imports it. Dynamic paths, package dependency declarations, and a shared repository root prove neither fact.
+
+Loading proof is scoped to consumer flows rather than granted package-wide. A Storybook, demo, or test source that imports the entry proves loading only for the consumers it reaches through static imports. A stylesheet with a consumer outside every proven flow keeps its rules retained even when the rest of the package migrates, because that consumer may ship through an application that never loads this entry.
+
+Explicit package-to-entry mappings remain deferred. A package where no stylesheet holds both proofs fails entry resolution and stays unchanged, or is skipped as a recoverable package failure under `--force`.
 
 Default package mode retains the current ownership boundary and does not inspect ancestor entries.
 
@@ -246,6 +250,8 @@ The editor follows these rules:
 The first implementation appends a new block rather than inserting declarations into an authored `@theme` block. A later run may append another block when it discovers a new condition. Tailwind supports multiple `@theme` blocks, and this policy avoids reparsing and reprinting user-owned formatting.
 
 Custom-variant order is behavior rather than formatting. When two generated conditions can hold at the same time, Tailwind emits their utilities in variant registration order, so entry order decides which conflicting declaration wins, exactly as authored rule order did before migration. Rule order is proven only inside one compiled stylesheet. Across stylesheets and packages, the import or bundler order that loaded the original files decides the cascade, and filesystem or normalized package-path order does not prove it. The entry group therefore orders generated custom variants by the position of the first migrated rule that uses each condition inside its stylesheet, and applies normalized package-path order across stylesheets only as a deterministic tiebreaker that carries no cascade meaning. Conflict analysis treats two candidates as ordering-sensitive when they set conflicting declarations on the same proven element under distinct generated conditions that are not provably mutually exclusive. Such a pair migrates only when both rules come from one stylesheet and the emitted definition order reproduces the original winning rule. An ordering-sensitive pair that spans stylesheets has no proven load order and is retained with the existing conflict warning.
+
+Generated breakpoints follow a separate ordering rule. Tailwind orders responsive breakpoint utilities by resolved breakpoint value rather than by theme-variable position, so the appended order of `--breakpoint-*` variables carries no cascade meaning and rule 5 sorts them by name for determinism only. For an ordering-sensitive pair of generated breakpoints, the value order is statically known: the pair migrates only when ascending value order reproduces the original winning rule, and is otherwise retained. An ordering-sensitive pair that mixes a generated breakpoint with a generated custom variant has no proven relative utility order and is retained. The ordering gate therefore covers both generated definition kinds, not only custom variants.
 
 An entry group owns one mutable in-memory entry source initialized from the shared snapshot. Each package plan receives the current source and may return a new source containing moved keyframes or global at-rules. The orchestration layer adopts that planned source before adding media definitions or processing the next package. It removes intermediate Tailwind entry files from package plans and emits only the group's final composed entry file. Media extraction must never add a second planned file for a path already changed by the native planner.
 
@@ -376,7 +382,7 @@ Existing warning codes continue to cover unsupported media syntax, candidate com
 - Add the native collection pass and group-supplied name map.
 - Reserve theme and custom-variant names from the complete Tailwind graph, including probe-detected plugin and dependency variants.
 - Add deterministic entry-group collision handling.
-- Order generated custom variants by proven cascade position and extend conflict analysis to overlapping generated conditions.
+- Order generated custom variants by proven cascade position and extend conflict analysis to overlapping generated conditions of both definition kinds.
 - Keep extraction disabled internally until entry augmentation and packaged coverage are available.
 
 ### Phase 2: Entry augmentation, options, and packaged behavior
@@ -416,6 +422,8 @@ Phase 3 adds runtime confidence without changing the CLI contract introduced and
 - imported custom-variant names are reserved before generation;
 - same-stylesheet overlapping generated conditions preserve the original winning declaration through definition order;
 - ordering-sensitive pairs that span stylesheets are retained as ambiguous;
+- conflicting overlapping generated breakpoints migrate only when ascending value order reproduces the original winner;
+- ordering-sensitive pairs that mix a generated breakpoint with a generated custom variant are retained;
 - collisions across packages in one entry group receive stable digest suffixes before consumer planning; and
 - extraction-disabled planning reproduces current arbitrary candidates.
 
@@ -434,6 +442,7 @@ Phase 3 adds runtime confidence without changing the CLI contract introduced and
 - a package without an entry uses an ancestor entry only when a supported static relationship proves coverage in workspace mode;
 - a direct entry import without proven scan coverage fails child entry resolution;
 - a literal `@source` scope without a child-owned import of the entry fails child entry resolution;
+- an entry import from a demo or test flow does not authorize stylesheets whose consumers sit outside that flow;
 - variant names contributed by plugins or dependency stylesheets are reserved through design-system probing;
 - an entry whose only changes are moved keyframes or global at-rules still produces the composed entry edit;
 - missing or ambiguous ancestor proof fails the child package deterministically;
