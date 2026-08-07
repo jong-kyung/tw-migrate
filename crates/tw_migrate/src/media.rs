@@ -541,6 +541,13 @@ fn tokenize(branch: &str) -> Option<Vec<Token<'_>>> {
                 {
                     index += 1;
                 }
+                // A word running straight into `(` is a CSS function token,
+                // as in `not(color)`; splitting it into a keyword and a
+                // condition would turn an always-false general-enclosed
+                // query into a live condition.
+                if bytes.get(index) == Some(&b'(') {
+                    return None;
+                }
                 tokens.push(Token::Word(&branch[start..index]));
             }
         }
@@ -920,6 +927,22 @@ mod tests {
         let condition = parsed("(orientation:\u{a0}landscape)");
         assert_eq!(condition.key, "(orientation: \u{a0}landscape)");
         assert_ne!(condition.key, parsed("(orientation: landscape)").key);
+    }
+
+    #[test]
+    fn vertical_tab_is_identifier_content_not_whitespace() {
+        // Rust's is_ascii_whitespace matches exactly the CSS whitespace set
+        // (space, tab, LF, FF, CR); U+000B stays in the condition.
+        let condition = parsed("(orientation:\u{b}landscape)");
+        assert_eq!(condition.key, "(orientation: \u{b}landscape)");
+        assert_ne!(condition.key, parsed("(orientation: landscape)").key);
+    }
+
+    #[test]
+    fn function_tokens_are_not_keyword_condition_pairs() {
+        for query in ["not(color)", "screen and(color)", "only screen and(color)"] {
+            assert!(parse_media_condition(query).is_none(), "{query}");
+        }
     }
 
     #[test]
