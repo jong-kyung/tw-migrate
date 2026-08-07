@@ -146,7 +146,7 @@ Before package planning, workspace discovery builds a catalog of Tailwind entrie
 Package ancestry identifies candidates but does not prove consumption. Selecting an ancestor entry requires both of these proofs:
 
 - **Loading proof**: a child-owned writable JavaScript, TypeScript, Vue, or HTML source directly imports or links the ancestor Tailwind entry, and every consumer of the migrated stylesheet is statically reachable from such a source through child-owned imports, so the entry's CSS output provably reaches the flows being rewritten.
-- **Scan proof**: the entry's utility detection provably covers the child package, so utilities generated for migrated child sources are emitted. A literal `@source` or `source(...)` scope that contains the child package proves this. Automatic detection also proves it when its base directory contains the child package and the entry does not disable detection with `source(none)`.
+- **Scan proof**: the entry's utility detection provably covers the child package, so utilities generated for migrated child sources are emitted. A literal `@source` or `source(...)` scope that contains the child package proves this. Automatic detection also proves it when its base directory contains the child package and the entry does not disable detection with `source(none)`, but containment alone is not sufficient: automatic detection honors ignore rules such as `.gitignore` patterns even for Git-tracked files, so each rewritten consumer path must also pass the effective scanner rules. A consumer excluded by those rules fails scan proof and its stylesheet keeps its rules retained. A literal scope does not need this check because explicit `@source` paths are scanned regardless of ignore rules.
 
 Neither proof substitutes for the other. A direct import does not prove that the child's newly generated utility classes are scanned, and a `@source` scope does not prove that the child loads the entry's output, because a scanned library may be consumed by a different application that never loads this entry. An entry whose literal source scope excludes the child fails scan proof even though the child imports it. Dynamic paths, package dependency declarations, and a shared repository root prove neither fact.
 
@@ -456,6 +456,7 @@ Phase 3 adds runtime confidence without changing the CLI contract introduced and
 - a package-owned entry wins over an ancestor entry;
 - a package without an entry uses an ancestor entry only when a supported static relationship proves coverage in workspace mode;
 - a direct entry import without proven scan coverage fails child entry resolution;
+- a consumer excluded by effective scanner rules such as `.gitignore` patterns fails automatic-detection scan proof;
 - a literal `@source` scope without a child-owned import of the entry fails child entry resolution;
 - an entry import from a demo or test flow does not authorize stylesheets whose consumers sit outside that flow;
 - an exported consumer counts as an unproven external flow and keeps its stylesheet retained;
