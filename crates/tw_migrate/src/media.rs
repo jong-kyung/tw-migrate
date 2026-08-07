@@ -37,15 +37,16 @@ pub(crate) struct SimpleMinWidth {
 /// syntax, nested grouping, custom-media references, or characters that a
 /// generated definition cannot carry.
 pub(crate) fn parse_media_condition(query: &str) -> Option<MediaCondition> {
-    let query = query.trim();
+    // Only ASCII whitespace is insignificant in CSS; other whitespace code
+    // points are identifier content and must survive untouched.
+    let query = query.trim_matches(|character: char| character.is_ascii_whitespace());
     if query.is_empty()
         || query.contains(['{', '}', ';', '"', '\'', '\\', '[', ']'])
         || query.contains("/*")
     {
         return None;
     }
-    let lowered = query.to_ascii_lowercase();
-    let branches = split_top_level(&lowered, ',')?;
+    let branches = split_top_level(query, ',')?;
     let mut parsed = Vec::with_capacity(branches.len());
     for branch in &branches {
         parsed.push(parse_branch(branch)?);
@@ -250,14 +251,14 @@ impl Branch {
         if feature != "width" {
             return None;
         }
-        let (number, unit) = crate::theme::parse_dimension(value)?;
-        if !number.is_finite() || number < 0.0 || unit.is_empty() {
+        let (number, unit) = parse_css_dimension(value)?;
+        if !number.is_finite() || number < 0.0 {
             return None;
         }
         Some(SimpleMinWidth {
             value: value.clone(),
             number,
-            unit: unit.to_string(),
+            unit,
         })
     }
 }
@@ -317,18 +318,26 @@ fn parse_branch(branch: &str) -> Option<Branch> {
     let mut media_type = None;
 
     if let [Token::Word(word), rest @ ..] = tokens {
-        if *word == "not" || *word == "only" {
-            modifier = Some(if *word == "not" { "not" } else { "only" });
+        if word.eq_ignore_ascii_case("not") {
+            modifier = Some("not");
+            tokens = rest;
+        } else if word.eq_ignore_ascii_case("only") {
+            modifier = Some("only");
             tokens = rest;
         }
     }
     if let [Token::Word(word), rest @ ..] = tokens {
-        if matches!(*word, "all" | "screen" | "print" | "speech") {
-            media_type = Some((*word).to_string());
+        let lowered = word.to_ascii_lowercase();
+        if matches!(lowered.as_str(), "all" | "screen" | "print" | "speech") {
+            media_type = Some(lowered);
             tokens = rest;
             match tokens {
                 [] => {}
-                [Token::Word("and"), rest @ ..] if !rest.is_empty() => tokens = rest,
+                [Token::Word(and), rest @ ..]
+                    if and.eq_ignore_ascii_case("and") && !rest.is_empty() =>
+                {
+                    tokens = rest;
+                }
                 _ => return None,
             }
         } else {
@@ -348,7 +357,11 @@ fn parse_branch(branch: &str) -> Option<Branch> {
             [Token::Group(content), rest @ ..] => {
                 conditions.push(parse_condition(content)?);
                 tokens = match rest {
-                    [Token::Word("and"), next @ ..] if !next.is_empty() => next,
+                    [Token::Word(and), next @ ..]
+                        if and.eq_ignore_ascii_case("and") && !next.is_empty() =>
+                    {
+                        next
+                    }
                     [] => rest,
                     _ => return None,
                 };
@@ -383,9 +396,9 @@ fn parse_condition(content: &str) -> Option<Condition> {
         return None;
     }
     if let Some((feature, value)) = split_top_level_once(&content, ':') {
-        let feature = feature.trim();
-        let value = collapse_whitespace(value.trim());
-        if !is_feature_ident(feature) || value.is_empty() {
+        let feature = feature.trim().to_ascii_lowercase();
+        let value = normalize_value(value);
+        if !is_feature_ident(&feature) || value.is_empty() {
             return None;
         }
         return Some(match feature.strip_prefix("min-") {
@@ -400,10 +413,7 @@ fn parse_condition(content: &str) -> Option<Condition> {
                     op: Comparison::Lte,
                     value,
                 },
-                _ => Condition::Plain {
-                    feature: feature.to_string(),
-                    value,
-                },
+                _ => Condition::Plain { feature, value },
             },
         });
     }
@@ -411,28 +421,26 @@ fn parse_condition(content: &str) -> Option<Condition> {
     let parts = split_comparisons(&content)?;
     match parts.as_slice() {
         [ComparisonPart::Trailing(operand)] => {
-            let feature = operand.trim();
-            is_feature_ident(feature).then(|| Condition::Boolean {
-                feature: feature.to_string(),
-            })
+            let feature = operand.trim().to_ascii_lowercase();
+            is_feature_ident(&feature).then_some(Condition::Boolean { feature })
         }
         [
             ComparisonPart::Pair(left, op),
             ComparisonPart::Trailing(right),
         ] => {
-            let left = left.trim();
-            let right = right.trim();
-            if is_feature_ident(left) && !right.is_empty() {
+            let left_ident = left.trim().to_ascii_lowercase();
+            let right_ident = right.trim().to_ascii_lowercase();
+            if is_feature_ident(&left_ident) && !right.trim().is_empty() {
                 Some(Condition::Range {
-                    feature: left.to_string(),
+                    feature: left_ident,
                     op: *op,
-                    value: right.to_string(),
+                    value: normalize_value(right),
                 })
-            } else if is_feature_ident(right) && !left.is_empty() {
+            } else if is_feature_ident(&right_ident) && !left.trim().is_empty() {
                 Some(Condition::Range {
-                    feature: right.to_string(),
+                    feature: right_ident,
                     op: op.flipped(),
-                    value: left.to_string(),
+                    value: normalize_value(left),
                 })
             } else {
                 None
@@ -443,23 +451,52 @@ fn parse_condition(content: &str) -> Option<Condition> {
             ComparisonPart::Pair(feature, high_op),
             ComparisonPart::Trailing(high),
         ] => {
-            let low = low.trim();
-            let feature = feature.trim();
-            let high = high.trim();
-            (is_feature_ident(feature)
-                && !low.is_empty()
-                && !high.is_empty()
-                && matches!(low_op, Comparison::Lt | Comparison::Lte)
-                && matches!(high_op, Comparison::Lt | Comparison::Lte))
-            .then(|| Condition::DoubleRange {
-                low: low.to_string(),
-                low_op: *low_op,
-                feature: feature.to_string(),
-                high_op: *high_op,
-                high: high.to_string(),
-            })
+            let feature = feature.trim().to_ascii_lowercase();
+            let low = normalize_value(low);
+            let high = normalize_value(high);
+            if !is_feature_ident(&feature) || low.is_empty() || high.is_empty() {
+                return None;
+            }
+            match (low_op, high_op) {
+                (Comparison::Lt | Comparison::Lte, Comparison::Lt | Comparison::Lte) => {
+                    Some(Condition::DoubleRange {
+                        low,
+                        low_op: *low_op,
+                        feature,
+                        high_op: *high_op,
+                        high,
+                    })
+                }
+                // A descending chain such as `(60rem > width >= 48rem)` is
+                // provably the ascending `(48rem <= width < 60rem)`.
+                (Comparison::Gt | Comparison::Gte, Comparison::Gt | Comparison::Gte) => {
+                    Some(Condition::DoubleRange {
+                        low: high,
+                        low_op: high_op.flipped(),
+                        feature,
+                        high_op: low_op.flipped(),
+                        high: low,
+                    })
+                }
+                _ => None,
+            }
         }
         _ => None,
+    }
+}
+
+/// Collapse ASCII whitespace in a media-feature value and fold case only
+/// when every code point is provably case-insensitive: plain keywords,
+/// dimensions, and ratios. Values carrying functions or other tokens, such
+/// as `env(MyInset)`, keep their authored case.
+fn normalize_value(value: &str) -> String {
+    let collapsed = collapse_whitespace(value);
+    if collapsed.chars().all(|character| {
+        character.is_ascii_alphanumeric() || matches!(character, ' ' | '.' | '%' | '+' | '-' | '/')
+    }) {
+        collapsed.to_ascii_lowercase()
+    } else {
+        collapsed
     }
 }
 
@@ -595,11 +632,74 @@ enum ComparisonPart<'a> {
     Trailing(&'a str),
 }
 
+/// Split a CSS dimension using the complete CSS number grammar: optional
+/// sign, integer and fraction digits, and an optional exponent, followed by
+/// an alphabetic unit. The unit folds to lowercase because CSS units are
+/// case-insensitive.
+fn parse_css_dimension(value: &str) -> Option<(f64, String)> {
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    if matches!(bytes.first(), Some(b'+' | b'-')) {
+        index += 1;
+    }
+    let integer_start = index;
+    while bytes.get(index).is_some_and(u8::is_ascii_digit) {
+        index += 1;
+    }
+    let mut has_digits = index > integer_start;
+    if bytes.get(index) == Some(&b'.') {
+        let fraction_start = index + 1;
+        let mut cursor = fraction_start;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
+            cursor += 1;
+        }
+        if cursor == fraction_start {
+            return None;
+        }
+        has_digits = true;
+        index = cursor;
+    }
+    if !has_digits {
+        return None;
+    }
+    if matches!(bytes.get(index), Some(b'e' | b'E')) {
+        let mut cursor = index + 1;
+        if matches!(bytes.get(cursor), Some(b'+' | b'-')) {
+            cursor += 1;
+        }
+        let exponent_start = cursor;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
+            cursor += 1;
+        }
+        if cursor > exponent_start {
+            index = cursor;
+        }
+    }
+    let unit = &value[index..];
+    if unit.is_empty()
+        || !unit
+            .chars()
+            .all(|character| character.is_ascii_alphabetic())
+    {
+        return None;
+    }
+    Some((value[..index].parse().ok()?, unit.to_ascii_lowercase()))
+}
+
+/// Collapse runs of ASCII whitespace only; other whitespace code points are
+/// identifier content to the CSS tokenizer and must not be rewritten.
 fn collapse_whitespace(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    text.split(|character: char| character.is_ascii_whitespace())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn is_feature_ident(text: &str) -> bool {
+    // A single leading hyphen admits vendor-prefixed feature names such as
+    // `-webkit-min-device-pixel-ratio`; `--*` custom-media references are
+    // rejected before this check ever runs.
+    let text = text.strip_prefix('-').unwrap_or(text);
     !text.is_empty()
         && text.starts_with(|character: char| character.is_ascii_lowercase())
         && text.chars().all(|character| {
@@ -786,6 +886,51 @@ mod tests {
         assert!(limited.contains('-'));
         assert_eq!(limited, limit_name(&long, "(key)"));
         assert_ne!(limit_name(&long, "(key)"), limit_name(&long, "(other)"));
+    }
+
+    #[test]
+    fn parses_the_full_css_number_grammar() {
+        let exponent = parsed("(min-width: 1e3px)");
+        let simple = exponent.simple_min_width.expect("exponent");
+        assert_eq!(simple.unit, "px");
+        assert!((simple.number - 1000.0).abs() < f64::EPSILON);
+        assert!(parsed("(min-width: +52rem)").simple_min_width.is_some());
+        let cased = parsed("(min-width: 52REM)");
+        assert_eq!(cased.key, "(width >= 52rem)");
+        assert_eq!(cased.simple_min_width.expect("cased").unit, "rem");
+    }
+
+    #[test]
+    fn preserves_case_sensitive_value_tokens() {
+        let condition = parsed("(min-width: env(MyInset))");
+        assert_eq!(condition.key, "(width >= env(MyInset))");
+        assert!(condition.simple_min_width.is_none());
+    }
+
+    #[test]
+    fn normalizes_descending_ranges_to_the_ascending_form() {
+        let descending = parsed("(60rem > width >= 48rem)");
+        assert_eq!(descending.key, "(48rem <= width < 60rem)");
+        assert_eq!(descending.key, parsed("(48rem <= width < 60rem)").key);
+        assert!(parse_media_condition("(60rem > width <= 48rem)").is_none());
+    }
+
+    #[test]
+    fn non_ascii_whitespace_stays_in_the_condition() {
+        let condition = parsed("(orientation:\u{a0}landscape)");
+        assert_eq!(condition.key, "(orientation: \u{a0}landscape)");
+        assert_ne!(condition.key, parsed("(orientation: landscape)").key);
+    }
+
+    #[test]
+    fn vendor_prefixed_features_are_representable() {
+        let condition = parsed("(-webkit-min-device-pixel-ratio: 2)");
+        assert_eq!(condition.key, "(-webkit-min-device-pixel-ratio: 2)");
+        assert_eq!(
+            condition.preferred_custom_name,
+            "webkit-min-device-pixel-ratio-2"
+        );
+        assert!(parse_media_condition("(--narrow)").is_none());
     }
 
     #[test]
