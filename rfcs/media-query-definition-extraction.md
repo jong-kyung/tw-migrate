@@ -13,6 +13,7 @@ Arbitrary variants preserve behavior, but repeated query text makes migrated cla
 - a simple unmatched minimum-width query becomes a generated `--breakpoint-*` theme variable;
 - every other unmatched, representable media query becomes a generated `@custom-variant`;
 - Tailwind built-ins and existing project breakpoints remain preferred;
+- workspace packages without their own entry may share the nearest ancestor package's unique entry;
 - extraction runs by default and has an opt-out CLI and API option; and
 - an entry that cannot be edited safely keeps the current arbitrary-variant behavior.
 
@@ -31,6 +32,7 @@ This RFC supersedes the unmatched `@media` behavior in the core RFC's **Breakpoi
 7. Include Tailwind entry changes in dry-run previews, integrity checks, and transactional writes.
 8. Preserve the current arbitrary variant as the safe fallback when definition extraction is disabled or unavailable.
 9. Keep a second migration run byte-identical.
+10. Resolve and update one ancestor-owned Tailwind entry for every workspace package that shares it.
 
 ## Non-Goals
 
@@ -43,6 +45,8 @@ This RFC supersedes the unmatched `@media` behavior in the core RFC's **Breakpoi
 7. Moving generated definitions into imported theme files or reorganizing existing `@theme` blocks.
 8. Editing dependency-owned or symlinked Tailwind entries.
 9. Adding a user-configurable naming template in the first implementation.
+10. Inferring that a sibling package's Tailwind entry consumes another package.
+11. Reusing an ancestor Tailwind entry outside `--workspaces` mode.
 
 ## Terminology
 
@@ -53,6 +57,8 @@ This RFC supersedes the unmatched `@media` behavior in the core RFC's **Breakpoi
 - **Media definition**: either generated form.
 - **Condition key**: the deterministic normalized representation used for deduplication and naming.
 - **Extraction fallback**: use of the current arbitrary at-rule variant instead of changing the Tailwind entry.
+- **Ancestor-shared entry**: the unique Tailwind entry owned by the nearest ancestor package of a workspace package that has no entry of its own.
+- **Entry group**: selected workspace packages that resolve to the same Tailwind entry and therefore share one ordered entry plan.
 
 ## User-Visible Behavior
 
@@ -125,6 +131,23 @@ Extraction does not require repetition. Every unmatched media condition receives
 
 This policy favors readable migrated class values. It accepts that a Tailwind entry may contain a definition used by one migrated class.
 
+### Workspace shared entries
+
+Before package planning, workspace discovery builds a catalog of Tailwind entries owned by each package. Entry resolution follows these rules:
+
+1. use the package's own unique entry when it has one;
+2. in `--workspaces` mode, when the package has no entry, walk ancestor package roots from nearest to farthest;
+3. continue past an ancestor with no entry;
+4. select the first ancestor that owns exactly one entry;
+5. fail the package as ambiguous when the nearest ancestor with entries owns more than one; and
+6. never select an entry owned by a sibling or descendant package.
+
+Default package mode retains the current ownership boundary and does not modify an ancestor entry. A package without an owned entry still fails entry resolution unless `--workspaces` enables the ancestor rule.
+
+The entry owner supplies the project root used to resolve Tailwind, imported stylesheets, plugins, and theme configuration. The migrated child package continues to supply its own stylesheets, consumers, preprocessors, and failure attribution.
+
+Packages that resolve to the same entry form one entry group. The group processes package plans in normalized package-path order and produces one Tailwind entry edit.
+
 ## Query Classification
 
 A simple minimum-width query must meet all of these conditions:
@@ -161,7 +184,7 @@ Normalization must not:
 
 For example, `48rem` and `768px` remain different keys even when a typical browser configuration would render them at the same width.
 
-Deduplication happens per resolved Tailwind entry. Workspace packages that share one writable entry share one definition set. Packages with separate entries receive separate definitions.
+Deduplication happens per resolved Tailwind entry. Packages in one entry group share one definition set even when their source stylesheets have different owners. Packages with separate entries receive separate definitions.
 
 ## Generated Names
 
@@ -209,6 +232,8 @@ The editor follows these rules:
 
 The first implementation appends a new block rather than inserting declarations into an authored `@theme` block. A later run may append another block when it discovers a new condition. Tailwind supports multiple `@theme` blocks, and this policy avoids reparsing and reprinting user-owned formatting.
 
+An entry group owns one mutable in-memory entry source initialized from the shared snapshot. Each package plan receives the current source and may return a new source containing moved keyframes or global at-rules. The orchestration layer adopts that planned source before adding media definitions or processing the next package. It removes intermediate Tailwind entry files from package plans and emits only the group's final composed entry file. Media extraction must never add a second planned file for a path already changed by the native planner.
+
 Imported theme files remain untouched. Generated definitions live in the resolved entry because that file already defines the design system used to validate migration candidates.
 
 ## CLI and Public API
@@ -231,7 +256,7 @@ interface MigrateOptions {
 
 `undefined` and `true` enable extraction. `false` preserves current arbitrary-variant behavior and never emits an extraction fallback warning.
 
-The option composes with positional stylesheet migration, package migration, `--workspaces`, `--force`, and `--dry-run`. A dry run includes the Tailwind entry in `changedFiles` and the unified diff but does not write it.
+The option composes with positional stylesheet migration, package migration, `--workspaces`, `--force`, and `--dry-run`. In workspace mode, ancestor entry inheritance is automatic and does not add a package-to-entry mapping option. A dry run includes each changed owned or ancestor-shared Tailwind entry in `changedFiles` and the unified diff but does not write it.
 
 ## Planning Architecture
 
@@ -250,17 +275,21 @@ The internal native response adds media definitions and candidate-to-definition 
 
 The TypeScript layer:
 
-1. decides whether the resolved entry is eligible for safe writes before enabling extraction in the planner request;
-2. aggregates definitions by Tailwind entry across package plans;
-3. builds an augmented entry source in memory;
-4. loads the target project's Tailwind design system from that augmented source;
-5. validates every generated candidate against the augmented design system;
-6. removes definitions unused after compile-failure replanning; and
-7. adds one final Tailwind entry edit to the merged transaction.
+1. discovers Tailwind entries for every package before calling `planPackage()`;
+2. resolves owned and ancestor-shared entries and records each entry's owning package;
+3. groups selected packages by resolved entry;
+4. rejects unsafe entry groups before enabling extraction;
+5. processes each group in normalized package-path order while carrying one mutable entry source;
+6. resolves Tailwind and its import graph from the entry owner's package root;
+7. folds each native planner entry result into the group's current source;
+8. aggregates media definitions for the group and builds the augmented source in memory;
+9. validates every generated candidate against the augmented design system;
+10. removes definitions unused after compile-failure replanning; and
+11. adds one final entry edit per group to the merged transaction.
 
-Shared workspace entries receive one combined edit. The orchestration layer must not let separate package plans claim the same entry independently because `mergePlans()` correctly rejects multiple package groups that edit one path.
+Intermediate package plans must not claim the shared entry. The final group edit is the only Tailwind entry file passed to `mergePlans()`, which continues to reject accidental duplicate path claims.
 
-The existing project-local Tailwind loading rule remains unchanged. No bundled Tailwind compiler or new dependency is introduced.
+Package-local Sass, Less, and Vue compiler loading remains rooted at the migrated package. Tailwind loading uses the entry owner because that package owns the entry's imports, plugins, dependency resolution, and theme. No bundled Tailwind compiler or new dependency is introduced.
 
 ### Candidate validation and replanning
 
@@ -286,6 +315,8 @@ The fallback does not weaken existing integrity rules:
 - file permissions remain preserved.
 
 If extraction is disabled explicitly, arbitrary variants are expected behavior and produce no fallback warning.
+
+A recoverable failure in one child package may be skipped under `--force` without discarding successful siblings in the same entry group. Entry discovery, Tailwind loading, or augmented-entry validation failures affect every package that depends on that shared entry and therefore skip the complete entry group only when the existing `--force` policy classifies the failure as recoverable. Integrity and write failures remain fatal for the full migration.
 
 ## Determinism and Idempotency
 
@@ -320,9 +351,12 @@ Existing warning codes continue to cover unsupported media syntax, candidate com
 ### Phase 2: Entry augmentation and options
 
 - Add the CLI opt-out and public API option.
-- Aggregate definitions per Tailwind entry.
+- Discover owned entries before package planning and resolve nearest-ancestor entries in workspace mode.
+- Group packages by entry and resolve Tailwind from the entry owner.
+- Carry one entry source through ordered package plans, preserving moved keyframes and global at-rules.
+- Aggregate media definitions per entry group.
 - Load and validate an augmented design system in memory.
-- Add the Tailwind entry to snapshot verification and the atomic write transaction.
+- Add one final Tailwind entry file per group to snapshot verification and the atomic write transaction.
 - Add arbitrary fallback and its warning for entries that cannot be edited safely.
 
 ### Phase 3: Packaged and browser coverage
@@ -358,7 +392,12 @@ Public documentation describes the feature only after all three phases land.
 - write mode changes the entry and consumers in one transaction;
 - source changes and write failures preserve current fatal behavior;
 - symlinked or out-of-scope entries use arbitrary variants and warn;
-- shared workspace entries receive one merged edit; and
+- a package-owned entry wins over an ancestor entry;
+- a package without an entry inherits the nearest ancestor's unique entry only in workspace mode;
+- an ancestor with multiple entries fails the child package deterministically;
+- sibling entries are never inferred;
+- Tailwind loads from the entry owner while preprocessors load from each migrated package;
+- shared workspace entries receive one merged edit that preserves native keyframe and global at-rule additions; and
 - a second run produces no diff.
 
 ### Packaged snapshots
@@ -394,6 +433,8 @@ The pre- and post-migration captures must match.
 8. Unsafe entry scope falls back to behavior-preserving arbitrary variants.
 9. Tailwind entry and consumer edits commit or roll back together.
 10. Repeated conditions share one definition, shared workspace entries receive one edit, and a second run is a no-op.
+11. A workspace package without an entry inherits only the nearest ancestor package's unique entry.
+12. Entry groups preserve all package-produced keyframes, global at-rules, and media definitions in one composed source.
 
 ## Accepted Trade-offs
 
@@ -402,9 +443,11 @@ The pre- and post-migration captures must match.
 3. Appending a new `@theme` block can leave multiple theme blocks after migrations at different times. This preserves authored formatting and avoids owning a managed section.
 4. Conditions that differ only through unit conversion remain separate even when they render similarly in one environment.
 5. An unsafe Tailwind entry keeps arbitrary variants, so output readability can differ across packages while rendered behavior remains preserved.
+6. Packages in one entry group share Tailwind entry planning and loading fate, although `--force` may still skip an independent package-specific input failure.
 
 ## Deferred Work
 
+- Explicit package-to-entry mappings for sibling or otherwise non-ancestor workspace consumers.
 - User-provided aliases for generated media definitions.
 - Semantic deduplication that requires calculation or unit conversion.
 - Extraction for HTML `<link media>` conditions.
