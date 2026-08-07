@@ -72,7 +72,16 @@ pub fn static_import_bindings(
 
 #[napi]
 pub fn collect_media_conditions(request: String) -> napi::Result<String> {
-    media::collect_media_conditions_json(&request).map_err(napi::Error::from_reason)
+    media::collect_media_conditions_json(&request).map_err(|error| {
+        // Package input failures stay recoverable so `--force` can skip the
+        // affected package, matching plan_batch_migration.
+        let reason = if planner::is_recoverable_input_error(&error) {
+            format!("{RECOVERABLE_INPUT_ERROR}{error}")
+        } else {
+            error
+        };
+        napi::Error::from_reason(reason)
+    })
 }
 
 const RECOVERABLE_INPUT_ERROR: &str = "TW_MIGRATE_RECOVERABLE_INPUT:";

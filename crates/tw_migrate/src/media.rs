@@ -29,6 +29,9 @@ pub(crate) struct MediaCondition {
     /// minimum-width query: `(min-width: 52rem)` or `(width >= 52rem)` with
     /// no modifier, media type, upper bound, list, or additional feature.
     pub(crate) simple_min_width: Option<SimpleMinWidth>,
+    /// Width bounds of a single-branch, width-only condition, used to match
+    /// existing breakpoint ranges before generating a definition.
+    pub(crate) width_bounds: Option<WidthBounds>,
     /// Preferred readable `@custom-variant` name derived from the condition.
     pub(crate) preferred_custom_name: String,
 }
@@ -38,6 +41,17 @@ pub(crate) struct SimpleMinWidth {
     /// round through f64.
     pub(crate) value: String,
     pub(crate) unit: String,
+}
+
+/// The provable width bounds of a width-only condition.
+pub(crate) struct WidthBounds {
+    pub(crate) lower: Option<WidthBound>,
+    pub(crate) upper: Option<WidthBound>,
+}
+
+pub(crate) struct WidthBound {
+    pub(crate) value: String,
+    pub(crate) inclusive: bool,
 }
 
 /// Parse and normalize a media query condition (the text after `@media`).
@@ -79,13 +93,14 @@ pub(crate) fn parse_media_condition(query: &str) -> Option<MediaCondition> {
             .collect::<Vec<_>>()
             .join("-or-"),
     );
-    let simple_min_width = match parsed.as_slice() {
-        [branch] => branch.simple_min_width(),
-        _ => None,
+    let (simple_min_width, width_bounds) = match parsed.as_slice() {
+        [branch] => (branch.simple_min_width(), branch.width_bounds()),
+        _ => (None, None),
     };
     Some(MediaCondition {
         key,
         simple_min_width,
+        width_bounds,
         preferred_custom_name,
     })
 }
@@ -286,6 +301,50 @@ impl Branch {
             value: value.clone(),
             unit,
         })
+    }
+
+    fn width_bounds(&self) -> Option<WidthBounds> {
+        if self.modifier.is_some() || self.media_type.is_some() {
+            return None;
+        }
+        match self.conditions.as_slice() {
+            [Condition::Range { feature, op, value }] if feature == "width" => {
+                let bound = WidthBound {
+                    value: value.clone(),
+                    inclusive: matches!(op, Comparison::Lte | Comparison::Gte),
+                };
+                match op {
+                    Comparison::Gt | Comparison::Gte => Some(WidthBounds {
+                        lower: Some(bound),
+                        upper: None,
+                    }),
+                    Comparison::Lt | Comparison::Lte => Some(WidthBounds {
+                        lower: None,
+                        upper: Some(bound),
+                    }),
+                    Comparison::Eq => None,
+                }
+            }
+            [
+                Condition::DoubleRange {
+                    low,
+                    low_op,
+                    feature,
+                    high_op,
+                    high,
+                },
+            ] if feature == "width" => Some(WidthBounds {
+                lower: Some(WidthBound {
+                    value: low.clone(),
+                    inclusive: matches!(low_op, Comparison::Lte),
+                }),
+                upper: Some(WidthBound {
+                    value: high.clone(),
+                    inclusive: matches!(high_op, Comparison::Lte),
+                }),
+            }),
+            _ => None,
+        }
     }
 }
 
@@ -1390,6 +1449,21 @@ struct CollectionStylesheet {
     analysis_source: Option<String>,
     #[serde(default)]
     syntax: StylesheetSyntax,
+    /// Vue SFC entries: `css_source` is the whole `.vue` file and each block
+    /// names its style contents, mirroring the planner's Vue entries.
+    #[serde(default)]
+    vue_blocks: Vec<CollectionVueBlock>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CollectionVueBlock {
+    content_start: usize,
+    content_end: usize,
+    #[serde(default)]
+    syntax: StylesheetSyntax,
+    #[serde(default)]
+    analysis_source: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1461,68 +1535,89 @@ pub fn collect_media_conditions_json(request: &str) -> Result<String, String> {
     let mut seen: HashMap<String, ()> = HashMap::new();
     let mut order = 0usize;
     for stylesheet in &request.stylesheets {
-        let (source, syntax) = match &stylesheet.analysis_source {
-            Some(analysis) => (analysis.as_str(), StylesheetSyntax::default()),
-            None => (stylesheet.css_source.as_str(), stylesheet.syntax),
-        };
-        let allocator = oxc_css_parser::Allocator::default();
-        let parsed = parse_css(&allocator, source, syntax.parser_syntax())
-            .map_err(|error| format!("Failed to parse {}: {error}", stylesheet.css_path))?;
-        let mut at_rules = Vec::new();
-        walk_media_at_rules(&parsed.statements, &mut |at_rule| at_rules.push(at_rule));
-        for at_rule in at_rules {
-            if at_rule.block.is_none() {
-                continue;
+        // A Vue SFC entry carries the whole `.vue` file as `css_source` and
+        // names its style contents through blocks; other entries parse one
+        // source, preferring compiled preprocessor output.
+        let mut units: Vec<(&str, StylesheetSyntax)> = Vec::new();
+        if stylesheet.vue_blocks.is_empty() {
+            match &stylesheet.analysis_source {
+                Some(analysis) => units.push((analysis.as_str(), StylesheetSyntax::default())),
+                None => units.push((stylesheet.css_source.as_str(), stylesheet.syntax)),
             }
-            if media_feature_variant(at_rule, source).is_some()
-                || media_breakpoint_variant(at_rule, source, &request.theme_tokens).is_some()
-            {
-                continue;
-            }
-            let Some(query) = at_rule_query(at_rule, source, "media") else {
-                continue;
-            };
-            let Some(condition) = parse_media_condition(query) else {
-                continue;
-            };
-            order += 1;
-            if seen.contains_key(&condition.key) {
-                continue;
-            }
-            let (kind, preferred_name) = match &condition.simple_min_width {
-                Some(simple)
-                    if breakpoint_unit.as_deref() == Some(simple.unit.as_str())
-                        && exact_theme_token(
-                            "breakpoint",
-                            &simple.value,
-                            &request.theme_tokens,
-                        )
-                        .is_none() =>
-                {
-                    ("breakpoint", breakpoint_name(&simple.value))
+        } else {
+            for block in &stylesheet.vue_blocks {
+                match &block.analysis_source {
+                    Some(analysis) => units.push((analysis.as_str(), StylesheetSyntax::default())),
+                    None => {
+                        let source = &stylesheet.css_source;
+                        if block.content_start > block.content_end
+                            || block.content_end > source.len()
+                            || !source.is_char_boundary(block.content_start)
+                            || !source.is_char_boundary(block.content_end)
+                        {
+                            return Err(format!(
+                                "Invalid Vue style block span in {}",
+                                stylesheet.css_path
+                            ));
+                        }
+                        units.push((
+                            &source[block.content_start..block.content_end],
+                            block.syntax,
+                        ));
+                    }
                 }
-                Some(simple)
-                    if exact_theme_token("breakpoint", &simple.value, &request.theme_tokens)
-                        .is_some() =>
-                {
-                    // An exact existing breakpoint needs no generated
-                    // definition; the resolution order reuses it.
+            }
+        }
+        for (source, syntax) in units {
+            let allocator = oxc_css_parser::Allocator::default();
+            let parsed = parse_css(&allocator, source, syntax.parser_syntax())
+                .map_err(|error| format!("Failed to parse {}: {error}", stylesheet.css_path))?;
+            let mut at_rules = Vec::new();
+            walk_media_at_rules(&parsed.statements, &mut |at_rule| at_rules.push(at_rule));
+            for at_rule in at_rules {
+                if at_rule.block.is_none() {
                     continue;
                 }
-                _ => (
-                    "customVariant",
-                    limit_name(&condition.preferred_custom_name, &condition.key),
-                ),
-            };
-            seen.insert(condition.key.clone(), ());
-            conditions.push(CollectedCondition {
-                digest: condition_digest(&condition.key),
-                key: condition.key,
-                kind,
-                preferred_name,
-                css_path: stylesheet.css_path.clone(),
-                order,
-            });
+                if media_feature_variant(at_rule, source).is_some()
+                    || media_breakpoint_variant(at_rule, source, &request.theme_tokens).is_some()
+                {
+                    continue;
+                }
+                let Some(query) = at_rule_query(at_rule, source, "media") else {
+                    continue;
+                };
+                let Some(condition) = parse_media_condition(query) else {
+                    continue;
+                };
+                if matches_existing_breakpoint_range(&condition, &request.theme_tokens) {
+                    // The resolution order reuses existing breakpoints and
+                    // breakpoint ranges; no definition is generated.
+                    continue;
+                }
+                order += 1;
+                if seen.contains_key(&condition.key) {
+                    continue;
+                }
+                let (kind, preferred_name) = match &condition.simple_min_width {
+                    Some(simple) if breakpoint_unit.as_deref() == Some(simple.unit.as_str()) => (
+                        "breakpoint",
+                        limit_name(&breakpoint_name(&simple.value), &condition.key),
+                    ),
+                    _ => (
+                        "customVariant",
+                        limit_name(&condition.preferred_custom_name, &condition.key),
+                    ),
+                };
+                seen.insert(condition.key.clone(), ());
+                conditions.push(CollectedCondition {
+                    digest: condition_digest(&condition.key),
+                    key: condition.key,
+                    kind,
+                    preferred_name,
+                    css_path: stylesheet.css_path.clone(),
+                    order,
+                });
+            }
         }
     }
     conditions.sort_by(|left, right| left.key.cmp(&right.key));
@@ -1550,19 +1645,44 @@ pub fn collect_media_conditions_json(request: &str) -> Result<String, String> {
 /// The one unit every `--breakpoint-*` token shares, or `None` when the
 /// namespace is empty or mixes units. No unit conversion is attempted.
 fn common_breakpoint_unit(theme_tokens: &HashMap<String, String>) -> Option<String> {
-    let mut unit: Option<&str> = None;
+    let mut unit: Option<String> = None;
     for (name, value) in theme_tokens {
         if !name.starts_with("breakpoint-") {
             continue;
         }
+        // CSS units are ASCII case-insensitive, so `48REM` and `64rem`
+        // share one namespace unit.
         let (_, token_unit) = parse_dimension(value.trim())?;
-        match unit {
+        let token_unit = token_unit.to_ascii_lowercase();
+        match &unit {
             None => unit = Some(token_unit),
-            Some(existing) if existing == token_unit => {}
+            Some(existing) if *existing == token_unit => {}
             Some(_) => return None,
         }
     }
-    unit.map(str::to_string)
+    unit
+}
+
+/// True when a width-only condition exactly matches existing breakpoints in
+/// the forms the resolution order can reuse: an inclusive lower bound
+/// (`md:`), an exclusive upper bound (`max-md:`), or both (`md:max-lg`).
+fn matches_existing_breakpoint_range(
+    condition: &MediaCondition,
+    theme_tokens: &HashMap<String, String>,
+) -> bool {
+    let Some(bounds) = &condition.width_bounds else {
+        return false;
+    };
+    let exact = |value: &str| exact_theme_token("breakpoint", value, theme_tokens).is_some();
+    let lower_matches = match &bounds.lower {
+        Some(bound) => bound.inclusive && exact(&bound.value),
+        None => bounds.upper.is_some(),
+    };
+    let upper_matches = match &bounds.upper {
+        Some(bound) => !bound.inclusive && exact(&bound.value),
+        None => bounds.lower.is_some(),
+    };
+    lower_matches && upper_matches
 }
 
 /// Visit every `@media` at-rule in document order, at any nesting depth.
@@ -1779,6 +1899,76 @@ mod collection_tests {
         assert_eq!(variants[1]["mediaQueryKey"], "(width <= 768px)");
         assert_eq!(variants[2]["name"], "themed");
         assert_eq!(variants[2]["mediaQueryKey"], Value::Null);
+    }
+
+    #[test]
+    fn breakpoint_units_compare_case_insensitively() {
+        let response = collect(json!({
+            "stylesheets": [{
+                "cssPath": "card.css",
+                "cssSource": "@media (min-width: 52rem) { .card { margin: 0; } }",
+            }],
+            "themeTokens": { "breakpoint-md": "48REM", "breakpoint-lg": "64rem" },
+        }));
+        assert_eq!(response["breakpointUnit"], "rem");
+        assert_eq!(response["conditions"][0]["kind"], "breakpoint");
+    }
+
+    #[test]
+    fn modern_range_queries_reuse_existing_breakpoints() {
+        let response = collect(json!({
+            "stylesheets": [{
+                "cssPath": "card.css",
+                "cssSource": "@media (48rem <= width < 64rem) { .card { margin: 0; } }\n\
+                    @media (width < 64rem) { .card { color: red; } }\n\
+                    @media (width >= 48rem) { .card { color: blue; } }\n\
+                    @media (width <= 64rem) { .card { padding: 1rem; } }",
+            }],
+            "themeTokens": rem_tokens(),
+        }));
+        let conditions = response["conditions"].as_array().unwrap();
+        assert_eq!(conditions.len(), 1);
+        // The inclusive upper bound has no exact breakpoint form and stays
+        // collected; every other query matches an existing breakpoint range.
+        assert_eq!(conditions[0]["key"], "(width <= 64rem)");
+    }
+
+    #[test]
+    fn collects_conditions_from_vue_style_blocks() {
+        let sfc = "<template><div class=\"card\"></div></template>\n\
+            <style scoped>@media (min-width: 52rem) { .card { margin: 0; } }</style>";
+        let content_start = sfc.find("<style scoped>").unwrap() + "<style scoped>".len();
+        let content_end = sfc.find("</style>").unwrap();
+        let response = collect(json!({
+            "stylesheets": [{
+                "cssPath": "Card.vue",
+                "cssSource": sfc,
+                "vueBlocks": [{ "contentStart": content_start, "contentEnd": content_end }],
+            }],
+            "themeTokens": rem_tokens(),
+        }));
+        let conditions = response["conditions"].as_array().unwrap();
+        assert_eq!(conditions.len(), 1);
+        assert_eq!(conditions[0]["key"], "(width >= 52rem)");
+        assert_eq!(conditions[0]["cssPath"], "Card.vue");
+    }
+
+    #[test]
+    fn overlong_breakpoint_names_receive_digest_suffixes() {
+        let value = format!("{}rem", "1".repeat(60));
+        let response = collect(json!({
+            "stylesheets": [{
+                "cssPath": "card.css",
+                "cssSource": format!("@media (min-width: {value}) {{ .card {{ margin: 0; }} }}"),
+            }],
+            "themeTokens": rem_tokens(),
+        }));
+        let condition = &response["conditions"][0];
+        assert_eq!(condition["kind"], "breakpoint");
+        let name = condition["preferredName"].as_str().unwrap();
+        assert!(name.len() <= 48, "{name}");
+        assert!(name.starts_with("min-111"), "{name}");
+        assert!(name.contains('-'), "{name}");
     }
 
     #[test]
