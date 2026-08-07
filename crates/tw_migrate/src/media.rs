@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     at_rules::{at_rule_query, media_breakpoint_variant, media_feature_variant, parse_css},
     planner::StylesheetSyntax,
-    theme::{exact_theme_token, parse_dimension},
+    theme::parse_dimension,
 };
 
 /// The longest generated name emitted without a digest suffix.
@@ -1673,16 +1673,31 @@ fn matches_existing_breakpoint_range(
     let Some(bounds) = &condition.width_bounds else {
         return false;
     };
-    let exact = |value: &str| exact_theme_token("breakpoint", value, theme_tokens).is_some();
+    let matches = |value: &str| breakpoint_with_value_exists(value, theme_tokens);
     let lower_matches = match &bounds.lower {
-        Some(bound) => bound.inclusive && exact(&bound.value),
+        Some(bound) => bound.inclusive && matches(&bound.value),
         None => bounds.upper.is_some(),
     };
     let upper_matches = match &bounds.upper {
-        Some(bound) => !bound.inclusive && exact(&bound.value),
+        Some(bound) => !bound.inclusive && matches(&bound.value),
         None => bounds.lower.is_some(),
     };
     lower_matches && upper_matches
+}
+
+/// True when an active breakpoint token has this exact value, compared as a
+/// parsed number and case-folded unit so spellings such as `48REM` and
+/// `48.0rem` still match `48rem`. No unit conversion is attempted.
+fn breakpoint_with_value_exists(value: &str, theme_tokens: &HashMap<String, String>) -> bool {
+    let Some((number, unit)) = parse_css_dimension(value) else {
+        return false;
+    };
+    theme_tokens.iter().any(|(name, token_value)| {
+        name.starts_with("breakpoint-")
+            && parse_css_dimension(token_value.trim()).is_some_and(|(token_number, token_unit)| {
+                token_number == number && token_unit == unit
+            })
+    })
 }
 
 /// Visit every `@media` at-rule in document order, at any nesting depth.
@@ -1931,6 +1946,24 @@ mod collection_tests {
         // The inclusive upper bound has no exact breakpoint form and stays
         // collected; every other query matches an existing breakpoint range.
         assert_eq!(conditions[0]["key"], "(width <= 64rem)");
+    }
+
+    #[test]
+    fn breakpoint_values_compare_semantically() {
+        let response = collect(json!({
+            "stylesheets": [{
+                "cssPath": "card.css",
+                "cssSource": "@media (width >= 48rem) { .card { margin: 0; } }\n\
+                    @media (width < 64rem) { .card { color: red; } }\n\
+                    @media (width >= 52rem) { .card { padding: 1rem; } }",
+            }],
+            "themeTokens": { "breakpoint-md": "48REM", "breakpoint-lg": "64.0rem" },
+        }));
+        let conditions = response["conditions"].as_array().unwrap();
+        assert_eq!(conditions.len(), 1);
+        // `48REM` and `64.0rem` spellings still prove the existing
+        // breakpoints; only the unmatched 52rem query is collected.
+        assert_eq!(conditions[0]["key"], "(width >= 52rem)");
     }
 
     #[test]
