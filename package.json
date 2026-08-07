@@ -1,6 +1,6 @@
 {
   "name": "tw-migrate",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Preview and migrate React, Vue, and HTML CSS to Tailwind utilities",
   "keywords": [
     "codemod",
