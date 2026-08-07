@@ -57,7 +57,7 @@ This RFC supersedes the unmatched `@media` behavior in the core RFC's **Breakpoi
 - **Media definition**: either generated form.
 - **Condition key**: the deterministic normalized representation used for deduplication and naming.
 - **Extraction fallback**: use of the current arbitrary at-rule variant instead of changing the Tailwind entry.
-- **Verified ancestor-shared entry**: an entry owned by an ancestor package whose static stylesheet or Tailwind `@source` relationship proves that its output covers a workspace package with no entry of its own.
+- **Verified ancestor-shared entry**: an entry owned by an ancestor package with static proof that a workspace package with no entry of its own loads the entry's output and falls inside the entry's utility scan scope.
 - **Entry group**: selected workspace packages that resolve to the same Tailwind entry and therefore share one definition registry and ordered entry plan.
 
 ## User-Visible Behavior
@@ -137,7 +137,7 @@ Before package planning, workspace discovery builds a catalog of Tailwind entrie
 
 1. use the package's own unique entry when it has one;
 2. in `--workspaces` mode, when the package has no entry, inspect entries owned by ancestor packages from nearest to farthest;
-3. accept an ancestor entry only when a supported static relationship proves that its Tailwind output covers the child package;
+3. accept an ancestor entry only when a supported static relationship proves that the child loads its output and that its utility scan covers the child package;
 4. select the nearest ancestor level with exactly one proven entry;
 5. fail the package as ambiguous when that level has multiple proven entries;
 6. fail the package when no ancestor entry has a proven relationship; and
@@ -145,10 +145,12 @@ Before package planning, workspace discovery builds a catalog of Tailwind entrie
 
 Package ancestry identifies candidates but does not prove consumption. The first implementation accepts either of these proofs:
 
-- a child-owned writable JavaScript, TypeScript, Vue, or HTML source directly imports or links the ancestor Tailwind entry; or
-- a literal `@source` directive in the entry's complete CSS import graph resolves to a file or directory scope that contains the child package.
+- a literal `@source` directive in the entry's complete CSS import graph resolves to a file or directory scope that contains the child package, which declares the child as part of the entry's utility scan scope; or
+- a child-owned writable JavaScript, TypeScript, Vue, or HTML source directly imports or links the ancestor Tailwind entry, and the entry's utility detection provably covers the child package as defined below.
 
-Dynamic paths, package dependency declarations, Tailwind's implicit source detection, and a shared repository root do not prove the relationship. Explicit package-to-entry mappings remain deferred. A package without proof fails entry resolution and stays unchanged, or is skipped as a recoverable package failure under `--force`.
+A direct import proves only that the entry's CSS output reaches the child. It does not prove that the child's newly generated utility classes are scanned, so the import proof additionally requires scan coverage: either a literal `@source` or `source(...)` scope contains the child package, or the entry relies on automatic detection whose base directory contains the child package and does not disable detection with `source(none)`. An entry whose literal source scope excludes the child fails the import proof even though the child loads its output.
+
+Automatic detection never proves loading by itself. Dynamic paths, package dependency declarations, and a shared repository root prove neither loading nor scanning. Explicit package-to-entry mappings remain deferred. A package without proof fails entry resolution and stays unchanged, or is skipped as a recoverable package failure under `--force`.
 
 Default package mode retains the current ownership boundary and does not inspect ancestor entries.
 
@@ -222,13 +224,15 @@ Examples:
 
 Names must be valid Tailwind variant identifiers. If a descriptive name would exceed the implementation's fixed length limit or collide with a different definition, the entry-group allocator keeps the readable prefix and appends a short stable digest of the condition key.
 
-The Tailwind loader retains every project-owned stylesheet source from the complete entry import graph. Before allocating generated names, the native preflight parses those sources and returns all authored `@custom-variant` names with normalized definitions. Existing theme breakpoint names remain reserved through the theme-token graph. The allocator reuses an authored definition only when its normalized meaning matches; otherwise it reserves the name and suffixes the generated form.
+The Tailwind loader retains every project-owned stylesheet source from the complete entry import graph. Before allocating generated names, the native preflight parses those sources and returns all authored `@custom-variant` names with normalized definitions. Existing theme breakpoint names remain reserved through the theme-token graph.
+
+Parsed sources cannot reveal variants registered by an `@plugin` or defined in dependency-owned imported stylesheets, so parsing is not the only reservation gate. Before committing to any generated name, the orchestration layer compiles a probe candidate for that name against the unaugmented loaded design system. A name that already resolves is reserved regardless of where it was defined, and the generated form takes the digest suffix, probed again until an unused name is found. The allocator reuses an authored definition only when a project-owned normalized definition proves that its meaning matches the condition. A name known only through the probe is never reused.
 
 Name allocation runs once for the complete entry group before any consumer candidate is produced. Different conditions from different packages therefore cannot independently claim the same readable name. The fixed condition-key-to-name map is passed into every native package plan. The migration never overwrites or renames an authored breakpoint or custom variant.
 
 ## Tailwind Entry Editing
 
-The resolved Tailwind CSS entry becomes a planned source file only when the final migration uses at least one missing media definition.
+The resolved Tailwind CSS entry becomes a planned source file whenever the final composed source differs from its snapshot. Media definitions, moved keyframes, and moved global at-rules all count as such changes, so an entry that gains only moved blocks is still emitted even when no media condition needed a generated definition or every generated definition was replanned to an arbitrary variant. A group whose composed source equals the snapshot emits no entry file.
 
 The editor follows these rules:
 
@@ -236,11 +240,14 @@ The editor follows these rules:
 2. append missing definitions at the top level after existing content;
 3. group missing breakpoint variables in one new `@theme` block;
 4. emit each missing `@custom-variant` as its own block;
-5. sort breakpoints and custom variants by generated name;
-6. add no definition that lacks a final validated candidate; and
-7. recognize existing matching definitions so a second run produces no diff.
+5. sort generated breakpoint variables by generated name;
+6. emit generated custom variants in original cascade order as defined below;
+7. add no definition that lacks a final validated candidate; and
+8. recognize existing matching definitions so a second run produces no diff.
 
 The first implementation appends a new block rather than inserting declarations into an authored `@theme` block. A later run may append another block when it discovers a new condition. Tailwind supports multiple `@theme` blocks, and this policy avoids reparsing and reprinting user-owned formatting.
+
+Custom-variant order is behavior rather than formatting. When two generated conditions can hold at the same time, Tailwind emits their utilities in variant registration order, so entry order decides which conflicting declaration wins, exactly as authored rule order did before migration. The entry group therefore orders generated custom variants by the position of the first migrated rule that uses each condition, following normalized package-path order and source order within each package. Conflict analysis treats two candidates as ordering-sensitive when they set conflicting declarations on the same proven element under distinct generated conditions that are not provably mutually exclusive. Such a pair migrates only when the emitted definition order reproduces the original winning rule, and is otherwise retained with the existing conflict warning.
 
 An entry group owns one mutable in-memory entry source initialized from the shared snapshot. Each package plan receives the current source and may return a new source containing moved keyframes or global at-rules. The orchestration layer adopts that planned source before adding media definitions or processing the next package. It removes intermediate Tailwind entry files from package plans and emits only the group's final composed entry file. Media extraction must never add a second planned file for a path already changed by the native planner.
 
@@ -294,7 +301,7 @@ The TypeScript layer:
 4. determines whether the entry group permits any entry edit;
 5. resolves Tailwind and retains the complete project-owned CSS import graph from the entry owner's package root;
 6. runs native condition collection for every package in the group;
-7. reserves imported custom-variant and theme names and allocates names across the complete group;
+7. reserves theme, authored custom-variant, plugin, and dependency variant names and allocates names across the complete group;
 8. prevalidates each missing generated definition and marks rejected conditions for arbitrary fallback;
 9. processes each group in normalized package-path order while carrying one mutable entry source and the fixed name map;
 10. folds each permitted native planner entry result into the group's current source;
@@ -369,8 +376,9 @@ Existing warning codes continue to cover unsupported media syntax, candidate com
 
 - Add media condition keys and the built-in, existing-breakpoint, generated-breakpoint, and custom-variant resolution order.
 - Add the native collection pass and group-supplied name map.
-- Reserve imported custom-variant and theme names from the complete Tailwind graph.
+- Reserve theme and custom-variant names from the complete Tailwind graph, including probe-detected plugin and dependency variants.
 - Add deterministic entry-group collision handling.
+- Order generated custom variants by cascade position and extend conflict analysis to overlapping generated conditions.
 - Keep extraction disabled internally until entry augmentation and packaged coverage are available.
 
 ### Phase 2: Entry augmentation, options, and packaged behavior
@@ -408,6 +416,7 @@ Phase 3 adds runtime confidence without changing the CLI contract introduced and
 - duplicate condition keys share one definition;
 - unit differences do not deduplicate;
 - imported custom-variant names are reserved before generation;
+- overlapping generated conditions preserve the original winning declaration through definition order or retain the affected rules;
 - collisions across packages in one entry group receive stable digest suffixes before consumer planning; and
 - extraction-disabled planning reproduces current arbitrary candidates.
 
@@ -424,6 +433,9 @@ Phase 3 adds runtime confidence without changing the CLI contract introduced and
 - generated definitions rejected by the target Tailwind version fall back independently;
 - a package-owned entry wins over an ancestor entry;
 - a package without an entry uses an ancestor entry only when a supported static relationship proves coverage in workspace mode;
+- a direct entry import without proven scan coverage fails child entry resolution;
+- variant names contributed by plugins or dependency stylesheets are reserved through design-system probing;
+- an entry whose only changes are moved keyframes or global at-rules still produces the composed entry edit;
 - missing or ambiguous ancestor proof fails the child package deterministically;
 - sibling entries and implicit source coverage are never inferred;
 - Tailwind loads from the entry owner while preprocessors load from each migrated package;
@@ -467,9 +479,10 @@ The pre- and post-migration captures must match.
 10. Repeated conditions share one definition, shared workspace entries receive one edit, and a second run is a no-op.
 11. A workspace package without an entry uses an ancestor entry only when a supported static relationship proves that the entry covers the package.
 12. Entry groups allocate names before consumer planning and preserve all permitted keyframes, global at-rules, and media definitions in one composed source.
-13. Imported custom variants and cross-package conditions cannot be silently overwritten through generated-name collisions.
+13. Existing variants from any design-system source, including plugins and dependencies, and cross-package conditions cannot be silently overwritten through generated-name collisions.
 14. Unsafe entry groups produce no entry edit and retain every rule that depends on a definition that cannot move.
 15. Generated definitions rejected by the target Tailwind version fall back per condition before a final entry failure becomes fatal.
+16. Overlapping generated conditions preserve the original cascade winner or retain the affected rules.
 
 ## Accepted Trade-offs
 
@@ -479,7 +492,7 @@ The pre- and post-migration captures must match.
 4. Conditions that differ only through unit conversion remain separate even when they render similarly in one environment.
 5. An unsafe Tailwind entry keeps arbitrary variants, so output readability can differ across packages while rendered behavior remains preserved.
 6. Packages in one entry group share Tailwind entry planning and loading fate, although `--force` may still skip an independent package-specific input failure.
-7. Automatic shared-entry coverage is intentionally narrow: ancestry supplies candidates, while direct references or literal `@source` scopes supply proof.
+7. Automatic shared-entry coverage is intentionally narrow: ancestry supplies candidates, while literal `@source` scopes or direct references with proven scan coverage supply proof.
 
 ## Deferred Work
 
