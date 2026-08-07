@@ -1,6 +1,6 @@
 {
   "name": "tw-migrate-win32-x64-msvc",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Preview and migrate React, Vue, and HTML CSS to Tailwind utilities",
   "license": "MIT",
   "repository": {
