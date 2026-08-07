@@ -228,7 +228,9 @@ Names must be valid Tailwind variant identifiers. If a descriptive name would ex
 
 The Tailwind loader retains every project-owned stylesheet source from the complete entry import graph. Before allocating generated names, the native preflight parses those sources and returns all authored `@custom-variant` names with normalized definitions. Existing theme breakpoint names remain reserved through the theme-token graph.
 
-Parsed sources cannot reveal variants registered by an `@plugin` or defined in dependency-owned imported stylesheets, so parsing is not the only reservation gate. Before committing to any generated name, the orchestration layer compiles a probe candidate for that name against the unaugmented loaded design system. A name that already resolves is reserved regardless of where it was defined, and the generated form takes the digest suffix, probed again until an unused name is found. The allocator reuses an authored definition only when a project-owned normalized definition proves that its meaning matches the condition. A name known only through the probe is never reused.
+Parsed sources cannot reveal variants registered by an `@plugin` or defined in dependency-owned imported stylesheets, so parsing is not the only reservation gate. Before committing to any generated name, the orchestration layer compiles a probe candidate for that name against the unaugmented loaded design system. A name that already resolves is reserved regardless of where it was defined, and the generated form takes the digest suffix, which is probed again. Probing is bounded rather than open-ended: when the readable name and its digest-suffixed form both resolve, the readable prefix is treated as owned by an existing functional variant namespace that suffixing cannot escape, and the allocator probes one name in the reserved generated namespace `twm-media-<digest>` instead. A condition whose namespaced name also resolves falls back to its arbitrary variant rather than failing the entry group. The allocator reuses an authored definition only when a project-owned normalized definition proves that its meaning matches the condition. A name known only through the probe is never reused.
+
+The probe cannot see inert candidates. A token such as `screen-width-lte-768px:hidden` may already sit in a file inside the entry's detection scope while its variant name is undefined, and appending the generated definition would activate that token and change an unrelated consumer. Before allocation, the preflight therefore scans the entry's provable detection scope for candidate tokens and reserves every variant prefix it finds, including prefixes of digest-suffixed and namespaced forms. When that scope cannot be enumerated, generated names for the entry are not allocated and its conditions fall back to arbitrary variants.
 
 Name allocation runs once for the complete entry group before any consumer candidate is produced. Different conditions from different packages therefore cannot independently claim the same readable name. The fixed condition-key-to-name map is passed into every native package plan. The migration never overwrites or renames an authored breakpoint or custom variant.
 
@@ -251,9 +253,11 @@ The first implementation appends a new block rather than inserting declarations 
 
 Custom-variant order is behavior rather than formatting. When two generated conditions can hold at the same time, Tailwind emits their utilities in variant registration order, so entry order decides which conflicting declaration wins, exactly as authored rule order did before migration. Rule order is proven only inside one compiled stylesheet. Across stylesheets and packages, the import or bundler order that loaded the original files decides the cascade, and filesystem or normalized package-path order does not prove it. The entry group therefore orders generated custom variants by the position of the first migrated rule that uses each condition inside its stylesheet, and applies normalized package-path order across stylesheets only as a deterministic tiebreaker that carries no cascade meaning. Conflict analysis treats two candidates as ordering-sensitive when they set conflicting declarations on the same proven element under distinct generated conditions that are not provably mutually exclusive. Such a pair migrates only when both rules come from one stylesheet and the emitted definition order reproduces the original winning rule. An ordering-sensitive pair that spans stylesheets has no proven load order and is retained with the existing conflict warning.
 
-Generated breakpoints follow a separate ordering rule. Tailwind orders responsive breakpoint utilities by resolved breakpoint value rather than by theme-variable position, so the appended order of `--breakpoint-*` variables carries no cascade meaning and rule 5 sorts them by name for determinism only. For an ordering-sensitive pair of generated breakpoints, the value order is statically known: the pair migrates only when ascending value order reproduces the original winning rule, and is otherwise retained. An ordering-sensitive pair that mixes a generated breakpoint with a generated custom variant has no proven relative utility order and is retained. The ordering gate therefore covers both generated definition kinds, not only custom variants.
+Generated breakpoints follow a separate ordering rule. Tailwind orders responsive breakpoint utilities by resolved breakpoint value rather than by theme-variable position, so the appended order of `--breakpoint-*` variables carries no cascade meaning and rule 5 sorts them by name for determinism only. For an ordering-sensitive pair of generated breakpoints, the value order is statically known: the pair migrates only when ascending value order reproduces the original winning rule, and is otherwise retained. A pair of a generated breakpoint and an existing project breakpoint uses the same test, because both values are statically known. Every other ordering-sensitive pair that involves a generated definition, including a generated breakpoint against a generated custom variant and a generated definition against a built-in or otherwise project-defined media variant, has no proven relative utility order and is retained. The ordering gate therefore covers every pair in which at least one side is a generated definition.
 
 An entry group owns one mutable in-memory entry source initialized from the shared snapshot. Each package plan receives the current source and may return a new source containing moved keyframes or global at-rules. The orchestration layer adopts that planned source before adding media definitions or processing the next package. It removes intermediate Tailwind entry files from package plans and emits only the group's final composed entry file. Media extraction must never add a second planned file for a path already changed by the native planner.
+
+Moved keyframes and global at-rules follow the same proof standard as generated definitions. Within one package, moved blocks keep their source order. When two packages in one group move colliding order-sensitive definitions, such as registrations for the same `@property` name or overlapping `@page` rules, their original precedence depends on the import order that loaded those packages, which normalized package-path order does not prove. The composition detects such collisions and retains the affected modules and at-rules instead of emitting an order that may flip the winning definition.
 
 Imported theme files remain untouched. Generated definitions live in the resolved entry because that file already defines the design system used to validate migration candidates.
 
@@ -424,6 +428,8 @@ Phase 3 adds runtime confidence without changing the CLI contract introduced and
 - ordering-sensitive pairs that span stylesheets are retained as ambiguous;
 - conflicting overlapping generated breakpoints migrate only when ascending value order reproduces the original winner;
 - ordering-sensitive pairs that mix a generated breakpoint with a generated custom variant are retained;
+- ordering-sensitive pairs between a generated definition and a built-in or project-defined media variant are retained unless both are value-comparable breakpoints;
+- a functional variant namespace bounds probing and falls back to the generated namespace or the arbitrary variant;
 - collisions across packages in one entry group receive stable digest suffixes before consumer planning; and
 - extraction-disabled planning reproduces current arbitrary candidates.
 
@@ -448,6 +454,8 @@ Phase 3 adds runtime confidence without changing the CLI contract introduced and
 - missing or ambiguous ancestor proof fails the child package deterministically;
 - sibling entries and implicit source coverage are never inferred;
 - Tailwind loads from the entry owner while preprocessors load from each migrated package;
+- variant prefixes found in the entry's scanned candidate corpus are reserved before allocation;
+- colliding order-sensitive global at-rules moved from two packages are retained;
 - shared workspace entries receive one merged edit that preserves native keyframe and global at-rule additions; and
 - a second run produces no diff.
 
@@ -491,7 +499,7 @@ The pre- and post-migration captures must match.
 13. Existing variants from any design-system source, including plugins and dependencies, and cross-package conditions cannot be silently overwritten through generated-name collisions.
 14. Unsafe entry groups produce no entry edit and retain every rule that depends on a definition that cannot move.
 15. Generated definitions rejected by the target Tailwind version fall back per condition before a final entry failure becomes fatal.
-16. Overlapping generated conditions preserve the original cascade winner or retain the affected rules.
+16. Ordering-sensitive conflicts involving generated definitions, existing media variants, or moved global definitions preserve the original winner or retain the affected rules.
 
 ## Accepted Trade-offs
 
