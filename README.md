@@ -2,9 +2,13 @@
 
 Migrate static React/Next.js, Vue 3 SFC, and HTML stylesheet references to Tailwind v4 utilities.
 
+## Prerequisites
+
+Install and configure Tailwind CSS v4 in the package you want to migrate by following the [official installation guide](https://tailwindcss.com/docs/installation/). The package must have a CSS entry containing `@import "tailwindcss";` so `tw-migrate` can validate generated utilities against the project's Tailwind configuration.
+
 ## Usage
 
-Run it in the package you want to migrate — no install step:
+Run it in the package you want to migrate — no separate `tw-migrate` install step:
 
 ```bash
 npx tw-migrate                                      # Migrate the current package
