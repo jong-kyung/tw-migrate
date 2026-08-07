@@ -39,7 +39,7 @@ pub(crate) struct SimpleMinWidth {
 pub(crate) fn parse_media_condition(query: &str) -> Option<MediaCondition> {
     // Only ASCII whitespace is insignificant in CSS; other whitespace code
     // points are identifier content and must survive untouched.
-    let query = query.trim_matches(|character: char| character.is_ascii_whitespace());
+    let query = trim_css_whitespace(query);
     if query.is_empty()
         || query.contains(['{', '}', ';', '"', '\'', '\\', '[', ']'])
         || query.contains("/*")
@@ -396,7 +396,7 @@ fn parse_condition(content: &str) -> Option<Condition> {
         return None;
     }
     if let Some((feature, value)) = split_top_level_once(&content, ':') {
-        let feature = feature.trim().to_ascii_lowercase();
+        let feature = trim_css_whitespace(feature).to_ascii_lowercase();
         let value = normalize_value(value);
         if !is_feature_ident(&feature) || value.is_empty() {
             return None;
@@ -421,22 +421,22 @@ fn parse_condition(content: &str) -> Option<Condition> {
     let parts = split_comparisons(&content)?;
     match parts.as_slice() {
         [ComparisonPart::Trailing(operand)] => {
-            let feature = operand.trim().to_ascii_lowercase();
+            let feature = trim_css_whitespace(operand).to_ascii_lowercase();
             is_feature_ident(&feature).then_some(Condition::Boolean { feature })
         }
         [
             ComparisonPart::Pair(left, op),
             ComparisonPart::Trailing(right),
         ] => {
-            let left_ident = left.trim().to_ascii_lowercase();
-            let right_ident = right.trim().to_ascii_lowercase();
-            if is_feature_ident(&left_ident) && !right.trim().is_empty() {
+            let left_ident = trim_css_whitespace(left).to_ascii_lowercase();
+            let right_ident = trim_css_whitespace(right).to_ascii_lowercase();
+            if is_feature_ident(&left_ident) && !trim_css_whitespace(right).is_empty() {
                 Some(Condition::Range {
                     feature: left_ident,
                     op: *op,
                     value: normalize_value(right),
                 })
-            } else if is_feature_ident(&right_ident) && !left.trim().is_empty() {
+            } else if is_feature_ident(&right_ident) && !trim_css_whitespace(left).is_empty() {
                 Some(Condition::Range {
                     feature: right_ident,
                     op: op.flipped(),
@@ -451,7 +451,7 @@ fn parse_condition(content: &str) -> Option<Condition> {
             ComparisonPart::Pair(feature, high_op),
             ComparisonPart::Trailing(high),
         ] => {
-            let feature = feature.trim().to_ascii_lowercase();
+            let feature = trim_css_whitespace(feature).to_ascii_lowercase();
             let low = normalize_value(low);
             let high = normalize_value(high);
             if !is_feature_ident(&feature) || low.is_empty() || high.is_empty() {
@@ -488,9 +488,15 @@ fn parse_condition(content: &str) -> Option<Condition> {
 /// Collapse ASCII whitespace in a media-feature value and fold case only
 /// when every code point is provably case-insensitive: plain keywords,
 /// dimensions, and ratios. Values carrying functions or other tokens, such
-/// as `env(MyInset)`, keep their authored case.
+/// as `env(MyInset)`, keep their authored case. Dimension values also
+/// canonicalize provably equivalent spellings: `+52rem`, `052rem`, and
+/// `5.2e1rem` all render as `52rem`, so one semantic condition receives one
+/// key. No unit conversion is attempted.
 fn normalize_value(value: &str) -> String {
     let collapsed = collapse_whitespace(value);
+    if let Some((number, unit)) = parse_css_dimension(&collapsed) {
+        return format!("{number}{unit}");
+    }
     if collapsed.chars().all(|character| {
         character.is_ascii_alphanumeric() || matches!(character, ' ' | '.' | '%' | '+' | '-' | '/')
     }) {
@@ -498,6 +504,12 @@ fn normalize_value(value: &str) -> String {
     } else {
         collapsed
     }
+}
+
+/// Trim only CSS whitespace; other whitespace code points are identifier
+/// content and must stay part of the token they touch.
+fn trim_css_whitespace(text: &str) -> &str {
+    text.trim_matches(|character: char| character.is_ascii_whitespace())
 }
 
 enum Token<'a> {
@@ -927,6 +939,29 @@ mod tests {
         let condition = parsed("(orientation:\u{a0}landscape)");
         assert_eq!(condition.key, "(orientation: \u{a0}landscape)");
         assert_ne!(condition.key, parsed("(orientation: landscape)").key);
+    }
+
+    #[test]
+    fn non_css_whitespace_around_a_feature_rejects_the_condition() {
+        // A U+00A0 attached to the feature name is identifier content; the
+        // authored condition names an unknown feature and stays false, so it
+        // must not become a live `(orientation: landscape)`.
+        assert!(parse_media_condition("(\u{a0}orientation: landscape)").is_none());
+        assert!(parse_media_condition("(orientation\u{a0}: landscape)").is_none());
+    }
+
+    #[test]
+    fn equivalent_dimension_spellings_share_one_key() {
+        let canonical = parsed("(min-width: 52rem)");
+        for query in [
+            "(min-width: +52rem)",
+            "(min-width: 052rem)",
+            "(min-width: 5.2e1rem)",
+        ] {
+            assert_eq!(parsed(query).key, canonical.key, "{query}");
+        }
+        assert_eq!(canonical.simple_min_width.expect("simple").value, "52rem");
+        assert_eq!(parsed("(width <= 47.50rem)").key, "(width <= 47.5rem)");
     }
 
     #[test]
