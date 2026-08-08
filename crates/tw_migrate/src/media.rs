@@ -1689,19 +1689,15 @@ fn matches_existing_breakpoint_range(
 /// parsed number and case-folded unit so spellings such as `48REM` and
 /// `48.0rem` still match `48rem`. No unit conversion is attempted.
 fn breakpoint_with_value_exists(value: &str, theme_tokens: &HashMap<String, String>) -> bool {
-    let Some((number, unit)) = parse_css_dimension(value) else {
+    // Exact lexical canonicalization proves equality without f64 rounding:
+    // values that differ beyond f64 precision, or that cannot canonicalize
+    // at all, never match an existing breakpoint.
+    let Some(canonical) = canonical_dimension(value) else {
         return false;
     };
-    // Two distinct overflowing spellings both parse to infinity; equality on
-    // non-finite numbers would prove an equivalence that does not exist.
-    if !number.is_finite() {
-        return false;
-    }
     theme_tokens.iter().any(|(name, token_value)| {
         name.starts_with("breakpoint-")
-            && parse_css_dimension(token_value.trim()).is_some_and(|(token_number, token_unit)| {
-                token_number == number && token_unit == unit
-            })
+            && canonical_dimension(token_value.trim()).is_some_and(|token| token == canonical)
     })
 }
 
@@ -1969,6 +1965,22 @@ mod collection_tests {
         // `48REM` and `64.0rem` spellings still prove the existing
         // breakpoints; only the unmatched 52rem query is collected.
         assert_eq!(conditions[0]["key"], "(width >= 52rem)");
+    }
+
+    #[test]
+    fn breakpoint_matching_never_rounds_through_f64() {
+        let response = collect(json!({
+            "stylesheets": [{
+                "cssPath": "card.css",
+                "cssSource": "@media (width >= 48.000000000000001rem) { .card { margin: 0; } }",
+            }],
+            "themeTokens": rem_tokens(),
+        }));
+        // The value differs from the 48rem breakpoint beyond f64 precision,
+        // so the condition is collected instead of treated as existing.
+        let conditions = response["conditions"].as_array().unwrap();
+        assert_eq!(conditions.len(), 1);
+        assert_eq!(conditions[0]["key"], "(width >= 48.000000000000001rem)");
     }
 
     #[test]
