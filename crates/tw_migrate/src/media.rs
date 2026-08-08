@@ -103,7 +103,10 @@ pub(crate) fn condition_digest(key: &str) -> String {
 }
 
 /// Append the digest suffix a colliding or over-long name receives, keeping
-/// the readable prefix inside the fixed length limit.
+/// the readable prefix inside the fixed length limit. The 32-bit digest is
+/// not collision-free: the entry-group allocator resolves digest collisions
+/// through its claimed-name set, bounded attempts, and the arbitrary-variant
+/// fallback, so distinct keys never share an emitted name.
 pub(crate) fn digest_suffixed_name(name: &str, key: &str) -> String {
     let digest = condition_digest(key);
     let budget = MAX_NAME_LENGTH - digest.len() - 1;
@@ -410,7 +413,7 @@ fn parse_condition(content: &str) -> Option<Condition> {
     }
     if let Some((feature, value)) = split_top_level_once(&content, ':') {
         let feature = trim_css_whitespace(feature).to_ascii_lowercase();
-        let value = normalize_value(value);
+        let value = normalize_value(&feature, value);
         if !is_feature_ident(&feature) || value.is_empty() {
             return None;
         }
@@ -445,15 +448,15 @@ fn parse_condition(content: &str) -> Option<Condition> {
             let right_ident = trim_css_whitespace(right).to_ascii_lowercase();
             if is_feature_ident(&left_ident) && !trim_css_whitespace(right).is_empty() {
                 Some(Condition::Range {
-                    feature: left_ident,
                     op: *op,
-                    value: normalize_value(right),
+                    value: normalize_value(&left_ident, right),
+                    feature: left_ident,
                 })
             } else if is_feature_ident(&right_ident) && !trim_css_whitespace(left).is_empty() {
                 Some(Condition::Range {
-                    feature: right_ident,
                     op: op.flipped(),
-                    value: normalize_value(left),
+                    value: normalize_value(&right_ident, left),
+                    feature: right_ident,
                 })
             } else {
                 None
@@ -465,8 +468,8 @@ fn parse_condition(content: &str) -> Option<Condition> {
             ComparisonPart::Trailing(high),
         ] => {
             let feature = trim_css_whitespace(feature).to_ascii_lowercase();
-            let low = normalize_value(low);
-            let high = normalize_value(high);
+            let low = normalize_value(&feature, low);
+            let high = normalize_value(&feature, high);
             if !is_feature_ident(&feature) || low.is_empty() || high.is_empty() {
                 return None;
             }
@@ -507,16 +510,26 @@ fn parse_condition(content: &str) -> Option<Condition> {
 /// whose exact decimal form would be unreasonably long, such as `1e999px`
 /// or `1e-324px`, keeps its authored spelling instead of rounding through
 /// f64. No unit conversion is attempted.
-fn normalize_value(value: &str) -> String {
+fn normalize_value(feature: &str, value: &str) -> String {
     let collapsed = collapse_whitespace(value);
     if let Some((number, unit)) = canonical_dimension(&collapsed) {
         return format!("{number}{unit}");
     }
-    if let Some(number) = canonical_css_number(&collapsed) {
-        return number;
-    }
-    if let Some(ratio) = canonical_ratio(&collapsed) {
-        return ratio;
+    if is_integer_feature(feature) {
+        // `<integer>` features reject `<number>` spellings, so `1.0` for
+        // `color` is an invalid, non-matching query; only the integer
+        // grammar is provably equivalent, and other spellings keep their
+        // authored form.
+        if let Some(integer) = canonical_css_integer(&collapsed) {
+            return integer;
+        }
+    } else {
+        if let Some(number) = canonical_css_number(&collapsed) {
+            return number;
+        }
+        if let Some(ratio) = canonical_ratio(&collapsed) {
+            return ratio;
+        }
     }
     if collapsed.chars().all(|character| {
         character.is_ascii_alphanumeric() || matches!(character, ' ' | '.' | '%' | '+' | '-' | '/')
@@ -525,6 +538,44 @@ fn normalize_value(value: &str) -> String {
     } else {
         collapsed
     }
+}
+
+/// Features whose values are `<integer>` tokens.
+fn is_integer_feature(feature: &str) -> bool {
+    let base = feature
+        .strip_prefix("min-")
+        .or_else(|| feature.strip_prefix("max-"))
+        .unwrap_or(feature);
+    matches!(base, "color" | "color-index" | "monochrome" | "grid")
+}
+
+/// The canonical form of a CSS `<integer>`: optional sign and digits only.
+fn canonical_css_integer(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    let negative = match bytes.first() {
+        Some(b'-') => {
+            index += 1;
+            true
+        }
+        Some(b'+') => {
+            index += 1;
+            false
+        }
+        _ => false,
+    };
+    if index == bytes.len() || !bytes[index..].iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let digits = text[index..].trim_start_matches('0');
+    if digits.is_empty() {
+        return Some("0".to_string());
+    }
+    Some(if negative {
+        format!("-{digits}")
+    } else {
+        digits.to_string()
+    })
 }
 
 /// Trim only CSS whitespace; other whitespace code points are identifier
@@ -791,10 +842,19 @@ fn canonical_css_number(text: &str) -> Option<String> {
         while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
             cursor += 1;
         }
-        if cursor == exponent_start || cursor - exponent_start > 4 {
+        if cursor == exponent_start {
             return None;
         }
-        exponent = text[exponent_start..cursor].parse().ok()?;
+        // Leading zeros carry no magnitude: `1e00000` is exactly `1`.
+        let exponent_digits = text[exponent_start..cursor].trim_start_matches('0');
+        if exponent_digits.len() > 4 {
+            return None;
+        }
+        exponent = if exponent_digits.is_empty() {
+            0
+        } else {
+            exponent_digits.parse().ok()?
+        };
         if negative_exponent {
             exponent = -exponent;
         }
@@ -1174,6 +1234,23 @@ mod tests {
         assert!(parsed("(min-width: 1e999px)").simple_min_width.is_none());
         let zero = parsed("(min-width: -0px)");
         assert_eq!(zero.simple_min_width.expect("zero").value, "0px");
+    }
+
+    #[test]
+    fn exponent_leading_zeros_do_not_defeat_canonicalization() {
+        let condition = parsed("(min-width: 1e00000px)");
+        assert_eq!(condition.key, "(width >= 1px)");
+        assert!(condition.simple_min_width.is_some());
+    }
+
+    #[test]
+    fn integer_feature_values_keep_number_spellings() {
+        assert_eq!(parsed("(color: 1.0)").key, "(color: 1.0)");
+        assert_ne!(parsed("(color: 1.0)").key, parsed("(color: 1)").key);
+        assert_eq!(parsed("(grid: 1e0)").key, "(grid: 1e0)");
+        assert_eq!(parsed("(color: +01)").key, "(color: 1)");
+        assert_eq!(parsed("(min-color: 02)").key, "(min-color: 2)");
+        assert_eq!(parsed("(width >= 1.0px)").key, "(width >= 1px)");
     }
 
     #[test]
