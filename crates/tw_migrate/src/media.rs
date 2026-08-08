@@ -15,7 +15,7 @@ use oxc_css_parser::ast::{AtRule, Statement};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    at_rules::{at_rule_query, builtin_media_variant, media_breakpoint_variant, parse_css},
+    at_rules::{at_rule_query, builtin_media_variant, parse_css},
     planner::StylesheetSyntax,
 };
 
@@ -1519,14 +1519,10 @@ pub fn collect_media_conditions_json(request: &str) -> Result<String, String> {
                 if at_rule.block.is_none() {
                     continue;
                 }
-                // Whole-condition breakpoint matches derive from theme
-                // tokens and need no verification or definitions. Built-in
-                // matches are NOT skipped: their names may be redefined, so
-                // they must be collected for effective-expansion
-                // verification before reuse.
-                if media_breakpoint_variant(at_rule, source, &request.theme_tokens).is_some() {
-                    continue;
-                }
+                // Nothing is converted whole: built-in and breakpoint names
+                // may both be shadowed, so every match must reach the
+                // resolver's effective-expansion verification through the
+                // decomposed components.
                 let Some(query) = at_rule_query(at_rule, source, "media") else {
                     continue;
                 };
@@ -1732,7 +1728,7 @@ mod collection_tests {
     }
 
     #[test]
-    fn whole_built_in_queries_are_collected_for_verification() {
+    fn whole_matching_queries_are_collected_for_verification() {
         let response = collect(json!({
             "stylesheets": [{
                 "cssPath": "card.css",
@@ -1743,14 +1739,36 @@ mod collection_tests {
             "themeTokens": rem_tokens(),
         }));
         let components = response["components"].as_array().unwrap();
-        // Built-in matches must reach the resolver so a redefined name is
-        // never reused unverified; exact breakpoint matches derive from
-        // theme tokens and stay skipped.
-        assert_eq!(components.len(), 2);
+        // Nothing is converted whole: built-in and breakpoint names may
+        // both be shadowed, so every match must reach the resolver's
+        // effective-expansion verification.
+        assert_eq!(components.len(), 3);
         assert_eq!(components[0]["key"], "(prefers-color-scheme: dark)");
         assert_eq!(components[0]["builtin"], "dark");
-        assert_eq!(components[1]["key"], "print");
-        assert_eq!(components[1]["builtin"], "print");
+        assert_eq!(components[1]["key"], "(width >= 48rem)");
+        assert_eq!(components[1]["breakpoint"], "md");
+        assert_eq!(components[2]["key"], "print");
+        assert_eq!(components[2]["builtin"], "print");
+    }
+
+    #[test]
+    fn legacy_pairs_preserve_inclusive_upper_bounds_exactly() {
+        let response = collect(json!({
+            "stylesheets": [{
+                "cssPath": "card.css",
+                "cssSource": "@media (min-width: 48rem) and (max-width: 63.999rem) { .card { margin: 0; } }",
+            }],
+            "themeTokens": rem_tokens(),
+        }));
+        let components = response["components"].as_array().unwrap();
+        assert_eq!(components.len(), 2);
+        assert_eq!(components[0]["key"], "(width <= 63.999rem)");
+        // The shipped epsilon approximation onto max-lg does not carry into
+        // extraction; the inclusive bound keeps its exact meaning.
+        assert_eq!(components[0]["breakpoint"], Value::Null);
+        assert_eq!(components[0]["readableName"], "width-lte-63p999rem");
+        assert_eq!(components[1]["key"], "(width >= 48rem)");
+        assert_eq!(components[1]["breakpoint"], "md");
     }
 
     #[test]
