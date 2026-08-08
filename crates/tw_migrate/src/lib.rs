@@ -5,6 +5,7 @@ mod css_plan;
 mod html_rewrite;
 mod js_rewrite;
 mod jsx_graph;
+mod media;
 mod planner;
 mod theme;
 mod utilities;
