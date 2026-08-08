@@ -86,10 +86,15 @@ export function resolveMediaNames(
   const components = mergeComponents(collections);
   const authoredKeysByName = mergeAuthoredVariants(collections);
 
-  const claimed = new Set<string>(reservedNames);
+  // External reservations block new generated claims only. Adoption of a
+  // verified identical definition bypasses them: a second run finds its own
+  // first-run names in the scanned candidate corpus, and rejecting adoption
+  // for that would break rerun idempotency with duplicate definitions.
+  const reserved = new Set<string>(reservedNames);
   for (const token of Object.keys(themeTokens)) {
-    if (token.startsWith("breakpoint-")) claimed.add(token.slice("breakpoint-".length));
+    if (token.startsWith("breakpoint-")) reserved.add(token.slice("breakpoint-".length));
   }
+  const claimed = new Set<string>();
   // The single wrapper key adoption may compare against, or null when the
   // name is absent, opaque, or registered with more than one meaning.
   const adoptableKey = (name: string): string | null => {
@@ -99,7 +104,10 @@ export function resolveMediaNames(
     return key ?? null;
   };
   const taken = (name: string): boolean =>
-    claimed.has(name) || authoredKeysByName.has(name) || probes.resolves(name);
+    claimed.has(name) ||
+    reserved.has(name) ||
+    authoredKeysByName.has(name) ||
+    probes.resolves(name);
 
   const names = new Map<string, ResolvedMediaName>();
   const fallbacks = new Set<string>();

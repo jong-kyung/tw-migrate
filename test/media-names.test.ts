@@ -187,6 +187,37 @@ test("owned names fall to the digest and owned digests fall back", () => {
   assert.ok(collided.fallbacks.has("(width <= 768px)"));
 });
 
+test("verified identical definitions bypass usage reservations", () => {
+  const collected = collect({
+    stylesheets: [
+      { cssPath: "card.css", cssSource: "@media (width <= 768px) { .card { margin: 0; } }" },
+    ],
+    themeTokens: remTokens,
+  });
+  const identical: AuthoredMediaVariant = {
+    name: "width-lte-768px",
+    definition: "@custom-variant width-lte-768px { @media (width <= 768px) { @slot; } }",
+    mediaQueryKey: "(width <= 768px)",
+    path: "app.css",
+  };
+  const proving: MediaProbes = {
+    resolves: (name) => name === "width-lte-768px",
+    expansionMatches: (name, key) => name === "width-lte-768px" && key === "(width <= 768px)",
+  };
+  // A second run finds its own first-run name in the scanned corpus; the
+  // corpus reservation must not block adopting the verified definition.
+  const resolution = resolveMediaNames(
+    [collection({ components: collected.components, authoredVariants: [identical] })],
+    remTokens,
+    proving,
+    ["width-lte-768px"],
+  );
+  const entry = resolution.names.get("(width <= 768px)");
+  assert.ok(entry);
+  assert.equal(entry.kind, "adopted");
+  assert.equal(entry.name, "width-lte-768px");
+});
+
 test("reserved and theme names block readable generated names", () => {
   const collected = collect({
     stylesheets: [
