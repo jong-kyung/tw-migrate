@@ -49,6 +49,7 @@ This RFC supersedes the unmatched `@media` behavior in the core RFC's **Breakpoi
 11. Adding a user-configurable naming template in the first implementation.
 12. Inferring that a sibling package's Tailwind entry consumes another package.
 13. Reusing an ancestor Tailwind entry outside `--workspaces` mode.
+14. Keeping digest names stable across tw-migrate or toolchain releases. The migration is a one-shot tool, and determinism guarantees apply to reruns of one release.
 
 ## Terminology
 
@@ -127,7 +128,7 @@ Such a condition becomes one generated whole variant preserving the complete con
 
 A readable name is used only when it derives cleanly: it consists of lowercase letters, digits, and hyphens, where a value contributes only letters, digits, and `p` for a decimal point, and the complete name fits the fixed length limit. A component or condition whose name would need any other character, such as a `calc()` or `env()` value, or whose name is too long, is not mangled or truncated; it takes the digest name directly.
 
-The digest name is `twm-media-<digest>`, where the digest is a stable content digest of the normalized key rendered as sixteen lowercase hex digits. In a compound condition only the affected component falls back, so `screen and (min-width: calc(100vw - 2rem))` still migrates as `screen:twm-media-<digest>:`.
+The digest name is `twm-media-<digest>`, where the digest is a content digest of the normalized key rendered as sixteen lowercase hex digits, deterministic across runs of one tw-migrate release. In a compound condition only the affected component falls back, so `screen and (min-width: calc(100vw - 2rem))` still migrates as `screen:twm-media-<digest>:`.
 
 A readable name that is already owned with a different meaning falls back to the digest name the same way, and a digest name owned with a different meaning falls back to the arbitrary variant for that condition. A name whose existing definition is identical to what the migration would emit is adopted instead, whoever wrote it, keeping a second run diff-free.
 
@@ -368,6 +369,8 @@ A recoverable failure in one child package may be skipped under `--force` withou
 ## Determinism and Idempotency
 
 Keys, generated names, definitions, candidates, warnings, and entry edits use stable sorting. Naming does not depend on discovery order or hash-map iteration.
+
+These guarantees apply to reruns of one tw-migrate release. A digest name may differ after a tool or toolchain upgrade; the worst outcome is one duplicate definition for a condition an earlier release already defined, which content-identity adoption and the resolver's name claiming contain.
 
 A successful migration followed by the same command must produce:
 
