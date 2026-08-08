@@ -328,22 +328,24 @@ fn parse_branch(branch: &str) -> Option<Branch> {
     }
     if let [Token::Word(word), rest @ ..] = tokens {
         let lowered = word.to_ascii_lowercase();
-        if matches!(lowered.as_str(), "all" | "screen" | "print" | "speech") {
-            media_type = Some(lowered);
-            tokens = rest;
-            match tokens {
-                [] => {}
-                [Token::Word(and), rest @ ..]
-                    if and.eq_ignore_ascii_case("and") && !rest.is_empty() =>
-                {
-                    tokens = rest;
-                }
-                _ => return None,
-            }
-        } else {
-            // An unrecognized media type (for example a deprecated device
-            // type) is not representable.
+        // A media type is any CSS identifier except the reserved keywords;
+        // an unknown type such as `tv` is preserved verbatim, keeping its
+        // authored match-nothing behavior.
+        if matches!(lowered.as_str(), "not" | "and" | "only" | "or" | "layer")
+            || !is_feature_ident(&lowered)
+        {
             return None;
+        }
+        media_type = Some(lowered);
+        tokens = rest;
+        match tokens {
+            [] => {}
+            [Token::Word(and), rest @ ..]
+                if and.eq_ignore_ascii_case("and") && !rest.is_empty() =>
+            {
+                tokens = rest;
+            }
+            _ => return None,
         }
     } else if modifier == Some("only") {
         // `only` requires a media type.
@@ -494,7 +496,12 @@ fn parse_condition(content: &str) -> Option<Condition> {
 /// key. No unit conversion is attempted.
 fn normalize_value(value: &str) -> String {
     let collapsed = collapse_whitespace(value);
-    if let Some((number, unit)) = parse_css_dimension(&collapsed) {
+    // A syntactically valid number that overflows f64, such as `1e999px`,
+    // must keep its authored spelling: serializing Rust's `inf` would turn
+    // a hugely true bound into an identifier that makes the query false.
+    if let Some((number, unit)) = parse_css_dimension(&collapsed)
+        && number.is_finite()
+    {
         return format!("{number}{unit}");
     }
     if collapsed.chars().all(|character| {
@@ -880,7 +887,8 @@ mod tests {
             "(--narrow)",
             "((min-width: 5em) and (max-width: 10em))",
             "(min-width: 5em) or (max-width: 10em)",
-            "tv and (min-width: 5em)",
+            "layer and (min-width: 5em)",
+            "or",
             "only (min-width: 5em)",
             "(width < 5em < 10em < 20em)",
             "{ }",
@@ -962,6 +970,21 @@ mod tests {
         }
         assert_eq!(canonical.simple_min_width.expect("simple").value, "52rem");
         assert_eq!(parsed("(width <= 47.50rem)").key, "(width <= 47.5rem)");
+    }
+
+    #[test]
+    fn custom_media_types_are_preserved_verbatim() {
+        let condition = parsed("tv and (color)");
+        assert_eq!(condition.key, "tv and (color)");
+        assert_eq!(condition.preferred_custom_name, "tv-color");
+        assert_eq!(parsed("only projection").key, "only projection");
+    }
+
+    #[test]
+    fn overflowing_dimensions_keep_their_authored_spelling() {
+        let condition = parsed("(max-width: 1e999px)");
+        assert_eq!(condition.key, "(width <= 1e999px)");
+        assert!(parsed("(min-width: 1e999rem)").simple_min_width.is_none());
     }
 
     #[test]
