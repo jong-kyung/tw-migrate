@@ -133,6 +133,9 @@ struct Branch {
     modifier: Option<&'static str>,
     media_type: Option<String>,
     conditions: Vec<Condition>,
+    /// The uniform separator between conditions: `and`, or the MQ4 `or`
+    /// form, which never mixes with `and` or follows a media type.
+    connector: &'static str,
 }
 
 enum Condition {
@@ -220,7 +223,9 @@ impl Branch {
             parts.push(media_type.clone());
         }
         for (index, condition) in self.conditions.iter().enumerate() {
-            if index > 0 || self.media_type.is_some() {
+            if index > 0 {
+                parts.push(self.connector.to_string());
+            } else if self.media_type.is_some() {
                 parts.push("and".to_string());
             }
             parts.push(condition.render());
@@ -238,7 +243,7 @@ impl Branch {
         }
         for (index, condition) in self.conditions.iter().enumerate() {
             if index > 0 {
-                parts.push("and".to_string());
+                parts.push(self.connector.to_string());
             }
             parts.push(condition.name_tokens());
         }
@@ -367,15 +372,32 @@ fn parse_branch(branch: &str) -> Option<Branch> {
     }
 
     let mut conditions = Vec::new();
+    let mut connector: Option<&'static str> = None;
     loop {
         match tokens {
             [] => break,
             [Token::Group(content), rest @ ..] => {
                 conditions.push(parse_condition(content)?);
                 tokens = match rest {
-                    [Token::Word(and), next @ ..]
-                        if and.eq_ignore_ascii_case("and") && !next.is_empty() =>
-                    {
+                    [Token::Word(word), next @ ..] if !next.is_empty() => {
+                        let separator = if word.eq_ignore_ascii_case("and") {
+                            "and"
+                        } else if word.eq_ignore_ascii_case("or") {
+                            "or"
+                        } else {
+                            return None;
+                        };
+                        // MQ4 `or` joins bare condition groups only: it
+                        // never mixes with `and` at one level and never
+                        // follows a media type or modifier.
+                        if separator == "or" && (media_type.is_some() || modifier.is_some()) {
+                            return None;
+                        }
+                        match connector {
+                            None => connector = Some(separator),
+                            Some(existing) if existing == separator => {}
+                            Some(_) => return None,
+                        }
                         next
                     }
                     [] => rest,
@@ -397,6 +419,7 @@ fn parse_branch(branch: &str) -> Option<Branch> {
         modifier,
         media_type,
         conditions,
+        connector: connector.unwrap_or("and"),
     })
 }
 
@@ -546,7 +569,15 @@ fn is_integer_feature(feature: &str) -> bool {
         .strip_prefix("min-")
         .or_else(|| feature.strip_prefix("max-"))
         .unwrap_or(feature);
-    matches!(base, "color" | "color-index" | "monochrome" | "grid")
+    matches!(
+        base,
+        "color"
+            | "color-index"
+            | "monochrome"
+            | "grid"
+            | "horizontal-viewport-segments"
+            | "vertical-viewport-segments"
+    )
 }
 
 /// The canonical form of a CSS `<integer>`: optional sign and digits only.
@@ -1109,7 +1140,6 @@ mod tests {
             "",
             "(--narrow)",
             "((min-width: 5em) and (max-width: 10em))",
-            "(min-width: 5em) or (max-width: 10em)",
             "layer and (min-width: 5em)",
             "or",
             "only (min-width: 5em)",
@@ -1251,6 +1281,32 @@ mod tests {
         assert_eq!(parsed("(color: +01)").key, "(color: 1)");
         assert_eq!(parsed("(min-color: 02)").key, "(min-color: 2)");
         assert_eq!(parsed("(width >= 1.0px)").key, "(width >= 1px)");
+        assert_eq!(
+            parsed("(horizontal-viewport-segments: 1.0)").key,
+            "(horizontal-viewport-segments: 1.0)"
+        );
+        assert_eq!(
+            parsed("(vertical-viewport-segments: 02)").key,
+            "(vertical-viewport-segments: 2)"
+        );
+    }
+
+    #[test]
+    fn or_joined_conditions_are_representable() {
+        let condition = parsed("(color) or (hover)");
+        assert_eq!(condition.key, "(color) or (hover)");
+        assert_eq!(condition.preferred_custom_name, "color-or-hover");
+        assert_eq!(
+            parsed("(min-width: 5em) or (max-width: 10em)").key,
+            "(width >= 5em) or (width <= 10em)"
+        );
+        for query in [
+            "(color) or (hover) and (pointer: fine)",
+            "screen or (color)",
+            "not (color) or (hover)",
+        ] {
+            assert!(parse_media_condition(query).is_none(), "{query}");
+        }
     }
 
     #[test]
