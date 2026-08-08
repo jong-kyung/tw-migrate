@@ -227,7 +227,10 @@ fn whole_component(branches: &[Branch]) -> MediaComponent {
 /// over the length limit takes the digest name instead.
 fn clean_name(name: String) -> Option<String> {
     let name = name.trim_start_matches('-').to_string();
+    // Underscores are significant to Tailwind's candidate parsing, so a
+    // name carrying one is not safely readable and takes the digest name.
     (name.len() <= MAX_NAME_LENGTH
+        && !name.contains('_')
         && name.starts_with(|character: char| character.is_ascii_lowercase()))
     .then_some(name)
 }
@@ -416,7 +419,10 @@ impl Condition {
         let Self::Range { feature, op, value } = self else {
             return None;
         };
-        if feature != "width" {
+        // Equality is a single-width condition, not a bound; exposing it
+        // here would let breakpoint matching broaden `(width = 48rem)` to
+        // the exclusive upper bound `max-*` covers.
+        if feature != "width" || matches!(op, Comparison::Eq) {
             return None;
         }
         Some(WidthBound {
@@ -1091,12 +1097,17 @@ fn collapse_whitespace(text: &str) -> String {
 fn is_feature_ident(text: &str) -> bool {
     // A single leading hyphen admits vendor-prefixed feature names such as
     // `-webkit-min-device-pixel-ratio`; `--*` custom-media references are
-    // rejected before this check ever runs.
+    // rejected before this check ever runs. Underscores are valid CSS
+    // identifier code points, so `foo_bar` stays representable; its
+    // readable name is rejected separately and the digest name applies.
     let text = text.strip_prefix('-').unwrap_or(text);
     !text.is_empty()
-        && text.starts_with(|character: char| character.is_ascii_lowercase())
+        && text.starts_with(|character: char| character.is_ascii_lowercase() || character == '_')
         && text.chars().all(|character| {
-            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || character == '-'
+                || character == '_'
         })
 }
 
@@ -1320,6 +1331,24 @@ mod tests {
         ] {
             assert!(parse_media_condition(query).is_none(), "{query}");
         }
+    }
+
+    #[test]
+    fn equality_bounds_never_match_breakpoints() {
+        let component = &components("(width = 48rem)")[0];
+        assert_eq!(component.key, "(width = 48rem)");
+        assert!(component.width_bound.is_none());
+        assert_eq!(component.readable_name.as_deref(), Some("width-eq-48rem"));
+    }
+
+    #[test]
+    fn underscore_identifiers_are_representable_with_digest_names() {
+        let media_type = &components("foo_bar")[0];
+        assert_eq!(media_type.key, "foo_bar");
+        assert!(media_type.readable_name.is_none());
+        let feature = &components("(foo_bar: baz)")[0];
+        assert_eq!(feature.key, "(foo_bar: baz)");
+        assert!(feature.readable_name.is_none());
     }
 
     #[test]
