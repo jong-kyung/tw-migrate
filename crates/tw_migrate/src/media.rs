@@ -37,13 +37,20 @@ pub(crate) struct SimpleMinWidth {
 /// syntax, nested grouping, custom-media references, or characters that a
 /// generated definition cannot carry.
 pub(crate) fn parse_media_condition(query: &str) -> Option<MediaCondition> {
+    // A CSS comment is token separation, so `screen/**/and (color)` parses
+    // like its whitespace-separated equivalent; an unterminated comment
+    // rejects the query.
+    let without_comments;
+    let query = if query.contains("/*") {
+        without_comments = strip_css_comments(query)?;
+        without_comments.as_str()
+    } else {
+        query
+    };
     // Only ASCII whitespace is insignificant in CSS; other whitespace code
     // points are identifier content and must survive untouched.
     let query = trim_css_whitespace(query);
-    if query.is_empty()
-        || query.contains(['{', '}', ';', '"', '\'', '\\', '[', ']'])
-        || query.contains("/*")
-    {
+    if query.is_empty() || query.contains(['{', '}', ';', '"', '\'', '\\', '[', ']']) {
         return None;
     }
     let branches = split_top_level(query, ',')?;
@@ -490,26 +497,19 @@ fn parse_condition(content: &str) -> Option<Condition> {
 /// Collapse ASCII whitespace in a media-feature value and fold case only
 /// when every code point is provably case-insensitive: plain keywords,
 /// dimensions, and ratios. Values carrying functions or other tokens, such
-/// as `env(MyInset)`, keep their authored case. Dimension values also
-/// canonicalize provably equivalent spellings: `+52rem`, `052rem`, and
-/// `5.2e1rem` all render as `52rem`, so one semantic condition receives one
-/// key. No unit conversion is attempted.
+/// as `env(MyInset)`, keep their authored case. Dimensions, unitless
+/// numbers, and ratios canonicalize exact lexical equivalence: `+052rem`
+/// and `5.2e1rem` both render as `52rem`, and `16 / 9` as `16/9`. A number
+/// whose exact decimal form would be unreasonably long, such as `1e999px`
+/// or `1e-324px`, keeps its authored spelling instead of rounding through
+/// f64. No unit conversion is attempted.
 fn normalize_value(value: &str) -> String {
     let collapsed = collapse_whitespace(value);
-    // A syntactically valid number that overflows f64, such as `1e999px`,
-    // must keep its authored spelling: serializing Rust's `inf` would turn
-    // a hugely true bound into an identifier that makes the query false.
-    if let Some((number, unit)) = parse_css_dimension(&collapsed)
-        && number.is_finite()
-    {
+    if let Some((number, unit)) = canonical_dimension(&collapsed) {
         return format!("{number}{unit}");
     }
-    // Unitless numbers and ratios canonicalize the same provable way:
-    // `1.50` renders as `1.5`, and `16 / 9` as `16/9`.
-    if let Some(number) = parse_css_number(&collapsed)
-        && number.is_finite()
-    {
-        return format!("{number}");
+    if let Some(number) = canonical_css_number(&collapsed) {
+        return number;
     }
     if let Some(ratio) = canonical_ratio(&collapsed) {
         return ratio;
@@ -527,6 +527,22 @@ fn normalize_value(value: &str) -> String {
 /// content and must stay part of the token they touch.
 fn trim_css_whitespace(text: &str) -> &str {
     text.trim_matches(|character: char| character.is_ascii_whitespace())
+}
+
+/// Replace each complete CSS comment with one space, or `None` when a
+/// comment never terminates.
+fn strip_css_comments(query: &str) -> Option<String> {
+    let mut result = String::with_capacity(query.len());
+    let mut rest = query;
+    while let Some(start) = rest.find("/*") {
+        result.push_str(&rest[..start]);
+        result.push(' ');
+        let after = &rest[start + 2..];
+        let end = after.find("*/")?;
+        rest = &after[end + 2..];
+    }
+    result.push_str(rest);
+    Some(result)
 }
 
 enum Token<'a> {
@@ -728,23 +744,149 @@ fn scan_css_number(bytes: &[u8]) -> Option<usize> {
     Some(index)
 }
 
-/// A complete CSS number with nothing following it, used for unitless
-/// values and ratio components.
-fn parse_css_number(text: &str) -> Option<f64> {
-    let end = scan_css_number(text.as_bytes())?;
-    if end != text.len() {
+/// The exact plain-decimal canonical form of a complete CSS number, built
+/// lexically so no precision is lost through f64: `+052` and `5.2e1` both
+/// become `52`, while `1.0000000000000001` keeps every digit. Returns
+/// `None` when the text is not exactly one number or when the exact form
+/// would exceed a fixed length, in which case the caller preserves the
+/// authored spelling.
+fn canonical_css_number(text: &str) -> Option<String> {
+    const MAX_RENDERED_DIGITS: usize = 64;
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    let negative = match bytes.first() {
+        Some(b'-') => {
+            index += 1;
+            true
+        }
+        Some(b'+') => {
+            index += 1;
+            false
+        }
+        _ => false,
+    };
+    let integer_start = index;
+    while bytes.get(index).is_some_and(u8::is_ascii_digit) {
+        index += 1;
+    }
+    let integer = &text[integer_start..index];
+    let mut fraction = "";
+    if bytes.get(index) == Some(&b'.') {
+        let fraction_start = index + 1;
+        let mut cursor = fraction_start;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
+            cursor += 1;
+        }
+        if cursor == fraction_start {
+            return None;
+        }
+        fraction = &text[fraction_start..cursor];
+        index = cursor;
+    }
+    if integer.is_empty() && fraction.is_empty() {
         return None;
     }
-    text.parse().ok()
+    let mut exponent: i64 = 0;
+    if matches!(bytes.get(index), Some(b'e' | b'E')) {
+        let mut cursor = index + 1;
+        let negative_exponent = match bytes.get(cursor) {
+            Some(b'-') => {
+                cursor += 1;
+                true
+            }
+            Some(b'+') => {
+                cursor += 1;
+                false
+            }
+            _ => false,
+        };
+        let exponent_start = cursor;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
+            cursor += 1;
+        }
+        if cursor == exponent_start || cursor - exponent_start > 4 {
+            return None;
+        }
+        exponent = text[exponent_start..cursor].parse().ok()?;
+        if negative_exponent {
+            exponent = -exponent;
+        }
+        index = cursor;
+    }
+    if index != text.len() {
+        return None;
+    }
+
+    let digits = format!("{integer}{fraction}");
+    let digits = digits.trim_start_matches('0');
+    if digits.is_empty() {
+        return Some("0".to_string());
+    }
+    let shift = exponent - fraction.len() as i64;
+    let mut rendered = String::new();
+    if shift >= 0 {
+        if digits.len() as i64 + shift > MAX_RENDERED_DIGITS as i64 {
+            return None;
+        }
+        rendered.push_str(digits);
+        for _ in 0..shift {
+            rendered.push('0');
+        }
+    } else {
+        let places = usize::try_from(-shift).ok()?;
+        if places > MAX_RENDERED_DIGITS {
+            return None;
+        }
+        if digits.len() > places {
+            let split = digits.len() - places;
+            rendered.push_str(&digits[..split]);
+            let fractional = digits[split..].trim_end_matches('0');
+            if !fractional.is_empty() {
+                rendered.push('.');
+                rendered.push_str(fractional);
+            }
+        } else {
+            let padded = format!("{}{}", "0".repeat(places - digits.len()), digits);
+            let fractional = padded.trim_end_matches('0');
+            rendered.push('0');
+            if !fractional.is_empty() {
+                rendered.push('.');
+                rendered.push_str(fractional);
+            }
+        }
+    }
+    Some(if negative && rendered != "0" {
+        format!("-{rendered}")
+    } else {
+        rendered
+    })
+}
+
+/// The exact canonical form of a `<number><unit>` dimension, with the unit
+/// folded to lowercase.
+fn canonical_dimension(text: &str) -> Option<(String, String)> {
+    let end = scan_css_number(text.as_bytes())?;
+    let unit = &text[end..];
+    if unit.is_empty()
+        || !unit
+            .chars()
+            .all(|character| character.is_ascii_alphabetic())
+    {
+        return None;
+    }
+    Some((
+        canonical_css_number(&text[..end])?,
+        unit.to_ascii_lowercase(),
+    ))
 }
 
 /// The canonical form of a `<number> / <number>` ratio value, or `None`
-/// when the text is not a plain finite ratio.
+/// when the text is not a plain exact ratio.
 fn canonical_ratio(text: &str) -> Option<String> {
     let (left, right) = split_top_level_once(text, '/')?;
-    let left = parse_css_number(trim_css_whitespace(left))?;
-    let right = parse_css_number(trim_css_whitespace(right))?;
-    (left.is_finite() && right.is_finite()).then(|| format!("{left}/{right}"))
+    let left = canonical_css_number(trim_css_whitespace(left))?;
+    let right = canonical_css_number(trim_css_whitespace(right))?;
+    Some(format!("{left}/{right}"))
 }
 
 /// Collapse runs of ASCII whitespace only; other whitespace code points are
@@ -1035,6 +1177,28 @@ mod tests {
         assert_eq!(canonical.key, "(aspect-ratio: 16/9)");
         assert_ne!(parsed("(aspect-ratio: 16/10)").key, canonical.key);
         assert_eq!(parsed("(aspect-ratio: 1.50)").key, "(aspect-ratio: 1.5)");
+    }
+
+    #[test]
+    fn comments_separate_tokens_like_whitespace() {
+        assert_eq!(parsed("screen/**/and (color)").key, "screen and (color)");
+        assert_eq!(
+            parsed("(min-width:/* tablet */52rem)").key,
+            "(width >= 52rem)"
+        );
+        assert!(parse_media_condition("(min-width: /* 52rem)").is_none());
+    }
+
+    #[test]
+    fn inexact_numbers_keep_their_exact_form() {
+        let precise = parsed("(min-width: 1.0000000000000001px)");
+        assert_eq!(precise.key, "(width >= 1.0000000000000001px)");
+        assert_ne!(precise.key, parsed("(min-width: 1px)").key);
+        let subnormal = parsed("(min-width: 1e-324px)");
+        assert_eq!(subnormal.key, "(width >= 1e-324px)");
+        assert_ne!(subnormal.key, parsed("(min-width: 0px)").key);
+        assert_eq!(parsed("(min-width: 1.50e1px)").key, "(width >= 15px)");
+        assert_eq!(parsed("(min-width: .5rem)").key, "(width >= 0.5rem)");
     }
 
     #[test]
