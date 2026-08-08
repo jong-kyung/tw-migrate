@@ -60,20 +60,16 @@ pub(crate) struct WidthBound {
 /// safely: unknown syntax, nested grouping, custom-media references, or
 /// characters that a generated definition cannot carry.
 pub(crate) fn parse_media_condition(query: &str) -> Option<ParsedMediaCondition> {
-    // A CSS comment is token separation, so `screen/**/and (color)` parses
-    // like its whitespace-separated equivalent; an unterminated comment
-    // rejects the query.
-    let without_comments;
-    let query = if query.contains("/*") {
-        without_comments = strip_css_comments(query)?;
-        without_comments.as_str()
-    } else {
-        query
-    };
     // Only ASCII whitespace is insignificant in CSS; other whitespace code
     // points are identifier content and must survive untouched.
     let query = trim_css_whitespace(query);
-    if query.is_empty() || query.contains(['{', '}', ';', '"', '\'', '\\', '[', ']']) {
+    if query.is_empty()
+        || query.contains(['{', '}', ';', '"', '\'', '\\', '[', ']'])
+        // Comment placement can be significant inside function values such
+        // as calc(), so a commented prelude stays on the retention path
+        // instead of being rewritten.
+        || query.contains("/*")
+    {
         return None;
     }
     let branches = split_top_level(query, ',')?;
@@ -733,22 +729,6 @@ fn trim_css_whitespace(text: &str) -> &str {
     text.trim_matches(|character: char| character.is_ascii_whitespace())
 }
 
-/// Replace each complete CSS comment with one space, or `None` when a
-/// comment never terminates.
-fn strip_css_comments(query: &str) -> Option<String> {
-    let mut result = String::with_capacity(query.len());
-    let mut rest = query;
-    while let Some(start) = rest.find("/*") {
-        result.push_str(&rest[..start]);
-        result.push(' ');
-        let after = &rest[start + 2..];
-        let end = after.find("*/")?;
-        rest = &after[end + 2..];
-    }
-    result.push_str(rest);
-    Some(result)
-}
-
 enum Token<'a> {
     Word(&'a str),
     /// The content between one balanced pair of top-level parentheses.
@@ -1308,8 +1288,17 @@ mod tests {
             keys("(orientation:\u{b}landscape)"),
             ["(orientation: \u{b}landscape)"]
         );
-        assert_eq!(keys("screen/**/and (color)"), ["screen", "(color)"]);
-        assert!(parse_media_condition("(min-width: /* 52rem)").is_none());
+        // Comment placement can be significant inside function values such
+        // as calc(), so commented preludes are rejected wholesale rather
+        // than rewritten.
+        for query in [
+            "screen/**/and (color)",
+            "(min-width:/* tablet */52rem)",
+            "(min-width: calc(1px/**/+/**/2px))",
+            "(min-width: /* 52rem)",
+        ] {
+            assert!(parse_media_condition(query).is_none(), "{query}");
+        }
     }
 
     #[test]
