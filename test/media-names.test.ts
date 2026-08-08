@@ -259,6 +259,29 @@ test("distinct keys with one preferred name receive stable digest suffixes", () 
   assert.equal(allocation.names.get("(width <= 768px)")?.name, "width-lte-768px-11111111");
 });
 
+test("identical digests for distinct keys never share a name", () => {
+  const shared = {
+    kind: "customVariant" as const,
+    preferredName: "width-gte-env",
+    digest: "deadbeef",
+    cssPath: "card.css",
+  };
+  const conditions = [
+    { ...shared, key: "(width >= env(A))", order: 1 },
+    { ...shared, key: "(width >= env(B))", order: 2 },
+    { ...shared, key: "(width >= env(C))", order: 3 },
+    { ...shared, key: "(width >= env(D))", order: 4 },
+  ];
+  const allocation = allocateMediaNames([collection({ conditions })], {}, neverProbes);
+  const names = [...allocation.names.values()].map((entry) => entry.name);
+  assert.equal(new Set(names).size, names.length);
+  // The preferred, digest-suffixed, and namespaced forms are each claimed
+  // once; the remaining key falls back to the arbitrary variant instead of
+  // sharing a name.
+  assert.equal(names.length, 3);
+  assert.equal(allocation.fallbacks.size, 1);
+});
+
 test("overlong preferred names are limited before allocation", () => {
   const condition = {
     key: "(width <= 1e60rem)",
