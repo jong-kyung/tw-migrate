@@ -504,6 +504,16 @@ fn normalize_value(value: &str) -> String {
     {
         return format!("{number}{unit}");
     }
+    // Unitless numbers and ratios canonicalize the same provable way:
+    // `1.50` renders as `1.5`, and `16 / 9` as `16/9`.
+    if let Some(number) = parse_css_number(&collapsed)
+        && number.is_finite()
+    {
+        return format!("{number}");
+    }
+    if let Some(ratio) = canonical_ratio(&collapsed) {
+        return ratio;
+    }
     if collapsed.chars().all(|character| {
         character.is_ascii_alphanumeric() || matches!(character, ' ' | '.' | '%' | '+' | '-' | '/')
     }) {
@@ -663,7 +673,21 @@ enum ComparisonPart<'a> {
 /// an alphabetic unit. The unit folds to lowercase because CSS units are
 /// case-insensitive.
 fn parse_css_dimension(value: &str) -> Option<(f64, String)> {
-    let bytes = value.as_bytes();
+    let index = scan_css_number(value.as_bytes())?;
+    let unit = &value[index..];
+    if unit.is_empty()
+        || !unit
+            .chars()
+            .all(|character| character.is_ascii_alphabetic())
+    {
+        return None;
+    }
+    Some((value[..index].parse().ok()?, unit.to_ascii_lowercase()))
+}
+
+/// The byte length of the leading CSS number in `bytes`: optional sign,
+/// integer and fraction digits, and an optional exponent.
+fn scan_css_number(bytes: &[u8]) -> Option<usize> {
     let mut index = 0;
     if matches!(bytes.first(), Some(b'+' | b'-')) {
         index += 1;
@@ -701,15 +725,26 @@ fn parse_css_dimension(value: &str) -> Option<(f64, String)> {
             index = cursor;
         }
     }
-    let unit = &value[index..];
-    if unit.is_empty()
-        || !unit
-            .chars()
-            .all(|character| character.is_ascii_alphabetic())
-    {
+    Some(index)
+}
+
+/// A complete CSS number with nothing following it, used for unitless
+/// values and ratio components.
+fn parse_css_number(text: &str) -> Option<f64> {
+    let end = scan_css_number(text.as_bytes())?;
+    if end != text.len() {
         return None;
     }
-    Some((value[..index].parse().ok()?, unit.to_ascii_lowercase()))
+    text.parse().ok()
+}
+
+/// The canonical form of a `<number> / <number>` ratio value, or `None`
+/// when the text is not a plain finite ratio.
+fn canonical_ratio(text: &str) -> Option<String> {
+    let (left, right) = split_top_level_once(text, '/')?;
+    let left = parse_css_number(trim_css_whitespace(left))?;
+    let right = parse_css_number(trim_css_whitespace(right))?;
+    (left.is_finite() && right.is_finite()).then(|| format!("{left}/{right}"))
 }
 
 /// Collapse runs of ASCII whitespace only; other whitespace code points are
@@ -985,6 +1020,21 @@ mod tests {
         let condition = parsed("(max-width: 1e999px)");
         assert_eq!(condition.key, "(width <= 1e999px)");
         assert!(parsed("(min-width: 1e999rem)").simple_min_width.is_none());
+    }
+
+    #[test]
+    fn equivalent_ratio_spellings_share_one_key() {
+        let canonical = parsed("(aspect-ratio: 16/9)");
+        for query in [
+            "(aspect-ratio: 16 / 9)",
+            "(aspect-ratio: 16.0/9)",
+            "(aspect-ratio: +16/09)",
+        ] {
+            assert_eq!(parsed(query).key, canonical.key, "{query}");
+        }
+        assert_eq!(canonical.key, "(aspect-ratio: 16/9)");
+        assert_ne!(parsed("(aspect-ratio: 16/10)").key, canonical.key);
+        assert_eq!(parsed("(aspect-ratio: 1.50)").key, "(aspect-ratio: 1.5)");
     }
 
     #[test]
