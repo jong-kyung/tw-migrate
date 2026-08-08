@@ -13,6 +13,8 @@
 // until then only the in-module tests exercise it.
 #![allow(dead_code)]
 
+use std::hash::{DefaultHasher, Hasher};
+
 /// The longest readable generated name; anything longer takes the digest.
 const MAX_NAME_LENGTH: usize = 48;
 
@@ -133,26 +135,19 @@ pub(crate) fn parse_media_condition(query: &str) -> Option<ParsedMediaCondition>
     Some(ParsedMediaCondition::Components(components))
 }
 
-/// The standard 64-bit FNV-1a parameters. The algorithm is implemented
-/// inline because generated names must stay identical across releases and
-/// platforms, and the standard library deliberately guarantees no stable
-/// hash: `DefaultHasher` documents that its algorithm may change between
-/// Rust versions.
-const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
-
 /// A short stable digest of a key, rendered as sixteen lowercase hex
 /// digits, used for the `twm-media-<digest>` fallback name.
 pub(crate) fn condition_digest(key: &str) -> String {
-    // FNV-1a over the UTF-8 bytes of the key; not cryptographic. Digest
+    // `DefaultHasher::new()` is keyless and therefore deterministic across
+    // runs and platforms within one Rust release, which idempotent reruns
+    // need. Its algorithm may change between Rust releases; that is
+    // accepted for a one-shot migration CLI, where the worst outcome is a
+    // harmless duplicate definition after a toolchain upgrade. Digest
     // collisions are contained by the resolver: a name is claimed by at
     // most one key and every later claimant falls back.
-    let mut hash = FNV_OFFSET_BASIS;
-    for byte in key.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    format!("{hash:016x}")
+    let mut hasher = DefaultHasher::new();
+    hasher.write(key.as_bytes());
+    format!("{:016x}", hasher.finish())
 }
 
 fn type_component(modifier: Option<&'static str>, media_type: &str) -> MediaComponent {
