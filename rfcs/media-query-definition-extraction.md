@@ -178,7 +178,7 @@ A condition decomposes when it is one branch whose parts are joined only by `and
 
 Decomposition never reorders components, never merges bounds, and never rewrites a negation, because `not` distributes over `and` only by becoming `or`, which stacking cannot express.
 
-A condition is representable when the parser proves its complete grammar: unknown syntax, nested condition grouping, custom-media references, and characters that a generated definition cannot carry stay on the existing arbitrary-variant and retention paths. A media type may be any valid CSS identifier except the reserved keywords `not`, `and`, `only`, `or`, and `layer`, so an unknown type such as `tv` keeps its authored match-nothing behavior verbatim.
+A condition is representable when the parser proves its complete grammar: unknown syntax, nested condition grouping, custom-media references, comments in the prelude, and characters that a generated definition cannot carry stay on the existing arbitrary-variant and retention paths. Comments are rejected rather than rewritten because their placement can be significant inside function values such as `calc()`. A media type may be any valid ASCII CSS identifier except the reserved keywords `not`, `and`, `only`, `or`, and `layer`, so an unknown type such as `tv` keeps its authored match-nothing behavior verbatim; exotic identifiers such as non-ASCII names stay on the arbitrary-variant path.
 
 Nested `@media` rules keep their nesting order through stacked variants. The planner assigns each distinct component its own definition rather than combining nested conditions into a new synthetic query.
 
@@ -186,7 +186,7 @@ Nested `@media` rules keep their nesting order through stacked variants. The pla
 
 The planner derives a key from each parsed component, and from the complete condition when it cannot decompose. Normalization may:
 
-- treat complete CSS comments as token separation and collapse ASCII whitespace, which is exactly the whitespace CSS defines;
+- collapse ASCII whitespace, which is exactly the whitespace CSS defines;
 - case-fold CSS keywords, media feature names, and units, which CSS defines as case-insensitive;
 - normalize legacy `min-width` and `max-width` forms to their exact inclusive range equivalents;
 - flip a descending range or a value-first comparison to the provably equivalent feature-first ascending form; and
