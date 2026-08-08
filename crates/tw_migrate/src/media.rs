@@ -1814,6 +1814,23 @@ mod collection_tests {
     }
 
     #[test]
+    fn equality_queries_never_reuse_breakpoints() {
+        let response = collect(json!({
+            "stylesheets": [{
+                "cssPath": "card.css",
+                "cssSource": "@media (width = 48rem) { .card { margin: 0; } }",
+            }],
+            "themeTokens": rem_tokens(),
+        }));
+        let components = response["components"].as_array().unwrap();
+        assert_eq!(components.len(), 1);
+        assert_eq!(components[0]["key"], "(width = 48rem)");
+        // A single-width condition must not broaden into md or max-md.
+        assert_eq!(components[0]["breakpoint"], Value::Null);
+        assert_eq!(components[0]["readableName"], "width-eq-48rem");
+    }
+
+    #[test]
     fn collects_conditions_from_vue_style_blocks() {
         let sfc = "<template><div class=\"card\"></div></template>\n\
             <style scoped>@media (min-width: 52rem) { .card { margin: 0; } }</style>";
