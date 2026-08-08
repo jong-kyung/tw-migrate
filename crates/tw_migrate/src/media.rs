@@ -27,8 +27,9 @@ pub(crate) struct MediaCondition {
 }
 
 pub(crate) struct SimpleMinWidth {
+    /// The exact canonical dimension text; downstream comparisons never
+    /// round through f64.
     pub(crate) value: String,
-    pub(crate) number: f64,
     pub(crate) unit: String,
 }
 
@@ -258,13 +259,16 @@ impl Branch {
         if feature != "width" {
             return None;
         }
-        let (number, unit) = parse_css_dimension(value)?;
-        if !number.is_finite() || number < 0.0 {
+        // Classification stays as exact as the key: the canonical decimal
+        // form supplies the sign and unit, so `-1e-999px` (negative zero
+        // through f64) stays rejected, and a value that cannot canonicalize
+        // exactly falls back to a custom variant.
+        let (number, unit) = canonical_dimension(value)?;
+        if number.starts_with('-') {
             return None;
         }
         Some(SimpleMinWidth {
             value: value.clone(),
-            number,
             unit,
         })
     }
@@ -684,23 +688,6 @@ enum ComparisonPart<'a> {
     Trailing(&'a str),
 }
 
-/// Split a CSS dimension using the complete CSS number grammar: optional
-/// sign, integer and fraction digits, and an optional exponent, followed by
-/// an alphabetic unit. The unit folds to lowercase because CSS units are
-/// case-insensitive.
-fn parse_css_dimension(value: &str) -> Option<(f64, String)> {
-    let index = scan_css_number(value.as_bytes())?;
-    let unit = &value[index..];
-    if unit.is_empty()
-        || !unit
-            .chars()
-            .all(|character| character.is_ascii_alphabetic())
-    {
-        return None;
-    }
-    Some((value[..index].parse().ok()?, unit.to_ascii_lowercase()))
-}
-
 /// The byte length of the leading CSS number in `bytes`: optional sign,
 /// integer and fraction digits, and an optional exponent.
 fn scan_css_number(bytes: &[u8]) -> Option<usize> {
@@ -965,7 +952,6 @@ mod tests {
         let simple = condition.simple_min_width.expect("simple");
         assert_eq!(simple.value, "52rem");
         assert_eq!(simple.unit, "rem");
-        assert!((simple.number - 52.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -1097,7 +1083,7 @@ mod tests {
         let exponent = parsed("(min-width: 1e3px)");
         let simple = exponent.simple_min_width.expect("exponent");
         assert_eq!(simple.unit, "px");
-        assert!((simple.number - 1000.0).abs() < f64::EPSILON);
+        assert_eq!(simple.value, "1000px");
         assert!(parsed("(min-width: +52rem)").simple_min_width.is_some());
         let cased = parsed("(min-width: 52REM)");
         assert_eq!(cased.key, "(width >= 52rem)");
@@ -1177,6 +1163,17 @@ mod tests {
         assert_eq!(canonical.key, "(aspect-ratio: 16/9)");
         assert_ne!(parsed("(aspect-ratio: 16/10)").key, canonical.key);
         assert_eq!(parsed("(aspect-ratio: 1.50)").key, "(aspect-ratio: 1.5)");
+    }
+
+    #[test]
+    fn lossy_bounds_are_never_simple() {
+        let negative_zero = parsed("(min-width: -1e-999px)");
+        assert!(negative_zero.simple_min_width.is_none());
+        assert_eq!(negative_zero.key, "(width >= -1e-999px)");
+        assert!(parsed("(min-width: -1px)").simple_min_width.is_none());
+        assert!(parsed("(min-width: 1e999px)").simple_min_width.is_none());
+        let zero = parsed("(min-width: -0px)");
+        assert_eq!(zero.simple_min_width.expect("zero").value, "0px");
     }
 
     #[test]
