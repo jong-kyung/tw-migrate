@@ -53,7 +53,7 @@ test("verified built-ins are reused and unverified ones are generated", () => {
   assert.equal(own.name, "prefers-color-scheme-dark");
 });
 
-test("existing breakpoints are reused per component including max forms", () => {
+test("existing breakpoints are reused per component only with verified expansions", () => {
   const collected = collect({
     stylesheets: [
       {
@@ -63,12 +63,28 @@ test("existing breakpoints are reused per component including max forms", () => 
     ],
     themeTokens: remTokens,
   });
-  const resolution = resolveMediaNames([collected], remTokens, neverProbes);
+  const proving: MediaProbes = {
+    resolves: (name) => name === "md" || name === "max-lg",
+    expansionMatches: (name, key) =>
+      (name === "md" && key === "(width >= 48rem)") ||
+      (name === "max-lg" && key === "(width < 64rem)"),
+  };
+  const resolution = resolveMediaNames([collected], remTokens, proving);
   assert.equal(resolution.names.get("(width >= 48rem)")?.kind, "breakpoint");
   assert.equal(resolution.names.get("(width >= 48rem)")?.name, "md");
   assert.equal(resolution.names.get("(width < 64rem)")?.kind, "breakpoint");
   assert.equal(resolution.names.get("(width < 64rem)")?.name, "max-lg");
   assert.equal(resolution.names.get("screen")?.kind, "generated");
+
+  // A custom variant can shadow a breakpoint name while the theme token
+  // keeps its value; the shadowed name is never reused.
+  const shadowed: MediaProbes = {
+    resolves: (name) => name === "md" || name === "max-lg",
+    expansionMatches: () => false,
+  };
+  const generated = resolveMediaNames([collected], remTokens, shadowed);
+  assert.equal(generated.names.get("(width >= 48rem)")?.kind, "generated");
+  assert.equal(generated.names.get("(width >= 48rem)")?.name, "width-gte-48rem");
 });
 
 test("identical existing definitions are adopted regardless of authorship", () => {
@@ -84,10 +100,14 @@ test("identical existing definitions are adopted regardless of authorship", () =
     mediaQueryKey: "(width <= 768px)",
     path: "app.css",
   };
+  const proving: MediaProbes = {
+    resolves: (name) => name === "width-lte-768px",
+    expansionMatches: (name, key) => name === "width-lte-768px" && key === "(width <= 768px)",
+  };
   const adopted = resolveMediaNames(
     [collection({ components: collected.components, authoredVariants: [identical] })],
     remTokens,
-    neverProbes,
+    proving,
   );
   const entry = adopted.names.get("(width <= 768px)");
   assert.ok(entry);
@@ -100,12 +120,29 @@ test("identical existing definitions are adopted regardless of authorship", () =
   const blocked = resolveMediaNames(
     [collection({ components: collected.components, authoredVariants: [different] })],
     remTokens,
-    neverProbes,
+    proving,
   );
   const digest = blocked.names.get("(width <= 768px)");
   assert.ok(digest);
   assert.equal(digest.kind, "generated");
   assert.match(digest.name, /^twm-media-[0-9a-f]{16}$/);
+
+  // A plugin can register the same name with different effective semantics
+  // behind an identical-looking stylesheet definition; the failing
+  // expansion proof blocks adoption and the component falls to the digest.
+  const shadowed: MediaProbes = {
+    resolves: (name) => name === "width-lte-768px",
+    expansionMatches: () => false,
+  };
+  const unadopted = resolveMediaNames(
+    [collection({ components: collected.components, authoredVariants: [identical] })],
+    remTokens,
+    shadowed,
+  );
+  const fallback = unadopted.names.get("(width <= 768px)");
+  assert.ok(fallback);
+  assert.equal(fallback.kind, "generated");
+  assert.match(fallback.name, /^twm-media-[0-9a-f]{16}$/);
 });
 
 test("owned names fall to the digest and owned digests fall back", () => {
