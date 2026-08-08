@@ -1692,6 +1692,11 @@ fn breakpoint_with_value_exists(value: &str, theme_tokens: &HashMap<String, Stri
     let Some((number, unit)) = parse_css_dimension(value) else {
         return false;
     };
+    // Two distinct overflowing spellings both parse to infinity; equality on
+    // non-finite numbers would prove an equivalence that does not exist.
+    if !number.is_finite() {
+        return false;
+    }
     theme_tokens.iter().any(|(name, token_value)| {
         name.starts_with("breakpoint-")
             && parse_css_dimension(token_value.trim()).is_some_and(|(token_number, token_unit)| {
