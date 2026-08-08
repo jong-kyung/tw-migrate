@@ -1755,6 +1755,11 @@ mod collection_tests {
 
     #[test]
     fn non_css_whitespace_in_the_prelude_stays_conservative() {
+        // `\u{a0}screen` is an exotic, match-nothing media type; collecting
+        // it as `screen` would broaden the rule to screen media. U+00A0 is
+        // not CSS whitespace, and is_ascii_whitespace matches exactly the
+        // CSS set, so it survives trimming as identifier content and stays
+        // unrepresentable.
         let response = collect(json!({
             "stylesheets": [{
                 "cssPath": "card.css",
@@ -1762,9 +1767,22 @@ mod collection_tests {
             }],
             "themeTokens": rem_tokens(),
         }));
-        // `\u{a0}screen` is an exotic, match-nothing media type; collecting
-        // it as `screen` would broaden the rule to screen media.
         assert_eq!(response["components"].as_array().unwrap().len(), 0);
+
+        // U+000B is rejected by the CSS parser in a prelude outright, so
+        // such a stylesheet fails parsing before collection ever sees it
+        // and can never be collected as an ordinary `screen` condition.
+        let error = super::collect_media_conditions_json(
+            &json!({
+                "stylesheets": [{
+                    "cssPath": "card.css",
+                    "cssSource": "@media \u{b}screen { .card { margin: 0; } }",
+                }],
+            })
+            .to_string(),
+        )
+        .unwrap_err();
+        assert!(error.starts_with("Failed to parse card.css"), "{error}");
     }
 
     #[test]
