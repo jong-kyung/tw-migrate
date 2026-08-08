@@ -41,7 +41,7 @@ This RFC supersedes the unmatched `@media` behavior in the core RFC's **Breakpoi
 3. Replacing existing project breakpoint names with generated names.
 4. Replacing Tailwind built-in variants such as `dark`, `print`, `motion-reduce`, or `portrait`.
 5. Generating `--breakpoint-*` theme variables for unmatched minimum-width values; a new lower bound becomes a component variant, and theme-breakpoint generation is deferred work.
-6. Reusing an authored `@custom-variant` whose meaning matches a migrated condition; aliasing generated definitions to authored names is deferred work.
+6. Aliasing a condition to a differently named authored `@custom-variant` such as an existing `tablet`; a definition identical to what the migration would emit is adopted, and aliasing is deferred work.
 7. Extracting `@supports`, `@container`, `@starting-style`, or selector arbitrary variants.
 8. Expanding HTML `<link media>` support in the first implementation.
 9. Moving generated definitions into imported theme files or reorganizing existing `@theme` blocks.
@@ -102,14 +102,16 @@ A double range decomposes into its two bounds: `(48rem <= width < 60rem)` become
 
 For each component, the planner tries these forms in order:
 
-1. an existing Tailwind built-in media variant, so `screen and (prefers-color-scheme: dark)` becomes `screen:dark:`;
+1. a verified Tailwind built-in media variant, so `screen and (prefers-color-scheme: dark)` becomes `screen:dark:` when `dark` still means that media condition;
 2. an exact existing project breakpoint: an inclusive lower bound whose value matches a breakpoint uses `<name>:`, and an exclusive upper bound whose value matches uses `max-<name>:`, so `(48rem <= width < 64rem)` with `md: 48rem` and `lg: 64rem` becomes `md:max-lg:`;
 3. a generated component variant with a readable name; and
 4. a generated component variant with a digest name when the readable name is unavailable.
 
+Built-in names are not fixed keywords: a project may redefine one, most commonly `@custom-variant dark (&:where(.dark, .dark *))` for class-toggled dark mode, and the redefined name then expresses a selector rather than the authored media condition. Reusing a built-in therefore requires proof: a compiled probe must show that the loaded design system's effective expansion of the name equals the expected media condition. A redefined name is never reused; its condition receives a generated component variant such as `prefers-color-scheme-dark` instead. This verification applies everywhere the resolution order runs, including single-condition queries that the planner already converts today, because mapping a condition onto a redefined name changes rendered behavior on either path; the resulting output change for redefined built-ins is a deliberate behavior-preserving fix.
+
 Breakpoint values compare as a parsed number and case-folded unit, exactly and without unit conversion, so `48REM` and `48.0rem` still prove `48rem` while values differing beyond any float representation stay distinct.
 
-The first two steps keep current output stable and extend it into compound conditions, which today fall to arbitrary variants whenever any part is unmatched. The planner does not create aliases for conditions that already have project-defined names.
+The first two steps keep current output stable for unredefined names and extend reuse into compound conditions, which today fall to arbitrary variants whenever any part is unmatched.
 
 ### Non-decomposable conditions
 
@@ -127,7 +129,7 @@ A readable name is used only when it derives cleanly: it consists of lowercase l
 
 The digest name is `twm-media-<digest>`, where the digest is a stable content digest of the normalized key rendered as sixteen lowercase hex digits. In a compound condition only the affected component falls back, so `screen and (min-width: calc(100vw - 2rem))` still migrates as `screen:twm-media-<digest>:`.
 
-A readable name that is already owned by the design system falls back to the digest name the same way. A digest name that is already owned with a different meaning falls back to the arbitrary variant for that condition; one that resolves to an identical prior-run definition is recognized and reused, keeping a second run diff-free.
+A readable name that is already owned with a different meaning falls back to the digest name the same way, and a digest name owned with a different meaning falls back to the arbitrary variant for that condition. A name whose existing definition is identical to what the migration would emit is adopted instead, whoever wrote it, keeping a second run diff-free.
 
 ### Single-use conditions
 
@@ -239,7 +241,7 @@ Name reservation follows one principle: every name the migration could emit or a
 2. **The loaded design system**: before committing to any name, the orchestration layer compiles a probe candidate against the unaugmented design system, which also reveals variants registered by an `@plugin` or defined in dependency-owned imported stylesheets.
 3. **The scanned candidate corpus**: the probe cannot see inert candidates such as `width-lte-768px:hidden` sitting in a file inside the entry's detection scope, which a generated definition would activate. The preflight therefore scans the entry's provable detection scope for candidate tokens, parses each candidate's variant chain recursively, and reserves every referenced variant name rather than only literal prefixes. When the detection scope cannot be enumerated, generated names for the entry are not allocated and its conditions fall back to arbitrary variants.
 
-The migration never overwrites or renames an authored breakpoint or custom variant, and it never reuses an authored name: an authored definition whose meaning matches a migrated condition keeps its name untouched while the migration emits its own definition. A digest name owned with any different meaning sends the condition to the arbitrary variant; digest collisions between distinct keys are therefore contained, because a name is claimed by at most one key and every later claimant falls back.
+The migration never overwrites or renames an existing definition, and adoption is decided by content rather than authorship. When the entry graph already contains a definition whose name and normalized meaning are exactly what the migration would emit, that definition is adopted as-is and nothing new is emitted, because using it is semantically indistinguishable from using the migration's own output. This one rule also makes a second run recognize the first run's definitions without any provenance marker. The comparison uses the normalized condition key rather than raw bytes, so reformatting an adopted block does not break recognition. A name owned with any different meaning is never touched: a readable name falls back to the digest name, and a digest name owned with a different meaning sends the condition to the arbitrary variant, so a name is claimed by at most one key and every later claimant falls back. Aliasing a condition to a differently named authored definition, such as an existing `tablet`, remains deferred work.
 
 Name allocation runs once for the complete entry group before any consumer candidate is produced. Different keys from different packages therefore cannot independently claim the same name. The fixed key-to-name map is passed into every native package plan.
 
@@ -420,7 +422,8 @@ Phase 3 adds runtime confidence without changing the CLI contract introduced and
 
 ### Rust planner tests
 
-- existing built-in media variants remain unchanged;
+- existing built-in media variants remain unchanged when their default meaning holds;
+- a redefined built-in is never reused and its condition receives a generated component variant;
 - exact existing breakpoints remain unchanged;
 - built-in and existing-breakpoint reuse applies per component inside compound conditions;
 - decomposition preserves component order and produces stacked candidates whose nesting reproduces the authored condition;
@@ -444,7 +447,8 @@ Phase 3 adds runtime confidence without changing the CLI contract introduced and
 - symlinked or out-of-scope entries use arbitrary variants, never receive an entry edit, and warn;
 - unsafe entries retain rules that require movable keyframes or global at-rules;
 - generated definitions rejected by the target Tailwind version fall back independently;
-- a digest name owned with a different meaning sends its condition to the arbitrary variant, and identical prior-run definitions are recognized;
+- a digest name owned with a different meaning sends its condition to the arbitrary variant, and identical-content definitions are adopted regardless of authorship;
+- built-in reuse is verified against the loaded design system's effective expansion;
 - variant names contributed by plugins or dependency stylesheets are reserved through design-system probing;
 - variants and recursively referenced names found in the entry's scanned candidate corpus are reserved before allocation;
 - fallback replanning that retains a module rebuilds the composed entry without that module's moved blocks;
@@ -488,8 +492,8 @@ The pre- and post-migration captures must match.
 
 ## Success Criteria
 
-1. Existing built-in and project-defined breakpoint output does not change.
-2. Built-ins and existing breakpoints are reused per component inside compound conditions.
+1. Output for built-ins that keep their default meaning and for project-defined breakpoints does not change; a built-in redefined with different semantics stops being reused, as a deliberate behavior-preserving fix.
+2. Built-ins and existing breakpoints are reused per component inside compound conditions, always with a verified effective expansion.
 3. Every safely representable unmatched media condition migrates to stacked named variants, or to one whole named variant when it cannot decompose, when the entry is writable.
 4. Decomposition and generated definitions preserve media types, operators, values, and compound structure exactly.
 5. No unit conversion or device-name inference occurs.
@@ -510,7 +514,7 @@ The pre- and post-migration captures must match.
 1. A single-use unmatched component adds a Tailwind definition. Readable consumer classes take priority over minimizing entry length.
 2. Generated names describe conditions rather than product semantics. `width-lte-768px` is longer than `tablet`, but it does not invent a design-system meaning.
 3. A digest name such as `twm-media-4be27e9a51c03d88` is opaque; the definition in the entry, not the name, documents the condition. This affects only conditions whose values or shapes cannot produce a clean name.
-4. An authored definition with the same meaning is never reused, so the entry may gain a generated definition duplicating an authored one. Aliasing is deferred rather than proven now.
+4. A differently named authored definition with the same meaning is not aliased, so the entry may gain a generated definition duplicating an authored one under another name. Adoption applies only to identical-content definitions, and aliasing is deferred rather than proven now.
 5. A new minimum-width bound becomes `width-gte-52rem:` rather than the theme-breakpoint idiom `min-52rem:`, because generating `--breakpoint-*` variables would reintroduce unit-namespace proofs, value-order gates, and custom-property reservations for a small notational gain.
 6. Conditions that differ only through unit conversion remain separate even when they render similarly in one environment.
 7. An unsafe Tailwind entry keeps arbitrary variants, so output readability can differ across packages while rendered behavior remains preserved.
