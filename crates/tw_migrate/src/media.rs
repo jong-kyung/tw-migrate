@@ -133,16 +133,24 @@ pub(crate) fn parse_media_condition(query: &str) -> Option<ParsedMediaCondition>
     Some(ParsedMediaCondition::Components(components))
 }
 
+/// The standard 64-bit FNV-1a parameters. The algorithm is implemented
+/// inline because generated names must stay identical across releases and
+/// platforms, and the standard library deliberately guarantees no stable
+/// hash: `DefaultHasher` documents that its algorithm may change between
+/// Rust versions.
+const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
 /// A short stable digest of a key, rendered as sixteen lowercase hex
 /// digits, used for the `twm-media-<digest>` fallback name.
 pub(crate) fn condition_digest(key: &str) -> String {
-    // FNV-1a, 64-bit. Stable across platforms and runs; not cryptographic.
-    // Digest collisions are contained by the allocator: a name is claimed
-    // by at most one key and every later claimant falls back.
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    // FNV-1a over the UTF-8 bytes of the key; not cryptographic. Digest
+    // collisions are contained by the resolver: a name is claimed by at
+    // most one key and every later claimant falls back.
+    let mut hash = FNV_OFFSET_BASIS;
     for byte in key.as_bytes() {
         hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        hash = hash.wrapping_mul(FNV_PRIME);
     }
     format!("{hash:016x}")
 }
