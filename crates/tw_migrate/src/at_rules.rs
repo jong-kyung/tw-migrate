@@ -301,11 +301,16 @@ pub(crate) fn at_rule_query<'a>(
     source: &'a str,
     name: &str,
 ) -> Option<&'a str> {
-    source[at_rule.span.start..at_rule.block.as_ref()?.span.start]
-        .trim()
+    // Trim only CSS whitespace: Unicode-aware trimming would strip code
+    // points such as U+00A0 that CSS treats as identifier content, turning
+    // an exotic non-matching prelude into an ordinary one.
+    fn trim_css(text: &str) -> &str {
+        text.trim_matches(|character: char| character.is_ascii_whitespace())
+    }
+    trim_css(&source[at_rule.span.start..at_rule.block.as_ref()?.span.start])
         .strip_prefix('@')?
         .strip_prefix(name)
-        .map(str::trim)
+        .map(trim_css)
 }
 
 fn width_media_query(query: &str) -> Option<(&str, Option<&str>)> {

@@ -15,10 +15,7 @@ use oxc_css_parser::ast::{AtRule, Statement};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    at_rules::{
-        at_rule_query, builtin_media_variant, media_breakpoint_variant, media_feature_variant,
-        parse_css,
-    },
+    at_rules::{at_rule_query, builtin_media_variant, media_breakpoint_variant, parse_css},
     planner::StylesheetSyntax,
 };
 
@@ -1444,8 +1441,12 @@ struct CollectedComponent {
     /// matched by exact semantic value.
     breakpoint: Option<String>,
     css_path: String,
-    /// Scan position of the first rule that uses this key, in request
-    /// stylesheet order; cascade-position ordering builds on it.
+    /// Scan position of the first occurrence of this key, in request
+    /// stylesheet order. A deterministic tiebreaker only: cascade ordering
+    /// authority belongs to the rewrite pass, which recomputes order from
+    /// the rules that actually survive into the migration plan, because a
+    /// retained early occurrence must not fix registration order for the
+    /// migrated uses.
     order: usize,
 }
 
@@ -1518,11 +1519,12 @@ pub fn collect_media_conditions_json(request: &str) -> Result<String, String> {
                 if at_rule.block.is_none() {
                     continue;
                 }
-                // Whole-condition matches the planner already converts stay
-                // on their existing path and need no definitions.
-                if media_feature_variant(at_rule, source).is_some()
-                    || media_breakpoint_variant(at_rule, source, &request.theme_tokens).is_some()
-                {
+                // Whole-condition breakpoint matches derive from theme
+                // tokens and need no verification or definitions. Built-in
+                // matches are NOT skipped: their names may be redefined, so
+                // they must be collected for effective-expansion
+                // verification before reuse.
+                if media_breakpoint_variant(at_rule, source, &request.theme_tokens).is_some() {
                     continue;
                 }
                 let Some(query) = at_rule_query(at_rule, source, "media") else {
@@ -1730,7 +1732,7 @@ mod collection_tests {
     }
 
     #[test]
-    fn skips_whole_conditions_the_planner_already_converts() {
+    fn whole_built_in_queries_are_collected_for_verification() {
         let response = collect(json!({
             "stylesheets": [{
                 "cssPath": "card.css",
@@ -1740,6 +1742,28 @@ mod collection_tests {
             }],
             "themeTokens": rem_tokens(),
         }));
+        let components = response["components"].as_array().unwrap();
+        // Built-in matches must reach the resolver so a redefined name is
+        // never reused unverified; exact breakpoint matches derive from
+        // theme tokens and stay skipped.
+        assert_eq!(components.len(), 2);
+        assert_eq!(components[0]["key"], "(prefers-color-scheme: dark)");
+        assert_eq!(components[0]["builtin"], "dark");
+        assert_eq!(components[1]["key"], "print");
+        assert_eq!(components[1]["builtin"], "print");
+    }
+
+    #[test]
+    fn non_css_whitespace_in_the_prelude_stays_conservative() {
+        let response = collect(json!({
+            "stylesheets": [{
+                "cssPath": "card.css",
+                "cssSource": "@media \u{a0}screen { .card { margin: 0; } }",
+            }],
+            "themeTokens": rem_tokens(),
+        }));
+        // `\u{a0}screen` is an exotic, match-nothing media type; collecting
+        // it as `screen` would broaden the rule to screen media.
         assert_eq!(response["components"].as_array().unwrap().len(), 0);
     }
 
