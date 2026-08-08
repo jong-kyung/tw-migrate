@@ -176,8 +176,16 @@ fn media_variant(
         .or_else(|| arbitrary_at_rule_variant(at_rule, source))
 }
 
-fn media_feature_variant(at_rule: &AtRule<'_>, source: &str) -> Option<String> {
+pub(crate) fn media_feature_variant(at_rule: &AtRule<'_>, source: &str) -> Option<String> {
     let query = at_rule_query(at_rule, source, "media")?;
+    builtin_media_variant(query).map(str::to_string)
+}
+
+/// The built-in variant matching a normalized media query or component
+/// text, or `None`. Reuse of a match still requires the caller to verify
+/// the loaded design system's effective expansion, because a project may
+/// redefine a built-in name.
+pub(crate) fn builtin_media_variant(query: &str) -> Option<&'static str> {
     let normalized = query
         .chars()
         .filter(|character| !character.is_ascii_whitespace())
@@ -204,10 +212,10 @@ fn media_feature_variant(at_rule: &AtRule<'_>, source: &str) -> Option<String> {
         "(scripting:none)" => "noscript",
         _ => return None,
     };
-    Some(variant.to_string())
+    Some(variant)
 }
 
-fn media_breakpoint_variant(
+pub(crate) fn media_breakpoint_variant(
     at_rule: &AtRule<'_>,
     source: &str,
     theme_tokens: &HashMap<String, String>,
@@ -288,7 +296,11 @@ fn normalize_query(query: &str) -> Option<String> {
     )
 }
 
-fn at_rule_query<'a>(at_rule: &AtRule<'_>, source: &'a str, name: &str) -> Option<&'a str> {
+pub(crate) fn at_rule_query<'a>(
+    at_rule: &AtRule<'_>,
+    source: &'a str,
+    name: &str,
+) -> Option<&'a str> {
     source[at_rule.span.start..at_rule.block.as_ref()?.span.start]
         .trim()
         .strip_prefix('@')?

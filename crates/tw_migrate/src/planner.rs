@@ -20,7 +20,7 @@ use crate::{
 
 #[derive(Clone, Copy, Default, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
-enum StylesheetSyntax {
+pub(crate) enum StylesheetSyntax {
     #[default]
     Css,
     Scss,
@@ -29,7 +29,7 @@ enum StylesheetSyntax {
 }
 
 impl StylesheetSyntax {
-    fn parser_syntax(self) -> Syntax {
+    pub(crate) fn parser_syntax(self) -> Syntax {
         match self {
             Self::Css => Syntax::Css,
             Self::Scss => Syntax::Scss,
