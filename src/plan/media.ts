@@ -68,10 +68,11 @@ export interface MediaNameResolution {
  * Resolve one fixed name per key across a complete entry group.
  *
  * Resolution follows the RFC order: a built-in candidate with a verified
- * effective expansion, an existing breakpoint matched by exact value, an
- * adopted definition whose name and normalized meaning equal what the
- * migration would emit, the readable generated name, the digest name, and
- * finally the arbitrary-variant fallback. Reservation is ownership-blind:
+ * effective expansion, an existing breakpoint matched by exact value and
+ * verified the same way, an adopted definition whose name, normalized
+ * meaning, and effective expansion equal what the migration would emit,
+ * the readable generated name, the digest name, and finally the
+ * arbitrary-variant fallback. Reservation is ownership-blind:
  * authored names with any different meaning, active theme names, explicit
  * reserved names such as inert scanned candidates, and any name the design
  * system resolves all block a generated name.
@@ -118,7 +119,13 @@ export function resolveMediaNames(
       resolved(component.builtin, "builtin");
       continue;
     }
-    if (component.breakpoint !== null) {
+    // Breakpoint reuse requires the same proof as built-ins: a custom
+    // variant can shadow a breakpoint name with unrelated semantics even
+    // while the theme token keeps its value.
+    if (
+      component.breakpoint !== null &&
+      probes.expansionMatches(component.breakpoint, component.key)
+    ) {
       resolved(component.breakpoint, "breakpoint");
       continue;
     }
@@ -131,8 +138,15 @@ export function resolveMediaNames(
       // Adoption is decided by content rather than authorship: an existing
       // definition whose name and normalized meaning equal what the
       // migration would emit is used as-is, which also makes a second run
-      // recognize the first run's definitions.
-      if (adoptableKey(candidate) === component.key && !claimed.has(candidate)) {
+      // recognize the first run's definitions. The expansion proof guards
+      // against a plugin or dependency registering the same name with
+      // different effective semantics behind an identical-looking
+      // stylesheet definition.
+      if (
+        adoptableKey(candidate) === component.key &&
+        !claimed.has(candidate) &&
+        probes.expansionMatches(candidate, component.key)
+      ) {
         resolved(candidate, "adopted");
         done = true;
         break;
@@ -158,7 +172,11 @@ function mergeComponents(collections: MediaCollection[]): CollectedMediaComponen
       if (!byKey.has(component.key)) byKey.set(component.key, component);
     }
   }
-  return [...byKey.values()].sort((left, right) => left.key.localeCompare(right.key));
+  // Code-point comparison keeps ordering independent of the host locale,
+  // matching the byte ordering used on the native side.
+  return [...byKey.values()].sort((left, right) =>
+    left.key < right.key ? -1 : left.key > right.key ? 1 : 0,
+  );
 }
 
 /// The set of wrapper keys registered under each authored name. Packages
