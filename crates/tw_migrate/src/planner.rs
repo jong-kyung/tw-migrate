@@ -334,6 +334,13 @@ struct PlanRequest {
     utility_prefix: Option<String>,
     #[serde(default)]
     theme_tokens: HashMap<String, String>,
+    /// The entry group's fixed key-to-name map: normalized media condition
+    /// keys to resolved variant names. `None` when extraction is disabled,
+    /// in which case media handling is unchanged. An explicitly supplied
+    /// empty map stays authoritative: every condition then uses the
+    /// arbitrary fallback, never the legacy conversions.
+    #[serde(default)]
+    media_names: Option<HashMap<String, String>>,
     files: Vec<SourceFile>,
 }
 
@@ -349,6 +356,8 @@ struct BatchPlanRequest {
     utility_prefix: Option<String>,
     #[serde(default)]
     theme_tokens: HashMap<String, String>,
+    #[serde(default)]
+    media_names: Option<HashMap<String, String>>,
     files: Vec<SourceFile>,
 }
 
@@ -670,6 +679,7 @@ pub fn plan_json(request: &str) -> Result<String, String> {
     let mut batch = serde_json::Map::new();
     for field in [
         "files",
+        "mediaNames",
         "tailwindPath",
         "tailwindSource",
         "utilityPrefix",
@@ -1182,6 +1192,7 @@ fn batch_stylesheet_request(
         tailwind_source: batch.tailwind_source.clone(),
         utility_prefix: batch.utility_prefix.clone(),
         theme_tokens: batch.theme_tokens.clone(),
+        media_names: batch.media_names.clone(),
         files,
     }
 }
@@ -1237,6 +1248,7 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
             keyframe_scope,
             analysis_source,
             &request.theme_tokens,
+            request.media_names.as_ref(),
             ParseOptions {
                 syntax: analysis_syntax,
                 is_module,
@@ -1381,6 +1393,7 @@ fn parse_vue_rules(
             keyframe_scope,
             analysis,
             &request.theme_tokens,
+            request.media_names.as_ref(),
             ParseOptions {
                 syntax: if block.analysis_source.is_some() {
                     Syntax::Css
@@ -3925,6 +3938,132 @@ mod tests {
         assert_eq!(
             response["candidates"],
             serde_json::json!(["dark:text-[white]", "motion-reduce:starting:@md:grid"])
+        );
+        assert_eq!(response["convertedRules"], 2);
+    }
+
+    #[test]
+    fn converts_media_conditions_through_supplied_names() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": "@media screen and (width <= 768px) { .button { margin: 0; } }\n@media (min-width: 900px) { .button { padding: 1rem; } }\n",
+            "mediaNames": {
+                "screen": "screen",
+                "(width <= 768px)": "width-lte-768px"
+            },
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        // The mapped compound stacks its component names; the 900px key is
+        // absent from the map (a resolver fallback), so it keeps the
+        // shipped arbitrary form.
+        assert_eq!(
+            response["candidates"],
+            serde_json::json!([
+                "[@media_(min-width:900px)]:p-[1rem]",
+                "screen:width-lte-768px:m-[0]"
+            ])
+        );
+        assert_eq!(response["convertedRules"], 2);
+    }
+
+    #[test]
+    fn supplied_names_override_shipped_media_conversions() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": "@media (prefers-color-scheme: dark) { .button { color: white; } }\n@media (min-width: 48rem) { .button { padding: 1rem; } }\n@media screen, print { .button { margin: 0; } }\n",
+            "themeTokens": { "breakpoint-md": "48rem" },
+            "mediaNames": {
+                "(prefers-color-scheme: dark)": "prefers-color-scheme-dark",
+                "(width >= 48rem)": "width-gte-48rem",
+                "screen, print": "screen-or-print"
+            },
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        // The map is the entry group's verified resolution: a redefined
+        // dark and a shadowed breakpoint resolve to generated component
+        // variants instead of the shipped conversions, and a whole
+        // condition uses its single name.
+        assert_eq!(
+            response["candidates"],
+            serde_json::json!([
+                "prefers-color-scheme-dark:text-[white]",
+                "screen-or-print:m-[0]",
+                "width-gte-48rem:p-[1rem]"
+            ])
+        );
+        assert_eq!(response["convertedRules"], 3);
+    }
+
+    #[test]
+    fn an_explicitly_empty_map_stays_authoritative() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": "@media (min-width: 48rem) { .button { padding: 1rem; } }\n@media (prefers-color-scheme: dark) { .button { color: white; } }\n",
+            "themeTokens": { "breakpoint-md": "48rem" },
+            // Extraction is enabled but every condition fell back, so the
+            // resolver legitimately produced an empty map. That is not the
+            // same as no map: the legacy conversions must stay off.
+            "mediaNames": {},
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(
+            response["candidates"],
+            serde_json::json!([
+                "[@media_(min-width:48rem)]:p-[1rem]",
+                "[@media_(prefers-color-scheme:dark)]:text-[white]"
+            ])
+        );
+        assert_eq!(response["convertedRules"], 2);
+    }
+
+    #[test]
+    fn unresolved_map_keys_never_revive_legacy_conversions() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": "@media (min-width: 48rem) { .button { padding: 1rem; } }\n@media (prefers-color-scheme: dark) { .button { color: white; } }\n",
+            "themeTokens": { "breakpoint-md": "48rem" },
+            // The map is supplied but omits both keys: the resolver sent
+            // them to the arbitrary fallback because their readable and
+            // digest names were unavailable in a project that shadows md
+            // and dark. The legacy conversions must not revive the exact
+            // names the resolver rejected.
+            "mediaNames": { "(width <= 600px)": "width-lte-600px" },
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(
+            response["candidates"],
+            serde_json::json!([
+                "[@media_(min-width:48rem)]:p-[1rem]",
+                "[@media_(prefers-color-scheme:dark)]:text-[white]"
+            ])
         );
         assert_eq!(response["convertedRules"], 2);
     }

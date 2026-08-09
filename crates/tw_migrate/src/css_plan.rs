@@ -86,6 +86,7 @@ pub(crate) fn parse_css_rules(
     keyframe_scope: &str,
     source: &str,
     theme_tokens: &HashMap<String, String>,
+    media_names: Option<&HashMap<String, String>>,
     options: ParseOptions,
 ) -> Result<ParsedCss, String> {
     let ParseOptions {
@@ -148,6 +149,7 @@ pub(crate) fn parse_css_rules(
         &[],
         source,
         theme_tokens,
+        media_names,
         &movable_at_rule_starts,
         &mut qualified_rules,
         &mut rules,
@@ -174,6 +176,7 @@ pub(crate) fn parse_css_rules(
             &variants,
             source,
             theme_tokens,
+            media_names,
             &keyframe_names,
             syntax,
             is_module,
@@ -267,6 +270,7 @@ fn collect_declaration_candidates(
     variants: &[String],
     source: &str,
     theme_tokens: &HashMap<String, String>,
+    media_names: Option<&HashMap<String, String>>,
     keyframes: &HashMap<&str, &str>,
     syntax: Syntax,
     is_module: bool,
@@ -311,9 +315,10 @@ fn collect_declaration_candidates(
 
     for statement in statements {
         if let Statement::AtRule(at_rule) = statement {
-            let Some((variant, block)) = conditional_variant(at_rule, source, theme_tokens)
-                .zip(at_rule.block.as_ref())
-                .filter(|_| is_conditional(at_rule.name.name))
+            let Some((variant, block)) =
+                conditional_variant(at_rule, source, theme_tokens, media_names)
+                    .zip(at_rule.block.as_ref())
+                    .filter(|_| is_conditional(at_rule.name.name))
             else {
                 warning = Some("unsupported-rule-content");
                 continue;
@@ -325,6 +330,7 @@ fn collect_declaration_candidates(
                 &nested_variants,
                 source,
                 theme_tokens,
+                media_names,
                 keyframes,
                 syntax,
                 is_module,
@@ -528,6 +534,7 @@ fn collect_conditional_rules<'a, 's>(
     variants: &[String],
     source: &str,
     theme_tokens: &HashMap<String, String>,
+    media_names: Option<&HashMap<String, String>>,
     movable_at_rule_starts: &HashSet<usize>,
     qualified_rules: &mut Vec<(&'s oxc_css_parser::ast::QualifiedRule<'a>, Vec<String>)>,
     retained_rules: &mut Vec<RulePlan>,
@@ -542,7 +549,8 @@ fn collect_conditional_rules<'a, 's>(
                 if variants.is_empty() && movable_at_rule_starts.contains(&at_rule.span.start) => {}
             Statement::AtRule(at_rule) if is_conditional(at_rule.name.name) => {
                 let Some((variant, block)) =
-                    conditional_variant(at_rule, source, theme_tokens).zip(at_rule.block.as_ref())
+                    conditional_variant(at_rule, source, theme_tokens, media_names)
+                        .zip(at_rule.block.as_ref())
                 else {
                     retained_rules.push(retained_at_rule(
                         at_rule,
@@ -562,6 +570,7 @@ fn collect_conditional_rules<'a, 's>(
                     &nested_variants,
                     source,
                     theme_tokens,
+                    media_names,
                     movable_at_rule_starts,
                     &mut nested_rules,
                     &mut nested_retained,

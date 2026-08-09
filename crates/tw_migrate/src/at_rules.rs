@@ -146,9 +146,10 @@ pub(crate) fn conditional_variant(
     at_rule: &AtRule<'_>,
     source: &str,
     theme_tokens: &HashMap<String, String>,
+    media_names: Option<&HashMap<String, String>>,
 ) -> Option<String> {
     match at_rule.name.name {
-        "media" => media_variant(at_rule, source, theme_tokens),
+        "media" => media_variant(at_rule, source, theme_tokens, media_names),
         "supports" => supports_variant(at_rule, source),
         "container" => container_variant(at_rule, source, theme_tokens),
         "starting-style" => Some("starting".to_string()),
@@ -170,10 +171,43 @@ fn media_variant(
     at_rule: &AtRule<'_>,
     source: &str,
     theme_tokens: &HashMap<String, String>,
+    media_names: Option<&HashMap<String, String>>,
 ) -> Option<String> {
+    if let Some(media_names) = media_names {
+        // A supplied map is the entry group's verified resolution and the
+        // only authority, even when it is empty because every condition
+        // fell back: a key it omits is a resolver fallback whose readable
+        // and digest names were both unavailable, and the legacy
+        // conversions below could revive the exact shadowed name the
+        // resolver rejected. Such conditions go straight to the arbitrary
+        // variant.
+        return named_media_chain(at_rule, source, media_names)
+            .or_else(|| arbitrary_at_rule_variant(at_rule, source));
+    }
     media_breakpoint_variant(at_rule, source, theme_tokens)
         .or_else(|| media_feature_variant(at_rule, source))
         .or_else(|| arbitrary_at_rule_variant(at_rule, source))
+}
+
+/// The stacked variant chain for a media condition whose every component
+/// key resolved to a name, such as `screen:width-lte-768px`. `None` when
+/// the condition is unrepresentable or any key is missing from the map, in
+/// which case the caller falls back to the shipped behavior.
+fn named_media_chain(
+    at_rule: &AtRule<'_>,
+    source: &str,
+    media_names: &HashMap<String, String>,
+) -> Option<String> {
+    let query = at_rule_query(at_rule, source, "media")?;
+    let components = match crate::media::parse_media_condition(query)? {
+        crate::media::ParsedMediaCondition::Components(components) => components,
+        crate::media::ParsedMediaCondition::Whole(component) => vec![component],
+    };
+    let names = components
+        .iter()
+        .map(|component| media_names.get(&component.key).map(String::as_str))
+        .collect::<Option<Vec<_>>>()?;
+    Some(names.join(":"))
 }
 
 pub(crate) fn media_feature_variant(at_rule: &AtRule<'_>, source: &str) -> Option<String> {
