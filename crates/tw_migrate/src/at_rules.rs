@@ -177,10 +177,14 @@ fn media_variant(
     // built-ins and breakpoints appear in it only with proven expansions,
     // and fallback conditions are absent, so the map takes precedence and
     // everything else keeps the shipped behavior.
-    if !media_names.is_empty()
-        && let Some(chain) = named_media_chain(at_rule, source, media_names)
-    {
-        return Some(chain);
+    if !media_names.is_empty() {
+        // The map is the only resolution authority once supplied: a key it
+        // omits is a resolver fallback whose readable and digest names were
+        // both unavailable, and the legacy conversions below could revive
+        // the exact shadowed name the resolver rejected. Such conditions go
+        // straight to the arbitrary variant.
+        return named_media_chain(at_rule, source, media_names)
+            .or_else(|| arbitrary_at_rule_variant(at_rule, source));
     }
     media_breakpoint_variant(at_rule, source, theme_tokens)
         .or_else(|| media_feature_variant(at_rule, source))

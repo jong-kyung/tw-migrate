@@ -4007,6 +4007,37 @@ mod tests {
     }
 
     #[test]
+    fn unresolved_map_keys_never_revive_legacy_conversions() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": "@media (min-width: 48rem) { .button { padding: 1rem; } }\n@media (prefers-color-scheme: dark) { .button { color: white; } }\n",
+            "themeTokens": { "breakpoint-md": "48rem" },
+            // The map is supplied but omits both keys: the resolver sent
+            // them to the arbitrary fallback because their readable and
+            // digest names were unavailable in a project that shadows md
+            // and dark. The legacy conversions must not revive the exact
+            // names the resolver rejected.
+            "mediaNames": { "(width <= 600px)": "width-lte-600px" },
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(
+            response["candidates"],
+            serde_json::json!([
+                "[@media_(min-width:48rem)]:p-[1rem]",
+                "[@media_(prefers-color-scheme:dark)]:text-[white]"
+            ])
+        );
+        assert_eq!(response["convertedRules"], 2);
+    }
+
+    #[test]
     fn escapes_literal_underscores_in_arbitrary_candidates() {
         let request = serde_json::json!({
             "cssPath": "/project/Button.module.css",
