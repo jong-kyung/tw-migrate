@@ -5,6 +5,7 @@ mod css_plan;
 mod html_rewrite;
 mod js_rewrite;
 mod jsx_graph;
+mod media;
 mod planner;
 mod theme;
 mod utilities;
@@ -67,6 +68,20 @@ pub fn static_import_bindings(
     source: String,
 ) -> napi::Result<Vec<js_rewrite::StaticImportBinding>> {
     js_rewrite::static_import_bindings(&path, &source).map_err(napi::Error::from_reason)
+}
+
+#[napi]
+pub fn collect_media_conditions(request: String) -> napi::Result<String> {
+    media::collect_media_conditions_json(&request).map_err(|error| {
+        // Package input failures stay recoverable so `--force` can skip the
+        // affected package, matching plan_batch_migration.
+        let reason = if planner::is_recoverable_input_error(&error) {
+            format!("{RECOVERABLE_INPUT_ERROR}{error}")
+        } else {
+            error
+        };
+        napi::Error::from_reason(reason)
+    })
 }
 
 const RECOVERABLE_INPUT_ERROR: &str = "TW_MIGRATE_RECOVERABLE_INPUT:";
