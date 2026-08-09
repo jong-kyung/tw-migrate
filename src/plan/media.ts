@@ -1,10 +1,13 @@
-// Entry-group media name resolution.
+// Entry-group media name resolution and extraction planning.
 //
 // The native collection pass reports deduplicated generated-variant units
 // per package; this module combines every package collection of one entry
 // group into a single fixed key-to-name map before any consumer candidate
 // is produced. Extraction stays disabled until entry augmentation lands, so
 // nothing calls this from the live planning flow yet.
+
+import { collectMediaConditions, mediaProbeKey } from "../native.ts";
+import type { LoadedTailwind, Plan, StylesheetEntry } from "../types.ts";
 
 /// The reserved namespace for digest fallback names.
 const GENERATED_NAMESPACE = "twm-media";
@@ -201,4 +204,140 @@ function mergeAuthoredVariants(collections: MediaCollection[]): Map<string, Set<
     }
   }
   return byName;
+}
+
+/// The probe utility appended to a variant name when compiling against the
+/// design system; an arbitrary property compiles under any theme.
+export const PROBE_UTILITY = "[--tw-probe:1]";
+
+export interface MediaExtraction {
+  /** The entry group's fixed key-to-name map, passed to the planner. */
+  names: Record<string, string>;
+  /** Resolved entries that emit a definition, in sorted key order. */
+  generated: { key: string; name: string }[];
+}
+
+/**
+ * Build the effective-expansion probes against the unaugmented loaded
+ * design system. `resolves` proves only existence; `expansionMatches`
+ * proves that compiling the name yields exactly one `@media` wrapper whose
+ * normalized query equals the key.
+ */
+export function buildMediaProbes(tailwind: LoadedTailwind): MediaProbes {
+  const compiled = new Map<string, string | null>();
+  const compile = (name: string): string | null => {
+    let css = compiled.get(name);
+    if (css === undefined) {
+      [css = null] = tailwind.designSystem.candidatesToCss([`${name}:${PROBE_UTILITY}`]);
+      compiled.set(name, css);
+    }
+    return css;
+  };
+  return {
+    resolves: (name) => compile(name) !== null,
+    expansionMatches: (name, key) => {
+      const css = compile(name);
+      if (css === null) return false;
+      const probed: string | null = JSON.parse(mediaProbeKey(css));
+      return probed === key;
+    },
+  };
+}
+
+/**
+ * Conservative scanned-corpus reservation: every colon-chained token in the
+ * package's scanned sources reserves its variant segments, so an inert
+ * candidate such as `width-lte-768px:hidden` is never activated with a new
+ * meaning. Over-reservation only pushes a generated name to its digest
+ * form, and content-identity adoption bypasses these reservations, so
+ * reruns stay idempotent.
+ */
+export function scannedVariantReservations(sources: Iterable<string>): Set<string> {
+  const reserved = new Set<string>();
+  for (const source of sources) {
+    for (const match of source.matchAll(/[A-Za-z][\w-]*(?::[^\s"'`{}]+)+/g)) {
+      for (const segment of match[0].split(":").slice(0, -1)) reserved.add(segment);
+    }
+  }
+  return reserved;
+}
+
+/**
+ * Run collection and name resolution for one package and produce the fixed
+ * map the planner consumes plus the definitions extraction may emit.
+ */
+export function planMediaExtraction(options: {
+  stylesheets: StylesheetEntry[];
+  tailwind: LoadedTailwind;
+  scannedSources: Iterable<string>;
+}): MediaExtraction {
+  const collection: MediaCollection = JSON.parse(
+    collectMediaConditions(
+      JSON.stringify({
+        stylesheets: options.stylesheets,
+        themeTokens: options.tailwind.themeTokens,
+        tailwindSources: options.tailwind.graphSources,
+      }),
+    ),
+  );
+  const resolution = resolveMediaNames(
+    [collection],
+    options.tailwind.themeTokens,
+    buildMediaProbes(options.tailwind),
+    scannedVariantReservations(options.scannedSources),
+  );
+  const names: Record<string, string> = {};
+  const generated: { key: string; name: string }[] = [];
+  for (const [key, resolved] of resolution.names) {
+    names[key] = resolved.name;
+    if (resolved.kind === "generated") generated.push({ key, name: resolved.name });
+  }
+  return { names, generated };
+}
+
+/**
+ * The generated definitions the final plan actually uses, ordered by the
+ * first converted rule that uses each name. Registration order controls
+ * conflicting utility precedence, so this order follows the surviving
+ * rules rather than every encountered condition.
+ */
+export function usedGeneratedDefinitions(
+  extraction: MediaExtraction,
+  plan: Plan,
+): { key: string; name: string }[] {
+  const byName = new Map(extraction.generated.map((definition) => [definition.name, definition]));
+  const ordered: { key: string; name: string }[] = [];
+  const seen = new Set<string>();
+  for (const rule of plan.rules) {
+    if (rule.status !== "converted") continue;
+    for (const candidate of rule.candidates) {
+      for (const segment of candidate.split(":").slice(0, -1)) {
+        const definition = byName.get(segment);
+        if (definition !== undefined && !seen.has(segment)) {
+          seen.add(segment);
+          ordered.push(definition);
+        }
+      }
+    }
+  }
+  return ordered;
+}
+
+/**
+ * Append the used definitions to the entry source, each as its own block,
+ * matching the planner's moved-block formatting. Definitions already
+ * present are recognized through adoption before this runs, so appending
+ * never duplicates one.
+ */
+export function appendMediaDefinitions(
+  source: string,
+  definitions: { key: string; name: string }[],
+): string {
+  let output = source;
+  for (const { key, name } of definitions) {
+    if (!output.endsWith("\n")) output += "\n";
+    if (!output.endsWith("\n\n")) output += "\n";
+    output += `@custom-variant ${name} {\n  @media ${key} {\n    @slot;\n  }\n}\n`;
+  }
+  return output;
 }

@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 
 import { unifiedDiff } from "./util/diff.ts";
@@ -27,10 +27,18 @@ import {
 import { compileStyleEntry, isPreprocessorPath, isSassPath } from "./parser/style-compiler.ts";
 import type { StyleCompilers } from "./parser/style-compiler.ts";
 import { invalidCandidates, loadTailwind, resolveTailwindEntry } from "./tailwind.ts";
+import {
+  PROBE_UTILITY,
+  appendMediaDefinitions,
+  planMediaExtraction,
+  usedGeneratedDefinitions,
+} from "./plan/media.ts";
+import type { MediaExtraction } from "./plan/media.ts";
 import { verifyVueSource } from "./parser/vue.ts";
 import { preparePackageVue, vueWarningsOnlyResult } from "./plan/vue.ts";
 import { verifySnapshots, writeChanges } from "./util/write.ts";
 import type {
+  DesignSystem,
   LoadedTailwind,
   MigrateOptions,
   MigrationContext,
@@ -495,12 +503,39 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
   }
 
   stylesheets.push(...preparedVue.stylesheets);
+
+  let extraction: MediaExtraction | undefined;
+  const mediaWarnings: MigrationWarning[] = [];
+  if (options.extractMediaQueries === true) {
+    if (await mediaEntryUnsafe(tailwind.path, workspaceRoot)) {
+      mediaWarnings.push({
+        code: "media-query-definition-fallback",
+        file: tailwind.path,
+        start: 0,
+        end: 0,
+        message:
+          "The Tailwind entry could not be edited safely, so media behavior was preserved with arbitrary variants.",
+      });
+    } else {
+      try {
+        extraction = planMediaExtraction({
+          stylesheets,
+          tailwind,
+          scannedSources: files.map((file) => file.source),
+        });
+      } catch (error) {
+        return recover(error, !isRecoverablePlanningError(error));
+      }
+    }
+  }
+
   const request: PlannerRequest = {
     stylesheets,
     tailwindPath: tailwind.path,
     tailwindSource: tailwind.css,
     utilityPrefix: tailwind.designSystem.theme.prefix,
     themeTokens: tailwind.themeTokens,
+    ...(extraction ? { mediaNames: extraction.names } : {}),
     files,
   };
   let plan: Plan;
@@ -511,10 +546,13 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
   }
 
   try {
-    plan = replanCompileFailures(tailwind, request, plan);
+    plan = extraction
+      ? await applyMediaExtraction(extraction, tailwind, request, plan)
+      : replanCompileFailures(tailwind.designSystem, request, plan);
   } catch (error) {
     return recover(error);
   }
+  plan.warnings.push(...mediaWarnings);
 
   removeMigratedHtmlLinks(plan, preparedHtml);
   plan.warnings.push(...preparedHtml.warnings);
@@ -581,13 +619,73 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
   return { plan };
 }
 
+/// True when extraction must not edit the entry: a symbolic link or a path
+/// outside the writable project scope.
+async function mediaEntryUnsafe(entryPath: string, workspaceRoot: string): Promise<boolean> {
+  if (!isProjectInput(workspaceRoot, entryPath)) return true;
+  const stats = await lstat(entryPath);
+  return stats.isSymbolicLink();
+}
+
+// Generated definitions must compile before any file is written. Each pass
+// appends the definitions the current plan uses to the entry, loads the
+// augmented design system in memory, and drops any definition whose probe
+// fails: removing its key from the map makes the planner's
+// authoritative-map rule fall the condition back to an arbitrary variant on
+// the next plan. Candidate compile-failure replanning then runs against the
+// final augmented system, and definitions left unused by retention are
+// removed again before the entry file is planned.
+async function applyMediaExtraction(
+  extraction: MediaExtraction,
+  tailwind: LoadedTailwind,
+  request: PlannerRequest,
+  initialPlan: Plan,
+): Promise<Plan> {
+  let names = extraction.names;
+  let generated = extraction.generated;
+  let plan = initialPlan;
+  let augmented = tailwind.css;
+  let system = tailwind.designSystem;
+  const augment = async (): Promise<{ key: string; name: string }[]> => {
+    const used = usedGeneratedDefinitions({ names, generated }, plan);
+    const base = plan.files.find((file) => file.path === tailwind.path)?.source ?? tailwind.css;
+    augmented = appendMediaDefinitions(base, used);
+    system =
+      augmented === tailwind.css ? tailwind.designSystem : await tailwind.loadWith(augmented);
+    return used;
+  };
+  for (let attempt = 0; attempt <= extraction.generated.length; attempt += 1) {
+    const used = await augment();
+    const rejected = new Set(
+      used
+        .filter(({ name }) => system.candidatesToCss([`${name}:${PROBE_UTILITY}`])[0] === null)
+        .map(({ key }) => key),
+    );
+    if (rejected.size === 0) break;
+    names = Object.fromEntries(Object.entries(names).filter(([key]) => !rejected.has(key)));
+    generated = generated.filter(({ key }) => !rejected.has(key));
+    plan = JSON.parse(planBatchMigration(JSON.stringify({ ...request, mediaNames: names })));
+  }
+  const replanned = replanCompileFailures(system, { ...request, mediaNames: names }, plan);
+  if (replanned !== plan) {
+    plan = replanned;
+    await augment();
+  }
+  if (augmented !== tailwind.css) {
+    const planned = plan.files.find((file) => file.path === tailwind.path);
+    if (planned) planned.source = augmented;
+    else plan.files.push({ path: tailwind.path, source: augmented });
+  }
+  return plan;
+}
+
 // A candidate Tailwind refuses to compile retains its owning rule(s) instead
 // of aborting the run: block those rules and replan until every applied
 // candidate compiles. Each iteration blocks at least one new rule, so the
 // loop is bounded by the rule count; if a failing candidate cannot be
 // attributed to a new rule, fall back to the package-level failure path.
 function replanCompileFailures(
-  tailwind: LoadedTailwind,
+  system: DesignSystem,
   request: PlannerRequest,
   initialPlan: Plan,
 ): Plan {
@@ -597,7 +695,7 @@ function replanCompileFailures(
     Map<string, { ruleId: RuleSpan; authoredSpan: RuleSpan; candidates: Set<string> }>
   >();
   while (true) {
-    const failing = invalidCandidates(tailwind, plan.candidates);
+    const failing = invalidCandidates(system, plan.candidates);
     if (failing.length === 0) break;
     let progressed = false;
     for (const rule of plan.rules) {

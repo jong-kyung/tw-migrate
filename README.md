@@ -78,6 +78,7 @@ Everything outside this subset is retained and reported with one of the warning 
 | `dynamic-template-class`             | A dynamic class binding makes a Vue template's class set unprovable, so its scoped rules are retained.                 |
 | `existing-tailwind-conflict`         | A generated utility may conflict with a Tailwind class already on the element.                                         |
 | `inferred-preprocessor-source`       | A linked CSS file was matched to a uniquely named preprocessor source file.                                            |
+| `media-query-definition-fallback`    | The Tailwind entry could not be edited safely, so media behavior was preserved with arbitrary variants.                |
 | `module-utilities-conflict`          | Utilities generated from different module classes on one element overlap, so their rules are retained.                 |
 | `non-classname-css-module-reference` | A CSS Module class is used outside a supported `className`, so the module is retained.                                 |
 | `open-root-fallthrough`              | A parent component can merge classes onto a Vue SFC's single root element, so its scoped rules are retained.           |

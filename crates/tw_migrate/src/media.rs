@@ -1673,3 +1673,75 @@ mod collection_tests {
         assert_eq!(collect(request.clone()), collect(request));
     }
 }
+
+/// The normalized generated-variant key of a compiled probe's output: the
+/// CSS must be exactly one top-level `@media` block, and its query must
+/// normalize to a single generated-variant unit. This is the shape the
+/// effective-expansion proof compares against a component or whole key;
+/// selector-based expansions and anything else return `None`.
+pub fn media_probe_key_json(css: &str) -> Result<String, String> {
+    let allocator = oxc_css_parser::Allocator::default();
+    let parsed = parse_css(&allocator, css, oxc_css_parser::Syntax::Css)
+        .map_err(|error| format!("Failed to parse probe CSS: {error}"))?;
+    let mut media_query: Option<&str> = None;
+    for statement in &parsed.statements {
+        let Statement::AtRule(at_rule) = statement else {
+            // A top-level style rule means the expansion is not a pure
+            // media wrapper.
+            return serde_json::to_string(&Option::<String>::None).map_err(|e| e.to_string());
+        };
+        let Some(block) = &at_rule.block else {
+            return serde_json::to_string(&Option::<String>::None).map_err(|e| e.to_string());
+        };
+        // A nested at-rule inside the wrapper means the expansion is more
+        // than one media level, which is not a single generated unit.
+        let nested_at_rule = block
+            .statements
+            .iter()
+            .any(|statement| matches!(statement, Statement::AtRule(_)));
+        if at_rule.name.name != "media" || media_query.is_some() || nested_at_rule {
+            return serde_json::to_string(&Option::<String>::None).map_err(|e| e.to_string());
+        }
+        media_query = at_rule_query(at_rule, css, "media");
+    }
+    let key = media_query.and_then(|query| match parse_media_condition(query)? {
+        ParsedMediaCondition::Whole(component) => Some(component.key),
+        ParsedMediaCondition::Components(components) => {
+            let [component] = components.as_slice() else {
+                return None;
+            };
+            Some(component.key.clone())
+        }
+    });
+    serde_json::to_string(&key).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod probe_tests {
+    #[test]
+    fn extracts_single_media_wrapper_keys() {
+        let probe = |css: &str| -> Option<String> {
+            serde_json::from_str(&super::media_probe_key_json(css).unwrap()).unwrap()
+        };
+        assert_eq!(
+            probe("@media (width >= 48rem) { .x { --tw-p: 1; } }"),
+            Some("(width >= 48rem)".to_string())
+        );
+        assert_eq!(
+            probe("@media (prefers-color-scheme: dark) { .x { --tw-p: 1; } }"),
+            Some("(prefers-color-scheme: dark)".to_string())
+        );
+        assert_eq!(
+            probe("@media screen, print { .x { --tw-p: 1; } }"),
+            Some("screen, print".to_string())
+        );
+        // A selector-based expansion, the shadowed-variant shape, never
+        // yields a key.
+        assert_eq!(probe(".dark .x { --tw-p: 1; }"), None);
+        // Stacked output with two media levels is not a single unit.
+        assert_eq!(
+            probe("@media screen { @media (width <= 768px) { .x { --tw-p: 1; } } }"),
+            None
+        );
+    }
+}
