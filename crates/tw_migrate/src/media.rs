@@ -556,7 +556,7 @@ fn parse_condition(content: &str) -> Option<Condition> {
     }
     if let Some((feature, value)) = split_top_level_once(&content, ':') {
         let feature = trim_css_whitespace(feature).to_ascii_lowercase();
-        let value = normalize_value(&feature, value);
+        let value = normalize_value(value);
         if !is_feature_ident(&feature) || value.is_empty() {
             return None;
         }
@@ -592,13 +592,13 @@ fn parse_condition(content: &str) -> Option<Condition> {
             if is_feature_ident(&left_ident) && !trim_css_whitespace(right).is_empty() {
                 Some(Condition::Range {
                     op: *op,
-                    value: normalize_value(&left_ident, right),
+                    value: normalize_value(right),
                     feature: left_ident,
                 })
             } else if is_feature_ident(&right_ident) && !trim_css_whitespace(left).is_empty() {
                 Some(Condition::Range {
                     op: op.flipped(),
-                    value: normalize_value(&right_ident, left),
+                    value: normalize_value(left),
                     feature: right_ident,
                 })
             } else {
@@ -611,8 +611,8 @@ fn parse_condition(content: &str) -> Option<Condition> {
             ComparisonPart::Trailing(high),
         ] => {
             let feature = trim_css_whitespace(feature).to_ascii_lowercase();
-            let low = normalize_value(&feature, low);
-            let high = normalize_value(&feature, high);
+            let low = normalize_value(low);
+            let high = normalize_value(high);
             if !is_feature_ident(&feature) || low.is_empty() || high.is_empty() {
                 return None;
             }
@@ -645,35 +645,14 @@ fn parse_condition(content: &str) -> Option<Condition> {
 }
 
 /// Collapse ASCII whitespace in a media-feature value and fold case only
-/// when every code point is provably case-insensitive: plain keywords,
-/// dimensions, and ratios. Values carrying functions or other tokens, such
-/// as `env(MyInset)`, keep their authored case. Dimensions, unitless
-/// numbers, and ratios canonicalize exact lexical equivalence: `+052rem`
-/// and `5.2e1rem` both render as `52rem`, and `16 / 9` as `16/9`. A number
-/// whose exact decimal form would be unreasonably long, such as `1e999px`
-/// or `1e-324px`, keeps its authored spelling instead of rounding through
-/// f64. No unit conversion is attempted.
-fn normalize_value(feature: &str, value: &str) -> String {
+/// when every code point is provably case-insensitive: plain keywords and
+/// dimensions. Values carrying functions or other tokens, such as
+/// `env(MyInset)`, keep their authored case. No numeric canonicalization is
+/// attempted: spellings the parser cannot prove identical, such as `+52rem`
+/// against `52rem`, keep distinct keys, and the worst outcome is one
+/// duplicate definition per authored spelling.
+fn normalize_value(value: &str) -> String {
     let collapsed = collapse_whitespace(value);
-    if let Some((number, unit)) = canonical_dimension(&collapsed) {
-        return format!("{number}{unit}");
-    }
-    if is_integer_feature(feature) {
-        // `<integer>` features reject `<number>` spellings, so `1.0` for
-        // `color` is an invalid, non-matching query; only the integer
-        // grammar is provably equivalent, and other spellings keep their
-        // authored form.
-        if let Some(integer) = canonical_css_integer(&collapsed) {
-            return integer;
-        }
-    } else {
-        if let Some(number) = canonical_css_number(&collapsed) {
-            return number;
-        }
-        if let Some(ratio) = canonical_ratio(&collapsed) {
-            return ratio;
-        }
-    }
     if collapsed.chars().all(|character| {
         character.is_ascii_alphanumeric() || matches!(character, ' ' | '.' | '%' | '+' | '-' | '/')
     }) {
@@ -681,52 +660,6 @@ fn normalize_value(feature: &str, value: &str) -> String {
     } else {
         collapsed
     }
-}
-
-/// Features whose values are `<integer>` tokens.
-fn is_integer_feature(feature: &str) -> bool {
-    let base = feature
-        .strip_prefix("min-")
-        .or_else(|| feature.strip_prefix("max-"))
-        .unwrap_or(feature);
-    matches!(
-        base,
-        "color"
-            | "color-index"
-            | "monochrome"
-            | "grid"
-            | "horizontal-viewport-segments"
-            | "vertical-viewport-segments"
-    )
-}
-
-/// The canonical form of a CSS `<integer>`: optional sign and digits only.
-fn canonical_css_integer(text: &str) -> Option<String> {
-    let bytes = text.as_bytes();
-    let mut index = 0;
-    let negative = match bytes.first() {
-        Some(b'-') => {
-            index += 1;
-            true
-        }
-        Some(b'+') => {
-            index += 1;
-            false
-        }
-        _ => false,
-    };
-    if index == bytes.len() || !bytes[index..].iter().all(u8::is_ascii_digit) {
-        return None;
-    }
-    let digits = text[index..].trim_start_matches('0');
-    if digits.is_empty() {
-        return Some("0".to_string());
-    }
-    Some(if negative {
-        format!("-{digits}")
-    } else {
-        digits.to_string()
-    })
 }
 
 /// Trim only CSS whitespace; other whitespace code points are identifier
@@ -872,203 +805,6 @@ fn split_comparisons(text: &str) -> Option<Vec<ComparisonPart<'_>>> {
 enum ComparisonPart<'a> {
     Pair(&'a str, Comparison),
     Trailing(&'a str),
-}
-
-/// The exact plain-decimal canonical form of a complete CSS number, built
-/// lexically so no precision is lost through f64: `+052` and `5.2e1` both
-/// become `52`, while `1.0000000000000001` keeps every digit. Returns
-/// `None` when the text is not exactly one number or when the exact form
-/// would exceed a fixed length, in which case the caller preserves the
-/// authored spelling.
-fn canonical_css_number(text: &str) -> Option<String> {
-    const MAX_RENDERED_DIGITS: usize = 64;
-    let bytes = text.as_bytes();
-    let mut index = 0;
-    let negative = match bytes.first() {
-        Some(b'-') => {
-            index += 1;
-            true
-        }
-        Some(b'+') => {
-            index += 1;
-            false
-        }
-        _ => false,
-    };
-    let integer_start = index;
-    while bytes.get(index).is_some_and(u8::is_ascii_digit) {
-        index += 1;
-    }
-    let integer = &text[integer_start..index];
-    let mut fraction = "";
-    if bytes.get(index) == Some(&b'.') {
-        let fraction_start = index + 1;
-        let mut cursor = fraction_start;
-        while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
-            cursor += 1;
-        }
-        if cursor == fraction_start {
-            return None;
-        }
-        fraction = &text[fraction_start..cursor];
-        index = cursor;
-    }
-    if integer.is_empty() && fraction.is_empty() {
-        return None;
-    }
-    let mut exponent: i64 = 0;
-    if matches!(bytes.get(index), Some(b'e' | b'E')) {
-        let mut cursor = index + 1;
-        let negative_exponent = match bytes.get(cursor) {
-            Some(b'-') => {
-                cursor += 1;
-                true
-            }
-            Some(b'+') => {
-                cursor += 1;
-                false
-            }
-            _ => false,
-        };
-        let exponent_start = cursor;
-        while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
-            cursor += 1;
-        }
-        if cursor == exponent_start {
-            return None;
-        }
-        // Leading zeros carry no magnitude: `1e00000` is exactly `1`.
-        let exponent_digits = text[exponent_start..cursor].trim_start_matches('0');
-        if exponent_digits.len() > 4 {
-            return None;
-        }
-        exponent = if exponent_digits.is_empty() {
-            0
-        } else {
-            exponent_digits.parse().ok()?
-        };
-        if negative_exponent {
-            exponent = -exponent;
-        }
-        index = cursor;
-    }
-    if index != text.len() {
-        return None;
-    }
-
-    let digits = format!("{integer}{fraction}");
-    let digits = digits.trim_start_matches('0');
-    if digits.is_empty() {
-        return Some("0".to_string());
-    }
-    let shift = exponent - fraction.len() as i64;
-    let mut rendered = String::new();
-    if shift >= 0 {
-        if digits.len() as i64 + shift > MAX_RENDERED_DIGITS as i64 {
-            return None;
-        }
-        rendered.push_str(digits);
-        for _ in 0..shift {
-            rendered.push('0');
-        }
-    } else {
-        let places = usize::try_from(-shift).ok()?;
-        if places > MAX_RENDERED_DIGITS {
-            return None;
-        }
-        if digits.len() > places {
-            let split = digits.len() - places;
-            rendered.push_str(&digits[..split]);
-            let fractional = digits[split..].trim_end_matches('0');
-            if !fractional.is_empty() {
-                rendered.push('.');
-                rendered.push_str(fractional);
-            }
-        } else {
-            let padded = format!("{}{}", "0".repeat(places - digits.len()), digits);
-            let fractional = padded.trim_end_matches('0');
-            rendered.push('0');
-            if !fractional.is_empty() {
-                rendered.push('.');
-                rendered.push_str(fractional);
-            }
-        }
-    }
-    Some(if negative && rendered != "0" {
-        format!("-{rendered}")
-    } else {
-        rendered
-    })
-}
-
-/// The exact canonical form of a `<number><unit>` dimension, with the unit
-/// folded to lowercase.
-pub(crate) fn canonical_dimension(text: &str) -> Option<(String, String)> {
-    let end = scan_css_number(text.as_bytes())?;
-    let unit = &text[end..];
-    if unit.is_empty()
-        || !unit
-            .chars()
-            .all(|character| character.is_ascii_alphabetic())
-    {
-        return None;
-    }
-    Some((
-        canonical_css_number(&text[..end])?,
-        unit.to_ascii_lowercase(),
-    ))
-}
-
-/// The canonical form of a `<number> / <number>` ratio value, or `None`
-/// when the text is not a plain exact ratio.
-fn canonical_ratio(text: &str) -> Option<String> {
-    let (left, right) = split_top_level_once(text, '/')?;
-    let left = canonical_css_number(trim_css_whitespace(left))?;
-    let right = canonical_css_number(trim_css_whitespace(right))?;
-    Some(format!("{left}/{right}"))
-}
-
-/// The byte length of the leading CSS number in `bytes`: optional sign,
-/// integer and fraction digits, and an optional exponent.
-fn scan_css_number(bytes: &[u8]) -> Option<usize> {
-    let mut index = 0;
-    if matches!(bytes.first(), Some(b'+' | b'-')) {
-        index += 1;
-    }
-    let integer_start = index;
-    while bytes.get(index).is_some_and(u8::is_ascii_digit) {
-        index += 1;
-    }
-    let mut has_digits = index > integer_start;
-    if bytes.get(index) == Some(&b'.') {
-        let fraction_start = index + 1;
-        let mut cursor = fraction_start;
-        while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
-            cursor += 1;
-        }
-        if cursor == fraction_start {
-            return None;
-        }
-        has_digits = true;
-        index = cursor;
-    }
-    if !has_digits {
-        return None;
-    }
-    if matches!(bytes.get(index), Some(b'e' | b'E')) {
-        let mut cursor = index + 1;
-        if matches!(bytes.get(cursor), Some(b'+' | b'-')) {
-            cursor += 1;
-        }
-        let exponent_start = cursor;
-        while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
-            cursor += 1;
-        }
-        if cursor > exponent_start {
-            index = cursor;
-        }
-    }
-    Some(index)
 }
 
 /// Collapse runs of ASCII whitespace only; other whitespace code points
@@ -1249,34 +985,21 @@ mod tests {
     }
 
     #[test]
-    fn keys_canonicalize_exact_equivalence_only() {
+    fn values_fold_case_and_whitespace_only() {
+        // No numeric canonicalization: only case and ASCII whitespace fold,
+        // and spellings the parser cannot prove identical keep distinct
+        // keys. The worst outcome is one duplicate definition per spelling.
+        assert_eq!(keys("(min-width: 52REM)"), ["(width >= 52rem)"]);
         for query in [
             "(min-width: +52rem)",
             "(min-width: 052rem)",
             "(min-width: 5.2e1rem)",
-            "(min-width: 52REM)",
         ] {
-            assert_eq!(keys(query), ["(width >= 52rem)"], "{query}");
+            assert_ne!(keys(query), ["(width >= 52rem)"], "{query}");
         }
-        assert_eq!(keys("(min-width: 1e3px)"), ["(width >= 1000px)"]);
-        assert_eq!(
-            keys("(min-width: 1.0000000000000001px)"),
-            ["(width >= 1.0000000000000001px)"]
-        );
-        assert_eq!(keys("(min-width: 1e-324px)"), ["(width >= 1e-324px)"]);
-        assert_eq!(keys("(aspect-ratio: 16 / 9)"), ["(aspect-ratio: 16/9)"]);
-        assert_ne!(keys("(min-width: 48rem)"), keys("(min-width: 768px)"));
-    }
-
-    #[test]
-    fn integer_feature_values_keep_number_spellings() {
+        assert_eq!(keys("(min-width: 47.5rem)"), ["(width >= 47.5rem)"]);
         assert_eq!(keys("(color: 1.0)"), ["(color: 1.0)"]);
-        assert_eq!(keys("(color: +01)"), ["(color: 1)"]);
-        assert_eq!(keys("(grid: 1e0)"), ["(grid: 1e0)"]);
-        assert_eq!(
-            keys("(horizontal-viewport-segments: 1.0)"),
-            ["(horizontal-viewport-segments: 1.0)"]
-        );
+        assert_ne!(keys("(min-width: 48rem)"), keys("(min-width: 768px)"));
     }
 
     #[test]
@@ -1596,12 +1319,17 @@ fn breakpoint_variant_for_bound(
         // breakpoint variant form.
         return None;
     }
-    let canonical = canonical_dimension(&bound.value)?;
+    // Values compare as case-insensitively identical text with no numeric
+    // parsing: a token spelled `48REM` proves `48rem`, while `48.0rem` does
+    // not and simply yields a generated variant with identical meaning.
     let name = theme_tokens
         .iter()
         .filter_map(|(name, token_value)| {
             let name = name.strip_prefix("breakpoint-")?;
-            (canonical_dimension(token_value.trim())? == canonical).then_some(name)
+            token_value
+                .trim()
+                .eq_ignore_ascii_case(&bound.value)
+                .then_some(name)
         })
         .min()?;
     Some(if bound.lower {

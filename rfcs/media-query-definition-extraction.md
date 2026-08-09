@@ -110,7 +110,7 @@ For each component, the planner tries these forms in order:
 
 Built-in names are not fixed keywords: a project may redefine one, most commonly `@custom-variant dark (&:where(.dark, .dark *))` for class-toggled dark mode, and the redefined name then expresses a selector rather than the authored media condition. Reusing a built-in therefore requires proof: a compiled probe must show that the loaded design system's effective expansion of the name equals the expected media condition. A redefined name is never reused; its condition receives a generated component variant such as `prefers-color-scheme-dark` instead. This verification applies everywhere the resolution order runs, including single-condition queries that the planner already converts today, because mapping a condition onto a redefined name changes rendered behavior on either path; the resulting output change for redefined built-ins is a deliberate behavior-preserving fix. Existing breakpoint reuse requires the same proof, because `@custom-variant` can shadow a breakpoint name with unrelated semantics even while the theme token keeps its value; a shadowed breakpoint name is never reused and the component receives a generated variant. Every breakpoint-matching query therefore flows through decomposition and verification rather than being converted whole, and the shipped planner's legacy approximation, which maps an inclusive `(max-width: X)` onto the exclusive `max-*` form of the next breakpoint by adding a sub-pixel epsilon, does not carry into extraction: the inclusive bound is preserved exactly through a generated variant, because the approximation changes behavior in the sub-pixel window between the bound and the breakpoint.
 
-Breakpoint values compare as a parsed number and case-folded unit, exactly and without unit conversion, so `48REM` and `48.0rem` still prove `48rem` while values differing beyond any float representation stay distinct.
+Breakpoint values compare as case-insensitively identical text with no numeric parsing, so `48REM` proves `48rem` while `48.0rem` does not; an unproven spelling simply receives a generated variant with identical meaning.
 
 The first two steps keep current output stable for unredefined names and extend reuse into compound conditions, which today fall to arbitrary variants whenever any part is unmatched.
 
@@ -190,7 +190,7 @@ The planner derives a key from each parsed component, and from the complete cond
 - case-fold CSS keywords, media feature names, and units, which CSS defines as case-insensitive;
 - normalize legacy `min-width` and `max-width` forms to their exact inclusive range equivalents;
 - flip a descending range or a value-first comparison to the provably equivalent feature-first ascending form; and
-- canonicalize provably equivalent number spellings exactly and lexically, so `+052rem`, `5.2e1rem`, and `52rem` share one key while a value that cannot canonicalize exactly, such as one overflowing every float representation, keeps its authored spelling.
+- fold nothing else: values keep their authored spelling.
 
 Normalization must not:
 
@@ -199,7 +199,7 @@ Normalization must not:
 - reorder components or comma-separated branches;
 - simplify calculations;
 - fold case in values that carry case-sensitive tokens, such as `env()` arguments;
-- rewrite `<number>` spellings for integer-valued features such as `color` or `grid`, where `1.0` is an invalid query and must keep its spelling; or
+- canonicalize numeric spellings: `+52rem`, `5.2e1rem`, and `52rem` keep distinct keys, and the worst outcome is one duplicate definition per authored spelling; or
 - merge conditions whose equivalence the parser cannot prove.
 
 For example, `48rem` and `768px` remain different keys even when a typical browser configuration would render them at the same width.
@@ -434,7 +434,7 @@ Phase 3 adds runtime confidence without changing the CLI contract introduced and
 - comma lists, `or`-joined conditions, and compound negations produce whole variants and are never decomposed;
 - readable names derive only from clean tokens, and function values, overlong names, and collisions take the digest name directly;
 - inclusive and exclusive operators receive distinct keys and preserve their conditions;
-- normalization is exact: equivalent spellings share one key, unproven equivalences stay distinct, and integer-feature number spellings keep their authored form;
+- normalization folds case and ASCII whitespace only: distinct numeric spellings keep distinct keys and their authored forms;
 - duplicate keys share one definition across packages in one entry group;
 - ordering-sensitive overlapping conditions migrate only with a proven winner and are otherwise retained; and
 - extraction-disabled planning reproduces current arbitrary candidates.
@@ -519,7 +519,7 @@ The pre- and post-migration captures must match.
 3. A digest name such as `twm-media-4be27e9a51c03d88` is opaque; the definition in the entry, not the name, documents the condition. This affects only conditions whose values or shapes cannot produce a clean name.
 4. A differently named authored definition with the same meaning is not aliased, so the entry may gain a generated definition duplicating an authored one under another name. Adoption applies only to identical-content definitions, and aliasing is deferred rather than proven now.
 5. A new minimum-width bound becomes `width-gte-52rem:` rather than the theme-breakpoint idiom `min-52rem:`, because generating `--breakpoint-*` variables would reintroduce unit-namespace proofs, value-order gates, and custom-property reservations for a small notational gain.
-6. Conditions that differ only through unit conversion remain separate even when they render similarly in one environment.
+6. Conditions that differ only through unit conversion remain separate even when they render similarly in one environment, and so do numeric spellings the parser does not prove identical, such as `+52rem` against `52rem`. Each spelling receives its own definition with identical meaning; harmless duplication is preferred over numeric parsing machinery.
 7. An unsafe Tailwind entry keeps arbitrary variants, so output readability can differ across packages while rendered behavior remains preserved.
 8. Packages in one entry group share Tailwind entry planning and loading fate, although `--force` may still skip an independent package-specific input failure.
 9. Automatic shared-entry coverage is intentionally narrow: ancestry supplies candidates, a direct reference supplies loading proof, and a provable source scope supplies scan proof, with both proofs required.
