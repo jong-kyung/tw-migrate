@@ -1,7 +1,6 @@
-import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { onTestFinished, test } from "vite-plus/test";
+import { expect, onTestFinished, test } from "vite-plus/test";
 
 import { migrate } from "../src/index.ts";
 
@@ -39,17 +38,15 @@ test("extracts media components into entry definitions and stacked variants", as
   const cwd = await fixture();
   const report = await migrate({ cwd, extractMediaQueries: true, write: true });
 
-  assert.deepEqual(report.candidates, ["p-[13px]", "screen:width-lte-700px:m-[7px]"]);
-  assert.deepEqual(report.changedFiles, ["Button.module.css", "Button.tsx", "globals.css"]);
-  assert.equal(
-    await readFile(join(cwd, "globals.css"), "utf8"),
+  expect(report.candidates).toEqual(["p-[13px]", "screen:width-lte-700px:m-[7px]"]);
+  expect(report.changedFiles).toEqual(["Button.module.css", "Button.tsx", "globals.css"]);
+  expect(await readFile(join(cwd, "globals.css"), "utf8")).toBe(
     `@import "tailwindcss";\n\n${screenDefinition}\n${widthDefinition}`,
   );
-  assert.match(
-    await readFile(join(cwd, "Button.tsx"), "utf8"),
+  expect(await readFile(join(cwd, "Button.tsx"), "utf8")).toMatch(
     /className="p-\[13px\] screen:width-lte-700px:m-\[7px\]"/,
   );
-  assert.equal(report.warnings.length, 0);
+  expect(report.warnings.length).toBe(0);
 });
 
 test("adopts identical authored definitions without duplicating them", async () => {
@@ -58,8 +55,8 @@ test("adopts identical authored definitions without duplicating them", async () 
   });
   const report = await migrate({ cwd, extractMediaQueries: true });
 
-  assert.deepEqual(report.candidates, ["p-[13px]", "screen:width-lte-700px:m-[7px]"]);
-  assert.deepEqual(report.changedFiles, ["Button.module.css", "Button.tsx"]);
+  expect(report.candidates).toEqual(["p-[13px]", "screen:width-lte-700px:m-[7px]"]);
+  expect(report.changedFiles).toEqual(["Button.module.css", "Button.tsx"]);
 });
 
 test("reapplying a written extraction changes nothing", async () => {
@@ -67,8 +64,8 @@ test("reapplying a written extraction changes nothing", async () => {
   await migrate({ cwd, extractMediaQueries: true, write: true });
   const again = await migrate({ cwd, extractMediaQueries: true, write: true });
 
-  assert.deepEqual(again.changedFiles, []);
-  assert.equal(again.diff, "");
+  expect(again.changedFiles).toEqual([]);
+  expect(again.diff).toBe("");
 });
 
 test("reuses a project breakpoint whose expansion matches the component", async () => {
@@ -78,11 +75,10 @@ test("reuses a project breakpoint whose expansion matches the component", async 
   });
   const report = await migrate({ cwd, extractMediaQueries: true, write: true });
 
-  assert.deepEqual(report.candidates, ["screen:md:m-[7px]"]);
+  expect(report.candidates).toEqual(["screen:md:m-[7px]"]);
   // The verified breakpoint emits no definition, so the entry gains only
   // the generated `screen` block.
-  assert.equal(
-    await readFile(join(cwd, "globals.css"), "utf8"),
+  expect(await readFile(join(cwd, "globals.css"), "utf8")).toBe(
     `@import "tailwindcss";\n\n@theme {\n  --breakpoint-md: 768px;\n}\n\n${screenDefinition}`,
   );
 });
@@ -91,9 +87,6 @@ test("leaves media handling unchanged while extraction is disabled", async () =>
   const cwd = await fixture();
   const report = await migrate({ cwd });
 
-  assert.deepEqual(report.candidates, [
-    "[@media_screen_and_(max-width:700px)]:m-[7px]",
-    "p-[13px]",
-  ]);
-  assert.deepEqual(report.changedFiles, ["Button.module.css", "Button.tsx"]);
+  expect(report.candidates).toEqual(["[@media_screen_and_(max-width:700px)]:m-[7px]", "p-[13px]"]);
+  expect(report.changedFiles).toEqual(["Button.module.css", "Button.tsx"]);
 });
