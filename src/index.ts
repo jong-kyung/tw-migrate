@@ -550,7 +550,10 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
       ? await applyMediaExtraction(extraction, tailwind, request, plan)
       : replanCompileFailures(tailwind.designSystem, request, plan);
   } catch (error) {
-    return recover(error);
+    // Augmented reloads share the graph loaders, so a source changing after
+    // the initial load surfaces here as an integrity error `--force` must
+    // not downgrade.
+    return recover(error, isIntegrityError(error));
   }
   plan.warnings.push(...mediaWarnings);
 

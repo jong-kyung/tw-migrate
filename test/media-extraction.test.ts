@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { expect, onTestFinished, test } from "vite-plus/test";
 
 import { migrate } from "../src/index.ts";
+import { usedGeneratedDefinitions } from "../src/plan/media.ts";
+import type { Plan, PlanRule } from "../src/types.ts";
 
 const mediaCss =
   ".button { padding: 13px; }\n@media screen and (max-width: 700px) { .button { margin: 7px; } }\n";
@@ -139,4 +141,45 @@ test("never reuses a variant that re-scopes the media condition", async () => {
   expect(await readFile(join(cwd, "globals.css"), "utf8")).toMatch(
     /@custom-variant prefers-color-scheme-dark \{\n {2}@media \(prefers-color-scheme: dark\) \{\n {4}@slot;\n {2}\}\n\}\n$/,
   );
+});
+
+test("orders definitions by applied rules, not blocked occurrences", () => {
+  const rule = (candidates: string[], status: PlanRule["status"]): PlanRule => ({
+    selector: ".x",
+    status,
+    candidates,
+    file: "styles.css",
+    ruleId: { start: 0, end: 0 },
+    authoredSpan: { start: 0, end: 0 },
+    stylesheet: 0,
+  });
+  // The blocked first rule shares `b:m-[7px]` with the last applied rule;
+  // its dropped `broken:p-[1px]` proves it never applied, so registration
+  // order must follow the applied rules: `a` before `b`.
+  const plan: Plan = {
+    files: [],
+    deletedFiles: [],
+    unlinkedFiles: [],
+    candidates: ["a:m-[7px]", "b:m-[7px]"],
+    rules: [
+      rule(["b:m-[7px]", "broken:p-[1px]"], "retained"),
+      rule(["a:m-[7px]"], "converted"),
+      rule(["b:m-[7px]"], "converted"),
+    ],
+    warnings: [],
+    convertedRules: 2,
+    retainedRules: 1,
+  };
+  const extraction = {
+    names: { "(width <= 700px)": "a", "(width <= 800px)": "b" },
+    generated: [
+      { key: "(width <= 700px)", name: "a" },
+      { key: "(width <= 800px)", name: "b" },
+    ],
+  };
+
+  expect(usedGeneratedDefinitions(extraction, plan)).toEqual([
+    { key: "(width <= 700px)", name: "a" },
+    { key: "(width <= 800px)", name: "b" },
+  ]);
 });

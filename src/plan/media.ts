@@ -310,12 +310,14 @@ export function planMediaExtraction(options: {
 
 /**
  * The generated definitions the final plan actually uses, ordered by the
- * first rule whose applied candidate uses each name. Membership comes from
- * `plan.candidates`, the candidates consumers actually received: a retained
- * global rule still applies its utilities to proven consumers, while a
- * converted-then-blocked rule's candidates drop out. Registration order
- * controls conflicting utility precedence, so the order follows the rules
- * rather than every encountered condition.
+ * first applied rule that uses each name. A rule counts as applied only
+ * when every one of its candidates survived into `plan.candidates`: a
+ * retained global rule still applies its utilities to proven consumers,
+ * while a blocked rule always contains a dropped candidate, so its
+ * occurrences must not fix registration order for a candidate another rule
+ * still applies. Registration order controls conflicting utility
+ * precedence, so the order follows the applied rules rather than every
+ * encountered condition.
  */
 export function usedGeneratedDefinitions(
   extraction: MediaExtraction,
@@ -326,8 +328,8 @@ export function usedGeneratedDefinitions(
   const ordered: { key: string; name: string }[] = [];
   const seen = new Set<string>();
   for (const rule of plan.rules) {
+    if (!rule.candidates.every((candidate) => applied.has(candidate))) continue;
     for (const candidate of rule.candidates) {
-      if (!applied.has(candidate)) continue;
       for (const segment of candidate.split(":").slice(0, -1)) {
         const definition = byName.get(segment);
         if (definition !== undefined && !seen.has(segment)) {
