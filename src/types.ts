@@ -112,8 +112,10 @@ export interface PlannerRequest {
   tailwindSource: string;
   utilityPrefix: string | null;
   themeTokens: Record<string, string>;
-  /** The entry group's fixed media key-to-name map; omitted while
-   * extraction is disabled, in which case media handling is unchanged. */
+  /** The entry group's fixed media key-to-name map. Omit while extraction
+   * is disabled, in which case media handling is unchanged; an explicitly
+   * supplied empty map stays authoritative and sends every condition to
+   * the arbitrary fallback. */
   mediaNames?: Record<string, string>;
   files: PlannedFile[];
 }

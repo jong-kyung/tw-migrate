@@ -335,10 +335,12 @@ struct PlanRequest {
     #[serde(default)]
     theme_tokens: HashMap<String, String>,
     /// The entry group's fixed key-to-name map: normalized media condition
-    /// keys to resolved variant names. Empty when extraction is disabled,
-    /// in which case media handling is unchanged.
+    /// keys to resolved variant names. `None` when extraction is disabled,
+    /// in which case media handling is unchanged. An explicitly supplied
+    /// empty map stays authoritative: every condition then uses the
+    /// arbitrary fallback, never the legacy conversions.
     #[serde(default)]
-    media_names: HashMap<String, String>,
+    media_names: Option<HashMap<String, String>>,
     files: Vec<SourceFile>,
 }
 
@@ -355,7 +357,7 @@ struct BatchPlanRequest {
     #[serde(default)]
     theme_tokens: HashMap<String, String>,
     #[serde(default)]
-    media_names: HashMap<String, String>,
+    media_names: Option<HashMap<String, String>>,
     files: Vec<SourceFile>,
 }
 
@@ -1246,7 +1248,7 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
             keyframe_scope,
             analysis_source,
             &request.theme_tokens,
-            &request.media_names,
+            request.media_names.as_ref(),
             ParseOptions {
                 syntax: analysis_syntax,
                 is_module,
@@ -1391,7 +1393,7 @@ fn parse_vue_rules(
             keyframe_scope,
             analysis,
             &request.theme_tokens,
-            &request.media_names,
+            request.media_names.as_ref(),
             ParseOptions {
                 syntax: if block.analysis_source.is_some() {
                     Syntax::Css
@@ -4004,6 +4006,35 @@ mod tests {
             ])
         );
         assert_eq!(response["convertedRules"], 3);
+    }
+
+    #[test]
+    fn an_explicitly_empty_map_stays_authoritative() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": "@media (min-width: 48rem) { .button { padding: 1rem; } }\n@media (prefers-color-scheme: dark) { .button { color: white; } }\n",
+            "themeTokens": { "breakpoint-md": "48rem" },
+            // Extraction is enabled but every condition fell back, so the
+            // resolver legitimately produced an empty map. That is not the
+            // same as no map: the legacy conversions must stay off.
+            "mediaNames": {},
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert_eq!(
+            response["candidates"],
+            serde_json::json!([
+                "[@media_(min-width:48rem)]:p-[1rem]",
+                "[@media_(prefers-color-scheme:dark)]:text-[white]"
+            ])
+        );
+        assert_eq!(response["convertedRules"], 2);
     }
 
     #[test]

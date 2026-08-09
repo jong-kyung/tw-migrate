@@ -86,7 +86,7 @@ pub(crate) fn parse_css_rules(
     keyframe_scope: &str,
     source: &str,
     theme_tokens: &HashMap<String, String>,
-    media_names: &HashMap<String, String>,
+    media_names: Option<&HashMap<String, String>>,
     options: ParseOptions,
 ) -> Result<ParsedCss, String> {
     let ParseOptions {
@@ -270,7 +270,7 @@ fn collect_declaration_candidates(
     variants: &[String],
     source: &str,
     theme_tokens: &HashMap<String, String>,
-    media_names: &HashMap<String, String>,
+    media_names: Option<&HashMap<String, String>>,
     keyframes: &HashMap<&str, &str>,
     syntax: Syntax,
     is_module: bool,
@@ -534,7 +534,7 @@ fn collect_conditional_rules<'a, 's>(
     variants: &[String],
     source: &str,
     theme_tokens: &HashMap<String, String>,
-    media_names: &HashMap<String, String>,
+    media_names: Option<&HashMap<String, String>>,
     movable_at_rule_starts: &HashSet<usize>,
     qualified_rules: &mut Vec<(&'s oxc_css_parser::ast::QualifiedRule<'a>, Vec<String>)>,
     retained_rules: &mut Vec<RulePlan>,

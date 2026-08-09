@@ -146,7 +146,7 @@ pub(crate) fn conditional_variant(
     at_rule: &AtRule<'_>,
     source: &str,
     theme_tokens: &HashMap<String, String>,
-    media_names: &HashMap<String, String>,
+    media_names: Option<&HashMap<String, String>>,
 ) -> Option<String> {
     match at_rule.name.name {
         "media" => media_variant(at_rule, source, theme_tokens, media_names),
@@ -171,18 +171,16 @@ fn media_variant(
     at_rule: &AtRule<'_>,
     source: &str,
     theme_tokens: &HashMap<String, String>,
-    media_names: &HashMap<String, String>,
+    media_names: Option<&HashMap<String, String>>,
 ) -> Option<String> {
-    // A supplied key-to-name map is the entry group's verified resolution:
-    // built-ins and breakpoints appear in it only with proven expansions,
-    // and fallback conditions are absent, so the map takes precedence and
-    // everything else keeps the shipped behavior.
-    if !media_names.is_empty() {
-        // The map is the only resolution authority once supplied: a key it
-        // omits is a resolver fallback whose readable and digest names were
-        // both unavailable, and the legacy conversions below could revive
-        // the exact shadowed name the resolver rejected. Such conditions go
-        // straight to the arbitrary variant.
+    if let Some(media_names) = media_names {
+        // A supplied map is the entry group's verified resolution and the
+        // only authority, even when it is empty because every condition
+        // fell back: a key it omits is a resolver fallback whose readable
+        // and digest names were both unavailable, and the legacy
+        // conversions below could revive the exact shadowed name the
+        // resolver rejected. Such conditions go straight to the arbitrary
+        // variant.
         return named_media_chain(at_rule, source, media_names)
             .or_else(|| arbitrary_at_rule_variant(at_rule, source));
     }
