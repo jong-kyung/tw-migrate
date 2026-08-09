@@ -11,7 +11,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use oxc_css_parser::ast::{AtRule, Statement};
+use oxc_css_parser::ast::{
+    AtRule, ComplexSelectorChild, QualifiedRule, SimpleSelector, Statement,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -1693,13 +1695,16 @@ pub fn media_probe_key_json(css: &str) -> Result<String, String> {
         let Some(block) = &at_rule.block else {
             return serde_json::to_string(&Option::<String>::None).map_err(|e| e.to_string());
         };
-        // A nested at-rule inside the wrapper means the expansion is more
-        // than one media level, which is not a single generated unit.
-        let nested_at_rule = block
-            .statements
-            .iter()
-            .any(|statement| matches!(statement, Statement::AtRule(_)));
-        if at_rule.name.name != "media" || media_query.is_some() || nested_at_rule {
+        // The wrapper must contain exactly the probe rule with its selector
+        // untouched: a nested at-rule means more than one media level, and
+        // any qualified or combined selector means the variant re-scopes the
+        // utility beyond the media condition, so reusing it for a plain
+        // condition would change when the style applies.
+        let pure_wrapper = match block.statements.as_slice() {
+            [Statement::QualifiedRule(rule)] => is_bare_class_rule(rule),
+            _ => false,
+        };
+        if at_rule.name.name != "media" || media_query.is_some() || !pure_wrapper {
             return serde_json::to_string(&Option::<String>::None).map_err(|e| e.to_string());
         }
         media_query = at_rule_query(at_rule, css, "media");
@@ -1714,6 +1719,19 @@ pub fn media_probe_key_json(css: &str) -> Result<String, String> {
         }
     });
     serde_json::to_string(&key).map_err(|error| error.to_string())
+}
+
+/// True when the rule's selector is exactly one bare class: the compiled
+/// probe candidate itself, with no combinators, qualifying selectors, or
+/// pseudo-classes added by the variant.
+fn is_bare_class_rule(rule: &QualifiedRule<'_>) -> bool {
+    let [selector] = rule.selector.selectors.as_slice() else {
+        return false;
+    };
+    let [ComplexSelectorChild::CompoundSelector(compound)] = selector.children.as_slice() else {
+        return false;
+    };
+    matches!(compound.children.as_slice(), [SimpleSelector::Class(_)])
 }
 
 #[cfg(test)]
@@ -1735,12 +1753,36 @@ mod probe_tests {
             probe("@media screen, print { .x { --tw-p: 1; } }"),
             Some("screen, print".to_string())
         );
+        // Escaped candidate classes stay a single bare class selector.
+        assert_eq!(
+            probe("@media (width >= 48rem) { .md\\:\\[--tw-probe\\:1\\] { --tw-p: 1; } }"),
+            Some("(width >= 48rem)".to_string())
+        );
         // A selector-based expansion, the shadowed-variant shape, never
         // yields a key.
         assert_eq!(probe(".dark .x { --tw-p: 1; }"), None);
         // Stacked output with two media levels is not a single unit.
         assert_eq!(
             probe("@media screen { @media (width <= 768px) { .x { --tw-p: 1; } } }"),
+            None
+        );
+        // A variant that combines the media condition with a qualifying
+        // selector re-scopes the utility, so the media key alone does not
+        // describe it.
+        assert_eq!(
+            probe("@media (prefers-color-scheme: dark) { .x:where(.dark *) { --tw-p: 1; } }"),
+            None
+        );
+        assert_eq!(
+            probe("@media (prefers-color-scheme: dark) { .dark .x { --tw-p: 1; } }"),
+            None
+        );
+        assert_eq!(
+            probe("@media (prefers-color-scheme: dark) { .x.dark { --tw-p: 1; } }"),
+            None
+        );
+        assert_eq!(
+            probe("@media screen { .x { --tw-p: 1; } .y { --tw-p: 1; } }"),
             None
         );
     }

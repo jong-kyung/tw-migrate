@@ -28,9 +28,9 @@ import { compileStyleEntry, isPreprocessorPath, isSassPath } from "./parser/styl
 import type { StyleCompilers } from "./parser/style-compiler.ts";
 import { invalidCandidates, loadTailwind, resolveTailwindEntry } from "./tailwind.ts";
 import {
-  PROBE_UTILITY,
   appendMediaDefinitions,
   planMediaExtraction,
+  probeCandidate,
   usedGeneratedDefinitions,
 } from "./plan/media.ts";
 import type { MediaExtraction } from "./plan/media.ts";
@@ -658,7 +658,10 @@ async function applyMediaExtraction(
     const used = await augment();
     const rejected = new Set(
       used
-        .filter(({ name }) => system.candidatesToCss([`${name}:${PROBE_UTILITY}`])[0] === null)
+        .filter(
+          ({ name }) =>
+            system.candidatesToCss([probeCandidate(system.theme.prefix, name)])[0] === null,
+        )
         .map(({ key }) => key),
     );
     if (rejected.size === 0) break;

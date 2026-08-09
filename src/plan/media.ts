@@ -208,7 +208,13 @@ function mergeAuthoredVariants(collections: MediaCollection[]): Map<string, Set<
 
 /// The probe utility appended to a variant name when compiling against the
 /// design system; an arbitrary property compiles under any theme.
-export const PROBE_UTILITY = "[--tw-probe:1]";
+const PROBE_UTILITY = "[--tw-probe:1]";
+
+/// The full candidate compiled to probe a variant name. A configured theme
+/// prefix must start every candidate, matching the planner's emitted form.
+export function probeCandidate(prefix: string | null, name: string): string {
+  return `${prefix === null || prefix === "" ? "" : `${prefix}:`}${name}:${PROBE_UTILITY}`;
+}
 
 export interface MediaExtraction {
   /** The entry group's fixed key-to-name map, passed to the planner. */
@@ -225,10 +231,11 @@ export interface MediaExtraction {
  */
 export function buildMediaProbes(tailwind: LoadedTailwind): MediaProbes {
   const compiled = new Map<string, string | null>();
+  const prefix = tailwind.designSystem.theme.prefix;
   const compile = (name: string): string | null => {
     let css = compiled.get(name);
     if (css === undefined) {
-      [css = null] = tailwind.designSystem.candidatesToCss([`${name}:${PROBE_UTILITY}`]);
+      [css = null] = tailwind.designSystem.candidatesToCss([probeCandidate(prefix, name)]);
       compiled.set(name, css);
     }
     return css;
@@ -284,7 +291,13 @@ export function planMediaExtraction(options: {
     [collection],
     options.tailwind.themeTokens,
     buildMediaProbes(options.tailwind),
-    scannedVariantReservations(options.scannedSources),
+    scannedVariantReservations([
+      ...options.scannedSources,
+      // The entry graph is part of Tailwind's detection corpus too: an
+      // `@source inline("width-lte-768px:hidden")` candidate must reserve
+      // its segments like any scanned source.
+      ...options.tailwind.graphSources.map((graphSource) => graphSource.source),
+    ]),
   );
   const names: Record<string, string> = {};
   const generated: { key: string; name: string }[] = [];
@@ -297,20 +310,24 @@ export function planMediaExtraction(options: {
 
 /**
  * The generated definitions the final plan actually uses, ordered by the
- * first converted rule that uses each name. Registration order controls
- * conflicting utility precedence, so this order follows the surviving
- * rules rather than every encountered condition.
+ * first rule whose applied candidate uses each name. Membership comes from
+ * `plan.candidates`, the candidates consumers actually received: a retained
+ * global rule still applies its utilities to proven consumers, while a
+ * converted-then-blocked rule's candidates drop out. Registration order
+ * controls conflicting utility precedence, so the order follows the rules
+ * rather than every encountered condition.
  */
 export function usedGeneratedDefinitions(
   extraction: MediaExtraction,
   plan: Plan,
 ): { key: string; name: string }[] {
+  const applied = new Set(plan.candidates);
   const byName = new Map(extraction.generated.map((definition) => [definition.name, definition]));
   const ordered: { key: string; name: string }[] = [];
   const seen = new Set<string>();
   for (const rule of plan.rules) {
-    if (rule.status !== "converted") continue;
     for (const candidate of rule.candidates) {
+      if (!applied.has(candidate)) continue;
       for (const segment of candidate.split(":").slice(0, -1)) {
         const definition = byName.get(segment);
         if (definition !== undefined && !seen.has(segment)) {

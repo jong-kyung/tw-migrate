@@ -90,3 +90,53 @@ test("leaves media handling unchanged while extraction is disabled", async () =>
   expect(report.candidates).toEqual(["[@media_screen_and_(max-width:700px)]:m-[7px]", "p-[13px]"]);
   expect(report.changedFiles).toEqual(["Button.module.css", "Button.tsx"]);
 });
+
+test("appends definitions used by retained global rules", async () => {
+  const cwd = await tempDir();
+  await Promise.all([
+    writeFile(join(cwd, "package.json"), '{"private":true}'),
+    writeFile(join(cwd, "globals.css"), '@import "tailwindcss";\n'),
+    writeFile(join(cwd, "styles.css"), mediaCss),
+    writeFile(
+      join(cwd, "index.html"),
+      '<!doctype html>\n<html>\n<head><link rel="stylesheet" href="styles.css"></head>\n<body><button class="button">Save</button></body>\n</html>\n',
+    ),
+  ]);
+  const report = await migrate({ cwd, extractMediaQueries: true, write: true });
+
+  expect(report.candidates).toEqual(["p-[13px]", "screen:width-lte-700px:m-[7px]"]);
+  expect(report.warnings.map((warning) => warning.code)).toEqual([
+    "retained-global-rule",
+    "retained-global-rule",
+  ]);
+  expect(await readFile(join(cwd, "index.html"), "utf8")).toMatch(
+    /class="button p-\[13px\] screen:width-lte-700px:m-\[7px\]"/,
+  );
+  expect(await readFile(join(cwd, "globals.css"), "utf8")).toBe(
+    `@import "tailwindcss";\n\n${screenDefinition}\n${widthDefinition}`,
+  );
+});
+
+test("probes and validates through the configured theme prefix", async () => {
+  const cwd = await fixture({ entry: '@import "tailwindcss" prefix(tw);\n' });
+  const report = await migrate({ cwd, extractMediaQueries: true, write: true });
+
+  expect(report.candidates).toEqual(["tw:p-[13px]", "tw:screen:width-lte-700px:m-[7px]"]);
+  expect(await readFile(join(cwd, "globals.css"), "utf8")).toBe(
+    `@import "tailwindcss" prefix(tw);\n\n${screenDefinition}\n${widthDefinition}`,
+  );
+});
+
+test("never reuses a variant that re-scopes the media condition", async () => {
+  const cwd = await fixture({
+    css: "@media (prefers-color-scheme: dark) { .button { margin: 7px; } }\n",
+    entry:
+      '@import "tailwindcss";\n\n@custom-variant dark {\n  @media (prefers-color-scheme: dark) {\n    &:where(.dark *) {\n      @slot;\n    }\n  }\n}\n',
+  });
+  const report = await migrate({ cwd, extractMediaQueries: true, write: true });
+
+  expect(report.candidates).toEqual(["prefers-color-scheme-dark:m-[7px]"]);
+  expect(await readFile(join(cwd, "globals.css"), "utf8")).toMatch(
+    /@custom-variant prefers-color-scheme-dark \{\n {2}@media \(prefers-color-scheme: dark\) \{\n {4}@slot;\n {2}\}\n\}\n$/,
+  );
+});
