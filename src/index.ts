@@ -507,7 +507,7 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
   let extraction: MediaExtraction | undefined;
   const mediaWarnings: MigrationWarning[] = [];
   if (options.extractMediaQueries === true) {
-    if (await mediaEntryUnsafe(tailwind.path, workspaceRoot)) {
+    if (await mediaEntryUnsafe(tailwind.path, workspaceRoot, targetable)) {
       mediaWarnings.push({
         code: "media-query-definition-fallback",
         file: tailwind.path,
@@ -624,8 +624,12 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
 
 /// True when extraction must not edit the entry: a symbolic link or a path
 /// outside the writable project scope.
-async function mediaEntryUnsafe(entryPath: string, workspaceRoot: string): Promise<boolean> {
-  if (!isProjectInput(workspaceRoot, entryPath)) return true;
+async function mediaEntryUnsafe(
+  entryPath: string,
+  workspaceRoot: string,
+  targetable: Set<string>,
+): Promise<boolean> {
+  if (!targetable.has(entryPath) || !isProjectInput(workspaceRoot, entryPath)) return true;
   const stats = await lstat(entryPath);
   return stats.isSymbolicLink();
 }

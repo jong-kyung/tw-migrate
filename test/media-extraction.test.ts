@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, onTestFinished, test } from "vite-plus/test";
@@ -91,6 +92,27 @@ test("leaves media handling unchanged while extraction is disabled", async () =>
 
   expect(report.candidates).toEqual(["[@media_screen_and_(max-width:700px)]:m-[7px]", "p-[13px]"]);
   expect(report.changedFiles).toEqual(["Button.module.css", "Button.tsx"]);
+});
+
+test("does not augment a gitignored Tailwind entry discovered through HTML", async () => {
+  const cwd = await tempDir();
+  execFileSync("git", ["init", "-q"], { cwd });
+  await Promise.all([
+    writeFile(join(cwd, "package.json"), '{"private":true}'),
+    writeFile(join(cwd, ".gitignore"), "globals.css\n"),
+    writeFile(join(cwd, "globals.css"), '@import "tailwindcss";\n'),
+    writeFile(join(cwd, "Button.module.css"), mediaCss),
+    writeFile(join(cwd, "Button.tsx"), consumerTsx),
+    writeFile(join(cwd, "index.html"), '<link rel="stylesheet" href="globals.css">\n'),
+  ]);
+
+  const report = await migrate({ cwd, extractMediaQueries: true, write: true });
+
+  expect(report.changedFiles).not.toContain("globals.css");
+  expect(await readFile(join(cwd, "globals.css"), "utf8")).toBe('@import "tailwindcss";\n');
+  expect(report.warnings.map((warning) => warning.code)).toContain(
+    "media-query-definition-fallback",
+  );
 });
 
 test("appends definitions used by retained global rules", async () => {
