@@ -291,6 +291,15 @@ test("an html consumer linking the entry proves itself", () => {
   expect(proofs?.provenStyle(`${child}/styles.css`, [page])).toBe(true);
 });
 
+test("commented-out html links are not loaders", () => {
+  const page = file(
+    `${child}/index.html`,
+    '<!-- <link rel="stylesheet" href="../../globals.css"> --><button class="button"></button>',
+  );
+
+  expect(prove({ packageSources: [page] })).toBe(null);
+});
+
 test("a base tag leaves html entry links unproven", () => {
   const page = file(
     `${child}/index.html`,

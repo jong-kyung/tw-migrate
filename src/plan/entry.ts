@@ -13,6 +13,7 @@
 import { dirname, extname, join, resolve } from "node:path";
 
 import { collectCssDirectives, collectSourceImports } from "../native.ts";
+import { parseHtmlSource } from "../parser/html.ts";
 import { isWithin, maskCssComments } from "../util/shared.ts";
 import type { PreparedSourceFile } from "../types.ts";
 
@@ -355,20 +356,24 @@ export function proveSharedEntry(options: SharedEntryProofOptions): SharedEntryP
   };
 }
 
-/// An HTML stylesheet link resolving to the entry. Prepared HTML contexts
-/// keep only package-local links, so ancestor entry links are re-resolved
-/// here from the raw source. A `<base>` tag changes href resolution and an
-/// entity-encoded href is invisible to this scan; both stay unproven.
+/// An HTML stylesheet link resolving to the entry, through the real HTML
+/// parser so commented-out markup never counts and entity-encoded hrefs
+/// resolve. Prepared HTML contexts keep only package-local links, so
+/// ancestor entry links are re-resolved here. A `<base>` element changes
+/// href resolution and stays unproven, as does unparseable HTML.
 function htmlLinksEntry(file: { path: string; source: string }, entry: string): boolean {
   if (extname(file.path) !== ".html") return false;
-  if (/<base\b/i.test(file.source)) return false;
-  for (const match of file.source.matchAll(/<link\b[^>]*\bhref\s*=\s*["']([^"']+)["'][^>]*>/gi)) {
-    if (!/\brel\s*=\s*["']?stylesheet\b/i.test(match[0])) continue;
-    const href = match[1].split(/[?#]/, 1)[0];
-    if (!href || /^[a-z][a-z0-9+.-]*:|^\/\//i.test(href)) continue;
-    if (resolve(dirname(file.path), href) === entry) return true;
+  try {
+    const parsed = parseHtmlSource(file.path, file.source);
+    if (parsed.bases.length > 0) return false;
+    return parsed.links.some((link) => {
+      const href = link.href.split(/[?#]/, 1)[0];
+      if (!href || /^[a-z][a-z0-9+.-]*:|^\/\//i.test(href)) return false;
+      return resolve(dirname(file.path), href) === entry;
+    });
+  } catch {
+    return false;
   }
-  return false;
 }
 
 /// A parsed runtime import, dynamic import, or require whose specifier
