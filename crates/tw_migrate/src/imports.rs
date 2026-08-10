@@ -91,6 +91,22 @@ impl<'a> Visit<'a> for ImportCollector {
         walk::walk_import_expression(self, expression);
     }
 
+    fn visit_ts_import_equals_declaration(
+        &mut self,
+        decl: &oxc_ast::ast::TSImportEqualsDeclaration<'a>,
+    ) {
+        if let oxc_ast::ast::TSModuleReference::ExternalModuleReference(reference) =
+            &decl.module_reference
+        {
+            self.imports.push(SourceImport {
+                specifier: reference.expression.value.to_string(),
+                type_only: decl.import_kind.is_type(),
+                dynamic: false,
+            });
+        }
+        walk::walk_ts_import_equals_declaration(self, decl);
+    }
+
     fn visit_call_expression(&mut self, call: &oxc_ast::ast::CallExpression<'a>) {
         if let Expression::Identifier(callee) = &call.callee
             && callee.name == "require"
@@ -381,6 +397,7 @@ mod tests {
              export { E } from './e.ts';\n\
              const f = await import('./f.ts');\n\
              const g = require('./g.cjs');\n\
+             import H = require('./h.ts');\n\
              // import './commented.css';\n\
              const dead = '../dead.css';\n",
             "/project/main.ts",
@@ -396,6 +413,7 @@ mod tests {
                 ("./e.ts".to_string(), false, false),
                 ("./f.ts".to_string(), false, true),
                 ("./g.cjs".to_string(), false, true),
+                ("./h.ts".to_string(), false, false),
             ]
         );
     }

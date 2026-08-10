@@ -287,3 +287,23 @@ test("retains duplicate at-rule registrations within one member", async () => {
     "@property --brand",
   );
 });
+
+test("rebases later member edits after earlier members shift offsets", async () => {
+  const cwd = await workspace({
+    "package.json": '{"private":true}',
+    "globals.css": '@import "tailwindcss";\n',
+    "shared.module.css": ".rootbox { padding: 13px; }\n",
+    "packages/site/package.json": '{"private":true}',
+    "packages/site/app.module.css": ".appbox { margin: 7px; }\n",
+    "packages/site/index.html":
+      '<!doctype html>\n<html>\n<head><link rel="stylesheet" href="../../globals.css"><link rel="stylesheet" href="../../shared.module.css"><link rel="stylesheet" href="app.module.css"></head>\n<body><div class="rootbox">A</div><div class="appbox">B</div></body>\n</html>\n',
+  });
+  const report = await migrate({ cwd, workspaces: true, extractMediaQueries: true, write: true });
+
+  // The root member's edit lengthens the page before the site member's
+  // element, so the second edit must rebase through the applied history.
+  const html = await readFile(join(cwd, "packages/site/index.html"), "utf8");
+  expect(html).toContain('<div class="rootbox p-[13px]">A</div>');
+  expect(html).toContain('<div class="appbox m-[7px]">B</div>');
+  expect(report.failures).toEqual([]);
+});

@@ -49,6 +49,7 @@ import { preparePackageVue, vueWarningsOnlyResult } from "./plan/vue.ts";
 import { verifySnapshots, writeChanges } from "./util/write.ts";
 import type {
   LoadedTailwind,
+  SourceEdit,
   PreparedVue,
   MigrateOptions,
   MigrationContext,
@@ -787,8 +788,10 @@ async function planPreparedGroup(
       // Consumer files can be edited by more than one member (a component
       // may use stylesheets from two packages), so edits chain through the
       // composition exactly like the entry source: each member plans over
-      // the previous members' planned sources.
+      // the previous members' planned sources, and the accumulated edit
+      // history rides along so prepared element offsets rebase natively.
       const composedFiles = new Map<string, string>();
+      const composedEdits = new Map<string, SourceEdit[][]>();
       for (const member of active) {
         const blocked = blockedByMember.get(member);
         const memberWritable = groupWritable && !unwritableMembers.has(member);
@@ -810,9 +813,8 @@ async function planPreparedGroup(
           ...(memberWritable ? {} : { entryWritable: false }),
           files: member.files.map((file) => {
             const chained = composedFiles.get(file.path);
-            return chained !== undefined && chained !== file.source
-              ? { ...file, source: chained }
-              : file;
+            if (chained === undefined || chained === file.source) return file;
+            return { ...file, source: chained, priorEdits: composedEdits.get(file.path) };
           }),
         };
         let plan: Plan;
@@ -862,6 +864,12 @@ async function planPreparedGroup(
           composed = delta;
         }
         for (const file of plan.files) composedFiles.set(file.path, file.source);
+        // The response history includes the supplied prior edits, so it
+        // replaces the accumulated entry rather than extending it.
+        for (const [path, edits] of Object.entries(plan.appliedEdits ?? {})) {
+          composedEdits.set(path, edits);
+        }
+        delete plan.appliedEdits;
         states.push({ prepared: member, request, plan });
       }
       // Only the last member editing a path claims its final composed
@@ -1075,7 +1083,16 @@ function atRuleIdentities(css: string): string[] {
   )) {
     if (match[3] !== undefined) {
       const family = match[4].match(/font-family\s*:\s*([^;}]+)/);
-      identities.push(`font-face ${family ? family[1].trim() : ""}`);
+      // Family names compare case-insensitively and quoted or unquoted
+      // spellings are equivalent.
+      const normalized = family
+        ? family[1]
+            .trim()
+            .replace(/^["']|["']$/g, "")
+            .replace(/\s+/g, " ")
+            .toLowerCase()
+        : "";
+      identities.push(`font-face ${normalized}`);
     } else {
       identities.push(`${match[1]} ${match[2].trim()}`);
     }

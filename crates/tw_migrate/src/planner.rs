@@ -513,7 +513,11 @@ pub(crate) struct SourceFile {
     pub(crate) html_references_safe: bool,
     #[serde(default, rename = "htmlScriptText")]
     pub(crate) html_script_text: String,
-    #[serde(skip)]
+    /// Edits already applied to `source` by earlier passes over the same
+    /// file: earlier stylesheets inside one batch, or earlier entry-group
+    /// members whose plans this batch chains on. Prepared element offsets
+    /// rebase through them.
+    #[serde(default, rename = "priorEdits")]
     pub(crate) prior_edits: Vec<Vec<Edit>>,
 }
 
@@ -545,7 +549,10 @@ struct PlanResponse {
     retained_rules: usize,
     rules: Vec<RuleReport>,
     warnings: Vec<Warning>,
-    #[serde(skip)]
+    /// The complete per-file edit history after this plan, including any
+    /// supplied prior edits; a caller chaining further plans over these
+    /// files passes it back as `priorEdits`.
+    #[serde(rename = "appliedEdits")]
     applied_edits: HashMap<String, Vec<Vec<Edit>>>,
 }
 
@@ -673,7 +680,7 @@ const WARNING_CODES: &[&str] = &[
     "unsupported-vue-version",
 ];
 
-#[derive(Clone)]
+#[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct Edit {
     pub(crate) start: usize,
     pub(crate) end: usize,
@@ -1084,6 +1091,11 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
     }
     let mut current = originals.clone();
     let mut applied_edits: HashMap<String, Vec<Vec<Edit>>> = HashMap::new();
+    for file in &request.files {
+        if !file.prior_edits.is_empty() {
+            applied_edits.insert(file.path.clone(), file.prior_edits.clone());
+        }
+    }
     let mut deleted = HashSet::new();
     let mut unlinked = HashSet::new();
     let mut candidates = BTreeSet::new();
@@ -1190,7 +1202,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
         retained_rules,
         rules,
         warnings,
-        applied_edits: HashMap::new(),
+        applied_edits,
     })
     .map_err(|error| error.to_string())
 }

@@ -82,8 +82,17 @@ export interface PreparedSourceFile extends SourceFile {
   htmlScriptText?: string;
 }
 
+export interface SourceEdit {
+  start: number;
+  end: number;
+  replacement: string;
+}
+
 export interface PlannedFile extends PreparedSourceFile {
   writable: boolean;
+  /** Edits already applied to `source` by earlier entry-group members;
+   * prepared element offsets rebase through them natively. */
+  priorEdits?: SourceEdit[][];
 }
 
 export interface RuleSpan {
@@ -144,6 +153,9 @@ export interface Plan {
   warnings: MigrationWarning[];
   convertedRules: number;
   retainedRules: number;
+  /** The complete per-file edit history after this plan, for chaining
+   * later entry-group members over the same files. */
+  appliedEdits?: Record<string, SourceEdit[][]>;
 }
 
 export interface PlanResult {

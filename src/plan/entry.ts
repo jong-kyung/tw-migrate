@@ -140,16 +140,26 @@ export function scanProof(options: {
   let automaticDisabled = false;
   for (const { path, directives } of sheets) {
     const base = dirname(path);
-    const scopePath = (scope: string): string => resolve(base, scope.replace(/[/\\]\*.*$/, ""));
     // A literal scope proves coverage only when it contains the whole child
-    // package; a narrower scope proves nothing for consumers outside it, so
-    // it falls through to the automatic-detection arm.
-    const coversChild = (scope: string): boolean => isWithin(scopePath(scope), options.packageRoot);
+    // package; a narrower scope, or one truncated mid-segment by a
+    // wildcard, proves nothing for consumers outside it and falls through
+    // to the automatic-detection arm.
+    const coversChild = (scope: string): boolean => {
+      const clean = scope.replace(/[/\\]\*.*$/, "");
+      if (clean.includes("*")) return false;
+      return isWithin(resolve(base, clean), options.packageRoot);
+    };
     // An exclusion overlapping the child in either direction defeats both
-    // proofs conservatively.
-    const excludesChild = (scope: string): boolean =>
-      isWithin(scopePath(scope), options.packageRoot) ||
-      isWithin(options.packageRoot, scopePath(scope));
+    // proofs conservatively; a wildcard exclusion matches by string prefix
+    // because `./packages/app*` excludes trees no path-segment comparison
+    // sees.
+    const excludesChild = (scope: string): boolean => {
+      const stripped = resolve(base, scope.replace(/\*.*$/, ""));
+      if (scope.includes("*")) {
+        return options.packageRoot.startsWith(stripped) || stripped.startsWith(options.packageRoot);
+      }
+      return isWithin(stripped, options.packageRoot) || isWithin(options.packageRoot, stripped);
+    };
     for (const directive of directives) {
       if (directive.kind === "source") {
         if (directive.inline) continue;
@@ -195,10 +205,21 @@ function sourceImports(file: { path: string; source: string }): SourceImportReco
           const lang = match[1].match(/\blang\s*=\s*["']?(\w+)/)?.[1]?.toLowerCase();
           const scriptExtension =
             lang === "tsx" || lang === "jsx" || lang === "js" ? `.${lang}` : ".ts";
-          return { source: match[2], path: `${file.path}${scriptExtension}` };
+          return {
+            source: match[2],
+            path: `${file.path}${scriptExtension}`,
+            src: match[1].match(/\bsrc\s*=\s*["']([^"']+)["']/)?.[1],
+          };
         })
-      : [{ source: file.source, path: file.path }];
+      : [{ source: file.source, path: file.path, src: undefined }];
   const records: SourceImportRecord[] = [];
+  // An external `<script src>` executes its target when the SFC runs, so
+  // it carries a runtime edge like an import.
+  for (const script of sources) {
+    if (script.src !== undefined) {
+      records.push({ specifier: script.src, typeOnly: false, dynamic: false });
+    }
+  }
   for (const script of sources) {
     try {
       const parsed: unknown = JSON.parse(collectSourceImports(script.source, script.path));
@@ -439,7 +460,11 @@ export function proveSharedEntry(options: SharedEntryProofOptions): SharedEntryP
   const exposed = exposedFiles(options.packageRoot, options.packageJson, ownedSources);
 
   return {
+    // A stylesheet with no consumer at all has no proven flow either: its
+    // movable at-rules would otherwise activate in the shared entry for
+    // CSS nothing provably loads.
     provenStyle: (stylePath, consumers) =>
+      consumers.length > 0 &&
       consumers.every(
         (consumer) =>
           options.owned(consumer.path) &&
