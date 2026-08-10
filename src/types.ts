@@ -9,6 +9,11 @@ export interface MigrateOptions {
   tailwindCss?: string;
   workspaces?: boolean;
   force?: boolean;
+  /** Extract unmatched media conditions into named `@custom-variant`
+   * definitions in the Tailwind entry and rewrite consumers to stacked
+   * variants. Disabled unless explicitly `true`; the CLI flag and
+   * default-on behavior land together with packaged snapshot coverage. */
+  extractMediaQueries?: boolean;
 }
 
 export interface MigrationWarning {
@@ -204,6 +209,13 @@ export interface LoadedTailwind {
   css: string;
   path: string;
   themeTokens: Record<string, string>;
+  /** Stylesheet sources retained from the entry's import graph, parsed for
+   * authored custom-variant reservations and content-identity adoption. */
+  graphSources: { path: string; source: string }[];
+  /** Load a design system for a replacement entry source, sharing the
+   * entry's module and stylesheet resolution; used to validate the
+   * augmented entry in memory. */
+  loadWith: (css: string) => Promise<DesignSystem>;
 }
 
 export interface CssImport {

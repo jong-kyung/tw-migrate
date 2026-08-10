@@ -625,6 +625,7 @@ const WARNING_CODES: &[&str] = &[
     "dynamic-template-class",
     "existing-tailwind-conflict",
     "inferred-preprocessor-source",
+    "media-query-definition-fallback",
     "module-utilities-conflict",
     "non-classname-css-module-reference",
     "open-root-fallthrough",

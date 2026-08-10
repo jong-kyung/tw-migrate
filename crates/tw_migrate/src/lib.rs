@@ -71,6 +71,11 @@ pub fn static_import_bindings(
 }
 
 #[napi]
+pub fn media_probe_key(css: String) -> napi::Result<String> {
+    media::media_probe_key_json(&css).map_err(napi::Error::from_reason)
+}
+
+#[napi]
 pub fn collect_media_conditions(request: String) -> napi::Result<String> {
     media::collect_media_conditions_json(&request).map_err(|error| {
         // Package input failures stay recoverable so `--force` can skip the

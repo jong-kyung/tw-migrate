@@ -68,12 +68,16 @@ export async function loadTailwind(
     return { content, base: dirname(path) };
   };
   const defaultTheme = await readFile(join(dirname(packagePath), "theme.css"), "utf8");
+  const graphSources: { path: string; source: string }[] = [];
   const themeTokens = {
     ...extractThemeTokens(defaultTheme),
-    ...(await extractThemeTokensFromGraph(css, base, loadStylesheet)),
+    ...(await extractThemeTokensFromGraph(css, base, loadStylesheet, graphSources)),
   };
+  graphSources.push({ path: tailwindCss, source: css });
   const designSystem = await loadDesignSystem(css, { base, loadModule, loadStylesheet });
-  return { designSystem, css, path: tailwindCss, themeTokens };
+  const loadWith = (replacement: string): Promise<DesignSystem> =>
+    loadDesignSystem(replacement, { base, loadModule, loadStylesheet });
+  return { designSystem, css, path: tailwindCss, themeTokens, graphSources, loadWith };
 }
 
 function extractThemeTokens(css: string): Record<string, string> {
@@ -89,6 +93,7 @@ async function extractThemeTokensFromGraph(
   css: string,
   base: string,
   loadStylesheet: StylesheetLoader,
+  graphSources: { path: string; source: string }[],
   seen = new Set<string>(),
 ): Promise<Record<string, string>> {
   const tokens: Record<string, string> = {};
@@ -97,15 +102,25 @@ async function extractThemeTokensFromGraph(
     if (seen.has(key)) continue;
     seen.add(key);
     const loaded = await loadStylesheet(match[1], base);
+    // Tailwind's own stylesheets define no custom variants worth parsing.
+    if (match[1] !== "tailwindcss" && !match[1].startsWith("tailwindcss/")) {
+      graphSources.push({ path: `${base}\0${match[1]}`, source: loaded.content });
+    }
     Object.assign(
       tokens,
-      await extractThemeTokensFromGraph(loaded.content, loaded.base, loadStylesheet, seen),
+      await extractThemeTokensFromGraph(
+        loaded.content,
+        loaded.base,
+        loadStylesheet,
+        graphSources,
+        seen,
+      ),
     );
   }
   return Object.assign(tokens, extractThemeTokens(css));
 }
 
-export function invalidCandidates(tailwind: LoadedTailwind, candidates: string[]): string[] {
-  const generated = tailwind.designSystem.candidatesToCss(candidates);
+export function invalidCandidates(system: DesignSystem, candidates: string[]): string[] {
+  const generated = system.candidatesToCss(candidates);
   return candidates.filter((_, index) => generated[index] === null);
 }
