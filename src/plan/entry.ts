@@ -229,21 +229,10 @@ function sourceImports(file: { path: string; source: string }): SourceImportReco
           const lang = match[1].match(/\blang\s*=\s*["']?(\w+)/)?.[1]?.toLowerCase();
           const scriptExtension =
             lang === "tsx" || lang === "jsx" || lang === "js" ? `.${lang}` : ".ts";
-          return {
-            source: match[2],
-            path: `${file.path}${scriptExtension}`,
-            src: match[1].match(/\bsrc\s*=\s*["']([^"']+)["']/)?.[1],
-          };
+          return { source: match[2], path: `${file.path}${scriptExtension}` };
         })
-      : [{ source: file.source, path: file.path, src: undefined }];
+      : [{ source: file.source, path: file.path }];
   const records: SourceImportRecord[] = [];
-  // An external `<script src>` executes its target when the SFC runs, so
-  // it carries a runtime edge like an import.
-  for (const script of sources) {
-    if (script.src !== undefined) {
-      records.push({ specifier: script.src, typeOnly: false, dynamic: false });
-    }
-  }
   for (const script of sources) {
     try {
       const parsed: unknown = JSON.parse(collectSourceImports(script.source, script.path));
