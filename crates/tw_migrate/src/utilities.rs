@@ -309,6 +309,30 @@ pub(crate) fn tailwind_variants_match(left: &str, right: &str) -> bool {
     tailwind_utility_parts(left).0 == tailwind_utility_parts(right).0
 }
 
+/// Split a variant chain into its segments, bracket-aware so arbitrary
+/// variants keep their inner colons.
+pub(crate) fn variant_segments(variants: &str) -> Vec<&str> {
+    if variants.is_empty() {
+        return Vec::new();
+    }
+    let mut segments = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (index, character) in variants.char_indices() {
+        match character {
+            '[' => depth += 1,
+            ']' => depth = depth.saturating_sub(1),
+            ':' if depth == 0 => {
+                segments.push(&variants[start..index]);
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    segments.push(&variants[start..]);
+    segments
+}
+
 pub(crate) fn css_properties_conflict(left: &str, right: &str) -> bool {
     if left == right {
         return true;
@@ -527,7 +551,7 @@ fn themed_candidate(
     }
 }
 
-fn tailwind_utility_parts(class: &str) -> (&str, &str) {
+pub(crate) fn tailwind_utility_parts(class: &str) -> (&str, &str) {
     let mut depth = 0usize;
     let mut separator = None;
     for (index, character) in class.char_indices() {
