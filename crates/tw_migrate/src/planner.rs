@@ -341,7 +341,16 @@ struct PlanRequest {
     /// arbitrary fallback, never the legacy conversions.
     #[serde(default)]
     media_names: Option<HashMap<String, String>>,
+    /// False when the resolved Tailwind entry must not be edited: keyframe
+    /// and global at-rule movement is disabled so their rules retain with
+    /// the existing warnings, and no entry file is planned.
+    #[serde(default = "default_entry_writable")]
+    entry_writable: bool,
     files: Vec<SourceFile>,
+}
+
+fn default_entry_writable() -> bool {
+    true
 }
 
 #[derive(Deserialize)]
@@ -358,6 +367,8 @@ struct BatchPlanRequest {
     theme_tokens: HashMap<String, String>,
     #[serde(default)]
     media_names: Option<HashMap<String, String>>,
+    #[serde(default = "default_entry_writable")]
+    entry_writable: bool,
     files: Vec<SourceFile>,
 }
 
@@ -679,6 +690,7 @@ pub fn plan_json(request: &str) -> Result<String, String> {
         .ok_or_else(|| "Plan request must be an object".to_string())?;
     let mut batch = serde_json::Map::new();
     for field in [
+        "entryWritable",
         "files",
         "mediaNames",
         "tailwindPath",
@@ -1194,6 +1206,7 @@ fn batch_stylesheet_request(
         utility_prefix: batch.utility_prefix.clone(),
         theme_tokens: batch.theme_tokens.clone(),
         media_names: batch.media_names.clone(),
+        entry_writable: batch.entry_writable,
         files,
     }
 }
@@ -1216,7 +1229,8 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
     };
     // Vue keyframes and at-rules stay inside their scoped block; moving them
     // to the Tailwind entry would change their scope.
-    let can_move_at_rules = vue_masked.is_none()
+    let can_move_at_rules = request.entry_writable
+        && vue_masked.is_none()
         && request.sheet.syntax == StylesheetSyntax::Css
         && request
             .tailwind_path
@@ -4808,6 +4822,36 @@ mod tests {
             response["deletedFiles"],
             serde_json::json!(["/project/Button.module.css"])
         );
+    }
+
+    #[test]
+    fn an_unwritable_entry_disables_keyframe_movement() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": "@keyframes fade { from { opacity: 0; } to { opacity: 1; } }\n.button { animation: fade 1s; }\n",
+            "tailwindPath": "/project/globals.css",
+            "tailwindSource": "@import \"tailwindcss\";\n",
+            "entryWritable": false,
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert!(
+            !response["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|file| file["path"] == "/project/globals.css"),
+            "an unwritable entry must never be planned"
+        );
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        assert_eq!(response["rules"][0]["status"], "retained");
+        assert_eq!(response["warnings"][0]["code"], "unsupported-at-rule");
     }
 
     #[test]

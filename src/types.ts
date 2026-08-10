@@ -122,6 +122,10 @@ export interface PlannerRequest {
    * supplied empty map stays authoritative and sends every condition to
    * the arbitrary fallback. */
   mediaNames?: Record<string, string>;
+  /** False when the resolved Tailwind entry must not be edited: the planner
+   * disables keyframe and global at-rule movement and returns no entry
+   * file. Omitted means writable. */
+  entryWritable?: boolean;
   files: PlannedFile[];
 }
 
