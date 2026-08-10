@@ -307,3 +307,61 @@ test("rebases later member edits after earlier members shift offsets", async () 
   expect(html).toContain('<div class="appbox m-[7px]">B</div>');
   expect(report.failures).toEqual([]);
 });
+
+test("a commented import is not a consumer for shared-entry proofs", async () => {
+  const files: Record<string, string> = {
+    "package.json": '{"private":true}',
+    "globals.css": '@import "tailwindcss";\n',
+    ...app("app"),
+  };
+  // The only mention of the orphan module is a commented-out import, so
+  // it has no proven consumer and its at-rules must not activate in the
+  // shared entry.
+  files["packages/app/Fonts.module.css"] =
+    '@font-face { font-family: "Acme"; src: url(/acme.woff2); }\n';
+  files["packages/app/main.tsx"] =
+    "import '../../globals.css';\n// import fonts from './Fonts.module.css';\nimport { Button } from './Button.tsx';\nexport const render = Button;\n";
+  const cwd = await workspace(files);
+  const report = await migrate({ cwd, workspaces: true, extractMediaQueries: true, write: true });
+
+  expect(await readFile(join(cwd, "globals.css"), "utf8")).not.toContain("@font-face");
+  expect(await readFile(join(cwd, "packages/app/Fonts.module.css"), "utf8")).toContain(
+    "@font-face",
+  );
+  expect(
+    report.warnings.some(
+      (warning) =>
+        warning.code === "unproven-shared-entry-flow" &&
+        warning.file === "packages/app/Fonts.module.css",
+    ),
+  ).toBe(true);
+});
+
+test("owner styles require proofs for their cross-package consumers", async () => {
+  const files: Record<string, string> = {
+    "package.json": '{"private":true}',
+    "globals.css": '@import "tailwindcss";\n',
+    "shared.module.css": ".frame { margin: 7px; }\n",
+    "main.tsx": "import './globals.css';\n",
+    ...app("app"),
+  };
+  // Stray.tsx consumes the root-owned module but is unreachable from the
+  // child's loading flows, so the root stylesheet must be retained.
+  files["packages/app/Stray.tsx"] =
+    "import shared from '../../shared.module.css';\nexport const Stray = () => <i className={shared.frame} />;\n";
+  const cwd = await workspace(files);
+  const report = await migrate({ cwd, workspaces: true, extractMediaQueries: true, write: true });
+
+  expect(await readFile(join(cwd, "shared.module.css"), "utf8")).toContain(".frame");
+  expect(await readFile(join(cwd, "packages/app/Stray.tsx"), "utf8")).toContain("shared.frame");
+  expect(
+    report.warnings.some(
+      (warning) =>
+        warning.code === "unproven-shared-entry-flow" && warning.file === "shared.module.css",
+    ),
+  ).toBe(true);
+  // The child's own proven stylesheet still migrates.
+  expect(await readFile(join(cwd, "packages/app/Button.tsx"), "utf8")).toMatch(
+    /screen:width-lte-700px:m-\[7px\]/,
+  );
+});

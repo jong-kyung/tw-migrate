@@ -145,9 +145,10 @@ export function scanProof(options: {
     // wildcard, proves nothing for consumers outside it and falls through
     // to the automatic-detection arm.
     const coversChild = (scope: string): boolean => {
-      const clean = scope.replace(/[/\\]\*.*$/, "");
-      if (clean.includes("*")) return false;
-      return isWithin(resolve(base, clean), options.packageRoot);
+      // A wildcard scope may restrict file types or depth, so it never
+      // proves package-wide coverage; only a plain directory scope does.
+      if (scope.includes("*")) return false;
+      return isWithin(resolve(base, scope), options.packageRoot);
     };
     // An exclusion overlapping the child in either direction defeats both
     // proofs conservatively; a wildcard exclusion matches by string prefix
@@ -199,7 +200,13 @@ function sourceImports(file: { path: string; source: string }): SourceImportReco
   if (extension === ".html") return [];
   const sources =
     extension === ".vue"
-      ? [...file.source.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)].map((match) => {
+      ? [
+          // A commented-out script block never executes, so it must not
+          // contribute loader or reachability records.
+          ...file.source
+            .replace(/<!--[\s\S]*?-->/g, "")
+            .matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi),
+        ].map((match) => {
           // Parse each block with its declared language so JSX blocks are
           // not rejected by the TypeScript grammar.
           const lang = match[1].match(/\blang\s*=\s*["']?(\w+)/)?.[1]?.toLowerCase();
@@ -428,6 +435,9 @@ export interface SharedEntryProofOptions {
 }
 
 export interface SharedEntryProofs {
+  /// True when this consumer file sits inside a proven loading flow and
+  /// the entry's detection scope covers it.
+  provenConsumer: (consumer: PreparedSourceFile) => boolean;
   /// Stylesheets proven for every consumer keep migrating; a stylesheet
   /// with any unproven consumer flow is retained.
   provenStyle: (stylePath: string, consumers: PreparedSourceFile[]) => boolean;
@@ -459,19 +469,17 @@ export function proveSharedEntry(options: SharedEntryProofOptions): SharedEntryP
   const reachable = reachableFrom(loaders, edges);
   const exposed = exposedFiles(options.packageRoot, options.packageJson, ownedSources);
 
+  const provenConsumer = (consumer: PreparedSourceFile): boolean =>
+    options.owned(consumer.path) &&
+    reachable.has(consumer.path) &&
+    (exposed === "all" ? false : !exposed.has(consumer.path)) &&
+    (scan === "literal" || !options.ignoredPaths.has(consumer.path));
   return {
+    provenConsumer,
     // A stylesheet with no consumer at all has no proven flow either: its
     // movable at-rules would otherwise activate in the shared entry for
     // CSS nothing provably loads.
-    provenStyle: (stylePath, consumers) =>
-      consumers.length > 0 &&
-      consumers.every(
-        (consumer) =>
-          options.owned(consumer.path) &&
-          reachable.has(consumer.path) &&
-          (exposed === "all" ? false : !exposed.has(consumer.path)) &&
-          (scan === "literal" || !options.ignoredPaths.has(consumer.path)),
-      ),
+    provenStyle: (stylePath, consumers) => consumers.length > 0 && consumers.every(provenConsumer),
   };
 }
 
@@ -497,6 +505,22 @@ function htmlLinksEntry(file: { path: string; source: string }, entry: string): 
   } catch {
     return false;
   }
+}
+
+/// A parsed import whose specifier resolves to the stylesheet. Consumer
+/// detection must not accept a path mentioned in a comment or unrelated
+/// string: the native rewriter only edits parsed module references, so
+/// the proof layer sees the same consumer set it does.
+export function importsStylesheet(
+  file: { path: string; source: string },
+  stylePath: string,
+): boolean {
+  return sourceImports(file).some(
+    (record) =>
+      !record.typeOnly &&
+      record.specifier.startsWith(".") &&
+      resolve(dirname(file.path), record.specifier) === stylePath,
+  );
 }
 
 /// A parsed static import declaration whose specifier resolves to the

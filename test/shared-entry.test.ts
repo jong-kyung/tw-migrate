@@ -186,6 +186,25 @@ test("a disabled html link is not a loader", () => {
   expect(prove({ packageSources: [page] })).toBe(null);
 });
 
+test("a commented-out vue script block is not a loader", () => {
+  const commented = file(
+    `${child}/App.vue`,
+    "<template><div /></template>\n<!-- <script>import '../../globals.css';</script> -->\n<script setup>import { Button } from './Button.tsx';</script>\n",
+  );
+
+  expect(prove({ packageSources: [commented, consumer] })).toBe(null);
+});
+
+test("wildcard positive scopes prove no literal coverage", () => {
+  expect(
+    scanProof({
+      entry,
+      entrySource: '@import "tailwindcss" source(none);\n@source "./packages/app/**/*.tsx";\n',
+      packageRoot: child,
+    }),
+  ).toBe(null);
+});
+
 test("a vue loader parses with its declared script language", () => {
   const vueLoader = file(
     `${child}/App.vue`,

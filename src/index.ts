@@ -34,7 +34,7 @@ import {
   loadTailwind,
   resolveTailwindEntry,
 } from "./tailwind.ts";
-import { proveSharedEntry, tailwindEntryCatalog } from "./plan/entry.ts";
+import { importsStylesheet, proveSharedEntry, tailwindEntryCatalog } from "./plan/entry.ts";
 import type { SharedEntryProofs } from "./plan/entry.ts";
 import {
   appendMediaDefinitions,
@@ -354,6 +354,9 @@ interface PreparedPackage {
   files: PlannedFile[];
   stylesheets: StylesheetEntry[];
   tailwind: LoadedTailwind;
+  /// The dual proofs of an ancestor-shared entry; absent for a package
+  /// that owns its entry, whose runtime loads it by definition.
+  sharedProofs?: SharedEntryProofs;
   /// Preparation-time warnings, such as unproven shared-entry flows.
   warnings: MigrationWarning[];
 }
@@ -557,7 +560,7 @@ async function preparePackage(
           path,
           packageSources.filter(
             (file) =>
-              sourceReferencesStyle(file, path) ||
+              importsStylesheet(file, path) ||
               (file.htmlStylesheets ?? []).some((linked) => linked.cssPath === path),
           ),
         );
@@ -672,6 +675,7 @@ async function preparePackage(
       files,
       stylesheets,
       tailwind,
+      sharedProofs,
       warnings: proofWarnings,
     },
   };
@@ -712,6 +716,62 @@ async function planPreparedGroup(
     }
     return results;
   };
+
+  // A member's stylesheet consumed by another package's files must prove
+  // that those consumers load the shared entry too: through the consumer
+  // package's own dual proofs when it shares the entry, trivially when the
+  // consumer package owns this entry, and never from outside the group.
+  const membersByRoot = new Map(active.map((member) => [member.packageRoot, member]));
+  for (const member of active) {
+    member.stylesheets = member.stylesheets.filter((stylesheet) => {
+      const foreignConsumers = member.files.filter(
+        (file) =>
+          context.pathOwners.get(file.path) !== member.packageRoot &&
+          (importsStylesheet(file, stylesheet.cssPath) ||
+            (file.htmlStylesheets ?? []).some((linked) => linked.cssPath === stylesheet.cssPath)),
+      );
+      const proven = foreignConsumers.every((consumer) => {
+        const consumerRoot = context.pathOwners.get(consumer.path);
+        const consumerMember =
+          consumerRoot === undefined ? undefined : membersByRoot.get(consumerRoot);
+        if (consumerMember === undefined) return false;
+        if (consumerMember.sharedProofs === undefined) return true;
+        return consumerMember.sharedProofs.provenConsumer(consumer);
+      });
+      if (!proven) {
+        member.warnings.push({
+          code: "unproven-shared-entry-flow",
+          file: stylesheet.cssPath,
+          start: 0,
+          end: 0,
+          message:
+            "A consumer flow could not be proven to load the shared Tailwind entry, so the stylesheet is retained.",
+        });
+      }
+      return proven;
+    });
+  }
+
+  // A member whose stylesheets were all retained by the proofs still
+  // surfaces its warnings, but plans nothing.
+  for (const member of active.filter((remaining) => remaining.stylesheets.length === 0)) {
+    if (member.warnings.length > 0) {
+      results.push({
+        plan: {
+          files: [],
+          deletedFiles: [],
+          unlinkedFiles: [],
+          candidates: [],
+          rules: [],
+          warnings: [...member.warnings],
+          convertedRules: 0,
+          retainedRules: 0,
+        },
+      });
+    }
+  }
+  active = active.filter((remaining) => remaining.stylesheets.length > 0);
+  if (active.length === 0) return results;
 
   // Entry safety gates every entry mutation, not only media extraction.
   const groupWritable = !(await entryUnsafe(entry.path, workspaceRoot, targetable));
