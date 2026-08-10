@@ -40,6 +40,7 @@ import { verifySnapshots, writeChanges } from "./util/write.ts";
 import type {
   DesignSystem,
   LoadedTailwind,
+  PreparedVue,
   MigrateOptions,
   MigrationContext,
   MigrationFailure,
@@ -307,7 +308,32 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
   };
 }
 
+// Preparation and planning are separate phases so a shared-entry group can
+// finish preparing every member package before any consumer is planned.
+interface PreparedPackage {
+  packageRoot: string;
+  preparedHtml: PreparedHtml;
+  preparedVue: PreparedVue;
+  styleCompilers: StyleCompilers;
+  files: PlannedFile[];
+  stylesheets: StylesheetEntry[];
+  tailwind: LoadedTailwind;
+}
+
+// When `prepared` is absent the result is final: a recoverable package
+// failure or a warnings-only plan from preparation.
+type PackagePreparation = PlanResult & { prepared?: PreparedPackage };
+
 async function planPackage(context: MigrationContext, packageRoot: string): Promise<PlanResult> {
+  const preparation = await preparePackage(context, packageRoot);
+  if (!preparation.prepared) return preparation;
+  return planPreparedPackage(context, preparation.prepared);
+}
+
+async function preparePackage(
+  context: MigrationContext,
+  packageRoot: string,
+): Promise<PackagePreparation> {
   const {
     options,
     snapshots,
@@ -503,6 +529,31 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
   }
 
   stylesheets.push(...preparedVue.stylesheets);
+
+  return {
+    prepared: {
+      packageRoot,
+      preparedHtml,
+      preparedVue,
+      styleCompilers,
+      files,
+      stylesheets,
+      tailwind,
+    },
+  };
+}
+
+async function planPreparedPackage(
+  context: MigrationContext,
+  prepared: PreparedPackage,
+): Promise<PlanResult> {
+  const { options, workspaceRoot, targetable, snapshots } = context;
+  const { packageRoot, preparedHtml, preparedVue, styleCompilers, files, stylesheets, tailwind } =
+    prepared;
+  const recover = (error: unknown, fatal = false): PlanResult => {
+    if (!options.force || fatal) throw error;
+    return { failure: packageFailure(workspaceRoot, packageRoot, error) };
+  };
 
   let extraction: MediaExtraction | undefined;
   const mediaWarnings: MigrationWarning[] = [];
