@@ -1,4 +1,6 @@
 [[steps]]
 name = "cross-group collision"
-args = ["--workspaces", "--force"]
+# The shared-entry consumer discipline retains cross-group consumers
+# before they can collide, so the collision path needs extraction off.
+args = ["--workspaces", "--force", "--no-extract-media-queries"]
 status = 1

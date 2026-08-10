@@ -16,6 +16,8 @@ Options:
   --tailwind-css <entry.css> Use this Tailwind CSS entry when the current package
                              has multiple entries. Cannot be used with --workspaces.
   --workspaces               Migrate every package in the workspace.
+  --no-extract-media-queries Keep arbitrary media variants instead of extracting
+                             named @custom-variant definitions into the entry.
   --force                    Skip packages with recoverable discovery or input errors.
   --dry-run                  Preview changes without applying them.
   -h, --help                 Show this help message.
@@ -43,10 +45,12 @@ async function main(): Promise<void> {
   let write = true;
   let force = false;
   let workspaces = false;
+  let extractMediaQueries = true;
 
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === "--dry-run") write = false;
+    else if (argument === "--no-extract-media-queries") extractMediaQueries = false;
     else if (argument === "--force") force = true;
     else if (argument === "--workspaces") workspaces = true;
     else if (argument === "--tailwind-css") {
@@ -59,7 +63,14 @@ async function main(): Promise<void> {
   }
 
   const { migrate } = await import("./index.ts");
-  const report = await migrate({ styleFile, tailwindCss, write, force, workspaces });
+  const report = await migrate({
+    styleFile,
+    tailwindCss,
+    write,
+    force,
+    workspaces,
+    extractMediaQueries,
+  });
   if (report.diff) process.stdout.write(report.diff);
   for (const warning of report.warnings) {
     const location = warning.line

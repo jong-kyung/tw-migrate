@@ -88,7 +88,7 @@ test("reuses a project breakpoint whose expansion matches the component", async 
 
 test("leaves media handling unchanged while extraction is disabled", async () => {
   const cwd = await fixture();
-  const report = await migrate({ cwd });
+  const report = await migrate({ cwd, extractMediaQueries: false });
 
   expect(report.candidates).toEqual(["[@media_screen_and_(max-width:700px)]:m-[7px]", "p-[13px]"]);
   expect(report.changedFiles).toEqual(["Button.module.css", "Button.tsx"]);

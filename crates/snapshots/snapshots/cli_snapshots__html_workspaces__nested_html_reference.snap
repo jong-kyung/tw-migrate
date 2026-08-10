@@ -6,7 +6,7 @@ case: nested_html_reference
 
 --- step: write ---
 status: 0
-stdout: "Applied 0 file(s); 0 rule(s) converted, 1 retained.\n"
-stderr: "warning[unresolved-selector-target] Button.module.css:1:1-1:27 No exclusively supported className references were found.\nwarning[reference-only-css-module-consumer] nested/index.html A reference-only source uses this CSS Module, so it is retained.\n"
+stdout: "Applied 0 file(s); 0 rule(s) converted, 0 retained.\n"
+stderr: "warning[unproven-shared-entry-flow] Button.module.css A consumer flow could not be proven to load the shared Tailwind entry, so the stylesheet is retained.\n"
 workspace delta:
   unchanged

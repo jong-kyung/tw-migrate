@@ -387,6 +387,11 @@ struct BatchPlanRequest {
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BatchStylesheet {
+    /// Per-stylesheet override of the request-level flag: false for a
+    /// shared-entry member's stylesheet inside a group batch, or for a
+    /// stylesheet whose registrations collide with another member's.
+    #[serde(default)]
+    global_at_rule_moves: Option<bool>,
     css_path: String,
     css_source: String,
     #[serde(default)]
@@ -525,11 +530,7 @@ pub(crate) struct SourceFile {
     pub(crate) html_references_safe: bool,
     #[serde(default, rename = "htmlScriptText")]
     pub(crate) html_script_text: String,
-    /// Edits already applied to `source` by earlier passes over the same
-    /// file: earlier stylesheets inside one batch, or earlier entry-group
-    /// members whose plans this batch chains on. Prepared element offsets
-    /// rebase through them.
-    #[serde(default, rename = "priorEdits")]
+    #[serde(skip)]
     pub(crate) prior_edits: Vec<Vec<Edit>>,
 }
 
@@ -561,10 +562,7 @@ struct PlanResponse {
     retained_rules: usize,
     rules: Vec<RuleReport>,
     warnings: Vec<Warning>,
-    /// The complete per-file edit history after this plan, including any
-    /// supplied prior edits; a caller chaining further plans over these
-    /// files passes it back as `priorEdits`.
-    #[serde(rename = "appliedEdits")]
+    #[serde(skip)]
     applied_edits: HashMap<String, Vec<Vec<Edit>>>,
 }
 
@@ -1327,11 +1325,6 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
     }
     let mut current = originals.clone();
     let mut applied_edits: HashMap<String, Vec<Vec<Edit>>> = HashMap::new();
-    for file in &request.files {
-        if !file.prior_edits.is_empty() {
-            applied_edits.insert(file.path.clone(), file.prior_edits.clone());
-        }
-    }
     let mut deleted = HashSet::new();
     let mut unlinked = HashSet::new();
     let mut candidates = BTreeSet::new();
@@ -1518,7 +1511,10 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
                 syntax: analysis_syntax,
                 is_module,
                 can_move_at_rules,
-                can_move_global_at_rules: request.global_at_rule_moves,
+                can_move_global_at_rules: request
+                    .sheet
+                    .global_at_rule_moves
+                    .unwrap_or(request.global_at_rule_moves),
                 relative_urls_stable,
             },
         )?;
