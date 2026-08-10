@@ -119,6 +119,40 @@ async function findGitRoot(cwd: string): Promise<string | undefined> {
   }
 }
 
+/// Scanned paths that Tailwind's automatic detection would exclude. The
+/// discovery scan lists tracked files even when an ignore pattern matches
+/// them, while the utility scanner honors the patterns regardless of
+/// tracking, so shared-entry scan proofs must check patterns with
+/// --no-index. Outside a Git workspace no ignore rules apply.
+export async function scannerIgnoredPaths(
+  workspaceRoot: string,
+  paths: string[],
+): Promise<Set<string>> {
+  if (paths.length === 0 || (await findGitRoot(workspaceRoot)) !== workspaceRoot) return new Set();
+  return new Promise((resolvePromise) => {
+    const child = execFile(
+      "git",
+      ["check-ignore", "--no-index", "-z", "--stdin"],
+      { cwd: workspaceRoot, maxBuffer: 64 * 1024 * 1024 },
+      (error, stdout) => {
+        // Exit code 1 only means nothing matched; any other failure
+        // conservatively reports every path as excluded rather than
+        // proving coverage from a failed check.
+        if (error !== null && typeof error.code === "number" && error.code > 1) {
+          resolvePromise(new Set(paths));
+          return;
+        }
+        const ignored = new Set<string>();
+        for (const entry of stdout.split("\0")) {
+          if (entry) ignored.add(resolve(workspaceRoot, entry));
+        }
+        resolvePromise(ignored);
+      },
+    );
+    child.stdin?.end(paths.map((path) => `${relative(workspaceRoot, path)}\0`).join(""));
+  });
+}
+
 async function isIgnoredByGit(gitRoot: string, path: string): Promise<boolean> {
   if (gitRoot === path) return false;
   try {

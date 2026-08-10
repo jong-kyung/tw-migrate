@@ -169,6 +169,10 @@ export interface MigrationContext extends Scope {
   sourceFiles: SourceFile[];
   styleDependents: Map<string, string[]>;
   vueStyleRanges: Map<string, RuleSpan[]>;
+  /** Tailwind entries per owning package, for ancestor-shared resolution. */
+  entryCatalog: Map<string, string[]>;
+  /** Scanned paths the utility scanner's ignore rules exclude. */
+  ignoredPaths: Set<string>;
 }
 
 export interface RemovableLink {

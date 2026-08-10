@@ -7,16 +7,23 @@ import { loadProjectModule } from "./parser/style-compiler.ts";
 import { isProjectInput, maskCssComments, snapshotFile } from "./util/shared.ts";
 import type { DesignSystem, LoadedTailwind, StylesheetLoader } from "./types.ts";
 
+export function findTailwindEntries(
+  stylePaths: string[],
+  styleSources: Map<string, string>,
+): string[] {
+  return stylePaths.filter((path) => {
+    if (extname(path) !== ".css") return false;
+    const source = maskCssComments(styleSources.get(path) ?? "");
+    return /@import\s+["']tailwindcss(?:\/[^"']*)?["']/.test(source);
+  });
+}
+
 export function resolveTailwindEntry(
   stylePaths: string[],
   styleSources: Map<string, string>,
   configuredPath?: string,
 ): { path: string; entries: string[] } {
-  const entries = stylePaths.filter((path) => {
-    if (extname(path) !== ".css") return false;
-    const source = maskCssComments(styleSources.get(path) ?? "");
-    return /@import\s+["']tailwindcss(?:\/[^"']*)?["']/.test(source);
-  });
+  const entries = findTailwindEntries(stylePaths, styleSources);
   if (configuredPath) return { path: configuredPath, entries };
   if (entries.length === 0)
     throw new Error("No Tailwind v4 CSS entry was found. Pass --tailwind-css.");
