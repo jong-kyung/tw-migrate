@@ -5,6 +5,7 @@ mod css_plan;
 mod html_rewrite;
 mod js_rewrite;
 mod jsx_graph;
+mod imports;
 mod media;
 mod planner;
 mod theme;
@@ -68,6 +69,17 @@ pub fn static_import_bindings(
     source: String,
 ) -> napi::Result<Vec<js_rewrite::StaticImportBinding>> {
     js_rewrite::static_import_bindings(&path, &source).map_err(napi::Error::from_reason)
+}
+
+#[napi]
+pub fn collect_source_imports(source: String, path: String) -> napi::Result<String> {
+    imports::collect_source_imports_json(&source, &path)
+        .map_err(|error| napi::Error::from_reason(error))
+}
+
+#[napi]
+pub fn collect_css_directives(source: String) -> napi::Result<String> {
+    imports::collect_css_directives_json(&source).map_err(|error| napi::Error::from_reason(error))
 }
 
 #[napi]

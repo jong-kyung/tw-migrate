@@ -210,8 +210,12 @@ function buildVueComponentGraph(
 // Vue analysis can produce retention warnings even when nothing remains to
 // plan (all blocks unsupported, unsupported Vue version); surface them
 // through an otherwise empty plan instead of dropping them.
-export function vueWarningsOnlyResult(preparedVue: PreparedVue): PlanResult {
-  if (preparedVue.warnings.length === 0) return {};
+export function vueWarningsOnlyResult(
+  preparedVue: PreparedVue,
+  extraWarnings: MigrationWarning[] = [],
+): PlanResult {
+  const warnings = [...preparedVue.warnings, ...extraWarnings];
+  if (warnings.length === 0) return {};
   return {
     plan: {
       files: [],
@@ -219,7 +223,7 @@ export function vueWarningsOnlyResult(preparedVue: PreparedVue): PlanResult {
       unlinkedFiles: [],
       candidates: [],
       rules: [],
-      warnings: preparedVue.warnings,
+      warnings,
       convertedRules: 0,
       retainedRules: 0,
     },

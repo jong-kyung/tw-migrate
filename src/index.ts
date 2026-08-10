@@ -579,7 +579,7 @@ async function preparePackage(
       })
     : preparedVue.stylesheets;
   if (provenTargets.length === 0 && provenVueStylesheets.length === 0) {
-    return vueWarningsOnlyResult(preparedVue);
+    return vueWarningsOnlyResult(preparedVue, proofWarnings);
   }
 
   let tailwind;
@@ -753,171 +753,204 @@ async function planPreparedGroup(
   let augmented = entry.css;
   let system = entry.designSystem;
 
-  planning: for (;;) {
-    composed = entry.css;
-    states = [];
-    const identityOwners = new Map<string, PreparedPackage>();
-    for (const member of active) {
-      const blocked = blockedByMember.get(member);
-      const memberWritable = groupWritable && !unwritableMembers.has(member);
-      const request: PlannerRequest = {
-        stylesheets: member.stylesheets.map((stylesheet, index) => {
-          const rules = blocked?.get(index);
-          return rules
-            ? {
-                ...stylesheet,
-                blockedRules: [...rules.values()].map((blockedRule) => blockedRule.ruleId),
-              }
-            : stylesheet;
-        }),
-        tailwindPath: entry.path,
-        tailwindSource: composed,
-        utilityPrefix: entry.designSystem.theme.prefix,
-        themeTokens: entry.themeTokens,
-        ...(names ? { mediaNames: names } : {}),
-        ...(memberWritable ? {} : { entryWritable: false }),
-        files: member.files,
-      };
-      let plan: Plan;
+  // Rebuild the complete composition from the shared snapshot with the
+  // current member set, blocked rules, and name map. Returns the group's
+  // final results when planning exhausts the group early.
+  const replanGroup = async (): Promise<PlanResult[] | undefined> => {
+    planning: for (;;) {
+      composed = entry.css;
+      states = [];
+      const identityOwners = new Map<string, PreparedPackage>();
+      for (const member of active) {
+        const blocked = blockedByMember.get(member);
+        const memberWritable = groupWritable && !unwritableMembers.has(member);
+        const request: PlannerRequest = {
+          stylesheets: member.stylesheets.map((stylesheet, index) => {
+            const rules = blocked?.get(index);
+            return rules
+              ? {
+                  ...stylesheet,
+                  blockedRules: [...rules.values()].map((blockedRule) => blockedRule.ruleId),
+                }
+              : stylesheet;
+          }),
+          tailwindPath: entry.path,
+          tailwindSource: composed,
+          utilityPrefix: entry.designSystem.theme.prefix,
+          themeTokens: entry.themeTokens,
+          ...(names ? { mediaNames: names } : {}),
+          ...(memberWritable ? {} : { entryWritable: false }),
+          files: member.files,
+        };
+        let plan: Plan;
+        try {
+          plan = JSON.parse(planBatchMigration(JSON.stringify(request)));
+        } catch (error) {
+          if (!options.force || !isRecoverablePlanningError(error)) throw error;
+          results.push({ failure: packageFailure(workspaceRoot, member.packageRoot, error) });
+          active = active.filter((remaining) => remaining !== member);
+          if (active.length === 0) return results;
+          continue planning;
+        }
+        // Adopt the member's planned entry source into the group composition;
+        // intermediate package plans must not claim the shared entry.
+        const plannedEntry = plan.files.findIndex((file) => file.path === entry.path);
+        if (plannedEntry >= 0) {
+          if (!memberWritable) {
+            throw new Error(`The planner claimed an unwritable Tailwind entry: ${entry.path}`);
+          }
+          const delta = plan.files[plannedEntry].source;
+          plan.files.splice(plannedEntry, 1);
+          if (!delta.startsWith(composed)) {
+            throw new Error(
+              `The planner rewrote the Tailwind entry instead of appending: ${entry.path}`,
+            );
+          }
+          const identities = atRuleIdentities(delta.slice(composed.length));
+          let collided = false;
+          for (const identity of identities) {
+            if (baseIdentities.has(identity)) {
+              unwritableMembers.add(member);
+              collided = true;
+            } else if (identityOwners.has(identity)) {
+              const owner = identityOwners.get(identity);
+              if (owner !== undefined) unwritableMembers.add(owner);
+              unwritableMembers.add(member);
+              collided = true;
+            }
+          }
+          if (collided) continue planning;
+          for (const identity of identities) identityOwners.set(identity, member);
+          composed = delta;
+        }
+        states.push({ prepared: member, request, plan });
+      }
+
+      const currentExtraction = names !== undefined ? { names, generated } : undefined;
+      const used: { key: string; name: string }[] = [];
+      if (currentExtraction) {
+        // First-use order inside each member's rules carries the cascade
+        // proof; member order is only a deterministic tiebreaker.
+        const seen = new Set<string>();
+        for (const state of states) {
+          for (const definition of usedGeneratedDefinitions(currentExtraction, state.plan)) {
+            if (!seen.has(definition.name)) {
+              seen.add(definition.name);
+              used.push(definition);
+            }
+          }
+        }
+      }
+      augmented = currentExtraction ? appendMediaDefinitions(composed, used) : composed;
       try {
-        plan = JSON.parse(planBatchMigration(JSON.stringify(request)));
+        system = augmented === entry.css ? entry.designSystem : await entry.loadWith(augmented);
       } catch (error) {
-        if (!options.force || !isRecoverablePlanningError(error)) throw error;
-        results.push({ failure: packageFailure(workspaceRoot, member.packageRoot, error) });
-        active = active.filter((remaining) => remaining !== member);
-        if (active.length === 0) return results;
-        continue planning;
-      }
-      // Adopt the member's planned entry source into the group composition;
-      // intermediate package plans must not claim the shared entry.
-      const plannedEntry = plan.files.findIndex((file) => file.path === entry.path);
-      if (plannedEntry >= 0) {
-        if (!memberWritable) {
-          throw new Error(`The planner claimed an unwritable Tailwind entry: ${entry.path}`);
-        }
-        const delta = plan.files[plannedEntry].source;
-        plan.files.splice(plannedEntry, 1);
-        if (!delta.startsWith(composed)) {
-          throw new Error(
-            `The planner rewrote the Tailwind entry instead of appending: ${entry.path}`,
+        if (isIntegrityError(error)) throw error;
+        // Isolate generated definitions before declaring the composed base
+        // invalid: fall every generated condition back to its arbitrary form
+        // and replan. A failure with no generated definition left comes from
+        // the composed base or another planner defect and is fatal.
+        if (names !== undefined && generated.length > 0) {
+          const generatedKeys = new Set(generated.map((definition) => definition.key));
+          names = Object.fromEntries(
+            Object.entries(names).filter(([key]) => !generatedKeys.has(key)),
           );
+          generated = [];
+          continue planning;
         }
-        const identities = atRuleIdentities(delta.slice(composed.length));
-        let collided = false;
-        for (const identity of identities) {
-          if (baseIdentities.has(identity)) {
-            unwritableMembers.add(member);
-            collided = true;
-          } else if (identityOwners.has(identity)) {
-            const owner = identityOwners.get(identity);
-            if (owner !== undefined) unwritableMembers.add(owner);
-            unwritableMembers.add(member);
-            collided = true;
-          }
-        }
-        if (collided) continue planning;
-        for (const identity of identities) identityOwners.set(identity, member);
-        composed = delta;
+        // The failure comes from the composed base rather than an
+        // extractable definition; it affects every package sharing the
+        // entry, so the whole group is skipped under the force policy.
+        return recoverGroup(error);
       }
-      states.push({ prepared: member, request, plan });
-    }
-
-    const currentExtraction = names !== undefined ? { names, generated } : undefined;
-    const used: { key: string; name: string }[] = [];
-    if (currentExtraction) {
-      // First-use order inside each member's rules carries the cascade
-      // proof; member order is only a deterministic tiebreaker.
-      const seen = new Set<string>();
-      for (const state of states) {
-        for (const definition of usedGeneratedDefinitions(currentExtraction, state.plan)) {
-          if (!seen.has(definition.name)) {
-            seen.add(definition.name);
-            used.push(definition);
-          }
-        }
-      }
-    }
-    augmented = currentExtraction ? appendMediaDefinitions(composed, used) : composed;
-    try {
-      system = augmented === entry.css ? entry.designSystem : await entry.loadWith(augmented);
-    } catch (error) {
-      if (isIntegrityError(error)) throw error;
-      // Isolate generated definitions before declaring the composed base
-      // invalid: fall every generated condition back to its arbitrary form
-      // and replan. A failure with no generated definition left comes from
-      // the composed base or another planner defect and is fatal.
-      if (names !== undefined && generated.length > 0) {
-        const generatedKeys = new Set(generated.map((definition) => definition.key));
-        names = Object.fromEntries(
-          Object.entries(names).filter(([key]) => !generatedKeys.has(key)),
+      if (currentExtraction && names !== undefined) {
+        const prefix = entry.designSystem.theme.prefix;
+        const rejected = new Set(
+          used
+            .filter(
+              ({ name }) => system.candidatesToCss([probeCandidate(prefix, name)])[0] === null,
+            )
+            .map(({ key }) => key),
         );
-        generated = [];
-        continue planning;
+        if (rejected.size > 0) {
+          names = Object.fromEntries(Object.entries(names).filter(([key]) => !rejected.has(key)));
+          generated = generated.filter(({ key }) => !rejected.has(key));
+          continue planning;
+        }
       }
-      // The failure comes from the composed base rather than an
-      // extractable definition; it affects every package sharing the
-      // entry, so the whole group is skipped under the force policy.
-      return recoverGroup(error);
-    }
-    if (currentExtraction && names !== undefined) {
-      const prefix = entry.designSystem.theme.prefix;
-      const rejected = new Set(
-        used
-          .filter(({ name }) => system.candidatesToCss([probeCandidate(prefix, name)])[0] === null)
-          .map(({ key }) => key),
-      );
-      if (rejected.size > 0) {
-        names = Object.fromEntries(Object.entries(names).filter(([key]) => !rejected.has(key)));
-        generated = generated.filter(({ key }) => !rejected.has(key));
-        continue planning;
-      }
-    }
 
-    // A candidate Tailwind refuses to compile retains its owning rule(s)
-    // instead of aborting the run: block those rules and replan until every
-    // applied candidate compiles. Replanning any member rebuilds the whole
-    // composition from the shared snapshot, so no moved block survives for
-    // a rule that is no longer migrated.
-    const replanSystem = currentExtraction ? system : entry.designSystem;
-    let progressed = false;
-    for (const state of states) {
-      const failing = invalidCandidates(replanSystem, state.plan.candidates);
-      if (failing.length === 0) continue;
-      let blocked = blockedByMember.get(state.prepared);
-      if (!blocked) blockedByMember.set(state.prepared, (blocked = new Map()));
-      if (accumulateBlockedRules(blocked, state.plan, failing)) progressed = true;
-      else throw new Error(`Tailwind did not generate CSS for candidate: ${failing[0]}`);
+      // A candidate Tailwind refuses to compile retains its owning rule(s)
+      // instead of aborting the run: block those rules and replan until every
+      // applied candidate compiles. Replanning any member rebuilds the whole
+      // composition from the shared snapshot, so no moved block survives for
+      // a rule that is no longer migrated.
+      const replanSystem = currentExtraction ? system : entry.designSystem;
+      let progressed = false;
+      for (const state of states) {
+        const failing = invalidCandidates(replanSystem, state.plan.candidates);
+        if (failing.length === 0) continue;
+        let blocked = blockedByMember.get(state.prepared);
+        if (!blocked) blockedByMember.set(state.prepared, (blocked = new Map()));
+        if (accumulateBlockedRules(blocked, state.plan, failing)) progressed = true;
+        else throw new Error(`Tailwind did not generate CSS for candidate: ${failing[0]}`);
+      }
+      if (progressed) continue planning;
+      break;
     }
-    if (progressed) continue planning;
-    break;
+    return undefined;
+  };
+
+  {
+    const early = await replanGroup();
+    if (early) return early;
   }
 
-  for (const state of states) {
-    const blocked = blockedByMember.get(state.prepared);
-    if (blocked) {
-      for (const [index, rules] of blocked) {
-        const cssPath = state.request.stylesheets[index].cssPath;
-        for (const { authoredSpan, candidates } of rules.values()) {
-          const failed = [...candidates]
-            .sort()
-            .map((candidate) => `\`${candidate}\``)
-            .join(", ");
-          state.plan.warnings.push({
-            code: "candidate-compilation-failure",
-            file: cssPath,
-            // ruleId is a compiled-domain span; warnings anchor to the
-            // authored file.
-            start: authoredSpan.start,
-            end: authoredSpan.end,
-            message: `Tailwind did not generate CSS for ${failed}, so the rule is retained.`,
-          });
+  // Finalization can still fail recoverably under force (for example a
+  // missing preprocessor discovered during post-edit verification). A
+  // failed member's definitions and moved blocks are already part of the
+  // composed entry, so the composition is rebuilt without that member
+  // before the entry edit is emitted; the loop is bounded by the member
+  // count.
+  finalization: for (;;) {
+    const finished: PlanResult[] = [];
+    for (const state of states) {
+      const blocked = blockedByMember.get(state.prepared);
+      if (blocked) {
+        for (const [index, rules] of blocked) {
+          const cssPath = state.request.stylesheets[index].cssPath;
+          for (const { authoredSpan, candidates } of rules.values()) {
+            const failed = [...candidates]
+              .sort()
+              .map((candidate) => `\`${candidate}\``)
+              .join(", ");
+            state.plan.warnings.push({
+              code: "candidate-compilation-failure",
+              file: cssPath,
+              // ruleId is a compiled-domain span; warnings anchor to the
+              // authored file.
+              start: authoredSpan.start,
+              end: authoredSpan.end,
+              message: `Tailwind did not generate CSS for ${failed}, so the rule is retained.`,
+            });
+          }
         }
       }
+      // Identical group-level warnings deduplicate in the merged report.
+      state.plan.warnings.push(...mediaWarnings);
+      state.plan.warnings.push(...state.prepared.warnings);
+      const result = await finishMemberPlan(context, state.prepared, state.plan);
+      if (result.failure) {
+        results.push(result);
+        active = active.filter((member) => member !== state.prepared);
+        if (active.length === 0) return results;
+        const early = await replanGroup();
+        if (early) return early;
+        continue finalization;
+      }
+      finished.push(result);
     }
-    // Identical group-level warnings deduplicate in the merged report.
-    state.plan.warnings.push(...mediaWarnings);
-    state.plan.warnings.push(...state.prepared.warnings);
-    results.push(await finishMemberPlan(context, state.prepared, state.plan));
+    results.push(...finished);
+    break;
   }
 
   if (augmented !== entry.css) {

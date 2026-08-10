@@ -159,6 +159,38 @@ test("keeps consumers outside child ownership unproven", () => {
   expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(true);
 });
 
+test("a type-only entry import is not a loader", () => {
+  const typeOnlyLoader = file(
+    `${child}/main.tsx`,
+    "import type {} from '../../globals.css';\nimport { Button } from './Button.tsx';\nexport const render = Button;\n",
+  );
+
+  expect(prove({ packageSources: [typeOnlyLoader, consumer] })).toBe(null);
+});
+
+test("a conventional index entry exposes its import closure", () => {
+  const index = file(`${child}/index.ts`, "export { Button } from './Button.tsx';\n");
+  const exposedByIndex = prove({ packageSources: [loader, consumer, index] });
+  const noIndex = prove({ packageSources: [loader, consumer] });
+
+  // Without export metadata the conventional index remains externally
+  // loadable, so consumers behind it are exposed; a package with no index
+  // exposes nothing by convention.
+  expect(exposedByIndex?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+  expect(noIndex?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(true);
+});
+
+test("directive-shaped text inside css strings proves nothing", () => {
+  expect(
+    scanProof({
+      entry,
+      entrySource:
+        '@import "tailwindcss" source(none);\n.rule { content: \'@source "./packages/app"\'; }\n',
+      packageRoot: child,
+    }),
+  ).toBe(null);
+});
+
 test("type-only imports create no reachability edges", () => {
   const typeLoader = file(
     `${child}/main.tsx`,

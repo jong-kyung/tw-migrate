@@ -12,6 +12,7 @@
 
 import { dirname, extname, join, resolve } from "node:path";
 
+import { collectCssDirectives, collectSourceImports } from "../native.ts";
 import { isWithin, maskCssComments } from "../util/shared.ts";
 import type { PreparedSourceFile } from "../types.ts";
 
@@ -36,15 +37,35 @@ export function tailwindEntryCatalog(
   return catalog;
 }
 
+/// Parsed top-level at-rule directives of one stylesheet, or null when the
+/// stylesheet does not parse. Tailwind honors `@source` and `@import` only
+/// at the top level, so directive-shaped text inside rule blocks or string
+/// values never counts.
+function cssDirectives(source: string): { name: string; text: string }[] | null {
+  try {
+    const parsed: unknown = JSON.parse(collectCssDirectives(source));
+    if (!Array.isArray(parsed)) return null;
+    return parsed.filter(
+      (directive): directive is { name: string; text: string } =>
+        directive !== null &&
+        typeof directive === "object" &&
+        typeof directive.name === "string" &&
+        typeof directive.text === "string",
+    );
+  } catch {
+    return null;
+  }
+}
+
 /// The entry's static import graph over the scanned stylesheet corpus:
 /// Tailwind processes source directives from imported project CSS as part
 /// of one entry graph. Returns null when a local import is missing from
-/// the corpus, because its directives are unknowable.
+/// the corpus or does not parse, because its directives are unknowable.
 function entryGraphSheets(
   entry: string,
   styleSources: Map<string, string>,
-): { path: string; source: string }[] | null {
-  const sheets: { path: string; source: string }[] = [];
+): { path: string; directives: { name: string; text: string }[] }[] | null {
+  const sheets: { path: string; directives: { name: string; text: string }[] }[] = [];
   const seen = new Set<string>();
   const pending = [entry];
   while (pending.length > 0) {
@@ -53,11 +74,13 @@ function entryGraphSheets(
     seen.add(path);
     const raw = styleSources.get(path);
     if (raw === undefined) return null;
-    const source = maskCssComments(raw);
-    sheets.push({ path, source });
-    for (const match of source.matchAll(/@import\s+(?:url\(\s*)?["']([^"']+)["']/g)) {
-      const spec = match[1];
-      if (!spec.startsWith(".") && !spec.startsWith("/")) continue;
+    const directives = cssDirectives(raw);
+    if (directives === null) return null;
+    sheets.push({ path, directives });
+    for (const directive of directives) {
+      if (directive.name !== "import") continue;
+      const spec = directive.text.match(/@import\s+(?:url\(\s*)?["']([^"']+)["']/)?.[1];
+      if (spec === undefined || (!spec.startsWith(".") && !spec.startsWith("/"))) continue;
       const resolved = resolve(dirname(path), spec);
       pending.push(styleSources.has(resolved) ? resolved : `${resolved}.css`);
     }
@@ -85,7 +108,7 @@ export function scanProof(options: {
 
   let literal = false;
   let automaticDisabled = false;
-  for (const { path, source } of sheets) {
+  for (const { path, directives } of sheets) {
     const base = dirname(path);
     const scopePath = (scope: string): string => resolve(base, scope.replace(/[/\\]\*.*$/, ""));
     // A literal scope proves coverage only when it contains the whole child
@@ -97,20 +120,22 @@ export function scanProof(options: {
     const excludesChild = (scope: string): boolean =>
       isWithin(scopePath(scope), options.packageRoot) ||
       isWithin(options.packageRoot, scopePath(scope));
-    for (const match of source.matchAll(/@source\s+not\s+["']([^"']+)["']/g)) {
-      if (excludesChild(match[1])) return null;
-    }
-    for (const match of source.matchAll(/@source\s+["']([^"']+)["']/g)) {
-      if (coversChild(match[1])) literal = true;
-    }
-    const importSource = source.match(/@import\s+["']tailwindcss["'][^;]*\bsource\(([^)]*)\)/);
-    if (importSource) {
-      const argument = importSource[1].trim();
-      if (argument === "none") automaticDisabled = true;
-      else {
-        const literalBase = argument.match(/^["']([^"']+)["']$/);
-        if (literalBase && coversChild(literalBase[1])) literal = true;
-        else automaticDisabled = true;
+    for (const { name, text } of directives) {
+      if (name === "source") {
+        const excluded = text.match(/@source\s+not\s+["']([^"']+)["']/);
+        if (excluded && excludesChild(excluded[1])) return null;
+        const scope = excluded ? undefined : text.match(/@source\s+["']([^"']+)["']/);
+        if (scope && coversChild(scope[1])) literal = true;
+      } else if (name === "import") {
+        const importSource = text.match(/@import\s+["']tailwindcss["'][^;]*\bsource\(([^)]*)\)/);
+        if (!importSource) continue;
+        const argument = importSource[1].trim();
+        if (argument === "none") automaticDisabled = true;
+        else {
+          const literalBase = argument.match(/^["']([^"']+)["']$/);
+          if (literalBase && coversChild(literalBase[1])) literal = true;
+          else automaticDisabled = true;
+        }
       }
     }
   }
@@ -119,62 +144,44 @@ export function scanProof(options: {
   return isWithin(dirname(options.entry), options.packageRoot) ? "automatic" : null;
 }
 
-/// Replace JS comments with spaces so commented-out imports never create
-/// loader or reachability edges. String and template contexts are tracked
-/// so comment markers inside literals stay untouched. Regex literals and
-/// `${}` re-entry inside templates are not modeled; mis-masking there can
-/// only remove candidate matches, which makes proofs fail conservatively.
-function maskJsComments(source: string): string {
-  // Split into UTF-16 units so writes align with the index-based scan.
-  const output = source.split("");
-  type State = "code" | "single" | "double" | "template" | "line" | "block";
-  let state: State = "code";
-  for (let index = 0; index < source.length; index += 1) {
-    const char = source[index];
-    const next = source[index + 1];
-    switch (state) {
-      case "code":
-        if (char === "/" && next === "/") {
-          state = "line";
-          output[index] = " ";
-        } else if (char === "/" && next === "*") {
-          state = "block";
-          output[index] = " ";
-        } else if (char === "'") state = "single";
-        else if (char === '"') state = "double";
-        else if (char === "`") state = "template";
-        break;
-      case "single":
-        if (char === "\\") index += 1;
-        else if (char === "'" || char === "\n") state = "code";
-        break;
-      case "double":
-        if (char === "\\") index += 1;
-        else if (char === '"' || char === "\n") state = "code";
-        break;
-      case "template":
-        if (char === "\\") index += 1;
-        else if (char === "`") state = "code";
-        break;
-      case "line":
-        if (char === "\n") state = "code";
-        else output[index] = " ";
-        break;
-      case "block":
-        if (char === "*" && next === "/") {
-          output[index] = " ";
-          output[index + 1] = " ";
-          index += 1;
-          state = "code";
-        } else if (char !== "\n") output[index] = " ";
-        break;
-    }
-  }
-  return output.join("");
+interface SourceImportRecord {
+  specifier: string;
+  typeOnly: boolean;
 }
 
-const IMPORT_SPECIFIERS =
-  /(?:\bimport|\bexport)\s+(?:[\w$*{},\s]+?from\s+)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)|\brequire\s*\(\s*["']([^"']+)["']\s*\)/g;
+/// Parsed module records of one source file through the native oxc parser.
+/// Vue SFC scripts are extracted first; a file that does not parse has no
+/// provable imports, which only makes proofs fail conservatively.
+function sourceImports(file: { path: string; source: string }): SourceImportRecord[] {
+  const extension = extname(file.path);
+  if (extension === ".html") return [];
+  const sources =
+    extension === ".vue"
+      ? [...file.source.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map((match) => match[1])
+      : [file.source];
+  const records: SourceImportRecord[] = [];
+  for (const source of sources) {
+    try {
+      const parsed: unknown = JSON.parse(
+        collectSourceImports(source, extension === ".vue" ? `${file.path}.ts` : file.path),
+      );
+      if (!Array.isArray(parsed)) continue;
+      for (const record of parsed) {
+        if (
+          record !== null &&
+          typeof record === "object" &&
+          typeof record.specifier === "string" &&
+          typeof record.typeOnly === "boolean"
+        ) {
+          records.push({ specifier: record.specifier, typeOnly: record.typeOnly });
+        }
+      }
+    } catch {
+      // Unparseable sources prove nothing.
+    }
+  }
+  return records;
+}
 
 const RESOLVABLE_EXTENSIONS = [
   ".ts",
@@ -208,17 +215,11 @@ function importEdges(files: PreparedSourceFile[]): Map<string, string[]> {
   for (const file of files) {
     if (extname(file.path) === ".html") continue;
     const targets: string[] = [];
-    for (const match of maskJsComments(file.source).matchAll(IMPORT_SPECIFIERS)) {
-      // Type-only imports are erased at runtime and load nothing, so they
-      // never carry loading reachability. A clause whose specifiers are
-      // all inline `type` entries is excluded the same way; over-excluding
-      // a mixed default-and-type clause only makes the proof fail
-      // conservatively.
-      if (/^(?:import|export)\s+type\b/.test(match[0])) continue;
-      const braces = match[0].match(/\{([^}]*)\}/);
-      if (braces && braces[1].split(",").every((part) => /^\s*type\s/.test(part))) continue;
-      const spec = match[1] ?? match[2] ?? match[3];
-      const resolved = resolveImport(dirname(file.path), spec, known);
+    // Type-only records are erased at runtime and load nothing, so they
+    // never carry loading reachability.
+    for (const record of sourceImports(file)) {
+      if (record.typeOnly) continue;
+      const resolved = resolveImport(dirname(file.path), record.specifier, known);
       if (resolved !== undefined) targets.push(resolved);
     }
     edges.set(file.path, targets);
@@ -270,14 +271,23 @@ function exposedFiles(
   for (const field of ["main", "module", "exports"]) {
     if (collect(packageJson[field]) === "all") return "all";
   }
+  const declared = specs.length > 0;
+  // Without export metadata the conventional `./index` entry remains
+  // externally loadable; when no index resolves, nothing is exposed by
+  // convention either.
+  if (!declared) specs.push("./index");
   const entryFiles: string[] = [];
   for (const spec of specs) {
     const resolved = resolveImport(packageRoot, spec.startsWith(".") ? spec : `./${spec}`, known);
     // A declared entry point that does not resolve to a scanned source,
     // such as an unbuilt `./dist/index.js`, exposes an unknowable set of
     // sources, so the exposure proof turns conservative instead of
-    // silently dropping the target.
-    if (resolved === undefined) return "all";
+    // silently dropping the target. A missing conventional index simply
+    // exposes nothing.
+    if (resolved === undefined) {
+      if (declared) return "all";
+      continue;
+    }
     entryFiles.push(resolved);
   }
   return reachableFrom(entryFiles, importEdges(files));
@@ -361,14 +371,15 @@ function htmlLinksEntry(file: { path: string; source: string }, entry: string): 
   return false;
 }
 
-/// A parsed static import, dynamic import, or require whose specifier
-/// resolves to the entry. A loading proof needs an actual import
-/// statement: a quoted path sitting in a comment or an unrelated string
-/// does not load the entry's CSS.
+/// A parsed runtime import, dynamic import, or require whose specifier
+/// resolves to the entry. A loading proof needs an actual runtime import:
+/// a quoted path in a comment or unrelated string, and a type-only clause
+/// TypeScript erases, never load the entry's CSS.
 function importsEntry(file: { path: string; source: string }, entry: string): boolean {
-  for (const match of maskJsComments(file.source).matchAll(IMPORT_SPECIFIERS)) {
-    const spec = match[1] ?? match[2] ?? match[3];
-    if (spec.startsWith(".") && resolve(dirname(file.path), spec) === entry) return true;
-  }
-  return false;
+  return sourceImports(file).some(
+    (record) =>
+      !record.typeOnly &&
+      record.specifier.startsWith(".") &&
+      resolve(dirname(file.path), record.specifier) === entry,
+  );
 }

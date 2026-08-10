@@ -175,3 +175,21 @@ test("an html child package proves the ancestor entry through its link", async (
   expect(await readFile(join(cwd, "globals.css"), "utf8")).toContain("@custom-variant screen ");
   expect(report.failures).toEqual([]);
 });
+
+test("returns proof warnings when every target is rejected", async () => {
+  const files: Record<string, string> = {
+    "package.json": '{"private":true}',
+    "globals.css": '@import "tailwindcss";\n',
+    ...app("app"),
+  };
+  // The loader no longer reaches the consumer, so every stylesheet is
+  // rejected and the package must still surface the retention warnings.
+  files["packages/app/main.tsx"] = "import '../../globals.css';\n";
+  const cwd = await workspace(files);
+  const report = await migrate({ cwd, workspaces: true, extractMediaQueries: true });
+
+  const flow = report.warnings.filter((warning) => warning.code === "unproven-shared-entry-flow");
+  expect(flow).toHaveLength(1);
+  expect(flow[0].file).toBe("packages/app/Button.module.css");
+  expect(report.changedFiles).toEqual([]);
+});

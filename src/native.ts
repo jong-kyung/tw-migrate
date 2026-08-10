@@ -11,6 +11,8 @@ export interface StaticImportBinding {
 
 interface Binding {
   collectMediaConditions: (request: string) => string;
+  collectSourceImports: (source: string, path: string) => string;
+  collectCssDirectives: (source: string) => string;
   mediaProbeKey: (css: string) => string;
   decodeSourceMap: (sourceMap: string) => string;
   planBatchMigration: (request: string) => string;
@@ -51,6 +53,8 @@ try {
 
 export const {
   collectMediaConditions,
+  collectSourceImports,
+  collectCssDirectives,
   mediaProbeKey,
   decodeSourceMap,
   planBatchMigration,
