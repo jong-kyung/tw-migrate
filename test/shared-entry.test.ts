@@ -1,28 +1,32 @@
 import { expect, test } from "vite-plus/test";
 
+import { join, resolve } from "node:path";
+
 import { proveSharedEntry, scanProof, tailwindEntryCatalog } from "../src/plan/entry.ts";
 import type { PreparedSourceFile } from "../src/types.ts";
 
-const root = "/repo";
-const child = "/repo/packages/app";
-const entry = "/repo/globals.css";
+// Platform-resolved so separators and drive letters match what the proof
+// helpers derive on Windows.
+const root = resolve("/repo");
+const child = join(root, "packages", "app");
+const entry = join(root, "globals.css");
 
 test("catalogs Tailwind entries by owning package", () => {
   const styleSources = new Map([
     [entry, '@import "tailwindcss";\n'],
-    ["/repo/plain.css", ".a { color: red; }\n"],
-    ["/repo/packages/app/own.css", '@import "tailwindcss" prefix(tw);\n'],
+    [join(root, "plain.css"), ".a { color: red; }\n"],
+    [join(child, "own.css"), '@import "tailwindcss" prefix(tw);\n'],
   ]);
   const owners = new Map<string, string | undefined>([
     [entry, root],
-    ["/repo/plain.css", root],
-    ["/repo/packages/app/own.css", child],
+    [join(root, "plain.css"), root],
+    [join(child, "own.css"), child],
   ]);
 
   expect(tailwindEntryCatalog(styleSources, owners)).toEqual(
     new Map([
       [root, [entry]],
-      [child, ["/repo/packages/app/own.css"]],
+      [child, [join(child, "own.css")]],
     ]),
   );
 });
@@ -48,7 +52,7 @@ test("proves scan coverage through literal scopes and automatic bases", () => {
   // Source directives in imported project CSS belong to the same entry
   // graph, resolved against their owning stylesheet; a graph import
   // missing from the corpus leaves the directives unknowable.
-  const styleSources = new Map([["/repo/theme.css", '@source not "./packages/app";\n']]);
+  const styleSources = new Map([[join(root, "theme.css"), '@source not "./packages/app";\n']]);
   expect(
     scanProof({
       entry,
@@ -70,10 +74,10 @@ test("proves scan coverage through literal scopes and automatic bases", () => {
       entry,
       entrySource: '@import "tailwindcss";\n@import "./theme.css";\n',
       packageRoot: child,
-      styleSources: new Map([["/repo/theme.css", '@source "./packages/app";\n']]),
+      styleSources: new Map([[join(root, "theme.css"), '@source "./packages/app";\n']]),
     }),
   ).toBe("literal");
-  expect(prove('@import "tailwindcss";\n', "/repo/other/globals.css")).toBe(null);
+  expect(prove('@import "tailwindcss";\n', join(root, "other", "globals.css"))).toBe(null);
 });
 
 function file(path: string, source: string): PreparedSourceFile {
@@ -99,11 +103,11 @@ function prove(options: {
 }
 
 const loader = file(
-  `${child}/main.tsx`,
+  join(child, "main.tsx"),
   "import '../../globals.css';\nimport { Button } from './Button.tsx';\n",
 );
 const consumer = file(
-  `${child}/Button.tsx`,
+  join(child, "Button.tsx"),
   "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n",
 );
 
@@ -111,7 +115,7 @@ test("proves consumers statically reachable from a loading source", () => {
   const proofs = prove({ packageSources: [loader, consumer] });
 
   expect(proofs).not.toBe(null);
-  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(true);
+  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(true);
 });
 
 test("rejects a package that never loads the entry", () => {
@@ -120,15 +124,15 @@ test("rejects a package that never loads the entry", () => {
 
 test("ignores entry paths outside real import statements", () => {
   const commented = file(
-    `${child}/main.tsx`,
+    join(child, "main.tsx"),
     "// import '../../globals.css';\nimport { Button } from './Button.tsx';\nexport const render = Button;\n",
   );
   const deadString = file(
-    `${child}/main.tsx`,
+    join(child, "main.tsx"),
     "const doc = '../../globals.css';\nimport { Button } from './Button.tsx';\nexport const render = Button;\n",
   );
   const blockCommented = file(
-    `${child}/main.tsx`,
+    join(child, "main.tsx"),
     "/* import '../../globals.css'; */\nimport { Button } from './Button.tsx';\nexport const render = Button;\n",
   );
 
@@ -139,7 +143,7 @@ test("ignores entry paths outside real import statements", () => {
 
 test("a bare package deep import of a child source exposes its closure", () => {
   const sibling = file(
-    `${root}/sibling/Panel.tsx`,
+    join(root, "sibling/Panel.tsx"),
     "import { Button } from '@acme/app/Button.tsx';\nexport const Panel = () => <Button />;\n",
   );
   const proofs = prove({
@@ -147,7 +151,7 @@ test("a bare package deep import of a child source exposes its closure", () => {
     packageJson: { name: "@acme/app", private: true },
   });
 
-  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
 });
 
 test("a foreign deep import of a child source exposes its closure", () => {
@@ -155,12 +159,12 @@ test("a foreign deep import of a child source exposes its closure", () => {
   // publication but not in-repository deep imports, so the component runs
   // without this entry.
   const sibling = file(
-    `${root}/sibling/Panel.tsx`,
+    join(root, "sibling/Panel.tsx"),
     "import { Button } from '../packages/app/Button.tsx';\nexport const Panel = () => <Button />;\n",
   );
   const proofs = prove({ packageSources: [loader, consumer, sibling] });
 
-  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
 });
 
 test("keeps consumers outside child ownership unproven", () => {
@@ -168,26 +172,26 @@ test("keeps consumers outside child ownership unproven", () => {
   // cross-package import and is reachable from the child's loader, but it
   // can run under its own package without this entry's CSS.
   const bridge = file(
-    `${child}/bridge.tsx`,
+    join(child, "bridge.tsx"),
     "export { Foreign } from '../../sibling/Foreign.tsx';\n",
   );
   const loaderWithBridge = file(
-    `${child}/main.tsx`,
+    join(child, "main.tsx"),
     "import '../../globals.css';\nimport { Button } from './Button.tsx';\nexport { Foreign } from './bridge.tsx';\n",
   );
   const foreign = file(
-    `${root}/sibling/Foreign.tsx`,
+    join(root, "sibling/Foreign.tsx"),
     "import styles from '../packages/app/Button.module.css';\nexport const Foreign = () => <i className={styles.button} />;\n",
   );
   const proofs = prove({ packageSources: [loaderWithBridge, bridge, consumer, foreign] });
 
-  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer, foreign])).toBe(false);
-  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(true);
+  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer, foreign])).toBe(false);
+  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(true);
 });
 
 test("a type-only entry import is not a loader", () => {
   const typeOnlyLoader = file(
-    `${child}/main.tsx`,
+    join(child, "main.tsx"),
     "import type {} from '../../globals.css';\nimport { Button } from './Button.tsx';\nexport const render = Button;\n",
   );
 
@@ -196,7 +200,7 @@ test("a type-only entry import is not a loader", () => {
 
 test("a conditional dynamic entry import is not a loader", () => {
   const conditionalLoader = file(
-    `${child}/main.tsx`,
+    join(child, "main.tsx"),
     "declare const enabled: boolean;\nif (enabled) import('../../globals.css');\nimport { Button } from './Button.tsx';\nexport const render = Button;\n",
   );
 
@@ -205,7 +209,7 @@ test("a conditional dynamic entry import is not a loader", () => {
 
 test("a disabled html link is not a loader", () => {
   const page = file(
-    `${child}/index.html`,
+    join(child, "index.html"),
     '<link rel="stylesheet" href="../../globals.css" disabled><button class="button"></button>',
   );
 
@@ -214,7 +218,7 @@ test("a disabled html link is not a loader", () => {
 
 test("a commented-out vue script block is not a loader", () => {
   const commented = file(
-    `${child}/App.vue`,
+    join(child, "App.vue"),
     "<template><div /></template>\n<!-- <script>import '../../globals.css';</script> -->\n<script setup>import { Button } from './Button.tsx';</script>\n",
   );
 
@@ -233,33 +237,33 @@ test("wildcard positive scopes prove no literal coverage", () => {
 
 test("a vue loader parses with its declared script language", () => {
   const vueLoader = file(
-    `${child}/App.vue`,
+    join(child, "App.vue"),
     "<script setup lang=\"tsx\">\nimport '../../globals.css';\nimport { Button } from './Button.tsx';\nconst render = () => <Button />;\n</script>\n<template><div /></template>\n",
   );
   const proofs = prove({ packageSources: [vueLoader, consumer] });
 
-  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(true);
+  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(true);
 });
 
 test("emitted javascript specifiers expose their typescript sources", () => {
-  const index = file(`${child}/index.ts`, "export { Button } from './Button.js';\n");
+  const index = file(join(child, "index.ts"), "export { Button } from './Button.js';\n");
   const proofs = prove({ packageSources: [loader, consumer, index] });
 
-  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
 });
 
 test("an unresolved script import in the exposed closure exposes everything", () => {
   const index = file(
-    `${child}/index.ts`,
+    join(child, "index.ts"),
     "export { hidden } from './generated.js';\nexport { Button } from './Button.tsx';\n",
   );
   const proofs = prove({ packageSources: [loader, consumer, index] });
 
-  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
 });
 
 test("unquoted url imports join the proof graph", () => {
-  const styleSources = new Map([["/repo/theme.css", '@source not "./packages/app";\n']]);
+  const styleSources = new Map([[join(root, "theme.css"), '@source not "./packages/app";\n']]);
 
   expect(
     scanProof({
@@ -282,15 +286,15 @@ test("tailwind subpath imports carry their source modifier", () => {
 });
 
 test("a conventional index entry exposes its import closure", () => {
-  const index = file(`${child}/index.ts`, "export { Button } from './Button.tsx';\n");
+  const index = file(join(child, "index.ts"), "export { Button } from './Button.tsx';\n");
   const exposedByIndex = prove({ packageSources: [loader, consumer, index] });
   const noIndex = prove({ packageSources: [loader, consumer] });
 
   // Without export metadata the conventional index remains externally
   // loadable, so consumers behind it are exposed; a package with no index
   // exposes nothing by convention.
-  expect(exposedByIndex?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
-  expect(noIndex?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(true);
+  expect(exposedByIndex?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
+  expect(noIndex?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(true);
 });
 
 test("directive-shaped text inside css strings proves nothing", () => {
@@ -306,22 +310,23 @@ test("directive-shaped text inside css strings proves nothing", () => {
 
 test("type-only imports create no reachability edges", () => {
   const typeLoader = file(
-    `${child}/main.tsx`,
+    join(child, "main.tsx"),
     "import '../../globals.css';\nimport type { Button } from './Button.tsx';\nexport type { Button };\n",
   );
   const inlineTypeLoader = file(
-    `${child}/main.tsx`,
+    join(child, "main.tsx"),
     "import '../../globals.css';\nimport { type Button } from './Button.tsx';\n",
   );
 
   expect(
-    prove({ packageSources: [typeLoader, consumer] })?.provenStyle(`${child}/Button.module.css`, [
-      consumer,
-    ]),
+    prove({ packageSources: [typeLoader, consumer] })?.provenStyle(
+      join(child, "Button.module.css"),
+      [consumer],
+    ),
   ).toBe(false);
   expect(
     prove({ packageSources: [inlineTypeLoader, consumer] })?.provenStyle(
-      `${child}/Button.module.css`,
+      join(child, "Button.module.css"),
       [consumer],
     ),
   ).toBe(false);
@@ -329,22 +334,22 @@ test("type-only imports create no reachability edges", () => {
 
 test("commented imports create no reachability edges", () => {
   const loaderWithoutEdge = file(
-    `${child}/main.tsx`,
+    join(child, "main.tsx"),
     "import '../../globals.css';\n// import { Button } from './Button.tsx';\n",
   );
   const proofs = prove({ packageSources: [loaderWithoutEdge, consumer] });
 
-  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
 });
 
 test("keeps a consumer outside every proven flow retained", () => {
   const stray = file(
-    `${child}/Stray.tsx`,
+    join(child, "Stray.tsx"),
     "import styles from './Button.module.css';\nexport const Stray = () => <i className={styles.button} />;\n",
   );
   const proofs = prove({ packageSources: [loader, consumer, stray] });
 
-  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer, stray])).toBe(false);
+  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer, stray])).toBe(false);
 });
 
 test("treats exported consumers as unproven flows", () => {
@@ -356,7 +361,7 @@ test("treats exported consumers as unproven flows", () => {
   // The consumer is reachable from the loading source, but the same chain
   // is exposed through the package entry point, so an external application
   // can render it without this entry's CSS.
-  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
 });
 
 test("an unresolved declared entry point exposes every consumer", () => {
@@ -365,7 +370,7 @@ test("an unresolved declared entry point exposes every consumer", () => {
     packageJson: { main: "./dist/index.js" },
   });
 
-  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
 });
 
 test("a publishable package without exports exposes every consumer", () => {
@@ -377,13 +382,13 @@ test("a publishable package without exports exposes every consumer", () => {
 
   // Deep imports reach any subpath without an encapsulating exports map,
   // while the exports map confines exposure to its targets.
-  expect(open?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
-  expect(encapsulated?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+  expect(open?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
+  expect(encapsulated?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
 });
 
 test("a css module-script import is not a loader", () => {
   const moduleScript = file(
-    `${child}/main.tsx`,
+    join(child, "main.tsx"),
     "import sheet from '../../globals.css' with { type: 'css' };\nimport { Button } from './Button.tsx';\nexport const render = Button;\n",
   );
 
@@ -393,41 +398,41 @@ test("a css module-script import is not a loader", () => {
 test("a sheet without the utilities layer is not an entry", () => {
   const styleSources = new Map([
     [entry, '@import "tailwindcss";\n'],
-    ["/repo/tokens.css", '@import "tailwindcss/theme";\n'],
-    ["/repo/split.css", '@import "tailwindcss/theme";\n@import "tailwindcss/utilities";\n'],
+    [join(root, "tokens.css"), '@import "tailwindcss/theme";\n'],
+    [join(root, "split.css"), '@import "tailwindcss/theme";\n@import "tailwindcss/utilities";\n'],
   ]);
   const owners = new Map<string, string | undefined>([
     [entry, root],
-    ["/repo/tokens.css", root],
-    ["/repo/split.css", root],
+    [join(root, "tokens.css"), root],
+    [join(root, "split.css"), root],
   ]);
 
   expect(tailwindEntryCatalog(styleSources, owners)).toEqual(
-    new Map([[root, [entry, "/repo/split.css"]]]),
+    new Map([[root, [entry, join(root, "split.css")].sort()]]),
   );
 });
 
 test("string content never catalogs a tailwind entry", () => {
   const styleSources = new Map([
     [entry, '@import "tailwindcss";\n'],
-    ["/repo/fake.css", `.x { content: '@import "tailwindcss"'; }\n`],
+    [join(root, "fake.css"), `.x { content: '@import "tailwindcss"'; }\n`],
   ]);
   const owners = new Map<string, string | undefined>([
     [entry, root],
-    ["/repo/fake.css", root],
+    [join(root, "fake.css"), root],
   ]);
 
   expect(tailwindEntryCatalog(styleSources, owners)).toEqual(new Map([[root, [entry]]]));
 });
 
 test("a browser entry point exposes its import closure", () => {
-  const browserEntry = file(`${child}/main.tsx`, loader.source);
+  const browserEntry = file(join(child, "main.tsx"), loader.source);
   const proofs = prove({
     packageSources: [browserEntry, consumer],
     packageJson: { private: true, browser: "./main.tsx" },
   });
 
-  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
 });
 
 test("wildcard exports expose every consumer", () => {
@@ -436,7 +441,7 @@ test("wildcard exports expose every consumer", () => {
     packageJson: { exports: { "./*": "./*" } },
   });
 
-  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
 });
 
 test("automatic scan coverage requires consumers to pass ignore rules", () => {
@@ -450,25 +455,25 @@ test("automatic scan coverage requires consumers to pass ignore rules", () => {
     ignoredPaths: new Set([consumer.path]),
   });
 
-  expect(literal?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(true);
-  expect(automatic?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+  expect(literal?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(true);
+  expect(automatic?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
 });
 
 test("an html consumer linking the entry proves itself", () => {
   // Prepared HTML contexts keep only package-local links, so the ancestor
   // entry link is proven from the raw source.
   const page: PreparedSourceFile = file(
-    `${child}/index.html`,
+    join(child, "index.html"),
     '<link rel="stylesheet" href="../../globals.css"><button class="button"></button>',
   );
   const proofs = prove({ packageSources: [page] });
 
-  expect(proofs?.provenStyle(`${child}/styles.css`, [page])).toBe(true);
+  expect(proofs?.provenStyle(join(child, "styles.css"), [page])).toBe(true);
 });
 
 test("commented-out html links are not loaders", () => {
   const page = file(
-    `${child}/index.html`,
+    join(child, "index.html"),
     '<!-- <link rel="stylesheet" href="../../globals.css"> --><button class="button"></button>',
   );
 
@@ -477,11 +482,11 @@ test("commented-out html links are not loaders", () => {
 
 test("a media-conditioned entry link is not an unconditional loader", () => {
   const printOnly = file(
-    `${child}/index.html`,
+    join(child, "index.html"),
     '<link rel="stylesheet" href="../../globals.css" media="print"><button class="button"></button>',
   );
   const all = file(
-    `${child}/index.html`,
+    join(child, "index.html"),
     '<link rel="stylesheet" href="../../globals.css" media="all"><button class="button"></button>',
   );
 
@@ -491,12 +496,12 @@ test("a media-conditioned entry link is not an unconditional loader", () => {
 
 test("an unresolved package alias in the exposed closure exposes everything", () => {
   const index = file(
-    `${child}/index.ts`,
+    join(child, "index.ts"),
     "export { hidden } from '#internal/button';\nexport { Button } from './Button.tsx';\n",
   );
   const proofs = prove({ packageSources: [loader, consumer, index] });
 
-  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
 });
 
 test("an unresolvable bare css import leaves the scan proof unproven", () => {
@@ -511,7 +516,7 @@ test("an unresolvable bare css import leaves the scan proof unproven", () => {
 
 test("a base tag leaves html entry links unproven", () => {
   const page = file(
-    `${child}/index.html`,
+    join(child, "index.html"),
     '<base href="/other/"><link rel="stylesheet" href="../../globals.css">',
   );
 

@@ -458,7 +458,15 @@ async function preparePackage(
   let entryOwner = packageRoot;
   let sharedProofs: SharedEntryProofs | undefined;
   const ownEntries = findTailwindEntries(ownedStyles, styleSources);
-  if (ownEntries.length === 0 && configuredEntry === undefined && options.workspaces) {
+  // Ancestor-shared resolution stays scoped to extraction until part 4
+  // flips the default together with the packaged snapshots: without the
+  // option, workspace behavior is byte-identical to today.
+  if (
+    ownEntries.length === 0 &&
+    configuredEntry === undefined &&
+    options.workspaces &&
+    options.extractMediaQueries === true
+  ) {
     // Ancestry identifies candidates only; selecting an ancestor entry
     // requires the dual loading and scan proofs, level by level from the
     // nearest ancestor package.
@@ -723,8 +731,10 @@ async function planPreparedGroup(
   // that those consumers load the shared entry too: through the consumer
   // package's own dual proofs when it shares the entry, trivially when the
   // consumer package owns this entry, and never from outside the group.
+  // Like ancestor resolution, this discipline stays scoped to extraction
+  // until part 4 flips the default with the packaged snapshots.
   const membersByRoot = new Map(active.map((member) => [member.packageRoot, member]));
-  for (const member of active) {
+  for (const member of options.extractMediaQueries === true ? active : []) {
     member.stylesheets = member.stylesheets.filter((stylesheet) => {
       const foreignConsumers = member.files.filter(
         (file) =>
