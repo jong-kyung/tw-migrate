@@ -1,6 +1,6 @@
 import { expect, test } from "vite-plus/test";
 
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 
 import { proveSharedEntry, scanProof, tailwindEntryCatalog } from "../src/plan/entry.ts";
 import type { PreparedSourceFile } from "../src/types.ts";
@@ -95,7 +95,7 @@ function prove(options: {
     entry,
     entrySource: options.entrySource ?? '@import "tailwindcss";\n',
     packageSources: options.packageSources,
-    owned: (path) => path.startsWith(`${child}/`),
+    owned: (path) => path.startsWith(`${child}${sep}`),
     writable: () => true,
     packageJson: options.packageJson ?? { private: true },
     ignoredPaths: options.ignoredPaths ?? new Set(),
