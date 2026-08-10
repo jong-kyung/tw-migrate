@@ -447,3 +447,23 @@ test("owner moves collide with registrations retained in shared members", async 
     "@property --brand",
   );
 });
+
+test("owner moves collide with registrations retained in plain stylesheets", async () => {
+  const cwd = await workspace({
+    "package.json": '{"private":true}',
+    "globals.css": '@import "tailwindcss";\n',
+    "site.css":
+      '@property --brand { syntax: "<color>"; inherits: false; initial-value: red; }\n.rootbox { color: var(--brand); }\n',
+    "shared.module.css":
+      '@property --brand { syntax: "<color>"; inherits: false; initial-value: blue; }\n.frame { padding: 13px; }\n',
+    "main.tsx":
+      "import './globals.css';\nimport './site.css';\nimport shared from './shared.module.css';\nexport const render = shared.frame;\n",
+  });
+  await migrate({ cwd, workspaces: true, extractMediaQueries: true, write: true });
+
+  // The plain stylesheet keeps its registration in place, so moving the
+  // module's conflicting registration into the entry would flip which one
+  // wins; the module must retain it.
+  expect(await readFile(join(cwd, "globals.css"), "utf8")).not.toContain("@property");
+  expect(await readFile(join(cwd, "shared.module.css"), "utf8")).toContain("@property --brand");
+});

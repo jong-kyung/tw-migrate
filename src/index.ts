@@ -836,12 +836,13 @@ async function planPreparedGroup(
       [entry.css, ...entry.graphSources.map((graphSource) => graphSource.source)].join("\n"),
     ),
   );
-  // Registrations retained inside shared members' modules participate as
-  // base identities: another member moving the same registration into the
-  // entry would flip precedence against the retained module definition.
+  // Registrations that stay in place participate as base identities:
+  // moving the same registration into the entry would flip precedence
+  // against them. Only modules of members with movable at-rules are
+  // excluded, because their moves are compared through the planned delta.
   for (const member of active) {
-    if (member.sharedProofs === undefined) continue;
     for (const stylesheet of member.stylesheets) {
+      if (member.sharedProofs === undefined && stylesheet.isModule) continue;
       for (const identity of atRuleIdentities(stylesheet.analysisSource ?? stylesheet.cssSource)) {
         baseIdentities.add(identity);
       }
