@@ -545,7 +545,18 @@ async function preparePackage(
         ),
       )
     : targets;
-  if (provenTargets.length === 0 && preparedVue.stylesheets.length === 0) {
+  // Vue SFC styles carry the same proof obligation: the SFC itself is the
+  // consumer its scoped and module rules ship with, so an SFC outside the
+  // proven flows keeps its style entries retained.
+  const provenVueStylesheets = sharedProofs
+    ? preparedVue.stylesheets.filter((stylesheet) =>
+        sharedProofs.provenStyle(
+          stylesheet.cssPath,
+          packageSources.filter((file) => file.path === stylesheet.cssPath),
+        ),
+      )
+    : preparedVue.stylesheets;
+  if (provenTargets.length === 0 && provenVueStylesheets.length === 0) {
     return vueWarningsOnlyResult(preparedVue);
   }
 
@@ -626,7 +637,7 @@ async function preparePackage(
     return recover(error, isIntegrityError(error));
   }
 
-  stylesheets.push(...preparedVue.stylesheets);
+  stylesheets.push(...provenVueStylesheets);
 
   return {
     prepared: {

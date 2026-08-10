@@ -209,6 +209,14 @@ function importEdges(files: PreparedSourceFile[]): Map<string, string[]> {
     if (extname(file.path) === ".html") continue;
     const targets: string[] = [];
     for (const match of maskJsComments(file.source).matchAll(IMPORT_SPECIFIERS)) {
+      // Type-only imports are erased at runtime and load nothing, so they
+      // never carry loading reachability. A clause whose specifiers are
+      // all inline `type` entries is excluded the same way; over-excluding
+      // a mixed default-and-type clause only makes the proof fail
+      // conservatively.
+      if (/^(?:import|export)\s+type\b/.test(match[0])) continue;
+      const braces = match[0].match(/\{([^}]*)\}/);
+      if (braces && braces[1].split(",").every((part) => /^\s*type\s/.test(part))) continue;
       const spec = match[1] ?? match[2] ?? match[3];
       const resolved = resolveImport(dirname(file.path), spec, known);
       if (resolved !== undefined) targets.push(resolved);

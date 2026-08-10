@@ -159,6 +159,29 @@ test("keeps consumers outside child ownership unproven", () => {
   expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(true);
 });
 
+test("type-only imports create no reachability edges", () => {
+  const typeLoader = file(
+    `${child}/main.tsx`,
+    "import '../../globals.css';\nimport type { Button } from './Button.tsx';\nexport type { Button };\n",
+  );
+  const inlineTypeLoader = file(
+    `${child}/main.tsx`,
+    "import '../../globals.css';\nimport { type Button } from './Button.tsx';\n",
+  );
+
+  expect(
+    prove({ packageSources: [typeLoader, consumer] })?.provenStyle(`${child}/Button.module.css`, [
+      consumer,
+    ]),
+  ).toBe(false);
+  expect(
+    prove({ packageSources: [inlineTypeLoader, consumer] })?.provenStyle(
+      `${child}/Button.module.css`,
+      [consumer],
+    ),
+  ).toBe(false);
+});
+
 test("commented imports create no reachability edges", () => {
   const loaderWithoutEdge = file(
     `${child}/main.tsx`,
