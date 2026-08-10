@@ -383,3 +383,23 @@ test("retains overlapping page registrations across members", async () => {
     "@page :left",
   );
 });
+
+test("url-imported entry sheets join registration collision checks", async () => {
+  const cwd = await workspace({
+    "package.json": '{"private":true}',
+    "globals.css": '@import "tailwindcss";\n@import url(./base.css);\n',
+    "base.css": '@property --brand { syntax: "<color>"; inherits: false; initial-value: red; }\n',
+    ...app(
+      "app",
+      '@property --brand { syntax: "<color>"; inherits: false; initial-value: blue; }\n.button { padding: 13px; }\n',
+    ),
+  });
+  await migrate({ cwd, workspaces: true, extractMediaQueries: true, write: true });
+
+  // The url-imported sheet already registers --brand, so the member's
+  // conflicting registration must stay in its module.
+  expect(await readFile(join(cwd, "globals.css"), "utf8")).not.toContain("@property");
+  expect(await readFile(join(cwd, "packages/app/Button.module.css"), "utf8")).toContain(
+    "@property --brand",
+  );
+});
