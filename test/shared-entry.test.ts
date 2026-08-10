@@ -390,6 +390,23 @@ test("a css module-script import is not a loader", () => {
   expect(prove({ packageSources: [moduleScript, consumer] })).toBe(null);
 });
 
+test("a sheet without the utilities layer is not an entry", () => {
+  const styleSources = new Map([
+    [entry, '@import "tailwindcss";\n'],
+    ["/repo/tokens.css", '@import "tailwindcss/theme";\n'],
+    ["/repo/split.css", '@import "tailwindcss/theme";\n@import "tailwindcss/utilities";\n'],
+  ]);
+  const owners = new Map<string, string | undefined>([
+    [entry, root],
+    ["/repo/tokens.css", root],
+    ["/repo/split.css", root],
+  ]);
+
+  expect(tailwindEntryCatalog(styleSources, owners)).toEqual(
+    new Map([[root, [entry, "/repo/split.css"]]]),
+  );
+});
+
 test("string content never catalogs a tailwind entry", () => {
   const styleSources = new Map([
     [entry, '@import "tailwindcss";\n'],

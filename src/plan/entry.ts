@@ -18,17 +18,35 @@ import { parseHtmlSource } from "../parser/html.ts";
 import { isWithin, maskCssComments } from "../util/shared.ts";
 import type { PreparedSourceFile } from "../types.ts";
 
-const TAILWIND_IMPORT = /@import\s+["']tailwindcss(?:\/[^"']*)?["']/;
+const TAILWIND_UTILITIES_IMPORT = /@import\s+["']tailwindcss(?:\/utilities(?:\.css)?)?["']/;
 
-/// A structurally parsed top-level Tailwind import. An unparseable
-/// stylesheet falls back to the masked regex so a working entry is never
-/// dropped from discovery.
+/// True for a specifier whose import actually emits utilities: the full
+/// package or its utilities layer. A sheet importing only
+/// `tailwindcss/theme` or `tailwindcss/preflight` produces no utility
+/// CSS, so selecting it as an entry would migrate classes that never
+/// compile into styles.
+function emitsUtilities(specifier: string): boolean {
+  return (
+    specifier === "tailwindcss" ||
+    specifier === "tailwindcss/utilities" ||
+    specifier === "tailwindcss/utilities.css"
+  );
+}
+
+/// A structurally parsed top-level Tailwind import that includes the
+/// utilities layer. An unparseable stylesheet falls back to the masked
+/// regex so a working entry is never dropped from discovery.
 function hasTailwindImport(source: string): boolean {
   const directives = cssDirectives(source);
   if (directives !== null) {
-    return directives.some((directive) => directive.kind === "import" && directive.tailwind);
+    return directives.some(
+      (directive) =>
+        directive.kind === "import" &&
+        directive.specifier !== null &&
+        emitsUtilities(directive.specifier),
+    );
   }
-  return TAILWIND_IMPORT.test(maskCssComments(source));
+  return TAILWIND_UTILITIES_IMPORT.test(maskCssComments(source));
 }
 
 /// Tailwind entries per owning package, from the scanned stylesheet corpus.
