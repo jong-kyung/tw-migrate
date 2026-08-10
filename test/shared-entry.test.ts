@@ -1,11 +1,6 @@
 import { expect, test } from "vite-plus/test";
 
-import {
-  integrityProtected,
-  proveSharedEntry,
-  scanProof,
-  tailwindEntryCatalog,
-} from "../src/plan/entry.ts";
+import { proveSharedEntry, scanProof, tailwindEntryCatalog } from "../src/plan/entry.ts";
 import type { PreparedSourceFile } from "../src/types.ts";
 
 const root = "/repo";
@@ -153,15 +148,6 @@ test("a bare package deep import of a child source exposes its closure", () => {
   });
 
   expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
-});
-
-test("an integrity link under a base element still protects the entry", () => {
-  const page = file(
-    `${child}/index.html`,
-    '<base href="./"><link rel="stylesheet" href="../../globals.css" integrity="sha384-x">',
-  );
-
-  expect(integrityProtected(entry, [page])).toBe(true);
 });
 
 test("a foreign deep import of a child source exposes its closure", () => {
@@ -393,15 +379,6 @@ test("a publishable package without exports exposes every consumer", () => {
   // while the exports map confines exposure to its targets.
   expect(open?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
   expect(encapsulated?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
-});
-
-test("an integrity-protected entry link is not a loader", () => {
-  const page = file(
-    `${child}/index.html`,
-    '<link rel="stylesheet" href="../../globals.css" integrity="sha384-x"><button class="button"></button>',
-  );
-
-  expect(prove({ packageSources: [page] })).toBe(null);
 });
 
 test("a css module-script import is not a loader", () => {

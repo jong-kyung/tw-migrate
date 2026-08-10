@@ -34,12 +34,7 @@ import {
   loadTailwind,
   resolveTailwindEntry,
 } from "./tailwind.ts";
-import {
-  importsStylesheet,
-  integrityProtected,
-  proveSharedEntry,
-  tailwindEntryCatalog,
-} from "./plan/entry.ts";
+import { importsStylesheet, proveSharedEntry, tailwindEntryCatalog } from "./plan/entry.ts";
 import type { SharedEntryProofs } from "./plan/entry.ts";
 import {
   appendMediaDefinitions,
@@ -784,12 +779,8 @@ async function planPreparedGroup(
   active = active.filter((remaining) => remaining.stylesheets.length > 0);
   if (active.length === 0) return results;
 
-  // Entry safety gates every entry mutation, not only media extraction. An
-  // integrity-protected entry link anywhere in the workspace makes any
-  // entry edit reject the stylesheet on that page.
-  const groupWritable =
-    !(await entryUnsafe(entry.path, workspaceRoot, targetable)) &&
-    !integrityProtected(entry.path, context.sourceFiles);
+  // Entry safety gates every entry mutation, not only media extraction.
+  const groupWritable = !(await entryUnsafe(entry.path, workspaceRoot, targetable));
   const mediaWarnings: MigrationWarning[] = [];
   let extraction: MediaExtraction | undefined;
   if (options.extractMediaQueries === true) {

@@ -25,9 +25,6 @@ interface HtmlAttribute {
 interface HtmlLink {
   href: string;
   media: string;
-  /// True when the link carries a subresource-integrity digest, which any
-  /// edit to the linked stylesheet would invalidate.
-  integrity: boolean;
   start: number;
   end: number;
   tagStart: number;
@@ -105,7 +102,6 @@ export function parseHtmlSource(path: string, source: string): ParsedHtml {
             links.push({
               href: href.value,
               media: media?.value ?? "",
-              integrity: attributes.has("integrity"),
               start: href.start,
               end: href.end,
               tagStart: tag.startOffset,

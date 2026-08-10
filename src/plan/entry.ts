@@ -543,9 +543,7 @@ function htmlLinksEntry(file: { path: string; source: string }, entry: string): 
     if (parsed.bases.length > 0) return false;
     return parsed.links.some((link) => {
       // A media-conditioned entry link loads the CSS only while its query
-      // matches, and an integrity digest would reject the entry outright
-      // once any edit changes its bytes; neither proves loading.
-      if (link.integrity) return false;
+      // matches, so it proves nothing unconditionally.
       const media = link.media.trim().toLowerCase();
       if (media !== "" && media !== "all") return false;
       const href = link.href.split(/[?#]/, 1)[0];
@@ -555,33 +553,6 @@ function htmlLinksEntry(file: { path: string; source: string }, entry: string): 
   } catch {
     return false;
   }
-}
-
-/// True when any scanned HTML page links the stylesheet with a
-/// subresource-integrity digest: editing the file would invalidate the
-/// digest and the browser would reject the whole stylesheet on that page.
-export function integrityProtected(
-  entry: string,
-  htmlFiles: Iterable<{ path: string; source: string }>,
-): boolean {
-  for (const file of htmlFiles) {
-    if (extname(file.path) !== ".html") continue;
-    try {
-      const parsed = parseHtmlSource(file.path, file.source);
-      for (const link of parsed.links) {
-        if (!link.integrity) continue;
-        // A base element changes href resolution, so any integrity link
-        // on such a page conservatively protects the entry.
-        if (parsed.bases.length > 0) return true;
-        const href = link.href.split(/[?#]/, 1)[0];
-        if (!href || /^[a-z][a-z0-9+.-]*:|^\/\//i.test(href)) continue;
-        if (resolve(dirname(file.path), href) === entry) return true;
-      }
-    } catch {
-      // An unparseable page proves no protection.
-    }
-  }
-  return false;
 }
 
 /// A parsed import whose specifier resolves to the stylesheet. Consumer
