@@ -228,8 +228,10 @@ export interface SharedEntryProofOptions {
   packageRoot: string;
   entry: string;
   entrySource: string;
-  /// The child's prepared sources, including HTML stylesheet contexts.
+  /// The prepared sources, including HTML stylesheet contexts. Files not
+  /// owned by the child are excluded from every proof graph.
   packageSources: PreparedSourceFile[];
+  owned: (path: string) => boolean;
   writable: (path: string) => boolean;
   packageJson: Record<string, unknown>;
   /// Consumer paths excluded by the effective scanner ignore rules; only
@@ -250,7 +252,11 @@ export function proveSharedEntry(options: SharedEntryProofOptions): SharedEntryP
   const scan = scanProof(options);
   if (scan === null) return null;
 
-  const loaders = options.packageSources
+  // Reachability is proven through child-owned imports only: a foreign
+  // file can be executed by its owning package without loading this
+  // entry, so it neither carries edges nor counts as a proven consumer.
+  const ownedSources = options.packageSources.filter((file) => options.owned(file.path));
+  const loaders = ownedSources
     .filter((file) => options.writable(file.path))
     .filter(
       (file) =>
@@ -260,14 +266,15 @@ export function proveSharedEntry(options: SharedEntryProofOptions): SharedEntryP
     .map((file) => file.path);
   if (loaders.length === 0) return null;
 
-  const edges = importEdges(options.packageSources);
+  const edges = importEdges(ownedSources);
   const reachable = reachableFrom(loaders, edges);
-  const exposed = exposedFiles(options.packageRoot, options.packageJson, options.packageSources);
+  const exposed = exposedFiles(options.packageRoot, options.packageJson, ownedSources);
 
   return {
     provenStyle: (stylePath, consumers) =>
       consumers.every(
         (consumer) =>
+          options.owned(consumer.path) &&
           reachable.has(consumer.path) &&
           (exposed === "all" ? false : !exposed.has(consumer.path)) &&
           (scan === "literal" || !options.ignoredPaths.has(consumer.path)),

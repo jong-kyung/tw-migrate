@@ -63,6 +63,7 @@ function prove(options: {
     entry,
     entrySource: options.entrySource ?? '@import "tailwindcss";\n',
     packageSources: options.packageSources,
+    owned: (path) => path.startsWith(`${child}/`),
     writable: () => true,
     packageJson: options.packageJson ?? {},
     ignoredPaths: options.ignoredPaths ?? new Set(),
@@ -106,6 +107,28 @@ test("ignores entry paths outside real import statements", () => {
   expect(prove({ packageSources: [commented, consumer] })).toBe(null);
   expect(prove({ packageSources: [deadString, consumer] })).toBe(null);
   expect(prove({ packageSources: [blockCommented, consumer] })).toBe(null);
+});
+
+test("keeps consumers outside child ownership unproven", () => {
+  // A sibling package's file consumes the child's stylesheet through a
+  // cross-package import and is reachable from the child's loader, but it
+  // can run under its own package without this entry's CSS.
+  const bridge = file(
+    `${child}/bridge.tsx`,
+    "export { Foreign } from '../../sibling/Foreign.tsx';\n",
+  );
+  const loaderWithBridge = file(
+    `${child}/main.tsx`,
+    "import '../../globals.css';\nimport { Button } from './Button.tsx';\nexport { Foreign } from './bridge.tsx';\n",
+  );
+  const foreign = file(
+    `${root}/sibling/Foreign.tsx`,
+    "import styles from '../packages/app/Button.module.css';\nexport const Foreign = () => <i className={styles.button} />;\n",
+  );
+  const proofs = prove({ packageSources: [loaderWithBridge, bridge, consumer, foreign] });
+
+  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer, foreign])).toBe(false);
+  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(true);
 });
 
 test("commented imports create no reachability edges", () => {

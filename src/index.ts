@@ -474,6 +474,7 @@ async function preparePackage(
           entry: candidate,
           entrySource: styleSources.get(candidate) ?? "",
           packageSources,
+          owned: (path) => pathOwners.get(path) === packageRoot,
           writable: (path) => targetable.has(path) && pathOwners.get(path) === packageRoot,
           packageJson,
           ignoredPaths: context.ignoredPaths,
