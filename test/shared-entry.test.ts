@@ -213,6 +213,19 @@ test("an unresolved script import in the exposed closure exposes everything", ()
   expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
 });
 
+test("unquoted url imports join the proof graph", () => {
+  const styleSources = new Map([["/repo/theme.css", '@source not "./packages/app";\n']]);
+
+  expect(
+    scanProof({
+      entry,
+      entrySource: '@import "tailwindcss";\n@import url(./theme.css);\n',
+      packageRoot: child,
+      styleSources,
+    }),
+  ).toBe(null);
+});
+
 test("tailwind subpath imports carry their source modifier", () => {
   expect(
     scanProof({

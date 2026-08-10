@@ -80,8 +80,13 @@ function entryGraphSheets(
     sheets.push({ path, directives });
     for (const directive of directives) {
       if (directive.name !== "import") continue;
-      const spec = directive.text.match(/@import\s+(?:url\(\s*)?["']([^"']+)["']/)?.[1];
-      if (spec === undefined || (!spec.startsWith(".") && !spec.startsWith("/"))) continue;
+      const spec =
+        directive.text.match(/@import\s+(?:url\(\s*)?["']([^"']+)["']/)?.[1] ??
+        directive.text.match(/@import\s+url\(\s*([^"')\s]+)\s*\)/)?.[1];
+      // An import whose target cannot be read leaves the graph's source
+      // directives unknowable.
+      if (spec === undefined) return null;
+      if (!spec.startsWith(".") && !spec.startsWith("/")) continue;
       const resolved = resolve(dirname(path), spec);
       pending.push(styleSources.has(resolved) ? resolved : `${resolved}.css`);
     }

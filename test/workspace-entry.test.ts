@@ -240,3 +240,23 @@ test("skips only the member whose media collection fails", async () => {
     /screen:width-lte-700px:m-\[7px\]/,
   );
 });
+
+test("composes html link removals across members on one page", async () => {
+  const cwd = await workspace({
+    "package.json": '{"private":true}',
+    "globals.css": '@import "tailwindcss";\n',
+    "shared.module.css": ".rootbox { padding: 13px; }\n",
+    "packages/site/package.json": '{"private":true}',
+    "packages/site/app.module.css": ".appbox { margin: 7px; }\n",
+    "packages/site/index.html":
+      '<!doctype html>\n<html>\n<head><link rel="stylesheet" href="../../globals.css"><link rel="stylesheet" href="../../shared.module.css"><link rel="stylesheet" href="app.module.css"></head>\n<body><div class="rootbox appbox">Hi</div></body>\n</html>\n',
+  });
+  const report = await migrate({ cwd, workspaces: true, extractMediaQueries: true, write: true });
+
+  // Both members unlink their module from the same page, so the removals
+  // must compose into one final claim instead of aborting the merge.
+  const html = await readFile(join(cwd, "packages/site/index.html"), "utf8");
+  expect(html).toContain('<head><link rel="stylesheet" href="../../globals.css"></head>');
+  expect(html).toMatch(/class="rootbox appbox p-\[13px\] m-\[7px\]"/);
+  expect(report.failures).toEqual([]);
+});

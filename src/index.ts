@@ -747,7 +747,11 @@ async function planPreparedGroup(
         extraction = planMediaExtraction({
           collections,
           tailwind: entry,
-          scannedSources: active.flatMap((member) => member.files.map((file) => file.source)),
+          // The entry's effective scan corpus covers the whole discovered
+          // workspace, not only active members' planner files: an inert
+          // candidate on an untouched sibling page must still reserve its
+          // variant names. Over-reservation is harmless.
+          scannedSources: context.sourceFiles.map((file) => file.source),
         });
       } catch (error) {
         return recoverGroup(error, !isRecoverablePlanningError(error));
@@ -863,6 +867,10 @@ async function planPreparedGroup(
       for (const state of states) {
         state.plan.files = state.plan.files.filter((file) => lastClaim.get(file.path) === state);
       }
+      // HTML link removals compose the same way: every member's unlinked
+      // stylesheets strip their links from the page's final composed
+      // source, which stays claimed by exactly one member.
+      removeGroupHtmlLinks(states);
 
       const currentExtraction = names !== undefined ? { names, generated } : undefined;
       const used: { key: string; name: string }[] = [];
@@ -1081,7 +1089,6 @@ async function finishMemberPlan(
     return { failure: packageFailure(workspaceRoot, packageRoot, error) };
   };
 
-  removeMigratedHtmlLinks(plan, preparedHtml);
   plan.warnings.push(...preparedHtml.warnings);
   plan.warnings.push(...preparedVue.warnings);
   try {
@@ -1146,32 +1153,42 @@ async function finishMemberPlan(
   return { plan };
 }
 
-function removeMigratedHtmlLinks(plan: Plan, preparedHtml: PreparedHtml): void {
-  const unlinked = new Set(plan.unlinkedFiles);
-  const linksByFile = new Map<string, Set<string>>();
-  for (const link of preparedHtml.removableLinks) {
-    if (!unlinked.has(link.cssPath)) continue;
-    const links = linksByFile.get(link.filePath) ?? new Set();
-    links.add(`${link.href}\0${link.media}`);
-    linksByFile.set(link.filePath, links);
+function removeGroupHtmlLinks(states: MemberState[]): void {
+  const claimants = new Map<string, { state: MemberState; file: SourceFile }>();
+  for (const state of states) {
+    for (const file of state.plan.files) claimants.set(file.path, { state, file });
   }
-
-  for (const [filePath, removable] of linksByFile) {
-    const planned = plan.files.find((file) => file.path === filePath);
-    const original = preparedHtml.files.find((file) => file.path === filePath);
-    if (!original) continue;
-    const source = planned?.source ?? original.source;
-    const links = parseHtmlSource(filePath, source)
-      .links.filter((link) => removable.has(`${link.href}\0${link.media}`))
-      .sort((left, right) => right.tagStart - left.tagStart);
-    let bytes = Buffer.from(source);
-    for (const link of links) {
-      bytes = Buffer.concat([bytes.subarray(0, link.tagStart), bytes.subarray(link.tagEnd)]);
+  for (const state of states) {
+    const unlinked = new Set(state.plan.unlinkedFiles);
+    const linksByFile = new Map<string, Set<string>>();
+    for (const link of state.prepared.preparedHtml.removableLinks) {
+      if (!unlinked.has(link.cssPath)) continue;
+      const links = linksByFile.get(link.filePath) ?? new Set();
+      links.add(`${link.href}\0${link.media}`);
+      linksByFile.set(link.filePath, links);
     }
-    const updated = bytes.toString();
-    if (updated === source) continue;
-    if (planned) planned.source = updated;
-    else plan.files.push({ path: filePath, source: updated });
+
+    for (const [filePath, removable] of linksByFile) {
+      const claimed = claimants.get(filePath);
+      const original = state.prepared.preparedHtml.files.find((file) => file.path === filePath);
+      const source = claimed?.file.source ?? original?.source;
+      if (source === undefined) continue;
+      const links = parseHtmlSource(filePath, source)
+        .links.filter((link) => removable.has(`${link.href}\0${link.media}`))
+        .sort((left, right) => right.tagStart - left.tagStart);
+      let bytes = Buffer.from(source);
+      for (const link of links) {
+        bytes = Buffer.concat([bytes.subarray(0, link.tagStart), bytes.subarray(link.tagEnd)]);
+      }
+      const updated = bytes.toString();
+      if (updated === source) continue;
+      if (claimed) claimed.file.source = updated;
+      else {
+        const file = { path: filePath, source: updated };
+        state.plan.files.push(file);
+        claimants.set(filePath, { state, file });
+      }
+    }
   }
 }
 
