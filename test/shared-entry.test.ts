@@ -137,6 +137,19 @@ test("ignores entry paths outside real import statements", () => {
   expect(prove({ packageSources: [blockCommented, consumer] })).toBe(null);
 });
 
+test("a foreign deep import of a child source exposes its closure", () => {
+  // The sibling file imports the component directly; private prevents
+  // publication but not in-repository deep imports, so the component runs
+  // without this entry.
+  const sibling = file(
+    `${root}/sibling/Panel.tsx`,
+    "import { Button } from '../packages/app/Button.tsx';\nexport const Panel = () => <Button />;\n",
+  );
+  const proofs = prove({ packageSources: [loader, consumer, sibling] });
+
+  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+});
+
 test("keeps consumers outside child ownership unproven", () => {
   // A sibling package's file consumes the child's stylesheet through a
   // cross-package import and is reachable from the child's loader, but it

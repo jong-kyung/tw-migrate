@@ -365,3 +365,21 @@ test("owner styles require proofs for their cross-package consumers", async () =
     /screen:width-lte-700px:m-\[7px\]/,
   );
 });
+
+test("retains overlapping page registrations across members", async () => {
+  const cwd = await workspace({
+    "package.json": '{"private":true}',
+    "globals.css": '@import "tailwindcss";\n',
+    ...app("app", "@page { margin: 1cm; }\n.button { padding: 13px; }\n"),
+    ...app("lib", "@page :left { margin: 2cm; }\n.button { padding: 13px; }\n"),
+  });
+  await migrate({ cwd, workspaces: true, extractMediaQueries: true, write: true });
+
+  // A bare @page overlaps the :left variant, so neither may move: the
+  // composed order cannot prove the original winner on left pages.
+  expect(await readFile(join(cwd, "globals.css"), "utf8")).not.toContain("@page");
+  expect(await readFile(join(cwd, "packages/app/Button.module.css"), "utf8")).toContain("@page");
+  expect(await readFile(join(cwd, "packages/lib/Button.module.css"), "utf8")).toContain(
+    "@page :left",
+  );
+});

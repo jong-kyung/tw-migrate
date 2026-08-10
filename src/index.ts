@@ -1153,6 +1153,10 @@ function atRuleIdentities(css: string): string[] {
             .toLowerCase()
         : "";
       identities.push(`font-face ${normalized}`);
+    } else if (match[1] === "page") {
+      // Page selectors such as `:left` overlap the bare rule, so every
+      // moved @page shares one conservative identity.
+      identities.push("page");
     } else {
       identities.push(`${match[1]} ${match[2].trim()}`);
     }

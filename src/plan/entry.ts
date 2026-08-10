@@ -203,10 +203,16 @@ interface SourceImportRecord {
   dynamic: boolean;
 }
 
+const importRecordCache = new Map<string, { source: string; records: SourceImportRecord[] }>();
+
 /// Parsed module records of one source file through the native oxc parser.
 /// Vue SFC scripts are extracted first; a file that does not parse has no
-/// provable imports, which only makes proofs fail conservatively.
+/// provable imports, which only makes proofs fail conservatively. Records
+/// are memoized by path and content because every package's proofs scan
+/// the workspace corpus.
 function sourceImports(file: { path: string; source: string }): SourceImportRecord[] {
+  const cached = importRecordCache.get(file.path);
+  if (cached !== undefined && cached.source === file.source) return cached.records;
   const extension = extname(file.path);
   if (extension === ".html") return [];
   const sources =
@@ -261,6 +267,7 @@ function sourceImports(file: { path: string; source: string }): SourceImportReco
       // Unparseable sources prove nothing.
     }
   }
+  importRecordCache.set(file.path, { source: file.source, records });
   return records;
 }
 
@@ -355,6 +362,7 @@ function exposedFiles(
   packageRoot: string,
   packageJson: Record<string, unknown>,
   files: PreparedSourceFile[],
+  inboundSeeds: string[],
 ): Set<string> | "all" {
   const known = new Set(files.map((file) => file.path));
   const specs: string[] = [];
@@ -380,11 +388,12 @@ function exposedFiles(
   // installed externally and keeps conventional resolution only.
   if (packageJson.exports === undefined && packageJson.private !== true) return "all";
   const declared = specs.length > 0;
+  const entryFileSeeds = [...inboundSeeds];
   // Without export metadata the conventional `./index` entry remains
   // externally loadable; when no index resolves, nothing is exposed by
   // convention either.
   if (!declared) specs.push("./index");
-  const entryFiles: string[] = [];
+  const entryFiles: string[] = [...entryFileSeeds];
   for (const spec of specs) {
     const resolved = resolveImport(packageRoot, spec.startsWith(".") ? spec : `./${spec}`, known);
     // A declared entry point that does not resolve to a scanned source,
@@ -482,7 +491,26 @@ export function proveSharedEntry(options: SharedEntryProofOptions): SharedEntryP
 
   const edges = importEdges(ownedSources);
   const reachable = reachableFrom(loaders, edges);
-  const exposed = exposedFiles(options.packageRoot, options.packageJson, ownedSources);
+  // A sibling workspace file can deep-import child sources directly, and
+  // `private` prevents publication without encapsulating in-repository
+  // subpaths, so whatever a foreign file imports is executable without
+  // this entry and seeds the exposed closure.
+  const ownedPaths = new Set(ownedSources.map((file) => file.path));
+  const inboundSeeds: string[] = [];
+  for (const file of options.packageSources) {
+    if (options.owned(file.path) || extname(file.path) === ".html") continue;
+    for (const record of sourceImports(file)) {
+      if (record.typeOnly) continue;
+      const resolved = resolveImport(dirname(file.path), record.specifier, ownedPaths);
+      if (resolved !== undefined) inboundSeeds.push(resolved);
+    }
+  }
+  const exposed = exposedFiles(
+    options.packageRoot,
+    options.packageJson,
+    ownedSources,
+    inboundSeeds,
+  );
 
   const provenConsumer = (consumer: PreparedSourceFile): boolean =>
     options.owned(consumer.path) &&
