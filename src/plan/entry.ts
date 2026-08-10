@@ -12,7 +12,7 @@
 
 import { dirname, extname, join, resolve } from "node:path";
 
-import { isWithin, maskCssComments, normalizedRelativePath } from "../util/shared.ts";
+import { isWithin, maskCssComments } from "../util/shared.ts";
 import type { PreparedSourceFile } from "../types.ts";
 
 const TAILWIND_IMPORT = /@import\s+["']tailwindcss(?:\/[^"']*)?["']/;
@@ -47,25 +47,84 @@ export function scanProof(options: {
 }): "literal" | "automatic" | null {
   const source = maskCssComments(options.entrySource);
   const base = dirname(options.entry);
-  const containsChild = (scope: string): boolean => {
-    const resolved = resolve(base, scope.replace(/[/\\]\*.*$/, ""));
-    return isWithin(resolved, options.packageRoot) || isWithin(options.packageRoot, resolved);
-  };
-  // An exclusion covering the child defeats both proofs conservatively.
+  const scopePath = (scope: string): string => resolve(base, scope.replace(/[/\\]\*.*$/, ""));
+  // A literal scope proves coverage only when it contains the whole child
+  // package; a narrower scope proves nothing for consumers outside it, so
+  // it falls through to the automatic-detection arm.
+  const coversChild = (scope: string): boolean => isWithin(scopePath(scope), options.packageRoot);
+  // An exclusion overlapping the child in either direction defeats both
+  // proofs conservatively.
+  const excludesChild = (scope: string): boolean =>
+    isWithin(scopePath(scope), options.packageRoot) ||
+    isWithin(options.packageRoot, scopePath(scope));
   for (const match of source.matchAll(/@source\s+not\s+["']([^"']+)["']/g)) {
-    if (containsChild(match[1])) return null;
+    if (excludesChild(match[1])) return null;
   }
   for (const match of source.matchAll(/@source\s+["']([^"']+)["']/g)) {
-    if (containsChild(match[1])) return "literal";
+    if (coversChild(match[1])) return "literal";
   }
   const importSource = source.match(/@import\s+["']tailwindcss["'][^;]*\bsource\(([^)]*)\)/);
   if (importSource) {
     const argument = importSource[1].trim();
     if (argument === "none") return null;
     const literal = argument.match(/^["']([^"']+)["']$/);
-    return literal && containsChild(literal[1]) ? "literal" : null;
+    return literal && coversChild(literal[1]) ? "literal" : null;
   }
   return isWithin(base, options.packageRoot) ? "automatic" : null;
+}
+
+/// Replace JS comments with spaces so commented-out imports never create
+/// loader or reachability edges. String and template contexts are tracked
+/// so comment markers inside literals stay untouched. Regex literals and
+/// `${}` re-entry inside templates are not modeled; mis-masking there can
+/// only remove candidate matches, which makes proofs fail conservatively.
+function maskJsComments(source: string): string {
+  // Split into UTF-16 units so writes align with the index-based scan.
+  const output = source.split("");
+  type State = "code" | "single" | "double" | "template" | "line" | "block";
+  let state: State = "code";
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    const next = source[index + 1];
+    switch (state) {
+      case "code":
+        if (char === "/" && next === "/") {
+          state = "line";
+          output[index] = " ";
+        } else if (char === "/" && next === "*") {
+          state = "block";
+          output[index] = " ";
+        } else if (char === "'") state = "single";
+        else if (char === '"') state = "double";
+        else if (char === "`") state = "template";
+        break;
+      case "single":
+        if (char === "\\") index += 1;
+        else if (char === "'" || char === "\n") state = "code";
+        break;
+      case "double":
+        if (char === "\\") index += 1;
+        else if (char === '"' || char === "\n") state = "code";
+        break;
+      case "template":
+        if (char === "\\") index += 1;
+        else if (char === "`") state = "code";
+        break;
+      case "line":
+        if (char === "\n") state = "code";
+        else output[index] = " ";
+        break;
+      case "block":
+        if (char === "*" && next === "/") {
+          output[index] = " ";
+          output[index + 1] = " ";
+          index += 1;
+          state = "code";
+        } else if (char !== "\n") output[index] = " ";
+        break;
+    }
+  }
+  return output.join("");
 }
 
 const IMPORT_SPECIFIERS =
@@ -103,7 +162,7 @@ function importEdges(files: PreparedSourceFile[]): Map<string, string[]> {
   for (const file of files) {
     if (extname(file.path) === ".html") continue;
     const targets: string[] = [];
-    for (const match of file.source.matchAll(IMPORT_SPECIFIERS)) {
+    for (const match of maskJsComments(file.source).matchAll(IMPORT_SPECIFIERS)) {
       const spec = match[1] ?? match[2] ?? match[3];
       const resolved = resolveImport(dirname(file.path), spec, known);
       if (resolved !== undefined) targets.push(resolved);
@@ -196,7 +255,7 @@ export function proveSharedEntry(options: SharedEntryProofOptions): SharedEntryP
     .filter(
       (file) =>
         (file.htmlStylesheets ?? []).some((context) => context.cssPath === options.entry) ||
-        (extname(file.path) !== ".html" && fileImportsStylesheet(file, options.entry)),
+        (extname(file.path) !== ".html" && importsEntry(file, options.entry)),
     )
     .map((file) => file.path);
   if (loaders.length === 0) return null;
@@ -216,12 +275,14 @@ export function proveSharedEntry(options: SharedEntryProofOptions): SharedEntryP
   };
 }
 
-/// A quoted relative import of the stylesheet, matching the reference shape
-/// used for consumer detection elsewhere.
-function fileImportsStylesheet(file: { path: string; source: string }, stylePath: string): boolean {
-  let importPath = normalizedRelativePath(dirname(file.path), stylePath);
-  if (!importPath.startsWith(".")) importPath = `./${importPath}`;
-  return [`'${importPath}'`, `"${importPath}"`, `\`${importPath}\``].some((literal) =>
-    file.source.includes(literal),
-  );
+/// A parsed static import, dynamic import, or require whose specifier
+/// resolves to the entry. A loading proof needs an actual import
+/// statement: a quoted path sitting in a comment or an unrelated string
+/// does not load the entry's CSS.
+function importsEntry(file: { path: string; source: string }, entry: string): boolean {
+  for (const match of maskJsComments(file.source).matchAll(IMPORT_SPECIFIERS)) {
+    const spec = match[1] ?? match[2] ?? match[3];
+    if (spec.startsWith(".") && resolve(dirname(file.path), spec) === entry) return true;
+  }
+  return false;
 }

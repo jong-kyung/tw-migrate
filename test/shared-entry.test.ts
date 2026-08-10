@@ -39,6 +39,12 @@ test("proves scan coverage through literal scopes and automatic bases", () => {
   expect(prove('@import "tailwindcss" source("./packages/app");\n')).toBe("literal");
   expect(prove('@import "tailwindcss" source("./other");\n')).toBe(null);
   expect(prove('@import "tailwindcss";\n@source not "./packages/app";\n')).toBe(null);
+  // A literal scope narrower than the package proves nothing for consumers
+  // outside it: automatic detection still applies, and disabling detection
+  // leaves the package unproven.
+  expect(prove('@import "tailwindcss";\n@source "./packages/app/src";\n')).toBe("automatic");
+  expect(prove('@import "tailwindcss" source(none);\n@source "./packages/app/src";\n')).toBe(null);
+  expect(prove('@import "tailwindcss";\n@source not "./packages/app/tests";\n')).toBe(null);
   expect(prove('@import "tailwindcss";\n', "/repo/other/globals.css")).toBe(null);
 });
 
@@ -81,6 +87,35 @@ test("proves consumers statically reachable from a loading source", () => {
 
 test("rejects a package that never loads the entry", () => {
   expect(prove({ packageSources: [consumer] })).toBe(null);
+});
+
+test("ignores entry paths outside real import statements", () => {
+  const commented = file(
+    `${child}/main.tsx`,
+    "// import '../../globals.css';\nimport { Button } from './Button.tsx';\nexport const render = Button;\n",
+  );
+  const deadString = file(
+    `${child}/main.tsx`,
+    "const doc = '../../globals.css';\nimport { Button } from './Button.tsx';\nexport const render = Button;\n",
+  );
+  const blockCommented = file(
+    `${child}/main.tsx`,
+    "/* import '../../globals.css'; */\nimport { Button } from './Button.tsx';\nexport const render = Button;\n",
+  );
+
+  expect(prove({ packageSources: [commented, consumer] })).toBe(null);
+  expect(prove({ packageSources: [deadString, consumer] })).toBe(null);
+  expect(prove({ packageSources: [blockCommented, consumer] })).toBe(null);
+});
+
+test("commented imports create no reachability edges", () => {
+  const loaderWithoutEdge = file(
+    `${child}/main.tsx`,
+    "import '../../globals.css';\n// import { Button } from './Button.tsx';\n",
+  );
+  const proofs = prove({ packageSources: [loaderWithoutEdge, consumer] });
+
+  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
 });
 
 test("keeps a consumer outside every proven flow retained", () => {
