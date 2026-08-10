@@ -1,0 +1,141 @@
+import { expect, test } from "vite-plus/test";
+
+import { proveSharedEntry, scanProof, tailwindEntryCatalog } from "../src/plan/entry.ts";
+import type { PreparedSourceFile } from "../src/types.ts";
+
+const root = "/repo";
+const child = "/repo/packages/app";
+const entry = "/repo/globals.css";
+
+test("catalogs Tailwind entries by owning package", () => {
+  const styleSources = new Map([
+    [entry, '@import "tailwindcss";\n'],
+    ["/repo/plain.css", ".a { color: red; }\n"],
+    ["/repo/packages/app/own.css", '@import "tailwindcss" prefix(tw);\n'],
+  ]);
+  const owners = new Map<string, string | undefined>([
+    [entry, root],
+    ["/repo/plain.css", root],
+    ["/repo/packages/app/own.css", child],
+  ]);
+
+  expect(tailwindEntryCatalog(styleSources, owners)).toEqual(
+    new Map([
+      [root, [entry]],
+      [child, ["/repo/packages/app/own.css"]],
+    ]),
+  );
+});
+
+test("proves scan coverage through literal scopes and automatic bases", () => {
+  const prove = (entrySource: string, entryPath = entry) =>
+    scanProof({ entry: entryPath, entrySource, packageRoot: child });
+
+  expect(prove('@import "tailwindcss";\n')).toBe("automatic");
+  expect(prove('@import "tailwindcss";\n@source "./packages/app";\n')).toBe("literal");
+  expect(prove('@import "tailwindcss";\n@source "./packages";\n')).toBe("literal");
+  expect(prove('@import "tailwindcss" source(none);\n')).toBe(null);
+  expect(prove('@import "tailwindcss" source(none);\n@source "./packages/app";\n')).toBe("literal");
+  expect(prove('@import "tailwindcss" source("./packages/app");\n')).toBe("literal");
+  expect(prove('@import "tailwindcss" source("./other");\n')).toBe(null);
+  expect(prove('@import "tailwindcss";\n@source not "./packages/app";\n')).toBe(null);
+  expect(prove('@import "tailwindcss";\n', "/repo/other/globals.css")).toBe(null);
+});
+
+function file(path: string, source: string): PreparedSourceFile {
+  return { path, source };
+}
+
+function prove(options: {
+  packageSources: PreparedSourceFile[];
+  packageJson?: Record<string, unknown>;
+  ignoredPaths?: Set<string>;
+  entrySource?: string;
+}) {
+  return proveSharedEntry({
+    packageRoot: child,
+    entry,
+    entrySource: options.entrySource ?? '@import "tailwindcss";\n',
+    packageSources: options.packageSources,
+    writable: () => true,
+    packageJson: options.packageJson ?? {},
+    ignoredPaths: options.ignoredPaths ?? new Set(),
+  });
+}
+
+const loader = file(
+  `${child}/main.tsx`,
+  "import '../../globals.css';\nimport { Button } from './Button.tsx';\n",
+);
+const consumer = file(
+  `${child}/Button.tsx`,
+  "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n",
+);
+
+test("proves consumers statically reachable from a loading source", () => {
+  const proofs = prove({ packageSources: [loader, consumer] });
+
+  expect(proofs).not.toBe(null);
+  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(true);
+});
+
+test("rejects a package that never loads the entry", () => {
+  expect(prove({ packageSources: [consumer] })).toBe(null);
+});
+
+test("keeps a consumer outside every proven flow retained", () => {
+  const stray = file(
+    `${child}/Stray.tsx`,
+    "import styles from './Button.module.css';\nexport const Stray = () => <i className={styles.button} />;\n",
+  );
+  const proofs = prove({ packageSources: [loader, consumer, stray] });
+
+  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer, stray])).toBe(false);
+});
+
+test("treats exported consumers as unproven flows", () => {
+  const proofs = prove({
+    packageSources: [loader, consumer],
+    packageJson: { main: "./main.tsx" },
+  });
+
+  // The consumer is reachable from the loading source, but the same chain
+  // is exposed through the package entry point, so an external application
+  // can render it without this entry's CSS.
+  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+});
+
+test("wildcard exports expose every consumer", () => {
+  const proofs = prove({
+    packageSources: [loader, consumer],
+    packageJson: { exports: { "./*": "./*" } },
+  });
+
+  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+});
+
+test("automatic scan coverage requires consumers to pass ignore rules", () => {
+  const literal = prove({
+    packageSources: [loader, consumer],
+    entrySource: '@import "tailwindcss";\n@source "./packages/app";\n',
+    ignoredPaths: new Set([consumer.path]),
+  });
+  const automatic = prove({
+    packageSources: [loader, consumer],
+    ignoredPaths: new Set([consumer.path]),
+  });
+
+  expect(literal?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(true);
+  expect(automatic?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+});
+
+test("an html consumer linking the entry proves itself", () => {
+  const page: PreparedSourceFile = {
+    path: `${child}/index.html`,
+    source: '<link rel="stylesheet" href="../../globals.css"><button class="button"></button>',
+    htmlStylesheets: [{ cssPath: entry, variants: [], direct: true, analyzable: true }],
+  };
+  const proofs = prove({ packageSources: [page] });
+
+  expect(proofs?.provenStyle(`${child}/styles.css`, [page])).toBe(true);
+});
