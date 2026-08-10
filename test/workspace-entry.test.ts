@@ -193,3 +193,50 @@ test("returns proof warnings when every target is rejected", async () => {
   expect(flow[0].file).toBe("packages/app/Button.module.css");
   expect(report.changedFiles).toEqual([]);
 });
+
+test("composes edits when one component consumes two members' stylesheets", async () => {
+  const cwd = await workspace({
+    "package.json": '{"private":true}',
+    "globals.css": '@import "tailwindcss";\n',
+    "shared.module.css": ".frame { margin: 7px; }\n",
+    "main.tsx": "import './globals.css';\n",
+    ...app("app"),
+  });
+  // The child component consumes the root-owned module and its own module,
+  // so both members edit the same file and the group must compose the
+  // edits instead of aborting on a duplicate path claim.
+  await writeFile(
+    join(cwd, "packages/app/Button.tsx"),
+    "import shared from '../../shared.module.css';\nimport styles from './Button.module.css';\nexport const Button = () => <button className={`${shared.frame} ${styles.button}`}>Save</button>;\n",
+  );
+  const report = await migrate({ cwd, workspaces: true, extractMediaQueries: true, write: true });
+
+  const button = await readFile(join(cwd, "packages/app/Button.tsx"), "utf8");
+  expect(button).toContain("m-[7px]");
+  expect(button).toContain("p-[13px]");
+  expect(report.failures).toEqual([]);
+});
+
+test("skips only the member whose media collection fails", async () => {
+  const files: Record<string, string> = {
+    "package.json": '{"private":true}',
+    "globals.css": '@import "tailwindcss";\n',
+    ...app("app"),
+    ...app("lib"),
+  };
+  files["packages/lib/Button.module.css"] = ".broken { color: red }}}\n";
+  const cwd = await workspace(files);
+  const report = await migrate({
+    cwd,
+    workspaces: true,
+    extractMediaQueries: true,
+    force: true,
+    write: true,
+  });
+
+  expect(report.failures).toHaveLength(1);
+  expect(report.failures[0].package).toBe("packages/lib");
+  expect(await readFile(join(cwd, "packages/app/Button.tsx"), "utf8")).toMatch(
+    /screen:width-lte-700px:m-\[7px\]/,
+  );
+});

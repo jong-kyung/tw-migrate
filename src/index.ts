@@ -38,11 +38,12 @@ import { proveSharedEntry, tailwindEntryCatalog } from "./plan/entry.ts";
 import type { SharedEntryProofs } from "./plan/entry.ts";
 import {
   appendMediaDefinitions,
+  collectMemberMediaConditions,
   planMediaExtraction,
   probeCandidate,
   usedGeneratedDefinitions,
 } from "./plan/media.ts";
-import type { MediaExtraction } from "./plan/media.ts";
+import type { MediaCollection, MediaExtraction } from "./plan/media.ts";
 import { verifyVueSource } from "./parser/vue.ts";
 import { preparePackageVue, vueWarningsOnlyResult } from "./plan/vue.ts";
 import { verifySnapshots, writeChanges } from "./util/write.ts";
@@ -726,9 +727,25 @@ async function planPreparedGroup(
           "The Tailwind entry could not be edited safely, so media behavior was preserved with arbitrary variants.",
       });
     } else {
+      // Collection failures are attributable to one member: under force
+      // only that member is skipped, while resolution failures affect the
+      // shared allocation and skip the group.
+      const collections: MediaCollection[] = [];
+      // Reassigning `active` below does not disturb this iteration over
+      // the current array, and each member is visited exactly once.
+      for (const member of active) {
+        try {
+          collections.push(collectMemberMediaConditions(member.stylesheets, entry));
+        } catch (error) {
+          if (!options.force || !isRecoverablePlanningError(error)) throw error;
+          results.push({ failure: packageFailure(workspaceRoot, member.packageRoot, error) });
+          active = active.filter((remaining) => remaining !== member);
+        }
+      }
+      if (active.length === 0) return results;
       try {
         extraction = planMediaExtraction({
-          memberStylesheets: active.map((member) => member.stylesheets),
+          collections,
           tailwind: entry,
           scannedSources: active.flatMap((member) => member.files.map((file) => file.source)),
         });
@@ -761,6 +778,11 @@ async function planPreparedGroup(
       composed = entry.css;
       states = [];
       const identityOwners = new Map<string, PreparedPackage>();
+      // Consumer files can be edited by more than one member (a component
+      // may use stylesheets from two packages), so edits chain through the
+      // composition exactly like the entry source: each member plans over
+      // the previous members' planned sources.
+      const composedFiles = new Map<string, string>();
       for (const member of active) {
         const blocked = blockedByMember.get(member);
         const memberWritable = groupWritable && !unwritableMembers.has(member);
@@ -780,7 +802,12 @@ async function planPreparedGroup(
           themeTokens: entry.themeTokens,
           ...(names ? { mediaNames: names } : {}),
           ...(memberWritable ? {} : { entryWritable: false }),
-          files: member.files,
+          files: member.files.map((file) => {
+            const chained = composedFiles.get(file.path);
+            return chained !== undefined && chained !== file.source
+              ? { ...file, source: chained }
+              : file;
+          }),
         };
         let plan: Plan;
         try {
@@ -823,7 +850,18 @@ async function planPreparedGroup(
           for (const identity of identities) identityOwners.set(identity, member);
           composed = delta;
         }
+        for (const file of plan.files) composedFiles.set(file.path, file.source);
         states.push({ prepared: member, request, plan });
+      }
+      // Only the last member editing a path claims its final composed
+      // source; earlier members' edits are already contained in it, and
+      // the merged transaction rejects duplicate path claims.
+      const lastClaim = new Map<string, MemberState>();
+      for (const state of states) {
+        for (const file of state.plan.files) lastClaim.set(file.path, state);
+      }
+      for (const state of states) {
+        state.plan.files = state.plan.files.filter((file) => lastClaim.get(file.path) === state);
       }
 
       const currentExtraction = names !== undefined ? { names, generated } : undefined;

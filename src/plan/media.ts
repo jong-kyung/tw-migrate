@@ -270,30 +270,38 @@ export function scannedVariantReservations(sources: Iterable<string>): Set<strin
 }
 
 /**
- * Run collection for every member of one entry group and resolve the fixed
- * map the planner consumes plus the definitions extraction may emit. Name
+ * Run native condition collection for one member package of an entry
+ * group. Kept separate from resolution so a recoverable collection
+ * failure is attributable to its member.
+ */
+export function collectMemberMediaConditions(
+  stylesheets: StylesheetEntry[],
+  tailwind: LoadedTailwind,
+): MediaCollection {
+  return JSON.parse(
+    collectMediaConditions(
+      JSON.stringify({
+        stylesheets,
+        themeTokens: tailwind.themeTokens,
+        tailwindSources: tailwind.graphSources,
+      }),
+    ),
+  );
+}
+
+/**
+ * Resolve the fixed map the planner consumes plus the definitions
+ * extraction may emit from the group's member collections. Name
  * allocation runs once for the complete group, so different keys from
  * different packages can never independently claim one name.
  */
 export function planMediaExtraction(options: {
-  memberStylesheets: StylesheetEntry[][];
+  collections: MediaCollection[];
   tailwind: LoadedTailwind;
   scannedSources: Iterable<string>;
 }): MediaExtraction {
-  const collections = options.memberStylesheets.map(
-    (stylesheets): MediaCollection =>
-      JSON.parse(
-        collectMediaConditions(
-          JSON.stringify({
-            stylesheets,
-            themeTokens: options.tailwind.themeTokens,
-            tailwindSources: options.tailwind.graphSources,
-          }),
-        ),
-      ),
-  );
   const resolution = resolveMediaNames(
-    collections,
+    options.collections,
     options.tailwind.themeTokens,
     buildMediaProbes(options.tailwind),
     scannedVariantReservations([

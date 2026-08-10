@@ -135,10 +135,11 @@ export async function scannerIgnoredPaths(
       ["check-ignore", "--no-index", "-z", "--stdin"],
       { cwd: workspaceRoot, maxBuffer: 64 * 1024 * 1024 },
       (error, stdout) => {
-        // Exit code 1 only means nothing matched; any other failure
+        // Exit code 1 only means nothing matched; any other failure,
+        // including string-coded ones such as a truncated maxBuffer,
         // conservatively reports every path as excluded rather than
-        // proving coverage from a failed check.
-        if (error !== null && typeof error.code === "number" && error.code > 1) {
+        // proving coverage from a failed or partial check.
+        if (error !== null && error.code !== 1) {
           resolvePromise(new Set(paths));
           return;
         }

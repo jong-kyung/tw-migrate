@@ -168,6 +168,61 @@ test("a type-only entry import is not a loader", () => {
   expect(prove({ packageSources: [typeOnlyLoader, consumer] })).toBe(null);
 });
 
+test("a conditional dynamic entry import is not a loader", () => {
+  const conditionalLoader = file(
+    `${child}/main.tsx`,
+    "declare const enabled: boolean;\nif (enabled) import('../../globals.css');\nimport { Button } from './Button.tsx';\nexport const render = Button;\n",
+  );
+
+  expect(prove({ packageSources: [conditionalLoader, consumer] })).toBe(null);
+});
+
+test("a disabled html link is not a loader", () => {
+  const page = file(
+    `${child}/index.html`,
+    '<link rel="stylesheet" href="../../globals.css" disabled><button class="button"></button>',
+  );
+
+  expect(prove({ packageSources: [page] })).toBe(null);
+});
+
+test("a vue loader parses with its declared script language", () => {
+  const vueLoader = file(
+    `${child}/App.vue`,
+    "<script setup lang=\"tsx\">\nimport '../../globals.css';\nimport { Button } from './Button.tsx';\nconst render = () => <Button />;\n</script>\n<template><div /></template>\n",
+  );
+  const proofs = prove({ packageSources: [vueLoader, consumer] });
+
+  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(true);
+});
+
+test("emitted javascript specifiers expose their typescript sources", () => {
+  const index = file(`${child}/index.ts`, "export { Button } from './Button.js';\n");
+  const proofs = prove({ packageSources: [loader, consumer, index] });
+
+  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+});
+
+test("an unresolved script import in the exposed closure exposes everything", () => {
+  const index = file(
+    `${child}/index.ts`,
+    "export { hidden } from './generated.js';\nexport { Button } from './Button.tsx';\n",
+  );
+  const proofs = prove({ packageSources: [loader, consumer, index] });
+
+  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+});
+
+test("tailwind subpath imports carry their source modifier", () => {
+  expect(
+    scanProof({
+      entry,
+      entrySource: '@import "tailwindcss/utilities" source(none);\n',
+      packageRoot: child,
+    }),
+  ).toBe(null);
+});
+
 test("a conventional index entry exposes its import closure", () => {
   const index = file(`${child}/index.ts`, "export { Button } from './Button.tsx';\n");
   const exposedByIndex = prove({ packageSources: [loader, consumer, index] });

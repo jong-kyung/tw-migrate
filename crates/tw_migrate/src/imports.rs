@@ -22,6 +22,10 @@ struct SourceImport {
     /// specifiers are all inline `type` entries; erased at runtime, they
     /// never load stylesheets.
     type_only: bool,
+    /// True for `import()` expressions and `require()` calls, which may sit
+    /// behind control flow; a loading proof needs an unconditional static
+    /// import, while reachability edges may still follow them.
+    dynamic: bool,
 }
 
 struct ImportCollector {
@@ -43,6 +47,7 @@ impl<'a> Visit<'a> for ImportCollector {
         self.imports.push(SourceImport {
             specifier: decl.source.value.to_string(),
             type_only,
+            dynamic: false,
         });
         walk::walk_import_declaration(self, decl);
     }
@@ -57,6 +62,7 @@ impl<'a> Visit<'a> for ImportCollector {
         self.imports.push(SourceImport {
             specifier: decl.source.value.to_string(),
             type_only,
+            dynamic: false,
         });
         walk::walk_export_from_declaration(self, decl);
     }
@@ -65,6 +71,7 @@ impl<'a> Visit<'a> for ImportCollector {
         self.imports.push(SourceImport {
             specifier: decl.source.value.to_string(),
             type_only: decl.export_kind.is_type(),
+            dynamic: false,
         });
         walk::walk_export_all_declaration(self, decl);
     }
@@ -74,6 +81,7 @@ impl<'a> Visit<'a> for ImportCollector {
             self.imports.push(SourceImport {
                 specifier: literal.value.to_string(),
                 type_only: false,
+                dynamic: true,
             });
         }
         walk::walk_import_expression(self, expression);
@@ -87,6 +95,7 @@ impl<'a> Visit<'a> for ImportCollector {
             self.imports.push(SourceImport {
                 specifier: literal.value.to_string(),
                 type_only: false,
+                dynamic: true,
             });
         }
         walk::walk_call_expression(self, call);
@@ -144,7 +153,7 @@ pub fn collect_css_directives_json(source: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    fn imports(source: &str, path: &str) -> Vec<(String, bool)> {
+    fn imports(source: &str, path: &str) -> Vec<(String, bool, bool)> {
         let parsed: Vec<serde_json::Value> =
             serde_json::from_str(&super::collect_source_imports_json(source, path).unwrap())
                 .unwrap();
@@ -154,6 +163,7 @@ mod tests {
                 (
                     import["specifier"].as_str().unwrap().to_string(),
                     import["typeOnly"].as_bool().unwrap(),
+                    import["dynamic"].as_bool().unwrap(),
                 )
             })
             .collect()
@@ -177,14 +187,14 @@ mod tests {
         assert_eq!(
             collected,
             vec![
-                ("../globals.css".to_string(), false),
-                ("./a.ts".to_string(), true),
-                ("./b.ts".to_string(), true),
-                ("./c.ts".to_string(), false),
-                ("./d.ts".to_string(), true),
-                ("./e.ts".to_string(), false),
-                ("./f.ts".to_string(), false),
-                ("./g.cjs".to_string(), false),
+                ("../globals.css".to_string(), false, false),
+                ("./a.ts".to_string(), true, false),
+                ("./b.ts".to_string(), true, false),
+                ("./c.ts".to_string(), false, false),
+                ("./d.ts".to_string(), true, false),
+                ("./e.ts".to_string(), false, false),
+                ("./f.ts".to_string(), false, true),
+                ("./g.cjs".to_string(), false, true),
             ]
         );
     }

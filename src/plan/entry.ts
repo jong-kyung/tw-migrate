@@ -128,7 +128,9 @@ export function scanProof(options: {
         const scope = excluded ? undefined : text.match(/@source\s+["']([^"']+)["']/);
         if (scope && coversChild(scope[1])) literal = true;
       } else if (name === "import") {
-        const importSource = text.match(/@import\s+["']tailwindcss["'][^;]*\bsource\(([^)]*)\)/);
+        const importSource = text.match(
+          /@import\s+["']tailwindcss(?:\/[^"']*)?["'][^;]*\bsource\(([^)]*)\)/,
+        );
         if (!importSource) continue;
         const argument = importSource[1].trim();
         if (argument === "none") automaticDisabled = true;
@@ -148,6 +150,7 @@ export function scanProof(options: {
 interface SourceImportRecord {
   specifier: string;
   typeOnly: boolean;
+  dynamic: boolean;
 }
 
 /// Parsed module records of one source file through the native oxc parser.
@@ -158,23 +161,33 @@ function sourceImports(file: { path: string; source: string }): SourceImportReco
   if (extension === ".html") return [];
   const sources =
     extension === ".vue"
-      ? [...file.source.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map((match) => match[1])
-      : [file.source];
+      ? [...file.source.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)].map((match) => {
+          // Parse each block with its declared language so JSX blocks are
+          // not rejected by the TypeScript grammar.
+          const lang = match[1].match(/\blang\s*=\s*["']?(\w+)/)?.[1]?.toLowerCase();
+          const scriptExtension =
+            lang === "tsx" || lang === "jsx" || lang === "js" ? `.${lang}` : ".ts";
+          return { source: match[2], path: `${file.path}${scriptExtension}` };
+        })
+      : [{ source: file.source, path: file.path }];
   const records: SourceImportRecord[] = [];
-  for (const source of sources) {
+  for (const script of sources) {
     try {
-      const parsed: unknown = JSON.parse(
-        collectSourceImports(source, extension === ".vue" ? `${file.path}.ts` : file.path),
-      );
+      const parsed: unknown = JSON.parse(collectSourceImports(script.source, script.path));
       if (!Array.isArray(parsed)) continue;
       for (const record of parsed) {
         if (
           record !== null &&
           typeof record === "object" &&
           typeof record.specifier === "string" &&
-          typeof record.typeOnly === "boolean"
+          typeof record.typeOnly === "boolean" &&
+          typeof record.dynamic === "boolean"
         ) {
-          records.push({ specifier: record.specifier, typeOnly: record.typeOnly });
+          records.push({
+            specifier: record.specifier,
+            typeOnly: record.typeOnly,
+            dynamic: record.dynamic,
+          });
         }
       }
     } catch {
@@ -196,16 +209,30 @@ const RESOLVABLE_EXTENSIONS = [
   ".vue",
 ];
 
-/// Resolve a relative import specifier to a known child source path.
+/// Resolve a relative import specifier to a known child source path. A
+/// NodeNext-style emitted specifier such as `./Button.js` also resolves to
+/// its authored TypeScript counterpart.
 function resolveImport(fromDir: string, spec: string, known: Set<string>): string | undefined {
   if (!spec.startsWith(".")) return undefined;
   const base = resolve(fromDir, spec);
+  const emitted = base.match(/^(.*)\.(?:mjs|cjs|js|jsx)$/);
   const candidates = [
     base,
+    ...(emitted
+      ? [".ts", ".tsx", ".mts", ".cts"].map((extension) => `${emitted[1]}${extension}`)
+      : []),
     ...RESOLVABLE_EXTENSIONS.map((extension) => `${base}${extension}`),
     ...RESOLVABLE_EXTENSIONS.map((extension) => join(base, `index${extension}`)),
   ];
   return candidates.find((candidate) => known.has(candidate));
+}
+
+/// A specifier that must resolve to a script source: an unresolved one in
+/// the exposure walk hides part of the externally loadable closure.
+function scriptLikeSpecifier(spec: string): boolean {
+  if (!spec.startsWith(".")) return false;
+  const trimmed = spec.split(/[?#]/, 1)[0];
+  return /\.(?:m?[jt]sx?|c[jt]s|vue)$/.test(trimmed) || !/\.[^/.]+$/.test(trimmed);
 }
 
 /// Child-owned static import edges. HTML files contribute no outgoing edges:
@@ -291,7 +318,32 @@ function exposedFiles(
     }
     entryFiles.push(resolved);
   }
-  return reachableFrom(entryFiles, importEdges(files));
+  // The exposure walk must not silently drop edges: an unresolved
+  // script-like import inside the exposed closure hides sources an
+  // external application can still execute. Stylesheet and asset imports
+  // resolve outside the source corpus by design and carry no exposure.
+  const byPath = new Map(files.map((file) => [file.path, file]));
+  const exposed = new Set<string>(entryFiles);
+  const pending = [...entryFiles];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) break;
+    const file = byPath.get(current);
+    if (file === undefined || extname(file.path) === ".html") continue;
+    for (const record of sourceImports(file)) {
+      if (record.typeOnly) continue;
+      const resolved = resolveImport(dirname(file.path), record.specifier, known);
+      if (resolved === undefined) {
+        if (scriptLikeSpecifier(record.specifier)) return "all";
+        continue;
+      }
+      if (!exposed.has(resolved)) {
+        exposed.add(resolved);
+        pending.push(resolved);
+      }
+    }
+  }
+  return exposed;
 }
 
 export interface SharedEntryProofOptions {
@@ -376,14 +428,15 @@ function htmlLinksEntry(file: { path: string; source: string }, entry: string): 
   }
 }
 
-/// A parsed runtime import, dynamic import, or require whose specifier
-/// resolves to the entry. A loading proof needs an actual runtime import:
-/// a quoted path in a comment or unrelated string, and a type-only clause
-/// TypeScript erases, never load the entry's CSS.
+/// A parsed static import declaration whose specifier resolves to the
+/// entry. A loading proof needs an unconditional runtime import: comments,
+/// unrelated strings, erased type-only clauses, and dynamic imports that
+/// may sit behind control flow never prove that the entry's CSS loads.
 function importsEntry(file: { path: string; source: string }, entry: string): boolean {
   return sourceImports(file).some(
     (record) =>
       !record.typeOnly &&
+      !record.dynamic &&
       record.specifier.startsWith(".") &&
       resolve(dirname(file.path), record.specifier) === entry,
   );
