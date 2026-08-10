@@ -473,6 +473,7 @@ async function preparePackage(
           packageRoot,
           entry: candidate,
           entrySource: styleSources.get(candidate) ?? "",
+          styleSources,
           packageSources,
           owned: (path) => pathOwners.get(path) === packageRoot,
           writable: (path) => targetable.has(path) && pathOwners.get(path) === packageRoot,

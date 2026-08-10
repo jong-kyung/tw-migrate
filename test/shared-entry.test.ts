@@ -45,6 +45,34 @@ test("proves scan coverage through literal scopes and automatic bases", () => {
   expect(prove('@import "tailwindcss";\n@source "./packages/app/src";\n')).toBe("automatic");
   expect(prove('@import "tailwindcss" source(none);\n@source "./packages/app/src";\n')).toBe(null);
   expect(prove('@import "tailwindcss";\n@source not "./packages/app/tests";\n')).toBe(null);
+  // Source directives in imported project CSS belong to the same entry
+  // graph, resolved against their owning stylesheet; a graph import
+  // missing from the corpus leaves the directives unknowable.
+  const styleSources = new Map([["/repo/theme.css", '@source not "./packages/app";\n']]);
+  expect(
+    scanProof({
+      entry,
+      entrySource: '@import "tailwindcss";\n@import "./theme.css";\n',
+      packageRoot: child,
+      styleSources,
+    }),
+  ).toBe(null);
+  expect(
+    scanProof({
+      entry,
+      entrySource: '@import "tailwindcss";\n@import "./missing.css";\n',
+      packageRoot: child,
+      styleSources,
+    }),
+  ).toBe(null);
+  expect(
+    scanProof({
+      entry,
+      entrySource: '@import "tailwindcss";\n@import "./theme.css";\n',
+      packageRoot: child,
+      styleSources: new Map([["/repo/theme.css", '@source "./packages/app";\n']]),
+    }),
+  ).toBe("literal");
   expect(prove('@import "tailwindcss";\n', "/repo/other/globals.css")).toBe(null);
 });
 
@@ -160,6 +188,15 @@ test("treats exported consumers as unproven flows", () => {
   // The consumer is reachable from the loading source, but the same chain
   // is exposed through the package entry point, so an external application
   // can render it without this entry's CSS.
+  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+});
+
+test("an unresolved declared entry point exposes every consumer", () => {
+  const proofs = prove({
+    packageSources: [loader, consumer],
+    packageJson: { main: "./dist/index.js" },
+  });
+
   expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
 });
 

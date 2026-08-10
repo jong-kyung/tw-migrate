@@ -36,41 +36,87 @@ export function tailwindEntryCatalog(
   return catalog;
 }
 
+/// The entry's static import graph over the scanned stylesheet corpus:
+/// Tailwind processes source directives from imported project CSS as part
+/// of one entry graph. Returns null when a local import is missing from
+/// the corpus, because its directives are unknowable.
+function entryGraphSheets(
+  entry: string,
+  styleSources: Map<string, string>,
+): { path: string; source: string }[] | null {
+  const sheets: { path: string; source: string }[] = [];
+  const seen = new Set<string>();
+  const pending = [entry];
+  while (pending.length > 0) {
+    const path = pending.pop();
+    if (path === undefined || seen.has(path)) continue;
+    seen.add(path);
+    const raw = styleSources.get(path);
+    if (raw === undefined) return null;
+    const source = maskCssComments(raw);
+    sheets.push({ path, source });
+    for (const match of source.matchAll(/@import\s+(?:url\(\s*)?["']([^"']+)["']/g)) {
+      const spec = match[1];
+      if (!spec.startsWith(".") && !spec.startsWith("/")) continue;
+      const resolved = resolve(dirname(path), spec);
+      pending.push(styleSources.has(resolved) ? resolved : `${resolved}.css`);
+    }
+  }
+  return sheets;
+}
+
 /// How the entry's utility detection covers the child package, or null when
-/// coverage cannot be proven. A literal `@source` scope is scanned
-/// regardless of ignore rules; automatic detection additionally requires
-/// each consumer path to pass the effective scanner ignore rules.
+/// coverage cannot be proven. Source directives are evaluated across the
+/// entry's imported graph, each resolved relative to its owning
+/// stylesheet. A literal `@source` scope is scanned regardless of ignore
+/// rules; automatic detection additionally requires each consumer path to
+/// pass the effective scanner ignore rules.
 export function scanProof(options: {
   entry: string;
   entrySource: string;
   packageRoot: string;
+  styleSources?: Map<string, string>;
 }): "literal" | "automatic" | null {
-  const source = maskCssComments(options.entrySource);
-  const base = dirname(options.entry);
-  const scopePath = (scope: string): string => resolve(base, scope.replace(/[/\\]\*.*$/, ""));
-  // A literal scope proves coverage only when it contains the whole child
-  // package; a narrower scope proves nothing for consumers outside it, so
-  // it falls through to the automatic-detection arm.
-  const coversChild = (scope: string): boolean => isWithin(scopePath(scope), options.packageRoot);
-  // An exclusion overlapping the child in either direction defeats both
-  // proofs conservatively.
-  const excludesChild = (scope: string): boolean =>
-    isWithin(scopePath(scope), options.packageRoot) ||
-    isWithin(options.packageRoot, scopePath(scope));
-  for (const match of source.matchAll(/@source\s+not\s+["']([^"']+)["']/g)) {
-    if (excludesChild(match[1])) return null;
+  const sheets = entryGraphSheets(
+    options.entry,
+    new Map([...(options.styleSources ?? []), [options.entry, options.entrySource]]),
+  );
+  if (sheets === null) return null;
+
+  let literal = false;
+  let automaticDisabled = false;
+  for (const { path, source } of sheets) {
+    const base = dirname(path);
+    const scopePath = (scope: string): string => resolve(base, scope.replace(/[/\\]\*.*$/, ""));
+    // A literal scope proves coverage only when it contains the whole child
+    // package; a narrower scope proves nothing for consumers outside it, so
+    // it falls through to the automatic-detection arm.
+    const coversChild = (scope: string): boolean => isWithin(scopePath(scope), options.packageRoot);
+    // An exclusion overlapping the child in either direction defeats both
+    // proofs conservatively.
+    const excludesChild = (scope: string): boolean =>
+      isWithin(scopePath(scope), options.packageRoot) ||
+      isWithin(options.packageRoot, scopePath(scope));
+    for (const match of source.matchAll(/@source\s+not\s+["']([^"']+)["']/g)) {
+      if (excludesChild(match[1])) return null;
+    }
+    for (const match of source.matchAll(/@source\s+["']([^"']+)["']/g)) {
+      if (coversChild(match[1])) literal = true;
+    }
+    const importSource = source.match(/@import\s+["']tailwindcss["'][^;]*\bsource\(([^)]*)\)/);
+    if (importSource) {
+      const argument = importSource[1].trim();
+      if (argument === "none") automaticDisabled = true;
+      else {
+        const literalBase = argument.match(/^["']([^"']+)["']$/);
+        if (literalBase && coversChild(literalBase[1])) literal = true;
+        else automaticDisabled = true;
+      }
+    }
   }
-  for (const match of source.matchAll(/@source\s+["']([^"']+)["']/g)) {
-    if (coversChild(match[1])) return "literal";
-  }
-  const importSource = source.match(/@import\s+["']tailwindcss["'][^;]*\bsource\(([^)]*)\)/);
-  if (importSource) {
-    const argument = importSource[1].trim();
-    if (argument === "none") return null;
-    const literal = argument.match(/^["']([^"']+)["']$/);
-    return literal && coversChild(literal[1]) ? "literal" : null;
-  }
-  return isWithin(base, options.packageRoot) ? "automatic" : null;
+  if (literal) return "literal";
+  if (automaticDisabled) return null;
+  return isWithin(dirname(options.entry), options.packageRoot) ? "automatic" : null;
 }
 
 /// Replace JS comments with spaces so commented-out imports never create
@@ -219,7 +265,12 @@ function exposedFiles(
   const entryFiles: string[] = [];
   for (const spec of specs) {
     const resolved = resolveImport(packageRoot, spec.startsWith(".") ? spec : `./${spec}`, known);
-    if (resolved !== undefined) entryFiles.push(resolved);
+    // A declared entry point that does not resolve to a scanned source,
+    // such as an unbuilt `./dist/index.js`, exposes an unknowable set of
+    // sources, so the exposure proof turns conservative instead of
+    // silently dropping the target.
+    if (resolved === undefined) return "all";
+    entryFiles.push(resolved);
   }
   return reachableFrom(entryFiles, importEdges(files));
 }
@@ -228,6 +279,9 @@ export interface SharedEntryProofOptions {
   packageRoot: string;
   entry: string;
   entrySource: string;
+  /// The scanned stylesheet corpus, for resolving the entry's imported
+  /// graph during the scan proof.
+  styleSources?: Map<string, string>;
   /// The prepared sources, including HTML stylesheet contexts. Files not
   /// owned by the child are excluded from every proof graph.
   packageSources: PreparedSourceFile[];
