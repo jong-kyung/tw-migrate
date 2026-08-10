@@ -1,6 +1,11 @@
 import { expect, test } from "vite-plus/test";
 
-import { proveSharedEntry, scanProof, tailwindEntryCatalog } from "../src/plan/entry.ts";
+import {
+  integrityProtected,
+  proveSharedEntry,
+  scanProof,
+  tailwindEntryCatalog,
+} from "../src/plan/entry.ts";
 import type { PreparedSourceFile } from "../src/types.ts";
 
 const root = "/repo";
@@ -135,6 +140,28 @@ test("ignores entry paths outside real import statements", () => {
   expect(prove({ packageSources: [commented, consumer] })).toBe(null);
   expect(prove({ packageSources: [deadString, consumer] })).toBe(null);
   expect(prove({ packageSources: [blockCommented, consumer] })).toBe(null);
+});
+
+test("a bare package deep import of a child source exposes its closure", () => {
+  const sibling = file(
+    `${root}/sibling/Panel.tsx`,
+    "import { Button } from '@acme/app/Button.tsx';\nexport const Panel = () => <Button />;\n",
+  );
+  const proofs = prove({
+    packageSources: [loader, consumer, sibling],
+    packageJson: { name: "@acme/app", private: true },
+  });
+
+  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+});
+
+test("an integrity link under a base element still protects the entry", () => {
+  const page = file(
+    `${child}/index.html`,
+    '<base href="./"><link rel="stylesheet" href="../../globals.css" integrity="sha384-x">',
+  );
+
+  expect(integrityProtected(entry, [page])).toBe(true);
 });
 
 test("a foreign deep import of a child source exposes its closure", () => {

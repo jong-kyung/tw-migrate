@@ -845,6 +845,17 @@ async function planPreparedGroup(
       [entry.css, ...entry.graphSources.map((graphSource) => graphSource.source)].join("\n"),
     ),
   );
+  // Registrations retained inside shared members' modules participate as
+  // base identities: another member moving the same registration into the
+  // entry would flip precedence against the retained module definition.
+  for (const member of active) {
+    if (member.sharedProofs === undefined) continue;
+    for (const stylesheet of member.stylesheets) {
+      for (const identity of atRuleIdentities(stylesheet.analysisSource ?? stylesheet.cssSource)) {
+        baseIdentities.add(identity);
+      }
+    }
+  }
   const unwritableMembers = new Set<PreparedPackage>();
   const blockedByMember = new Map<PreparedPackage, BlockedRules>();
   let states: MemberState[] = [];

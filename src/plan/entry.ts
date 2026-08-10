@@ -496,12 +496,28 @@ export function proveSharedEntry(options: SharedEntryProofOptions): SharedEntryP
   // subpaths, so whatever a foreign file imports is executable without
   // this entry and seeds the exposed closure.
   const ownedPaths = new Set(ownedSources.map((file) => file.path));
+  const packageName =
+    typeof options.packageJson.name === "string" ? options.packageJson.name : undefined;
+  const resolveInbound = (fromDir: string, spec: string): string | undefined => {
+    const relative = resolveImport(fromDir, spec, ownedPaths);
+    if (relative !== undefined) return relative;
+    // A sibling can also deep-import through the package name; the
+    // subpath resolves against the package root.
+    if (packageName !== undefined && spec.startsWith(`${packageName}/`)) {
+      return resolveImport(
+        options.packageRoot,
+        `./${spec.slice(packageName.length + 1)}`,
+        ownedPaths,
+      );
+    }
+    return undefined;
+  };
   const inboundSeeds: string[] = [];
   for (const file of options.packageSources) {
     if (options.owned(file.path) || extname(file.path) === ".html") continue;
     for (const record of sourceImports(file)) {
       if (record.typeOnly) continue;
-      const resolved = resolveImport(dirname(file.path), record.specifier, ownedPaths);
+      const resolved = resolveInbound(dirname(file.path), record.specifier);
       if (resolved !== undefined) inboundSeeds.push(resolved);
     }
   }
@@ -563,9 +579,11 @@ export function integrityProtected(
     if (extname(file.path) !== ".html") continue;
     try {
       const parsed = parseHtmlSource(file.path, file.source);
-      if (parsed.bases.length > 0) continue;
       for (const link of parsed.links) {
         if (!link.integrity) continue;
+        // A base element changes href resolution, so any integrity link
+        // on such a page conservatively protects the entry.
+        if (parsed.bases.length > 0) return true;
         const href = link.href.split(/[?#]/, 1)[0];
         if (!href || /^[a-z][a-z0-9+.-]*:|^\/\//i.test(href)) continue;
         if (resolve(dirname(file.path), href) === entry) return true;

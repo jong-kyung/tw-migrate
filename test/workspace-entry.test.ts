@@ -447,3 +447,25 @@ test("keeps active global at-rules of shared members in their modules", async ()
   expect(await readFile(join(cwd, "packages/app/Button.tsx"), "utf8")).toContain("p-[13px]");
   expect(report.failures).toEqual([]);
 });
+
+test("owner moves collide with registrations retained in shared members", async () => {
+  const property = (value: string) =>
+    `@property --brand { syntax: "<color>"; inherits: false; initial-value: ${value}; }\n.frame { padding: 13px; }\n`;
+  const cwd = await workspace({
+    "package.json": '{"private":true}',
+    "globals.css": '@import "tailwindcss";\n',
+    "shared.module.css": property("red"),
+    "main.tsx":
+      "import './globals.css';\nimport shared from './shared.module.css';\nexport const render = shared.frame;\n",
+    ...app("app", property("blue")),
+  });
+  await migrate({ cwd, workspaces: true, extractMediaQueries: true, write: true });
+
+  // The shared child retains its registration in place, so the owner's
+  // move of the same identity would flip precedence and must be retained.
+  expect(await readFile(join(cwd, "globals.css"), "utf8")).not.toContain("@property");
+  expect(await readFile(join(cwd, "shared.module.css"), "utf8")).toContain("@property --brand");
+  expect(await readFile(join(cwd, "packages/app/Button.module.css"), "utf8")).toContain(
+    "@property --brand",
+  );
+});
