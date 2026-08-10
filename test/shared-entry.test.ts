@@ -93,7 +93,7 @@ function prove(options: {
     packageSources: options.packageSources,
     owned: (path) => path.startsWith(`${child}/`),
     writable: () => true,
-    packageJson: options.packageJson ?? {},
+    packageJson: options.packageJson ?? { private: true },
     ignoredPaths: options.ignoredPaths ?? new Set(),
   });
 }
@@ -340,6 +340,50 @@ test("an unresolved declared entry point exposes every consumer", () => {
   });
 
   expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+});
+
+test("a publishable package without exports exposes every consumer", () => {
+  const open = prove({ packageSources: [loader, consumer], packageJson: {} });
+  const encapsulated = prove({
+    packageSources: [loader, consumer],
+    packageJson: { exports: { ".": "./main.tsx" } },
+  });
+
+  // Deep imports reach any subpath without an encapsulating exports map,
+  // while the exports map confines exposure to its targets.
+  expect(open?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+  expect(encapsulated?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+});
+
+test("an integrity-protected entry link is not a loader", () => {
+  const page = file(
+    `${child}/index.html`,
+    '<link rel="stylesheet" href="../../globals.css" integrity="sha384-x"><button class="button"></button>',
+  );
+
+  expect(prove({ packageSources: [page] })).toBe(null);
+});
+
+test("a css module-script import is not a loader", () => {
+  const moduleScript = file(
+    `${child}/main.tsx`,
+    "import sheet from '../../globals.css' with { type: 'css' };\nimport { Button } from './Button.tsx';\nexport const render = Button;\n",
+  );
+
+  expect(prove({ packageSources: [moduleScript, consumer] })).toBe(null);
+});
+
+test("string content never catalogs a tailwind entry", () => {
+  const styleSources = new Map([
+    [entry, '@import "tailwindcss";\n'],
+    ["/repo/fake.css", `.x { content: '@import "tailwindcss"'; }\n`],
+  ]);
+  const owners = new Map<string, string | undefined>([
+    [entry, root],
+    ["/repo/fake.css", root],
+  ]);
+
+  expect(tailwindEntryCatalog(styleSources, owners)).toEqual(new Map([[root, [entry]]]));
 });
 
 test("wildcard exports expose every consumer", () => {

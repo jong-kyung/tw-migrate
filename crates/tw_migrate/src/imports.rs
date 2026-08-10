@@ -51,7 +51,10 @@ impl<'a> Visit<'a> for ImportCollector {
         self.imports.push(SourceImport {
             specifier: decl.source.value.to_string(),
             type_only,
-            dynamic: false,
+            // An import attribute clause such as `with { type: 'css' }`
+            // constructs a stylesheet object without applying it, so the
+            // record cannot prove unconditional loading.
+            dynamic: decl.with_clause.is_some(),
         });
         walk::walk_import_declaration(self, decl);
     }
@@ -398,6 +401,7 @@ mod tests {
              const f = await import('./f.ts');\n\
              const g = require('./g.cjs');\n\
              import H = require('./h.ts');\n\
+             import sheet from './i.css' with { type: 'css' };\n\
              // import './commented.css';\n\
              const dead = '../dead.css';\n",
             "/project/main.ts",
@@ -414,6 +418,7 @@ mod tests {
                 ("./f.ts".to_string(), false, true),
                 ("./g.cjs".to_string(), false, true),
                 ("./h.ts".to_string(), false, false),
+                ("./i.css".to_string(), false, true),
             ]
         );
     }

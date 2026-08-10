@@ -20,6 +20,17 @@ import type { PreparedSourceFile } from "../types.ts";
 
 const TAILWIND_IMPORT = /@import\s+["']tailwindcss(?:\/[^"']*)?["']/;
 
+/// A structurally parsed top-level Tailwind import. An unparseable
+/// stylesheet falls back to the masked regex so a working entry is never
+/// dropped from discovery.
+function hasTailwindImport(source: string): boolean {
+  const directives = cssDirectives(source);
+  if (directives !== null) {
+    return directives.some((directive) => directive.kind === "import" && directive.tailwind);
+  }
+  return TAILWIND_IMPORT.test(maskCssComments(source));
+}
+
 /// Tailwind entries per owning package, from the scanned stylesheet corpus.
 export function tailwindEntryCatalog(
   styleSources: Map<string, string>,
@@ -28,7 +39,7 @@ export function tailwindEntryCatalog(
   const catalog = new Map<string, string[]>();
   for (const [path, source] of styleSources) {
     if (extname(path) !== ".css") continue;
-    if (!TAILWIND_IMPORT.test(maskCssComments(source))) continue;
+    if (!hasTailwindImport(source)) continue;
     const owner = pathOwners.get(path);
     if (owner === undefined) continue;
     const entries = catalog.get(owner) ?? [];
@@ -364,6 +375,10 @@ function exposedFiles(
   for (const field of ["main", "module", "exports"]) {
     if (collect(packageJson[field]) === "all") return "all";
   }
+  // Without an encapsulating `exports` map a publishable package is open
+  // to deep imports of any source subpath; a private package cannot be
+  // installed externally and keeps conventional resolution only.
+  if (packageJson.exports === undefined && packageJson.private !== true) return "all";
   const declared = specs.length > 0;
   // Without export metadata the conventional `./index` entry remains
   // externally loadable; when no index resolves, nothing is exposed by
@@ -495,7 +510,9 @@ function htmlLinksEntry(file: { path: string; source: string }, entry: string): 
     if (parsed.bases.length > 0) return false;
     return parsed.links.some((link) => {
       // A media-conditioned entry link loads the CSS only while its query
-      // matches, so it proves nothing unconditionally.
+      // matches, and an integrity digest would reject the entry outright
+      // once any edit changes its bytes; neither proves loading.
+      if (link.integrity) return false;
       const media = link.media.trim().toLowerCase();
       if (media !== "" && media !== "all") return false;
       const href = link.href.split(/[?#]/, 1)[0];
