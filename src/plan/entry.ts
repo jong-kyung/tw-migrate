@@ -10,6 +10,7 @@
 // every proven flow keeps its rules retained while the rest of the package
 // migrates.
 
+import { createRequire } from "node:module";
 import { dirname, extname, join, resolve } from "node:path";
 
 import { collectCssDirectives, collectSourceImports } from "../native.ts";
@@ -93,7 +94,23 @@ function entryGraphSheets(
       if (directive.kind !== "import") continue;
       if (directive.specifier === null) return null;
       const spec = directive.specifier;
-      if (!spec.startsWith(".") && !spec.startsWith("/")) continue;
+      if (directive.tailwind) continue;
+      if (!spec.startsWith(".") && !spec.startsWith("/")) {
+        // Bare package imports load through the same resolver as the
+        // Tailwind loader. A workspace-internal target joins the graph; a
+        // dependency under node_modules cannot target the workspace with
+        // its relative scopes; an unresolvable one leaves the graph's
+        // directives unknowable.
+        let resolved: string;
+        try {
+          resolved = createRequire(join(dirname(path), "package.json")).resolve(spec);
+        } catch {
+          return null;
+        }
+        if (/[\\/]node_modules[\\/]/.test(resolved)) continue;
+        pending.push(resolved);
+        continue;
+      }
       const resolved = resolve(dirname(path), spec);
       pending.push(styleSources.has(resolved) ? resolved : `${resolved}.css`);
     }
@@ -246,6 +263,15 @@ function scriptLikeSpecifier(spec: string): boolean {
   return /\.(?:m?[jt]sx?|c[jt]s|vue)$/.test(trimmed) || !/\.[^/.]+$/.test(trimmed);
 }
 
+/// A bare specifier shaped like an external package or builtin. Package
+/// aliases such as `#internal` or `@/components` fall outside this shape
+/// and may map back into package sources, so an unresolved one inside the
+/// exposed closure is conservative. An alias styled exactly like a scoped
+/// npm name remains indistinguishable from a real dependency.
+function externalPackageSpecifier(spec: string): boolean {
+  return /^(?:node:[\w/.-]+|(?:@[a-z0-9~][\w.~-]*\/)?[a-z0-9~][\w.~-]*(?:\/.*)?)$/.test(spec);
+}
+
 /// Child-owned static import edges. HTML files contribute no outgoing edges:
 /// an HTML consumer proves only itself through its own entry link.
 function importEdges(files: PreparedSourceFile[]): Map<string, string[]> {
@@ -345,7 +371,12 @@ function exposedFiles(
       if (record.typeOnly) continue;
       const resolved = resolveImport(dirname(file.path), record.specifier, known);
       if (resolved === undefined) {
-        if (scriptLikeSpecifier(record.specifier)) return "all";
+        if (
+          scriptLikeSpecifier(record.specifier) ||
+          (!record.specifier.startsWith(".") && !externalPackageSpecifier(record.specifier))
+        ) {
+          return "all";
+        }
         continue;
       }
       if (!exposed.has(resolved)) {
@@ -430,6 +461,10 @@ function htmlLinksEntry(file: { path: string; source: string }, entry: string): 
     const parsed = parseHtmlSource(file.path, file.source);
     if (parsed.bases.length > 0) return false;
     return parsed.links.some((link) => {
+      // A media-conditioned entry link loads the CSS only while its query
+      // matches, so it proves nothing unconditionally.
+      const media = link.media.trim().toLowerCase();
+      if (media !== "" && media !== "all") return false;
       const href = link.href.split(/[?#]/, 1)[0];
       if (!href || /^[a-z][a-z0-9+.-]*:|^\/\//i.test(href)) return false;
       return resolve(dirname(file.path), href) === entry;

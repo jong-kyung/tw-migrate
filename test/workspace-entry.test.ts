@@ -260,3 +260,30 @@ test("composes html link removals across members on one page", async () => {
   expect(html).toMatch(/class="rootbox appbox p-\[13px\] m-\[7px\]"/);
   expect(report.failures).toEqual([]);
 });
+
+test("retains duplicate at-rule registrations within one member", async () => {
+  const property = (value: string, klass: string) =>
+    `@property --brand { syntax: "<color>"; inherits: false; initial-value: ${value}; }\n.${klass} { padding: 13px; }\n`;
+  const files: Record<string, string> = {
+    "package.json": '{"private":true}',
+    "globals.css": '@import "tailwindcss";\n',
+    ...app("app", property("red", "button")),
+  };
+  files["packages/app/Card.module.css"] = property("blue", "card");
+  files["packages/app/Card.tsx"] =
+    "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.card} />;\n";
+  files["packages/app/main.tsx"] =
+    "import '../../globals.css';\nimport { Button } from './Button.tsx';\nimport { Card } from './Card.tsx';\nexport const render = [Button, Card];\n";
+  const cwd = await workspace(files);
+  await migrate({ cwd, workspaces: true, extractMediaQueries: true, write: true });
+
+  // Two stylesheets of one package move the same registration with
+  // different content; their load order is unproven, so neither moves.
+  expect(await readFile(join(cwd, "globals.css"), "utf8")).not.toContain("@property");
+  expect(await readFile(join(cwd, "packages/app/Button.module.css"), "utf8")).toContain(
+    "@property --brand",
+  );
+  expect(await readFile(join(cwd, "packages/app/Card.module.css"), "utf8")).toContain(
+    "@property --brand",
+  );
+});

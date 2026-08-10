@@ -764,8 +764,10 @@ async function planPreparedGroup(
   // Order-sensitive at-rule registrations already present in the entry
   // graph; a moved definition colliding with them, or with another
   // stylesheet's move, has no proven precedence and is retained.
-  const baseIdentities = atRuleIdentities(
-    [entry.css, ...entry.graphSources.map((graphSource) => graphSource.source)].join("\n"),
+  const baseIdentities = new Set(
+    atRuleIdentities(
+      [entry.css, ...entry.graphSources.map((graphSource) => graphSource.source)].join("\n"),
+    ),
   );
   const unwritableMembers = new Set<PreparedPackage>();
   const blockedByMember = new Map<PreparedPackage, BlockedRules>();
@@ -838,9 +840,13 @@ async function planPreparedGroup(
             );
           }
           const identities = atRuleIdentities(delta.slice(composed.length));
+          // A duplicate inside one member's own delta means two of its
+          // stylesheets move the same registration; their runtime load
+          // order is equally unproven, so the member keeps its at-rules.
+          const withinDelta = new Set<string>();
           let collided = false;
           for (const identity of identities) {
-            if (baseIdentities.has(identity)) {
+            if (withinDelta.has(identity) || baseIdentities.has(identity)) {
               unwritableMembers.add(member);
               collided = true;
             } else if (identityOwners.has(identity)) {
@@ -849,6 +855,7 @@ async function planPreparedGroup(
               unwritableMembers.add(member);
               collided = true;
             }
+            withinDelta.add(identity);
           }
           if (collided) continue planning;
           for (const identity of identities) identityOwners.set(identity, member);
@@ -1057,19 +1064,20 @@ async function entryUnsafe(
 }
 
 /// Registration identities of order-sensitive movable global at-rules in a
-/// CSS fragment. Moved keyframes are renamed to unique migration names and
-/// never collide; `@font-face` has no prelude and is identified by its
-/// font-family descriptor.
-function atRuleIdentities(css: string): Set<string> {
-  const identities = new Set<string>();
+/// CSS fragment, in source order and with duplicates preserved. Moved
+/// keyframes are renamed to unique migration names and never collide;
+/// `@font-face` has no prelude and is identified by its font-family
+/// descriptor.
+function atRuleIdentities(css: string): string[] {
+  const identities: string[] = [];
   for (const match of maskCssComments(css).matchAll(
     /@(color-profile|counter-style|font-feature-values|font-palette-values|page|position-try|property|view-transition)\b([^{;]*)\{|@(font-face)\b[^{]*\{([^}]*)/g,
   )) {
     if (match[3] !== undefined) {
       const family = match[4].match(/font-family\s*:\s*([^;}]+)/);
-      identities.add(`font-face ${family ? family[1].trim() : ""}`);
+      identities.push(`font-face ${family ? family[1].trim() : ""}`);
     } else {
-      identities.add(`${match[1]} ${match[2].trim()}`);
+      identities.push(`${match[1]} ${match[2].trim()}`);
     }
   }
   return identities;

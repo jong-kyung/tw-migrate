@@ -368,6 +368,40 @@ test("commented-out html links are not loaders", () => {
   expect(prove({ packageSources: [page] })).toBe(null);
 });
 
+test("a media-conditioned entry link is not an unconditional loader", () => {
+  const printOnly = file(
+    `${child}/index.html`,
+    '<link rel="stylesheet" href="../../globals.css" media="print"><button class="button"></button>',
+  );
+  const all = file(
+    `${child}/index.html`,
+    '<link rel="stylesheet" href="../../globals.css" media="all"><button class="button"></button>',
+  );
+
+  expect(prove({ packageSources: [printOnly] })).toBe(null);
+  expect(prove({ packageSources: [all] })).not.toBe(null);
+});
+
+test("an unresolved package alias in the exposed closure exposes everything", () => {
+  const index = file(
+    `${child}/index.ts`,
+    "export { hidden } from '#internal/button';\nexport { Button } from './Button.tsx';\n",
+  );
+  const proofs = prove({ packageSources: [loader, consumer, index] });
+
+  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+});
+
+test("an unresolvable bare css import leaves the scan proof unproven", () => {
+  expect(
+    scanProof({
+      entry,
+      entrySource: '@import "tailwindcss";\n@import "@acme/theme";\n',
+      packageRoot: child,
+    }),
+  ).toBe(null);
+});
+
 test("a base tag leaves html entry links unproven", () => {
   const page = file(
     `${child}/index.html`,
