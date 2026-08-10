@@ -90,6 +90,7 @@ Everything outside this subset is retained and reported with one of the warning 
 | `shared-preprocessor-source`         | A Sass partial must be analyzed through every consuming entry, so it is retained.                                      |
 | `unproven-css-module-relationship`   | A compound selector's element relationship could not be proven for every usage.                                        |
 | `unproven-script-reference`          | An inline script names a CSS Module class, so the module is retained.                                                  |
+| `unproven-shared-entry-flow`         | A consumer flow could not be proven to load the shared Tailwind entry, so the stylesheet is retained.                  |
 | `unproven-source-map`                | A generated rule does not map uniquely to one authored source rule, so it is retained.                                 |
 | `unresolved-selector-target`         | No exclusively supported `className` references were found for the rule.                                               |
 | `unscoped-style-block`               | An unscoped Vue style does not have a closed private single-source usage surface, so it is retained.                   |

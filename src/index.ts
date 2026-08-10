@@ -352,6 +352,8 @@ interface PreparedPackage {
   files: PlannedFile[];
   stylesheets: StylesheetEntry[];
   tailwind: LoadedTailwind;
+  /// Preparation-time warnings, such as unproven shared-entry flows.
+  warnings: MigrationWarning[];
 }
 
 // When `prepared` is absent the result is final: a recoverable package
@@ -456,12 +458,16 @@ async function preparePackage(
     // requires the dual loading and scan proofs, level by level from the
     // nearest ancestor package.
     let packageJson: Record<string, unknown> = {};
-    const rawPackageJson = snapshots.get(join(packageRoot, "package.json"));
-    if (rawPackageJson !== undefined) {
-      const parsed: unknown = JSON.parse(rawPackageJson);
-      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-        packageJson = { ...parsed };
+    try {
+      const rawPackageJson = snapshots.get(join(packageRoot, "package.json"));
+      if (rawPackageJson !== undefined) {
+        const parsed: unknown = JSON.parse(rawPackageJson);
+        if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+          packageJson = { ...parsed };
+        }
       }
+    } catch (error) {
+      return recover(error);
     }
     const ancestors = selectedPackages
       .filter((root) => root !== packageRoot && isWithin(root, packageRoot))
@@ -532,29 +538,45 @@ async function preparePackage(
     throw new Error("The Tailwind CSS entry cannot be migrated.");
   }
   // A stylesheet with any consumer outside the proven shared-entry flows
-  // keeps its rules retained while the rest of the package migrates.
+  // keeps its rules retained while the rest of the package migrates, and
+  // every rejected target is reported instead of silently skipped.
+  const proofWarnings: MigrationWarning[] = [];
+  const unprovenFlow = (path: string): MigrationWarning => ({
+    code: "unproven-shared-entry-flow",
+    file: path,
+    start: 0,
+    end: 0,
+    message:
+      "A consumer flow could not be proven to load the shared Tailwind entry, so the stylesheet is retained.",
+  });
   const provenTargets = sharedProofs
-    ? targets.filter((path) =>
-        sharedProofs.provenStyle(
+    ? targets.filter((path) => {
+        const proven = sharedProofs.provenStyle(
           path,
           packageSources.filter(
             (file) =>
               sourceReferencesStyle(file, path) ||
               (file.htmlStylesheets ?? []).some((linked) => linked.cssPath === path),
           ),
-        ),
-      )
+        );
+        if (!proven) proofWarnings.push(unprovenFlow(path));
+        return proven;
+      })
     : targets;
   // Vue SFC styles carry the same proof obligation: the SFC itself is the
   // consumer its scoped and module rules ship with, so an SFC outside the
   // proven flows keeps its style entries retained.
   const provenVueStylesheets = sharedProofs
-    ? preparedVue.stylesheets.filter((stylesheet) =>
-        sharedProofs.provenStyle(
+    ? preparedVue.stylesheets.filter((stylesheet) => {
+        const proven = sharedProofs.provenStyle(
           stylesheet.cssPath,
           packageSources.filter((file) => file.path === stylesheet.cssPath),
-        ),
-      )
+        );
+        if (!proven && !proofWarnings.some((warning) => warning.file === stylesheet.cssPath)) {
+          proofWarnings.push(unprovenFlow(stylesheet.cssPath));
+        }
+        return proven;
+      })
     : preparedVue.stylesheets;
   if (provenTargets.length === 0 && provenVueStylesheets.length === 0) {
     return vueWarningsOnlyResult(preparedVue);
@@ -648,6 +670,7 @@ async function preparePackage(
       files,
       stylesheets,
       tailwind,
+      warnings: proofWarnings,
     },
   };
 }
@@ -831,7 +854,10 @@ async function planPreparedGroup(
         generated = [];
         continue planning;
       }
-      throw error;
+      // The failure comes from the composed base rather than an
+      // extractable definition; it affects every package sharing the
+      // entry, so the whole group is skipped under the force policy.
+      return recoverGroup(error);
     }
     if (currentExtraction && names !== undefined) {
       const prefix = entry.designSystem.theme.prefix;
@@ -890,6 +916,7 @@ async function planPreparedGroup(
     }
     // Identical group-level warnings deduplicate in the merged report.
     state.plan.warnings.push(...mediaWarnings);
+    state.plan.warnings.push(...state.prepared.warnings);
     results.push(await finishMemberPlan(context, state.prepared, state.plan));
   }
 

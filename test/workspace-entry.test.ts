@@ -135,6 +135,29 @@ test("skips an unproven child package only under force", async () => {
   );
 });
 
+test("reports stylesheets rejected by the shared-entry proof", async () => {
+  const files: Record<string, string> = {
+    "package.json": '{"private":true}',
+    "globals.css": '@import "tailwindcss";\n',
+    ...app("app"),
+  };
+  // The stray consumer is unreachable from the loading source, so its
+  // stylesheet is retained and reported while the proven one migrates.
+  files["packages/app/Stray.tsx"] =
+    "import styles from './Stray.module.css';\nexport const Stray = () => <i className={styles.stray} />;\n";
+  files["packages/app/Stray.module.css"] = ".stray { padding: 13px; }\n";
+  const cwd = await workspace(files);
+  const report = await migrate({ cwd, workspaces: true, extractMediaQueries: true, write: true });
+
+  const flow = report.warnings.filter((warning) => warning.code === "unproven-shared-entry-flow");
+  expect(flow).toHaveLength(1);
+  expect(flow[0].file).toBe("packages/app/Stray.module.css");
+  expect(await readFile(join(cwd, "packages/app/Stray.module.css"), "utf8")).toContain(".stray");
+  expect(await readFile(join(cwd, "packages/app/Button.tsx"), "utf8")).toMatch(
+    /screen:width-lte-700px:m-\[7px\]/,
+  );
+});
+
 test("an html child package proves the ancestor entry through its link", async () => {
   const cwd = await workspace({
     "package.json": '{"private":true}',
