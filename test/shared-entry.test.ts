@@ -248,12 +248,22 @@ test("automatic scan coverage requires consumers to pass ignore rules", () => {
 });
 
 test("an html consumer linking the entry proves itself", () => {
-  const page: PreparedSourceFile = {
-    path: `${child}/index.html`,
-    source: '<link rel="stylesheet" href="../../globals.css"><button class="button"></button>',
-    htmlStylesheets: [{ cssPath: entry, variants: [], direct: true, analyzable: true }],
-  };
+  // Prepared HTML contexts keep only package-local links, so the ancestor
+  // entry link is proven from the raw source.
+  const page: PreparedSourceFile = file(
+    `${child}/index.html`,
+    '<link rel="stylesheet" href="../../globals.css"><button class="button"></button>',
+  );
   const proofs = prove({ packageSources: [page] });
 
   expect(proofs?.provenStyle(`${child}/styles.css`, [page])).toBe(true);
+});
+
+test("a base tag leaves html entry links unproven", () => {
+  const page = file(
+    `${child}/index.html`,
+    '<base href="/other/"><link rel="stylesheet" href="../../globals.css">',
+  );
+
+  expect(prove({ packageSources: [page] })).toBe(null);
 });

@@ -134,3 +134,21 @@ test("skips an unproven child package only under force", async () => {
     "styles.button",
   );
 });
+
+test("an html child package proves the ancestor entry through its link", async () => {
+  const cwd = await workspace({
+    "package.json": '{"private":true}',
+    "globals.css": '@import "tailwindcss";\n',
+    "packages/site/package.json": '{"private":true}',
+    "packages/site/index.html":
+      '<!doctype html>\n<html>\n<head><link rel="stylesheet" href="../../globals.css"><link rel="stylesheet" href="styles.css"></head>\n<body><button class="button">Save</button></body>\n</html>\n',
+    "packages/site/styles.css": mediaCss,
+  });
+  const report = await migrate({ cwd, workspaces: true, extractMediaQueries: true, write: true });
+
+  expect(await readFile(join(cwd, "packages/site/index.html"), "utf8")).toMatch(
+    /class="button p-\[13px\] screen:width-lte-700px:m-\[7px\]"/,
+  );
+  expect(await readFile(join(cwd, "globals.css"), "utf8")).toContain("@custom-variant screen ");
+  expect(report.failures).toEqual([]);
+});

@@ -323,6 +323,7 @@ export function proveSharedEntry(options: SharedEntryProofOptions): SharedEntryP
     .filter(
       (file) =>
         (file.htmlStylesheets ?? []).some((context) => context.cssPath === options.entry) ||
+        htmlLinksEntry(file, options.entry) ||
         (extname(file.path) !== ".html" && importsEntry(file, options.entry)),
     )
     .map((file) => file.path);
@@ -342,6 +343,22 @@ export function proveSharedEntry(options: SharedEntryProofOptions): SharedEntryP
           (scan === "literal" || !options.ignoredPaths.has(consumer.path)),
       ),
   };
+}
+
+/// An HTML stylesheet link resolving to the entry. Prepared HTML contexts
+/// keep only package-local links, so ancestor entry links are re-resolved
+/// here from the raw source. A `<base>` tag changes href resolution and an
+/// entity-encoded href is invisible to this scan; both stay unproven.
+function htmlLinksEntry(file: { path: string; source: string }, entry: string): boolean {
+  if (extname(file.path) !== ".html") return false;
+  if (/<base\b/i.test(file.source)) return false;
+  for (const match of file.source.matchAll(/<link\b[^>]*\bhref\s*=\s*["']([^"']+)["'][^>]*>/gi)) {
+    if (!/\brel\s*=\s*["']?stylesheet\b/i.test(match[0])) continue;
+    const href = match[1].split(/[?#]/, 1)[0];
+    if (!href || /^[a-z][a-z0-9+.-]*:|^\/\//i.test(href)) continue;
+    if (resolve(dirname(file.path), href) === entry) return true;
+  }
+  return false;
 }
 
 /// A parsed static import, dynamic import, or require whose specifier
