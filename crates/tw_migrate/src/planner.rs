@@ -346,6 +346,11 @@ struct PlanRequest {
     /// the existing warnings, and no entry file is planned.
     #[serde(default = "default_entry_writable")]
     entry_writable: bool,
+    /// False for members that reuse an ancestor-shared entry: actively
+    /// applied global at-rules stay in their modules while renamed
+    /// keyframes may still move.
+    #[serde(default = "default_entry_writable")]
+    global_at_rule_moves: bool,
     files: Vec<SourceFile>,
 }
 
@@ -369,6 +374,8 @@ struct BatchPlanRequest {
     media_names: Option<HashMap<String, String>>,
     #[serde(default = "default_entry_writable")]
     entry_writable: bool,
+    #[serde(default = "default_entry_writable")]
+    global_at_rule_moves: bool,
     files: Vec<SourceFile>,
 }
 
@@ -700,6 +707,7 @@ pub fn plan_json(request: &str) -> Result<String, String> {
     for field in [
         "entryWritable",
         "files",
+        "globalAtRuleMoves",
         "mediaNames",
         "tailwindPath",
         "tailwindSource",
@@ -1220,6 +1228,7 @@ fn batch_stylesheet_request(
         theme_tokens: batch.theme_tokens.clone(),
         media_names: batch.media_names.clone(),
         entry_writable: batch.entry_writable,
+        global_at_rule_moves: batch.global_at_rule_moves,
         files,
     }
 }
@@ -1281,6 +1290,7 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
                 syntax: analysis_syntax,
                 is_module,
                 can_move_at_rules,
+                can_move_global_at_rules: request.global_at_rule_moves,
                 relative_urls_stable,
             },
         )?;
@@ -1432,6 +1442,7 @@ fn parse_vue_rules(
                 can_move_at_rules: false,
                 // Inert while `can_move_at_rules` is false: global at-rules
                 // are never built on the Vue path.
+                can_move_global_at_rules: false,
                 relative_urls_stable: false,
             },
         )?;

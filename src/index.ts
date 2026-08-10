@@ -34,7 +34,12 @@ import {
   loadTailwind,
   resolveTailwindEntry,
 } from "./tailwind.ts";
-import { importsStylesheet, proveSharedEntry, tailwindEntryCatalog } from "./plan/entry.ts";
+import {
+  importsStylesheet,
+  integrityProtected,
+  proveSharedEntry,
+  tailwindEntryCatalog,
+} from "./plan/entry.ts";
 import type { SharedEntryProofs } from "./plan/entry.ts";
 import {
   appendMediaDefinitions,
@@ -763,7 +768,13 @@ async function planPreparedGroup(
           unlinkedFiles: [],
           candidates: [],
           rules: [],
-          warnings: [...member.warnings],
+          // Preparation warnings surface here because finalization never
+          // runs for a fully retained member.
+          warnings: [
+            ...member.warnings,
+            ...member.preparedHtml.warnings,
+            ...member.preparedVue.warnings,
+          ],
           convertedRules: 0,
           retainedRules: 0,
         },
@@ -773,8 +784,12 @@ async function planPreparedGroup(
   active = active.filter((remaining) => remaining.stylesheets.length > 0);
   if (active.length === 0) return results;
 
-  // Entry safety gates every entry mutation, not only media extraction.
-  const groupWritable = !(await entryUnsafe(entry.path, workspaceRoot, targetable));
+  // Entry safety gates every entry mutation, not only media extraction. An
+  // integrity-protected entry link anywhere in the workspace makes any
+  // entry edit reject the stylesheet on that page.
+  const groupWritable =
+    !(await entryUnsafe(entry.path, workspaceRoot, targetable)) &&
+    !integrityProtected(entry.path, context.sourceFiles);
   const mediaWarnings: MigrationWarning[] = [];
   let extraction: MediaExtraction | undefined;
   if (options.extractMediaQueries === true) {
@@ -871,6 +886,9 @@ async function planPreparedGroup(
           themeTokens: entry.themeTokens,
           ...(names ? { mediaNames: names } : {}),
           ...(memberWritable ? {} : { entryWritable: false }),
+          // Actively applied global at-rules from an ancestor-shared
+          // member would activate in every other flow loading the entry.
+          ...(member.sharedProofs ? { globalAtRuleMoves: false } : {}),
           files: member.files.map((file) => {
             const chained = composedFiles.get(file.path);
             if (chained === undefined || chained === file.source) return file;

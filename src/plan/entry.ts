@@ -552,6 +552,31 @@ function htmlLinksEntry(file: { path: string; source: string }, entry: string): 
   }
 }
 
+/// True when any scanned HTML page links the stylesheet with a
+/// subresource-integrity digest: editing the file would invalidate the
+/// digest and the browser would reject the whole stylesheet on that page.
+export function integrityProtected(
+  entry: string,
+  htmlFiles: Iterable<{ path: string; source: string }>,
+): boolean {
+  for (const file of htmlFiles) {
+    if (extname(file.path) !== ".html") continue;
+    try {
+      const parsed = parseHtmlSource(file.path, file.source);
+      if (parsed.bases.length > 0) continue;
+      for (const link of parsed.links) {
+        if (!link.integrity) continue;
+        const href = link.href.split(/[?#]/, 1)[0];
+        if (!href || /^[a-z][a-z0-9+.-]*:|^\/\//i.test(href)) continue;
+        if (resolve(dirname(file.path), href) === entry) return true;
+      }
+    } catch {
+      // An unparseable page proves no protection.
+    }
+  }
+  return false;
+}
+
 /// A parsed import whose specifier resolves to the stylesheet. Consumer
 /// detection must not accept a path mentioned in a comment or unrelated
 /// string: the native rewriter only edits parsed module references, so

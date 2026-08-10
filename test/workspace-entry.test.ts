@@ -403,3 +403,47 @@ test("url-imported entry sheets join registration collision checks", async () =>
     "@property --brand",
   );
 });
+
+test("an integrity-protected entry link makes the group read-only", async () => {
+  const files: Record<string, string> = {
+    "package.json": '{"private":true}',
+    "globals.css": '@import "tailwindcss";\n',
+    "status.html":
+      '<!doctype html>\n<html><head><link rel="stylesheet" href="globals.css" integrity="sha384-x"></head><body></body></html>\n',
+    ...app("app"),
+  };
+  const cwd = await workspace(files);
+  const report = await migrate({ cwd, workspaces: true, extractMediaQueries: true, write: true });
+
+  // Any entry edit would invalidate the digest and reject the stylesheet
+  // on that page, so media behavior falls back to arbitrary variants.
+  expect(await readFile(join(cwd, "globals.css"), "utf8")).toBe('@import "tailwindcss";\n');
+  expect(
+    report.warnings.some((warning) => warning.code === "media-query-definition-fallback"),
+  ).toBe(true);
+  expect(await readFile(join(cwd, "packages/app/Button.tsx"), "utf8")).toContain(
+    "[@media_screen_and_(max-width:700px)]:m-[7px]",
+  );
+});
+
+test("keeps active global at-rules of shared members in their modules", async () => {
+  const cwd = await workspace({
+    "package.json": '{"private":true}',
+    "globals.css": '@import "tailwindcss";\n',
+    ...app(
+      "app",
+      '@font-face { font-family: "Acme"; src: url(/acme.woff2); }\n.button { padding: 13px; }\n',
+    ),
+  });
+  const report = await migrate({ cwd, workspaces: true, extractMediaQueries: true, write: true });
+
+  // Appending the font to the ancestor-shared entry would activate it in
+  // every other flow loading that entry, so it stays in the module while
+  // the rule itself still migrates.
+  expect(await readFile(join(cwd, "globals.css"), "utf8")).not.toContain("@font-face");
+  expect(await readFile(join(cwd, "packages/app/Button.module.css"), "utf8")).toContain(
+    "@font-face",
+  );
+  expect(await readFile(join(cwd, "packages/app/Button.tsx"), "utf8")).toContain("p-[13px]");
+  expect(report.failures).toEqual([]);
+});

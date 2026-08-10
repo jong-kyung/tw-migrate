@@ -78,6 +78,11 @@ pub(crate) struct ParseOptions {
     pub(crate) syntax: Syntax,
     pub(crate) is_module: bool,
     pub(crate) can_move_at_rules: bool,
+    /// False when actively applied global at-rules such as `@font-face`
+    /// must stay in place even though renamed keyframes may still move:
+    /// appending them to an ancestor-shared entry would activate them in
+    /// every other flow loading that entry.
+    pub(crate) can_move_global_at_rules: bool,
     pub(crate) relative_urls_stable: bool,
 }
 
@@ -93,6 +98,7 @@ pub(crate) fn parse_css_rules(
         syntax,
         is_module,
         can_move_at_rules,
+        can_move_global_at_rules,
         relative_urls_stable,
     } = options;
     let allocator = oxc_css_parser::Allocator::default();
@@ -113,7 +119,7 @@ pub(crate) fn parse_css_rules(
     } else {
         Vec::new()
     };
-    let global_at_rules = if is_module && can_move_at_rules {
+    let global_at_rules = if is_module && can_move_at_rules && can_move_global_at_rules {
         stylesheet
             .statements
             .iter()
