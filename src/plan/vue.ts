@@ -705,7 +705,7 @@ export async function preparePackageVue({
       stylesheets.push({
         cssPath: file.path,
         cssSource: file.source,
-        cssModuleId: normalizedRelativePath(packageRoot, file.path),
+        cssModuleId: normalizedRelativePath(workspaceRoot, file.path),
         syntax: "css",
         isModule: true,
         vueBlocks: analysis.moduleBlocks,
@@ -719,7 +719,7 @@ export async function preparePackageVue({
       stylesheets.push({
         cssPath: file.path,
         cssSource: file.source,
-        cssModuleId: normalizedRelativePath(packageRoot, file.path),
+        cssModuleId: normalizedRelativePath(workspaceRoot, file.path),
         syntax: "css",
         isModule: !vueRetention,
         vueBlocks,

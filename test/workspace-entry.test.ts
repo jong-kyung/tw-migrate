@@ -467,3 +467,21 @@ test("owner moves collide with registrations retained in plain stylesheets", asy
   expect(await readFile(join(cwd, "globals.css"), "utf8")).not.toContain("@property");
   expect(await readFile(join(cwd, "shared.module.css"), "utf8")).toContain("@property --brand");
 });
+
+test("same-named modules across packages keep distinct keyframe scopes", async () => {
+  const keyframes = (opacity: string) =>
+    `@keyframes fade { from { opacity: ${opacity}; } to { opacity: 1; } }\n.button { animation: fade 1s; }\n`;
+  const cwd = await workspace({
+    "package.json": '{"private":true}',
+    "globals.css": '@import "tailwindcss";\n',
+    ...app("app", keyframes("0")),
+    ...app("lib", keyframes("0.5")),
+  });
+  const report = await migrate({ cwd, workspaces: true, extractMediaQueries: true, write: true });
+
+  // Both packages define `fade` in a module named Button.module.css; the
+  // workspace-relative scope keeps their migrated names distinct.
+  const entry = await readFile(join(cwd, "globals.css"), "utf8");
+  expect(entry.match(/@keyframes tw-migrate-[0-9a-f]+-fade/g)).toHaveLength(2);
+  expect(report.failures).toEqual([]);
+});

@@ -403,6 +403,16 @@ test("string content never catalogs a tailwind entry", () => {
   expect(tailwindEntryCatalog(styleSources, owners)).toEqual(new Map([[root, [entry]]]));
 });
 
+test("a browser entry point exposes its import closure", () => {
+  const browserEntry = file(`${child}/main.tsx`, loader.source);
+  const proofs = prove({
+    packageSources: [browserEntry, consumer],
+    packageJson: { private: true, browser: "./main.tsx" },
+  });
+
+  expect(proofs?.provenStyle(`${child}/Button.module.css`, [consumer])).toBe(false);
+});
+
 test("wildcard exports expose every consumer", () => {
   const proofs = prove({
     packageSources: [loader, consumer],

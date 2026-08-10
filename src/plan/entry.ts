@@ -369,7 +369,7 @@ function exposedFiles(
     }
     return undefined;
   };
-  for (const field of ["main", "module", "exports"]) {
+  for (const field of ["main", "module", "exports", "browser"]) {
     if (collect(packageJson[field]) === "all") return "all";
   }
   // Without an encapsulating `exports` map a publishable package is open

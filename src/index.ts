@@ -618,7 +618,9 @@ async function preparePackage(
       const stylesheet: StylesheetEntry = {
         cssPath: stylePath,
         cssSource: styleSources.get(stylePath) ?? "",
-        cssModuleId: normalizedRelativePath(packageRoot, stylePath),
+        // Workspace-relative so migrated keyframe scopes stay unique when
+        // two packages share a module filename.
+        cssModuleId: normalizedRelativePath(workspaceRoot, stylePath),
         cssDependents: styleDependents.get(stylePath) ?? [],
         syntax: stylesheetSyntax(stylePath),
         isModule: isStylesheetModule(stylePath),
@@ -842,7 +844,13 @@ async function planPreparedGroup(
   // excluded, because their moves are compared through the planned delta.
   for (const member of active) {
     for (const stylesheet of member.stylesheets) {
-      if (member.sharedProofs === undefined && stylesheet.isModule) continue;
+      // Preprocessor and Vue modules never move their at-rules, so their
+      // retained registrations stay in the base like plain stylesheets.
+      const movableModule =
+        stylesheet.isModule === true &&
+        (stylesheet.syntax === undefined || stylesheet.syntax === "css") &&
+        (stylesheet.vueBlocks === undefined || stylesheet.vueBlocks.length === 0);
+      if (member.sharedProofs === undefined && movableModule) continue;
       for (const identity of atRuleIdentities(stylesheet.analysisSource ?? stylesheet.cssSource)) {
         baseIdentities.add(identity);
       }
