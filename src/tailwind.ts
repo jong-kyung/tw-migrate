@@ -3,20 +3,28 @@ import { createRequire } from "node:module";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { collectCssDirectives } from "./native.ts";
 import { loadProjectModule } from "./parser/style-compiler.ts";
 import { isProjectInput, maskCssComments, snapshotFile } from "./util/shared.ts";
 import type { DesignSystem, LoadedTailwind, StylesheetLoader } from "./types.ts";
+
+export function findTailwindEntries(
+  stylePaths: string[],
+  styleSources: Map<string, string>,
+): string[] {
+  return stylePaths.filter((path) => {
+    if (extname(path) !== ".css") return false;
+    const source = maskCssComments(styleSources.get(path) ?? "");
+    return /@import\s+["']tailwindcss(?:\/[^"']*)?["']/.test(source);
+  });
+}
 
 export function resolveTailwindEntry(
   stylePaths: string[],
   styleSources: Map<string, string>,
   configuredPath?: string,
 ): { path: string; entries: string[] } {
-  const entries = stylePaths.filter((path) => {
-    if (extname(path) !== ".css") return false;
-    const source = maskCssComments(styleSources.get(path) ?? "");
-    return /@import\s+["']tailwindcss(?:\/[^"']*)?["']/.test(source);
-  });
+  const entries = findTailwindEntries(stylePaths, styleSources);
   if (configuredPath) return { path: configuredPath, entries };
   if (entries.length === 0)
     throw new Error("No Tailwind v4 CSS entry was found. Pass --tailwind-css.");
@@ -89,6 +97,29 @@ function extractThemeTokens(css: string): Record<string, string> {
   return tokens;
 }
 
+/// Import specifiers of one stylesheet through the structured directive
+/// parser, covering quoted and url() forms at the top level only; an
+/// unparseable stylesheet falls back to the quoted-import regex so a
+/// working graph keeps loading.
+function importSpecifiers(css: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(collectCssDirectives(css));
+    if (Array.isArray(parsed)) {
+      return parsed.flatMap((directive) =>
+        directive !== null &&
+        typeof directive === "object" &&
+        directive.kind === "import" &&
+        typeof directive.specifier === "string"
+          ? [directive.specifier]
+          : [],
+      );
+    }
+  } catch {
+    // fall through to the regex
+  }
+  return [...css.matchAll(/@import\s+["']([^"']+)["']/g)].map((match) => match[1]);
+}
+
 async function extractThemeTokensFromGraph(
   css: string,
   base: string,
@@ -97,14 +128,14 @@ async function extractThemeTokensFromGraph(
   seen = new Set<string>(),
 ): Promise<Record<string, string>> {
   const tokens: Record<string, string> = {};
-  for (const match of css.matchAll(/@import\s+["']([^"']+)["']/g)) {
-    const key = `${base}\0${match[1]}`;
+  for (const spec of importSpecifiers(css)) {
+    const key = `${base}\0${spec}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    const loaded = await loadStylesheet(match[1], base);
+    const loaded = await loadStylesheet(spec, base);
     // Tailwind's own stylesheets define no custom variants worth parsing.
-    if (match[1] !== "tailwindcss" && !match[1].startsWith("tailwindcss/")) {
-      graphSources.push({ path: `${base}\0${match[1]}`, source: loaded.content });
+    if (spec !== "tailwindcss" && !spec.startsWith("tailwindcss/")) {
+      graphSources.push({ path: `${base}\0${spec}`, source: loaded.content });
     }
     Object.assign(
       tokens,

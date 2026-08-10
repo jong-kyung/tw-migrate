@@ -2,7 +2,7 @@ import { lstat, readFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 
 import { unifiedDiff } from "./util/diff.ts";
-import { collectFiles, resolveScope } from "./discovery.ts";
+import { collectFiles, resolveScope, scannerIgnoredPaths } from "./discovery.ts";
 import { parseHtmlSource } from "./parser/html.ts";
 import { preparePackageHtml } from "./plan/html.ts";
 import { planBatchMigration, validateCss } from "./native.ts";
@@ -14,6 +14,8 @@ import {
   isRecoverablePlanningError,
   isStylesheetModule,
   isStylesheetPath,
+  isWithin,
+  maskCssComments,
   normalizedRelativePath,
   packageFailure,
   recordSnapshot,
@@ -26,20 +28,29 @@ import {
 } from "./util/shared.ts";
 import { compileStyleEntry, isPreprocessorPath, isSassPath } from "./parser/style-compiler.ts";
 import type { StyleCompilers } from "./parser/style-compiler.ts";
-import { invalidCandidates, loadTailwind, resolveTailwindEntry } from "./tailwind.ts";
+import {
+  findTailwindEntries,
+  invalidCandidates,
+  loadTailwind,
+  resolveTailwindEntry,
+} from "./tailwind.ts";
+import { importsStylesheet, proveSharedEntry, tailwindEntryCatalog } from "./plan/entry.ts";
+import type { SharedEntryProofs } from "./plan/entry.ts";
 import {
   appendMediaDefinitions,
+  collectMemberMediaConditions,
   planMediaExtraction,
   probeCandidate,
   usedGeneratedDefinitions,
 } from "./plan/media.ts";
-import type { MediaExtraction } from "./plan/media.ts";
+import type { MediaCollection, MediaExtraction } from "./plan/media.ts";
 import { verifyVueSource } from "./parser/vue.ts";
 import { preparePackageVue, vueWarningsOnlyResult } from "./plan/vue.ts";
 import { verifySnapshots, writeChanges } from "./util/write.ts";
 import type {
-  DesignSystem,
   LoadedTailwind,
+  SourceEdit,
+  PreparedVue,
   MigrateOptions,
   MigrationContext,
   MigrationFailure,
@@ -180,13 +191,39 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
     sourceFiles,
     styleDependents: indexStylesheetDependents(styleSources),
     vueStyleRanges,
+    entryCatalog: tailwindEntryCatalog(styleSources, scope.pathOwners),
+    ignoredPaths: options.workspaces
+      ? await scannerIgnoredPaths(
+          workspaceRoot,
+          sourceFiles.map((file) => file.path),
+        )
+      : new Set(),
   };
   const failures: MigrationFailure[] = [];
   const plans: Plan[] = [];
+  // Preparation completes for every package before any planning so that
+  // packages resolving to one shared Tailwind entry can plan as a group
+  // with one name allocation and one composed entry edit.
+  const prepared: PreparedPackage[] = [];
   for (const packageRoot of selectedPackages) {
-    const result = await planPackage(context, packageRoot);
-    if (result.failure) failures.push(result.failure);
-    else if (result.plan) plans.push(result.plan);
+    const preparation = await preparePackage(context, packageRoot);
+    if (preparation.failure) failures.push(preparation.failure);
+    else if (preparation.plan) plans.push(preparation.plan);
+    if (preparation.prepared) prepared.push(preparation.prepared);
+  }
+  const groups = new Map<string, PreparedPackage[]>();
+  for (const preparation of prepared) {
+    const members = groups.get(preparation.tailwind.path) ?? [];
+    members.push(preparation);
+    groups.set(preparation.tailwind.path, members);
+  }
+  for (const [, members] of [...groups].sort(([left], [right]) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  )) {
+    for (const result of await planPreparedGroup(context, members)) {
+      if (result.failure) failures.push(result.failure);
+      else if (result.plan) plans.push(result.plan);
+    }
   }
 
   const originals = new Map<string, string>([
@@ -307,7 +344,31 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
   };
 }
 
-async function planPackage(context: MigrationContext, packageRoot: string): Promise<PlanResult> {
+// Preparation and planning are separate phases so a shared-entry group can
+// finish preparing every member package before any consumer is planned.
+interface PreparedPackage {
+  packageRoot: string;
+  preparedHtml: PreparedHtml;
+  preparedVue: PreparedVue;
+  styleCompilers: StyleCompilers;
+  files: PlannedFile[];
+  stylesheets: StylesheetEntry[];
+  tailwind: LoadedTailwind;
+  /// The dual proofs of an ancestor-shared entry; absent for a package
+  /// that owns its entry, whose runtime loads it by definition.
+  sharedProofs?: SharedEntryProofs;
+  /// Preparation-time warnings, such as unproven shared-entry flows.
+  warnings: MigrationWarning[];
+}
+
+// When `prepared` is absent the result is final: a recoverable package
+// failure or a warnings-only plan from preparation.
+type PackagePreparation = PlanResult & { prepared?: PreparedPackage };
+
+async function preparePackage(
+  context: MigrationContext,
+  packageRoot: string,
+): Promise<PackagePreparation> {
   const {
     options,
     snapshots,
@@ -392,16 +453,78 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
     return vueWarningsOnlyResult(preparedVue);
   }
 
-  let tailwindPath: string;
+  let tailwindPath: string | undefined;
   let tailwindEntries: string[];
-  try {
-    ({ path: tailwindPath, entries: tailwindEntries } = resolveTailwindEntry(
-      ownedStyles,
-      styleSources,
-      configuredEntry,
-    ));
-  } catch (error) {
-    return recover(error);
+  let entryOwner = packageRoot;
+  let sharedProofs: SharedEntryProofs | undefined;
+  const ownEntries = findTailwindEntries(ownedStyles, styleSources);
+  // Ancestor-shared resolution stays scoped to extraction until part 4
+  // flips the default together with the packaged snapshots: without the
+  // option, workspace behavior is byte-identical to today.
+  if (
+    ownEntries.length === 0 &&
+    configuredEntry === undefined &&
+    options.workspaces &&
+    options.extractMediaQueries === true
+  ) {
+    // Ancestry identifies candidates only; selecting an ancestor entry
+    // requires the dual loading and scan proofs, level by level from the
+    // nearest ancestor package.
+    let packageJson: Record<string, unknown> = {};
+    try {
+      const rawPackageJson = snapshots.get(join(packageRoot, "package.json"));
+      if (rawPackageJson !== undefined) {
+        const parsed: unknown = JSON.parse(rawPackageJson);
+        if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+          packageJson = { ...parsed };
+        }
+      }
+    } catch (error) {
+      return recover(error);
+    }
+    const ancestors = selectedPackages
+      .filter((root) => root !== packageRoot && isWithin(root, packageRoot))
+      .sort((left, right) => right.length - left.length);
+    for (const ancestor of ancestors) {
+      const proven: { entry: string; proofs: SharedEntryProofs }[] = [];
+      for (const candidate of context.entryCatalog.get(ancestor) ?? []) {
+        const proofs = proveSharedEntry({
+          packageRoot,
+          entry: candidate,
+          entrySource: styleSources.get(candidate) ?? "",
+          styleSources,
+          packageSources,
+          owned: (path) => pathOwners.get(path) === packageRoot,
+          writable: (path) => targetable.has(path) && pathOwners.get(path) === packageRoot,
+          packageJson,
+          ignoredPaths: context.ignoredPaths,
+        });
+        if (proofs) proven.push({ entry: candidate, proofs });
+      }
+      if (proven.length > 1) {
+        return recover(
+          new Error("Multiple proven ancestor Tailwind entries were found. Pass --tailwind-css."),
+        );
+      }
+      if (proven.length === 1) {
+        [{ entry: tailwindPath, proofs: sharedProofs }] = proven;
+        entryOwner = ancestor;
+        break;
+      }
+    }
+  }
+  if (sharedProofs && tailwindPath !== undefined) {
+    tailwindEntries = [];
+  } else {
+    try {
+      ({ path: tailwindPath, entries: tailwindEntries } = resolveTailwindEntry(
+        ownedStyles,
+        styleSources,
+        configuredEntry,
+      ));
+    } catch (error) {
+      return recover(error);
+    }
   }
 
   const excludedEntries = new Set([...tailwindEntries, tailwindPath]);
@@ -427,10 +550,57 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
   if (targets.some((path) => excludedEntries.has(path))) {
     throw new Error("The Tailwind CSS entry cannot be migrated.");
   }
+  // A stylesheet with any consumer outside the proven shared-entry flows
+  // keeps its rules retained while the rest of the package migrates, and
+  // every rejected target is reported instead of silently skipped.
+  const proofWarnings: MigrationWarning[] = [];
+  const unprovenFlow = (path: string): MigrationWarning => ({
+    code: "unproven-shared-entry-flow",
+    file: path,
+    start: 0,
+    end: 0,
+    message:
+      "A consumer flow could not be proven to load the shared Tailwind entry, so the stylesheet is retained.",
+  });
+  const provenTargets = sharedProofs
+    ? targets.filter((path) => {
+        const proven = sharedProofs.provenStyle(
+          path,
+          packageSources.filter(
+            (file) =>
+              importsStylesheet(file, path) ||
+              (file.htmlStylesheets ?? []).some((linked) => linked.cssPath === path),
+          ),
+        );
+        if (!proven) proofWarnings.push(unprovenFlow(path));
+        return proven;
+      })
+    : targets;
+  // Vue SFC styles carry the same proof obligation: the SFC itself is the
+  // consumer its scoped and module rules ship with, so an SFC outside the
+  // proven flows keeps its style entries retained.
+  const provenVueStylesheets = sharedProofs
+    ? preparedVue.stylesheets.filter((stylesheet) => {
+        const proven = sharedProofs.provenStyle(
+          stylesheet.cssPath,
+          packageSources.filter((file) => file.path === stylesheet.cssPath),
+        );
+        if (!proven && !proofWarnings.some((warning) => warning.file === stylesheet.cssPath)) {
+          proofWarnings.push(unprovenFlow(stylesheet.cssPath));
+        }
+        return proven;
+      })
+    : preparedVue.stylesheets;
+  if (provenTargets.length === 0 && provenVueStylesheets.length === 0) {
+    return vueWarningsOnlyResult(preparedVue, proofWarnings);
+  }
 
   let tailwind;
   try {
-    tailwind = await loadTailwind(packageRoot, tailwindPath, snapshots, workspaceRoot);
+    // The entry owner supplies the project root for Tailwind, its imports,
+    // plugins, and theme; the migrated package keeps supplying its own
+    // stylesheets, consumers, and preprocessors.
+    tailwind = await loadTailwind(entryOwner, tailwindPath, snapshots, workspaceRoot);
   } catch (error) {
     return recover(error, isIntegrityError(error));
   }
@@ -450,13 +620,15 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
   try {
     stylesheets = [];
     const compilerDependents = new Map<string, string[]>();
-    for (const stylePath of targets.sort()) {
+    for (const stylePath of provenTargets.sort()) {
       await rejectSymlinkTarget(stylePath, packageRoot);
       const isPartial = isSassPath(stylePath) && basename(stylePath).startsWith("_");
       const stylesheet: StylesheetEntry = {
         cssPath: stylePath,
         cssSource: styleSources.get(stylePath) ?? "",
-        cssModuleId: normalizedRelativePath(packageRoot, stylePath),
+        // Workspace-relative so migrated keyframe scopes stay unique when
+        // two packages share a module filename.
+        cssModuleId: normalizedRelativePath(workspaceRoot, stylePath),
         cssDependents: styleDependents.get(stylePath) ?? [],
         syntax: stylesheetSyntax(stylePath),
         isModule: isStylesheetModule(stylePath),
@@ -502,62 +674,549 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
     return recover(error, isIntegrityError(error));
   }
 
-  stylesheets.push(...preparedVue.stylesheets);
+  stylesheets.push(...provenVueStylesheets);
 
-  let extraction: MediaExtraction | undefined;
+  return {
+    prepared: {
+      packageRoot,
+      preparedHtml,
+      preparedVue,
+      styleCompilers,
+      files,
+      stylesheets,
+      tailwind,
+      sharedProofs,
+      warnings: proofWarnings,
+    },
+  };
+}
+
+interface MemberState {
+  prepared: PreparedPackage;
+  request: PlannerRequest;
+  plan: Plan;
+}
+
+type BlockedRules = Map<
+  number,
+  Map<string, { ruleId: RuleSpan; authoredSpan: RuleSpan; candidates: Set<string> }>
+>;
+
+// Plan every package that resolved to one Tailwind entry as a group: one
+// fixed media name allocation, one mutable composed entry source, and one
+// final entry edit. A single-entry package is simply a group of one.
+async function planPreparedGroup(
+  context: MigrationContext,
+  members: PreparedPackage[],
+): Promise<PlanResult[]> {
+  const { options, workspaceRoot, targetable } = context;
+  const results: PlanResult[] = [];
+  let active = [...members].sort((left, right) => {
+    const leftPath = normalizedRelativePath(workspaceRoot, left.packageRoot);
+    const rightPath = normalizedRelativePath(workspaceRoot, right.packageRoot);
+    return leftPath < rightPath ? -1 : leftPath > rightPath ? 1 : 0;
+  });
+  const entry = active[0].tailwind;
+  const recoverGroup = (error: unknown, fatal = false): PlanResult[] => {
+    if (!options.force || fatal) throw error;
+    // Group-level failures affect every package depending on the shared
+    // entry, so the complete group is skipped together.
+    for (const member of active) {
+      results.push({ failure: packageFailure(workspaceRoot, member.packageRoot, error) });
+    }
+    return results;
+  };
+
+  // A member's stylesheet consumed by another package's files must prove
+  // that those consumers load the shared entry too: through the consumer
+  // package's own dual proofs when it shares the entry, trivially when the
+  // consumer package owns this entry, and never from outside the group.
+  // Like ancestor resolution, this discipline stays scoped to extraction
+  // until part 4 flips the default with the packaged snapshots.
+  const membersByRoot = new Map(active.map((member) => [member.packageRoot, member]));
+  for (const member of options.extractMediaQueries === true ? active : []) {
+    member.stylesheets = member.stylesheets.filter((stylesheet) => {
+      const foreignConsumers = member.files.filter(
+        (file) =>
+          context.pathOwners.get(file.path) !== member.packageRoot &&
+          (importsStylesheet(file, stylesheet.cssPath) ||
+            (file.htmlStylesheets ?? []).some((linked) => linked.cssPath === stylesheet.cssPath)),
+      );
+      const proven = foreignConsumers.every((consumer) => {
+        const consumerRoot = context.pathOwners.get(consumer.path);
+        const consumerMember =
+          consumerRoot === undefined ? undefined : membersByRoot.get(consumerRoot);
+        if (consumerMember === undefined) return false;
+        if (consumerMember.sharedProofs === undefined) return true;
+        return consumerMember.sharedProofs.provenConsumer(consumer);
+      });
+      if (!proven) {
+        member.warnings.push({
+          code: "unproven-shared-entry-flow",
+          file: stylesheet.cssPath,
+          start: 0,
+          end: 0,
+          message:
+            "A consumer flow could not be proven to load the shared Tailwind entry, so the stylesheet is retained.",
+        });
+      }
+      return proven;
+    });
+  }
+
+  // A member whose stylesheets were all retained by the proofs still
+  // surfaces its warnings, but plans nothing.
+  for (const member of active.filter((remaining) => remaining.stylesheets.length === 0)) {
+    if (member.warnings.length > 0) {
+      results.push({
+        plan: {
+          files: [],
+          deletedFiles: [],
+          unlinkedFiles: [],
+          candidates: [],
+          rules: [],
+          // Preparation warnings surface here because finalization never
+          // runs for a fully retained member.
+          warnings: [
+            ...member.warnings,
+            ...member.preparedHtml.warnings,
+            ...member.preparedVue.warnings,
+          ],
+          convertedRules: 0,
+          retainedRules: 0,
+        },
+      });
+    }
+  }
+  active = active.filter((remaining) => remaining.stylesheets.length > 0);
+  if (active.length === 0) return results;
+
+  // Entry safety gates every entry mutation, not only media extraction.
+  const groupWritable = !(await entryUnsafe(entry.path, workspaceRoot, targetable));
   const mediaWarnings: MigrationWarning[] = [];
+  let extraction: MediaExtraction | undefined;
   if (options.extractMediaQueries === true) {
-    if (await mediaEntryUnsafe(tailwind.path, workspaceRoot, targetable)) {
+    if (!groupWritable) {
       mediaWarnings.push({
         code: "media-query-definition-fallback",
-        file: tailwind.path,
+        file: entry.path,
         start: 0,
         end: 0,
         message:
           "The Tailwind entry could not be edited safely, so media behavior was preserved with arbitrary variants.",
       });
     } else {
+      // Collection failures are attributable to one member: under force
+      // only that member is skipped, while resolution failures affect the
+      // shared allocation and skip the group.
+      const collections: MediaCollection[] = [];
+      // Reassigning `active` below does not disturb this iteration over
+      // the current array, and each member is visited exactly once.
+      for (const member of active) {
+        try {
+          collections.push(collectMemberMediaConditions(member.stylesheets, entry));
+        } catch (error) {
+          if (!options.force || !isRecoverablePlanningError(error)) throw error;
+          results.push({ failure: packageFailure(workspaceRoot, member.packageRoot, error) });
+          active = active.filter((remaining) => remaining !== member);
+        }
+      }
+      if (active.length === 0) return results;
       try {
         extraction = planMediaExtraction({
-          stylesheets,
-          tailwind,
-          scannedSources: files.map((file) => file.source),
+          collections,
+          tailwind: entry,
+          // The entry's effective scan corpus covers the whole discovered
+          // workspace, not only active members' planner files: an inert
+          // candidate on an untouched sibling page must still reserve its
+          // variant names. Over-reservation is harmless.
+          scannedSources: context.sourceFiles.map((file) => file.source),
         });
       } catch (error) {
-        return recover(error, !isRecoverablePlanningError(error));
+        return recoverGroup(error, !isRecoverablePlanningError(error));
       }
     }
   }
 
-  const request: PlannerRequest = {
-    stylesheets,
-    tailwindPath: tailwind.path,
-    tailwindSource: tailwind.css,
-    utilityPrefix: tailwind.designSystem.theme.prefix,
-    themeTokens: tailwind.themeTokens,
-    ...(extraction ? { mediaNames: extraction.names } : {}),
-    files,
+  let names = extraction?.names;
+  let generated = extraction?.generated ?? [];
+  // Order-sensitive at-rule registrations already present in the entry
+  // graph; a moved definition colliding with them, or with another
+  // stylesheet's move, has no proven precedence and is retained.
+  const baseIdentities = new Set(
+    atRuleIdentities(
+      [entry.css, ...entry.graphSources.map((graphSource) => graphSource.source)].join("\n"),
+    ),
+  );
+  // Registrations that stay in place participate as base identities:
+  // moving the same registration into the entry would flip precedence
+  // against them. Only modules of members with movable at-rules are
+  // excluded, because their moves are compared through the planned delta.
+  for (const member of active) {
+    for (const stylesheet of member.stylesheets) {
+      // Preprocessor and Vue modules never move their at-rules, so their
+      // retained registrations stay in the base like plain stylesheets.
+      const movableModule =
+        stylesheet.isModule === true &&
+        (stylesheet.syntax === undefined || stylesheet.syntax === "css") &&
+        (stylesheet.vueBlocks === undefined || stylesheet.vueBlocks.length === 0);
+      if (member.sharedProofs === undefined && movableModule) continue;
+      for (const identity of atRuleIdentities(stylesheet.analysisSource ?? stylesheet.cssSource)) {
+        baseIdentities.add(identity);
+      }
+    }
+  }
+  const unwritableMembers = new Set<PreparedPackage>();
+  const blockedByMember = new Map<PreparedPackage, BlockedRules>();
+  let states: MemberState[] = [];
+  let composed = entry.css;
+  let augmented = entry.css;
+  let system = entry.designSystem;
+
+  // Rebuild the complete composition from the shared snapshot with the
+  // current member set, blocked rules, and name map. Returns the group's
+  // final results when planning exhausts the group early.
+  const replanGroup = async (): Promise<PlanResult[] | undefined> => {
+    planning: for (;;) {
+      composed = entry.css;
+      states = [];
+      const identityOwners = new Map<string, PreparedPackage>();
+      // Consumer files can be edited by more than one member (a component
+      // may use stylesheets from two packages), so edits chain through the
+      // composition exactly like the entry source: each member plans over
+      // the previous members' planned sources, and the accumulated edit
+      // history rides along so prepared element offsets rebase natively.
+      const composedFiles = new Map<string, string>();
+      const composedEdits = new Map<string, SourceEdit[][]>();
+      for (const member of active) {
+        const blocked = blockedByMember.get(member);
+        const memberWritable = groupWritable && !unwritableMembers.has(member);
+        const request: PlannerRequest = {
+          stylesheets: member.stylesheets.map((stylesheet, index) => {
+            const rules = blocked?.get(index);
+            return rules
+              ? {
+                  ...stylesheet,
+                  blockedRules: [...rules.values()].map((blockedRule) => blockedRule.ruleId),
+                }
+              : stylesheet;
+          }),
+          tailwindPath: entry.path,
+          tailwindSource: composed,
+          utilityPrefix: entry.designSystem.theme.prefix,
+          themeTokens: entry.themeTokens,
+          ...(names ? { mediaNames: names } : {}),
+          ...(memberWritable ? {} : { entryWritable: false }),
+          // Actively applied global at-rules from an ancestor-shared
+          // member would activate in every other flow loading the entry.
+          ...(member.sharedProofs ? { globalAtRuleMoves: false } : {}),
+          files: member.files.map((file) => {
+            const chained = composedFiles.get(file.path);
+            if (chained === undefined || chained === file.source) return file;
+            return { ...file, source: chained, priorEdits: composedEdits.get(file.path) };
+          }),
+        };
+        let plan: Plan;
+        try {
+          plan = JSON.parse(planBatchMigration(JSON.stringify(request)));
+        } catch (error) {
+          if (!options.force || !isRecoverablePlanningError(error)) throw error;
+          results.push({ failure: packageFailure(workspaceRoot, member.packageRoot, error) });
+          active = active.filter((remaining) => remaining !== member);
+          if (active.length === 0) return results;
+          continue planning;
+        }
+        // Adopt the member's planned entry source into the group composition;
+        // intermediate package plans must not claim the shared entry.
+        const plannedEntry = plan.files.findIndex((file) => file.path === entry.path);
+        if (plannedEntry >= 0) {
+          if (!memberWritable) {
+            throw new Error(`The planner claimed an unwritable Tailwind entry: ${entry.path}`);
+          }
+          const delta = plan.files[plannedEntry].source;
+          plan.files.splice(plannedEntry, 1);
+          if (!delta.startsWith(composed)) {
+            throw new Error(
+              `The planner rewrote the Tailwind entry instead of appending: ${entry.path}`,
+            );
+          }
+          const identities = atRuleIdentities(delta.slice(composed.length));
+          // A duplicate inside one member's own delta means two of its
+          // stylesheets move the same registration; their runtime load
+          // order is equally unproven, so the member keeps its at-rules.
+          const withinDelta = new Set<string>();
+          let collided = false;
+          for (const identity of identities) {
+            if (withinDelta.has(identity) || baseIdentities.has(identity)) {
+              unwritableMembers.add(member);
+              collided = true;
+            } else if (identityOwners.has(identity)) {
+              const owner = identityOwners.get(identity);
+              if (owner !== undefined) unwritableMembers.add(owner);
+              unwritableMembers.add(member);
+              collided = true;
+            }
+            withinDelta.add(identity);
+          }
+          if (collided) continue planning;
+          for (const identity of identities) identityOwners.set(identity, member);
+          composed = delta;
+        }
+        for (const file of plan.files) composedFiles.set(file.path, file.source);
+        // The response history includes the supplied prior edits, so it
+        // replaces the accumulated entry rather than extending it.
+        for (const [path, edits] of Object.entries(plan.appliedEdits ?? {})) {
+          composedEdits.set(path, edits);
+        }
+        delete plan.appliedEdits;
+        states.push({ prepared: member, request, plan });
+      }
+      // Only the last member editing a path claims its final composed
+      // source; earlier members' edits are already contained in it, and
+      // the merged transaction rejects duplicate path claims.
+      const lastClaim = new Map<string, MemberState>();
+      for (const state of states) {
+        for (const file of state.plan.files) lastClaim.set(file.path, state);
+      }
+      for (const state of states) {
+        state.plan.files = state.plan.files.filter((file) => lastClaim.get(file.path) === state);
+      }
+      // HTML link removals compose the same way: every member's unlinked
+      // stylesheets strip their links from the page's final composed
+      // source, which stays claimed by exactly one member.
+      removeGroupHtmlLinks(states);
+
+      const currentExtraction = names !== undefined ? { names, generated } : undefined;
+      const used: { key: string; name: string }[] = [];
+      if (currentExtraction) {
+        // First-use order inside each member's rules carries the cascade
+        // proof; member order is only a deterministic tiebreaker.
+        const seen = new Set<string>();
+        for (const state of states) {
+          for (const definition of usedGeneratedDefinitions(currentExtraction, state.plan)) {
+            if (!seen.has(definition.name)) {
+              seen.add(definition.name);
+              used.push(definition);
+            }
+          }
+        }
+      }
+      augmented = currentExtraction ? appendMediaDefinitions(composed, used) : composed;
+      try {
+        system = augmented === entry.css ? entry.designSystem : await entry.loadWith(augmented);
+      } catch (error) {
+        if (isIntegrityError(error)) throw error;
+        // Isolate generated definitions before declaring the composed base
+        // invalid: fall every generated condition back to its arbitrary form
+        // and replan. A failure with no generated definition left comes from
+        // the composed base or another planner defect and is fatal.
+        if (names !== undefined && generated.length > 0) {
+          const generatedKeys = new Set(generated.map((definition) => definition.key));
+          names = Object.fromEntries(
+            Object.entries(names).filter(([key]) => !generatedKeys.has(key)),
+          );
+          generated = [];
+          continue planning;
+        }
+        // The failure comes from the composed base rather than an
+        // extractable definition; it affects every package sharing the
+        // entry, so the whole group is skipped under the force policy.
+        return recoverGroup(error);
+      }
+      if (currentExtraction && names !== undefined) {
+        const prefix = entry.designSystem.theme.prefix;
+        const rejected = new Set(
+          used
+            .filter(
+              ({ name }) => system.candidatesToCss([probeCandidate(prefix, name)])[0] === null,
+            )
+            .map(({ key }) => key),
+        );
+        if (rejected.size > 0) {
+          names = Object.fromEntries(Object.entries(names).filter(([key]) => !rejected.has(key)));
+          generated = generated.filter(({ key }) => !rejected.has(key));
+          continue planning;
+        }
+      }
+
+      // A candidate Tailwind refuses to compile retains its owning rule(s)
+      // instead of aborting the run: block those rules and replan until every
+      // applied candidate compiles. Replanning any member rebuilds the whole
+      // composition from the shared snapshot, so no moved block survives for
+      // a rule that is no longer migrated.
+      const replanSystem = currentExtraction ? system : entry.designSystem;
+      let progressed = false;
+      for (const state of states) {
+        const failing = invalidCandidates(replanSystem, state.plan.candidates);
+        if (failing.length === 0) continue;
+        let blocked = blockedByMember.get(state.prepared);
+        if (!blocked) blockedByMember.set(state.prepared, (blocked = new Map()));
+        if (accumulateBlockedRules(blocked, state.plan, failing)) progressed = true;
+        else throw new Error(`Tailwind did not generate CSS for candidate: ${failing[0]}`);
+      }
+      if (progressed) continue planning;
+      break;
+    }
+    return undefined;
   };
-  let plan: Plan;
-  try {
-    plan = JSON.parse(planBatchMigration(JSON.stringify(request)));
-  } catch (error) {
-    return recover(error, !isRecoverablePlanningError(error));
+
+  {
+    const early = await replanGroup();
+    if (early) return early;
   }
 
-  try {
-    plan = extraction
-      ? await applyMediaExtraction(extraction, tailwind, request, plan)
-      : replanCompileFailures(tailwind.designSystem, request, plan);
-  } catch (error) {
-    // Augmented reloads share the graph loaders, so a source changing after
-    // the initial load surfaces here as an integrity error `--force` must
-    // not downgrade.
-    return recover(error, isIntegrityError(error));
+  // Finalization can still fail recoverably under force (for example a
+  // missing preprocessor discovered during post-edit verification). A
+  // failed member's definitions and moved blocks are already part of the
+  // composed entry, so the composition is rebuilt without that member
+  // before the entry edit is emitted; the loop is bounded by the member
+  // count.
+  finalization: for (;;) {
+    const finished: PlanResult[] = [];
+    for (const state of states) {
+      const blocked = blockedByMember.get(state.prepared);
+      if (blocked) {
+        for (const [index, rules] of blocked) {
+          const cssPath = state.request.stylesheets[index].cssPath;
+          for (const { authoredSpan, candidates } of rules.values()) {
+            const failed = [...candidates]
+              .sort()
+              .map((candidate) => `\`${candidate}\``)
+              .join(", ");
+            state.plan.warnings.push({
+              code: "candidate-compilation-failure",
+              file: cssPath,
+              // ruleId is a compiled-domain span; warnings anchor to the
+              // authored file.
+              start: authoredSpan.start,
+              end: authoredSpan.end,
+              message: `Tailwind did not generate CSS for ${failed}, so the rule is retained.`,
+            });
+          }
+        }
+      }
+      // Identical group-level warnings deduplicate in the merged report.
+      state.plan.warnings.push(...mediaWarnings);
+      state.plan.warnings.push(...state.prepared.warnings);
+      const result = await finishMemberPlan(context, state.prepared, state.plan);
+      if (result.failure) {
+        results.push(result);
+        active = active.filter((member) => member !== state.prepared);
+        if (active.length === 0) return results;
+        const early = await replanGroup();
+        if (early) return early;
+        continue finalization;
+      }
+      finished.push(result);
+    }
+    results.push(...finished);
+    break;
   }
-  plan.warnings.push(...mediaWarnings);
 
-  removeMigratedHtmlLinks(plan, preparedHtml);
+  if (augmented !== entry.css) {
+    results.push({
+      plan: {
+        files: [{ path: entry.path, source: augmented }],
+        deletedFiles: [],
+        unlinkedFiles: [],
+        candidates: [],
+        rules: [],
+        warnings: [],
+        convertedRules: 0,
+        retainedRules: 0,
+      },
+    });
+  }
+  return results;
+}
+
+function accumulateBlockedRules(blocked: BlockedRules, plan: Plan, failing: string[]): boolean {
+  let progressed = false;
+  for (const rule of plan.rules) {
+    const failed = rule.candidates.filter((candidate) => failing.includes(candidate));
+    if (failed.length === 0) continue;
+    // Keyed by entry index, not cssPath: same-path Vue entries (scoped and
+    // module blocks) reuse local rule spans, so path-level attribution
+    // would block unrelated rules in the sibling entry.
+    let rules = blocked.get(rule.stylesheet);
+    if (!rules) blocked.set(rule.stylesheet, (rules = new Map()));
+    const key = `${rule.ruleId.start}-${rule.ruleId.end}`;
+    let blockedRule = rules.get(key);
+    if (!blockedRule) {
+      rules.set(
+        key,
+        (blockedRule = {
+          ruleId: rule.ruleId,
+          authoredSpan: rule.authoredSpan,
+          candidates: new Set(),
+        }),
+      );
+      progressed = true;
+    }
+    for (const candidate of failed) blockedRule.candidates.add(candidate);
+  }
+  return progressed;
+}
+
+/// True when the group must not edit the entry: a symbolic link or a path
+/// outside the writable project scope.
+async function entryUnsafe(
+  entryPath: string,
+  workspaceRoot: string,
+  targetable: Set<string>,
+): Promise<boolean> {
+  if (!targetable.has(entryPath) || !isProjectInput(workspaceRoot, entryPath)) return true;
+  const stats = await lstat(entryPath);
+  return stats.isSymbolicLink();
+}
+
+/// Registration identities of order-sensitive movable global at-rules in a
+/// CSS fragment, in source order and with duplicates preserved. Moved
+/// keyframes are renamed to unique migration names and never collide;
+/// `@font-face` has no prelude and is identified by its font-family
+/// descriptor.
+function atRuleIdentities(css: string): string[] {
+  const identities: string[] = [];
+  for (const match of maskCssComments(css).matchAll(
+    /@(color-profile|counter-style|font-feature-values|font-palette-values|page|position-try|property|view-transition)\b([^{;]*)\{|@(font-face)\b[^{]*\{([^}]*)/g,
+  )) {
+    if (match[3] !== undefined) {
+      const family = match[4].match(/font-family\s*:\s*([^;}]+)/);
+      // Family names compare case-insensitively and quoted or unquoted
+      // spellings are equivalent.
+      const normalized = family
+        ? family[1]
+            .trim()
+            .replace(/^["']|["']$/g, "")
+            .replace(/\s+/g, " ")
+            .toLowerCase()
+        : "";
+      identities.push(`font-face ${normalized}`);
+    } else if (match[1] === "page") {
+      // Page selectors such as `:left` overlap the bare rule, so every
+      // moved @page shares one conservative identity.
+      identities.push("page");
+    } else {
+      identities.push(`${match[1]} ${match[2].trim()}`);
+    }
+  }
+  return identities;
+}
+
+// The per-member planning tail: HTML link removal, planned-source
+// verification, and preprocessor recompilation checks.
+async function finishMemberPlan(
+  context: MigrationContext,
+  prepared: PreparedPackage,
+  plan: Plan,
+): Promise<PlanResult> {
+  const { options, workspaceRoot, snapshots } = context;
+  const { packageRoot, preparedHtml, preparedVue, styleCompilers, stylesheets } = prepared;
+  const recover = (error: unknown, fatal = false): PlanResult => {
+    if (!options.force || fatal) throw error;
+    return { failure: packageFailure(workspaceRoot, packageRoot, error) };
+  };
+
   plan.warnings.push(...preparedHtml.warnings);
   plan.warnings.push(...preparedVue.warnings);
   try {
@@ -622,174 +1281,42 @@ async function planPackage(context: MigrationContext, packageRoot: string): Prom
   return { plan };
 }
 
-/// True when extraction must not edit the entry: a symbolic link or a path
-/// outside the writable project scope.
-async function mediaEntryUnsafe(
-  entryPath: string,
-  workspaceRoot: string,
-  targetable: Set<string>,
-): Promise<boolean> {
-  if (!targetable.has(entryPath) || !isProjectInput(workspaceRoot, entryPath)) return true;
-  const stats = await lstat(entryPath);
-  return stats.isSymbolicLink();
-}
+function removeGroupHtmlLinks(states: MemberState[]): void {
+  const claimants = new Map<string, { state: MemberState; file: SourceFile }>();
+  for (const state of states) {
+    for (const file of state.plan.files) claimants.set(file.path, { state, file });
+  }
+  for (const state of states) {
+    const unlinked = new Set(state.plan.unlinkedFiles);
+    const linksByFile = new Map<string, Set<string>>();
+    for (const link of state.prepared.preparedHtml.removableLinks) {
+      if (!unlinked.has(link.cssPath)) continue;
+      const links = linksByFile.get(link.filePath) ?? new Set();
+      links.add(`${link.href}\0${link.media}`);
+      linksByFile.set(link.filePath, links);
+    }
 
-// Generated definitions must compile before any file is written. Each pass
-// appends the definitions the current plan uses to the entry, loads the
-// augmented design system in memory, and drops any definition whose probe
-// fails: removing its key from the map makes the planner's
-// authoritative-map rule fall the condition back to an arbitrary variant on
-// the next plan. Candidate compile-failure replanning then runs against the
-// final augmented system, and definitions left unused by retention are
-// removed again before the entry file is planned.
-async function applyMediaExtraction(
-  extraction: MediaExtraction,
-  tailwind: LoadedTailwind,
-  request: PlannerRequest,
-  initialPlan: Plan,
-): Promise<Plan> {
-  let names = extraction.names;
-  let generated = extraction.generated;
-  let plan = initialPlan;
-  let augmented = tailwind.css;
-  let system = tailwind.designSystem;
-  const augment = async (): Promise<{ key: string; name: string }[]> => {
-    const used = usedGeneratedDefinitions({ names, generated }, plan);
-    const base = plan.files.find((file) => file.path === tailwind.path)?.source ?? tailwind.css;
-    augmented = appendMediaDefinitions(base, used);
-    system =
-      augmented === tailwind.css ? tailwind.designSystem : await tailwind.loadWith(augmented);
-    return used;
-  };
-  for (let attempt = 0; attempt <= extraction.generated.length; attempt += 1) {
-    const used = await augment();
-    const rejected = new Set(
-      used
-        .filter(
-          ({ name }) =>
-            system.candidatesToCss([probeCandidate(system.theme.prefix, name)])[0] === null,
-        )
-        .map(({ key }) => key),
-    );
-    if (rejected.size === 0) break;
-    names = Object.fromEntries(Object.entries(names).filter(([key]) => !rejected.has(key)));
-    generated = generated.filter(({ key }) => !rejected.has(key));
-    plan = JSON.parse(planBatchMigration(JSON.stringify({ ...request, mediaNames: names })));
-  }
-  const replanned = replanCompileFailures(system, { ...request, mediaNames: names }, plan);
-  if (replanned !== plan) {
-    plan = replanned;
-    await augment();
-  }
-  if (augmented !== tailwind.css) {
-    const planned = plan.files.find((file) => file.path === tailwind.path);
-    if (planned) planned.source = augmented;
-    else plan.files.push({ path: tailwind.path, source: augmented });
-  }
-  return plan;
-}
-
-// A candidate Tailwind refuses to compile retains its owning rule(s) instead
-// of aborting the run: block those rules and replan until every applied
-// candidate compiles. Each iteration blocks at least one new rule, so the
-// loop is bounded by the rule count; if a failing candidate cannot be
-// attributed to a new rule, fall back to the package-level failure path.
-function replanCompileFailures(
-  system: DesignSystem,
-  request: PlannerRequest,
-  initialPlan: Plan,
-): Plan {
-  let plan = initialPlan;
-  const blockedByStylesheet = new Map<
-    number,
-    Map<string, { ruleId: RuleSpan; authoredSpan: RuleSpan; candidates: Set<string> }>
-  >();
-  while (true) {
-    const failing = invalidCandidates(system, plan.candidates);
-    if (failing.length === 0) break;
-    let progressed = false;
-    for (const rule of plan.rules) {
-      const failed = rule.candidates.filter((candidate) => failing.includes(candidate));
-      if (failed.length === 0) continue;
-      // Keyed by entry index, not cssPath: same-path Vue entries (scoped and
-      // module blocks) reuse local rule spans, so path-level attribution
-      // would block unrelated rules in the sibling entry.
-      let blocked = blockedByStylesheet.get(rule.stylesheet);
-      if (!blocked) blockedByStylesheet.set(rule.stylesheet, (blocked = new Map()));
-      const key = `${rule.ruleId.start}-${rule.ruleId.end}`;
-      let entry = blocked.get(key);
-      if (!entry) {
-        blocked.set(
-          key,
-          (entry = { ruleId: rule.ruleId, authoredSpan: rule.authoredSpan, candidates: new Set() }),
-        );
-        progressed = true;
+    for (const [filePath, removable] of linksByFile) {
+      const claimed = claimants.get(filePath);
+      const original = state.prepared.preparedHtml.files.find((file) => file.path === filePath);
+      const source = claimed?.file.source ?? original?.source;
+      if (source === undefined) continue;
+      const links = parseHtmlSource(filePath, source)
+        .links.filter((link) => removable.has(`${link.href}\0${link.media}`))
+        .sort((left, right) => right.tagStart - left.tagStart);
+      let bytes = Buffer.from(source);
+      for (const link of links) {
+        bytes = Buffer.concat([bytes.subarray(0, link.tagStart), bytes.subarray(link.tagEnd)]);
       }
-      for (const candidate of failed) entry.candidates.add(candidate);
+      const updated = bytes.toString();
+      if (updated === source) continue;
+      if (claimed) claimed.file.source = updated;
+      else {
+        const file = { path: filePath, source: updated };
+        state.plan.files.push(file);
+        claimants.set(filePath, { state, file });
+      }
     }
-    if (!progressed) {
-      throw new Error(`Tailwind did not generate CSS for candidate: ${failing[0]}`);
-    }
-    plan = JSON.parse(
-      planBatchMigration(
-        JSON.stringify({
-          ...request,
-          stylesheets: request.stylesheets.map((stylesheet, index) => ({
-            ...stylesheet,
-            blockedRules: [...(blockedByStylesheet.get(index)?.values() ?? [])].map(
-              (entry) => entry.ruleId,
-            ),
-          })),
-        }),
-      ),
-    );
-  }
-  for (const [index, blocked] of blockedByStylesheet) {
-    const cssPath = request.stylesheets[index].cssPath;
-    for (const { authoredSpan, candidates } of blocked.values()) {
-      const failed = [...candidates]
-        .sort()
-        .map((candidate) => `\`${candidate}\``)
-        .join(", ");
-      plan.warnings.push({
-        code: "candidate-compilation-failure",
-        file: cssPath,
-        // ruleId is a compiled-domain span; warnings anchor to the authored file.
-        start: authoredSpan.start,
-        end: authoredSpan.end,
-        message: `Tailwind did not generate CSS for ${failed}, so the rule is retained.`,
-      });
-    }
-  }
-  return plan;
-}
-
-function removeMigratedHtmlLinks(plan: Plan, preparedHtml: PreparedHtml): void {
-  const unlinked = new Set(plan.unlinkedFiles);
-  const linksByFile = new Map<string, Set<string>>();
-  for (const link of preparedHtml.removableLinks) {
-    if (!unlinked.has(link.cssPath)) continue;
-    const links = linksByFile.get(link.filePath) ?? new Set();
-    links.add(`${link.href}\0${link.media}`);
-    linksByFile.set(link.filePath, links);
-  }
-
-  for (const [filePath, removable] of linksByFile) {
-    const planned = plan.files.find((file) => file.path === filePath);
-    const original = preparedHtml.files.find((file) => file.path === filePath);
-    if (!original) continue;
-    const source = planned?.source ?? original.source;
-    const links = parseHtmlSource(filePath, source)
-      .links.filter((link) => removable.has(`${link.href}\0${link.media}`))
-      .sort((left, right) => right.tagStart - left.tagStart);
-    let bytes = Buffer.from(source);
-    for (const link of links) {
-      bytes = Buffer.concat([bytes.subarray(0, link.tagStart), bytes.subarray(link.tagEnd)]);
-    }
-    const updated = bytes.toString();
-    if (updated === source) continue;
-    if (planned) planned.source = updated;
-    else plan.files.push({ path: filePath, source: updated });
   }
 }
 

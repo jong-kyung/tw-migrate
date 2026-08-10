@@ -341,7 +341,21 @@ struct PlanRequest {
     /// arbitrary fallback, never the legacy conversions.
     #[serde(default)]
     media_names: Option<HashMap<String, String>>,
+    /// False when the resolved Tailwind entry must not be edited: keyframe
+    /// and global at-rule movement is disabled so their rules retain with
+    /// the existing warnings, and no entry file is planned.
+    #[serde(default = "default_entry_writable")]
+    entry_writable: bool,
+    /// False for members that reuse an ancestor-shared entry: actively
+    /// applied global at-rules stay in their modules while renamed
+    /// keyframes may still move.
+    #[serde(default = "default_entry_writable")]
+    global_at_rule_moves: bool,
     files: Vec<SourceFile>,
+}
+
+fn default_entry_writable() -> bool {
+    true
 }
 
 #[derive(Deserialize)]
@@ -358,6 +372,10 @@ struct BatchPlanRequest {
     theme_tokens: HashMap<String, String>,
     #[serde(default)]
     media_names: Option<HashMap<String, String>>,
+    #[serde(default = "default_entry_writable")]
+    entry_writable: bool,
+    #[serde(default = "default_entry_writable")]
+    global_at_rule_moves: bool,
     files: Vec<SourceFile>,
 }
 
@@ -502,7 +520,11 @@ pub(crate) struct SourceFile {
     pub(crate) html_references_safe: bool,
     #[serde(default, rename = "htmlScriptText")]
     pub(crate) html_script_text: String,
-    #[serde(skip)]
+    /// Edits already applied to `source` by earlier passes over the same
+    /// file: earlier stylesheets inside one batch, or earlier entry-group
+    /// members whose plans this batch chains on. Prepared element offsets
+    /// rebase through them.
+    #[serde(default, rename = "priorEdits")]
     pub(crate) prior_edits: Vec<Vec<Edit>>,
 }
 
@@ -534,7 +556,10 @@ struct PlanResponse {
     retained_rules: usize,
     rules: Vec<RuleReport>,
     warnings: Vec<Warning>,
-    #[serde(skip)]
+    /// The complete per-file edit history after this plan, including any
+    /// supplied prior edits; a caller chaining further plans over these
+    /// files passes it back as `priorEdits`.
+    #[serde(rename = "appliedEdits")]
     applied_edits: HashMap<String, Vec<Vec<Edit>>>,
 }
 
@@ -637,6 +662,7 @@ const WARNING_CODES: &[&str] = &[
     "shared-preprocessor-source",
     "unproven-css-module-relationship",
     "unproven-script-reference",
+    "unproven-shared-entry-flow",
     "unproven-source-map",
     "unresolved-selector-target",
     "unscoped-style-block",
@@ -661,7 +687,7 @@ const WARNING_CODES: &[&str] = &[
     "unsupported-vue-version",
 ];
 
-#[derive(Clone)]
+#[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct Edit {
     pub(crate) start: usize,
     pub(crate) end: usize,
@@ -679,7 +705,9 @@ pub fn plan_json(request: &str) -> Result<String, String> {
         .ok_or_else(|| "Plan request must be an object".to_string())?;
     let mut batch = serde_json::Map::new();
     for field in [
+        "entryWritable",
         "files",
+        "globalAtRuleMoves",
         "mediaNames",
         "tailwindPath",
         "tailwindSource",
@@ -1071,6 +1099,11 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
     }
     let mut current = originals.clone();
     let mut applied_edits: HashMap<String, Vec<Vec<Edit>>> = HashMap::new();
+    for file in &request.files {
+        if !file.prior_edits.is_empty() {
+            applied_edits.insert(file.path.clone(), file.prior_edits.clone());
+        }
+    }
     let mut deleted = HashSet::new();
     let mut unlinked = HashSet::new();
     let mut candidates = BTreeSet::new();
@@ -1177,7 +1210,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
         retained_rules,
         rules,
         warnings,
-        applied_edits: HashMap::new(),
+        applied_edits,
     })
     .map_err(|error| error.to_string())
 }
@@ -1194,6 +1227,8 @@ fn batch_stylesheet_request(
         utility_prefix: batch.utility_prefix.clone(),
         theme_tokens: batch.theme_tokens.clone(),
         media_names: batch.media_names.clone(),
+        entry_writable: batch.entry_writable,
+        global_at_rule_moves: batch.global_at_rule_moves,
         files,
     }
 }
@@ -1216,7 +1251,8 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
     };
     // Vue keyframes and at-rules stay inside their scoped block; moving them
     // to the Tailwind entry would change their scope.
-    let can_move_at_rules = vue_masked.is_none()
+    let can_move_at_rules = request.entry_writable
+        && vue_masked.is_none()
         && request.sheet.syntax == StylesheetSyntax::Css
         && request
             .tailwind_path
@@ -1254,6 +1290,7 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
                 syntax: analysis_syntax,
                 is_module,
                 can_move_at_rules,
+                can_move_global_at_rules: request.global_at_rule_moves,
                 relative_urls_stable,
             },
         )?;
@@ -1405,6 +1442,7 @@ fn parse_vue_rules(
                 can_move_at_rules: false,
                 // Inert while `can_move_at_rules` is false: global at-rules
                 // are never built on the Vue path.
+                can_move_global_at_rules: false,
                 relative_urls_stable: false,
             },
         )?;
@@ -4808,6 +4846,36 @@ mod tests {
             response["deletedFiles"],
             serde_json::json!(["/project/Button.module.css"])
         );
+    }
+
+    #[test]
+    fn an_unwritable_entry_disables_keyframe_movement() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": "@keyframes fade { from { opacity: 0; } to { opacity: 1; } }\n.button { animation: fade 1s; }\n",
+            "tailwindPath": "/project/globals.css",
+            "tailwindSource": "@import \"tailwindcss\";\n",
+            "entryWritable": false,
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        assert!(
+            !response["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|file| file["path"] == "/project/globals.css"),
+            "an unwritable entry must never be planned"
+        );
+        assert_eq!(response["deletedFiles"], serde_json::json!([]));
+        assert_eq!(response["rules"][0]["status"], "retained");
+        assert_eq!(response["warnings"][0]["code"], "unsupported-at-rule");
     }
 
     #[test]

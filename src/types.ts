@@ -82,8 +82,17 @@ export interface PreparedSourceFile extends SourceFile {
   htmlScriptText?: string;
 }
 
+export interface SourceEdit {
+  start: number;
+  end: number;
+  replacement: string;
+}
+
 export interface PlannedFile extends PreparedSourceFile {
   writable: boolean;
+  /** Edits already applied to `source` by earlier entry-group members;
+   * prepared element offsets rebase through them natively. */
+  priorEdits?: SourceEdit[][];
 }
 
 export interface RuleSpan {
@@ -122,6 +131,14 @@ export interface PlannerRequest {
    * supplied empty map stays authoritative and sends every condition to
    * the arbitrary fallback. */
   mediaNames?: Record<string, string>;
+  /** False when the resolved Tailwind entry must not be edited: the planner
+   * disables keyframe and global at-rule movement and returns no entry
+   * file. Omitted means writable. */
+  entryWritable?: boolean;
+  /** False for members reusing an ancestor-shared entry: actively applied
+   * global at-rules stay in their modules while renamed keyframes may
+   * still move. Omitted means allowed. */
+  globalAtRuleMoves?: boolean;
   files: PlannedFile[];
 }
 
@@ -140,6 +157,9 @@ export interface Plan {
   warnings: MigrationWarning[];
   convertedRules: number;
   retainedRules: number;
+  /** The complete per-file edit history after this plan, for chaining
+   * later entry-group members over the same files. */
+  appliedEdits?: Record<string, SourceEdit[][]>;
 }
 
 export interface PlanResult {
@@ -165,6 +185,10 @@ export interface MigrationContext extends Scope {
   sourceFiles: SourceFile[];
   styleDependents: Map<string, string[]>;
   vueStyleRanges: Map<string, RuleSpan[]>;
+  /** Tailwind entries per owning package, for ancestor-shared resolution. */
+  entryCatalog: Map<string, string[]>;
+  /** Scanned paths the utility scanner's ignore rules exclude. */
+  ignoredPaths: Set<string>;
 }
 
 export interface RemovableLink {
