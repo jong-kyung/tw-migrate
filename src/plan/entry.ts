@@ -38,20 +38,30 @@ export function tailwindEntryCatalog(
   return catalog;
 }
 
-/// Parsed top-level at-rule directives of one stylesheet, or null when the
-/// stylesheet does not parse. Tailwind honors `@source` and `@import` only
-/// at the top level, so directive-shaped text inside rule blocks or string
-/// values never counts.
-function cssDirectives(source: string): { name: string; text: string }[] | null {
+type CssDirective =
+  | {
+      kind: "import";
+      specifier: string | null;
+      tailwind: boolean;
+      source: string | null;
+      sourceUnreadable: boolean;
+    }
+  | { kind: "source"; not: boolean; inline: boolean; scope: string | null; unreadable: boolean }
+  | { kind: "other"; name: string };
+
+/// Parsed top-level at-rule directives of one stylesheet through the
+/// native oxc-css-parser, or null when the stylesheet does not parse.
+/// Tailwind honors `@source` and `@import` only at the top level, so
+/// directive-shaped text inside rule blocks or string values never
+/// counts, and import targets and source modifiers arrive structurally
+/// instead of through text matching.
+function cssDirectives(source: string): CssDirective[] | null {
   try {
     const parsed: unknown = JSON.parse(collectCssDirectives(source));
     if (!Array.isArray(parsed)) return null;
     return parsed.filter(
-      (directive): directive is { name: string; text: string } =>
-        directive !== null &&
-        typeof directive === "object" &&
-        typeof directive.name === "string" &&
-        typeof directive.text === "string",
+      (directive): directive is CssDirective =>
+        directive !== null && typeof directive === "object" && typeof directive.kind === "string",
     );
   } catch {
     return null;
@@ -61,12 +71,13 @@ function cssDirectives(source: string): { name: string; text: string }[] | null 
 /// The entry's static import graph over the scanned stylesheet corpus:
 /// Tailwind processes source directives from imported project CSS as part
 /// of one entry graph. Returns null when a local import is missing from
-/// the corpus or does not parse, because its directives are unknowable.
+/// the corpus, does not parse, or has an unreadable target, because its
+/// directives are unknowable.
 function entryGraphSheets(
   entry: string,
   styleSources: Map<string, string>,
-): { path: string; directives: { name: string; text: string }[] }[] | null {
-  const sheets: { path: string; directives: { name: string; text: string }[] }[] = [];
+): { path: string; directives: CssDirective[] }[] | null {
+  const sheets: { path: string; directives: CssDirective[] }[] = [];
   const seen = new Set<string>();
   const pending = [entry];
   while (pending.length > 0) {
@@ -79,13 +90,9 @@ function entryGraphSheets(
     if (directives === null) return null;
     sheets.push({ path, directives });
     for (const directive of directives) {
-      if (directive.name !== "import") continue;
-      const spec =
-        directive.text.match(/@import\s+(?:url\(\s*)?["']([^"']+)["']/)?.[1] ??
-        directive.text.match(/@import\s+url\(\s*([^"')\s]+)\s*\)/)?.[1];
-      // An import whose target cannot be read leaves the graph's source
-      // directives unknowable.
-      if (spec === undefined) return null;
+      if (directive.kind !== "import") continue;
+      if (directive.specifier === null) return null;
+      const spec = directive.specifier;
       if (!spec.startsWith(".") && !spec.startsWith("/")) continue;
       const resolved = resolve(dirname(path), spec);
       pending.push(styleSources.has(resolved) ? resolved : `${resolved}.css`);
@@ -126,22 +133,21 @@ export function scanProof(options: {
     const excludesChild = (scope: string): boolean =>
       isWithin(scopePath(scope), options.packageRoot) ||
       isWithin(options.packageRoot, scopePath(scope));
-    for (const { name, text } of directives) {
-      if (name === "source") {
-        const excluded = text.match(/@source\s+not\s+["']([^"']+)["']/);
-        if (excluded && excludesChild(excluded[1])) return null;
-        const scope = excluded ? undefined : text.match(/@source\s+["']([^"']+)["']/);
-        if (scope && coversChild(scope[1])) literal = true;
-      } else if (name === "import") {
-        const importSource = text.match(
-          /@import\s+["']tailwindcss(?:\/[^"']*)?["'][^;]*\bsource\(([^)]*)\)/,
-        );
-        if (!importSource) continue;
-        const argument = importSource[1].trim();
-        if (argument === "none") automaticDisabled = true;
-        else {
-          const literalBase = argument.match(/^["']([^"']+)["']$/);
-          if (literalBase && coversChild(literalBase[1])) literal = true;
+    for (const directive of directives) {
+      if (directive.kind === "source") {
+        if (directive.inline) continue;
+        // An unreadable scope leaves coverage or exclusion unknowable.
+        if (directive.unreadable || directive.scope === null) return null;
+        if (directive.not) {
+          if (excludesChild(directive.scope)) return null;
+        } else if (coversChild(directive.scope)) {
+          literal = true;
+        }
+      } else if (directive.kind === "import" && directive.tailwind) {
+        if (directive.sourceUnreadable) return null;
+        if (directive.source === "none") automaticDisabled = true;
+        else if (directive.source !== null) {
+          if (coversChild(directive.source)) literal = true;
           else automaticDisabled = true;
         }
       }
