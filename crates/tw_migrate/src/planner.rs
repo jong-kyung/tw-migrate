@@ -1910,7 +1910,6 @@ fn plan_request(
             module_references_safe = false;
             warnings.push(Warning::new(
                 "unproven-script-reference",
-    "unproven-shared-entry-flow",
                 file.path.clone(),
                 (0, 0),
                 "An inline script names a CSS Module class, so the module is retained.".to_string(),
