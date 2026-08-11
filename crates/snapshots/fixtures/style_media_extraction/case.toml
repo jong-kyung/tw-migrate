@@ -1,0 +1,9 @@
+[[steps]]
+name = "extract"
+args = ["--tailwind-css", "globals.css"]
+status = 0
+
+[[steps]]
+name = "rerun is idempotent"
+args = ["--tailwind-css", "globals.css"]
+status = 0

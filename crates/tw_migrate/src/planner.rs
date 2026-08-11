@@ -15,7 +15,12 @@ use crate::{
     html_rewrite::{candidates_fit_attribute, plan_html_file, plan_vue_module_file, rebase_span},
     js_rewrite::{SourcePlan, opaque_reference_plan, plan_batch_source_file, validate_js},
     jsx_graph,
-    utilities::{css_properties_conflict, tailwind_utilities_conflict, tailwind_variants_match},
+    media::{MediaComponent, ParsedMediaCondition, parse_media_condition},
+    theme::parse_dimension,
+    utilities::{
+        css_properties_conflict, tailwind_utilities_conflict, tailwind_utility_parts,
+        tailwind_variants_match, variant_segments,
+    },
 };
 
 #[derive(Clone, Copy, Default, Deserialize, Eq, PartialEq)]
@@ -382,6 +387,11 @@ struct BatchPlanRequest {
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BatchStylesheet {
+    /// Per-stylesheet override of the request-level flag: false for a
+    /// shared-entry member's stylesheet inside a group batch, or for a
+    /// stylesheet whose registrations collide with another member's.
+    #[serde(default)]
+    global_at_rule_moves: Option<bool>,
     css_path: String,
     css_source: String,
     #[serde(default)]
@@ -520,11 +530,7 @@ pub(crate) struct SourceFile {
     pub(crate) html_references_safe: bool,
     #[serde(default, rename = "htmlScriptText")]
     pub(crate) html_script_text: String,
-    /// Edits already applied to `source` by earlier passes over the same
-    /// file: earlier stylesheets inside one batch, or earlier entry-group
-    /// members whose plans this batch chains on. Prepared element offsets
-    /// rebase through them.
-    #[serde(default, rename = "priorEdits")]
+    #[serde(skip)]
     pub(crate) prior_edits: Vec<Vec<Edit>>,
 }
 
@@ -556,10 +562,7 @@ struct PlanResponse {
     retained_rules: usize,
     rules: Vec<RuleReport>,
     warnings: Vec<Warning>,
-    /// The complete per-file edit history after this plan, including any
-    /// supplied prior edits; a caller chaining further plans over these
-    /// files passes it back as `priorEdits`.
-    #[serde(rename = "appliedEdits")]
+    #[serde(skip)]
     applied_edits: HashMap<String, Vec<Vec<Edit>>>,
 }
 
@@ -723,6 +726,232 @@ pub fn plan_json(request: &str) -> Result<String, String> {
         serde_json::Value::Array(vec![request]),
     );
     plan_batch_json(&serde_json::Value::Object(batch).to_string())
+}
+
+/// One provable width constraint of a media variant chain, in a single
+/// authored unit; bounds in other units stay unprovable and widen the
+/// interval conservatively.
+struct WidthConstraint {
+    value: f64,
+    unit: String,
+    inclusive: bool,
+    lower: bool,
+}
+
+/// Recognizes media-condition variant segments and proves the RFC's
+/// ordering-sensitive conflict gate: two candidates that set conflicting
+/// declarations on one element under distinct media conditions migrate
+/// only when the conditions are provably mutually exclusive by width, or
+/// when the pair is a base rule and a later media rule from the same
+/// stylesheet, whose variant CSS always follows base utilities.
+struct MediaVariantContext<'a> {
+    /// True when a map was supplied at all: an explicitly empty map still
+    /// means extraction ran and every condition fell back to arbitrary
+    /// variants, which the gate must keep covering.
+    enabled: bool,
+    keys_by_name: HashMap<&'a str, &'a str>,
+    theme_tokens: &'a HashMap<String, String>,
+}
+
+impl<'a> MediaVariantContext<'a> {
+    fn new(request: &'a BatchPlanRequest) -> Self {
+        let mut keys_by_name = HashMap::new();
+        if let Some(names) = &request.media_names {
+            for (key, name) in names {
+                keys_by_name.insert(name.as_str(), key.as_str());
+            }
+        }
+        Self {
+            enabled: request.media_names.is_some(),
+            keys_by_name,
+            theme_tokens: &request.theme_tokens,
+        }
+    }
+
+    fn is_media_segment(&self, segment: &str) -> bool {
+        self.keys_by_name.contains_key(segment)
+            || segment == "dark"
+            || segment.starts_with("min-[")
+            || segment.starts_with("max-[")
+            || segment.starts_with("[@media")
+            || self
+                .theme_tokens
+                .contains_key(&format!("breakpoint-{segment}"))
+            || segment
+                .strip_prefix("max-")
+                .is_some_and(|rest| self.theme_tokens.contains_key(&format!("breakpoint-{rest}")))
+    }
+
+    /// The candidate's media variant segments and its residual variants.
+    fn split_candidate<'c>(&self, candidate: &'c str) -> (Vec<&'c str>, Vec<&'c str>) {
+        let (variants, _) = tailwind_utility_parts(candidate);
+        let mut media = Vec::new();
+        let mut residual = Vec::new();
+        for segment in variant_segments(variants) {
+            if self.is_media_segment(segment) {
+                media.push(segment);
+            } else {
+                residual.push(segment);
+            }
+        }
+        (media, residual)
+    }
+
+    fn component_constraints(component: &MediaComponent, constraints: &mut Vec<WidthConstraint>) {
+        let Some(bound) = &component.width_bound else {
+            return;
+        };
+        let Some((value, unit)) = parse_dimension(&bound.value) else {
+            return;
+        };
+        constraints.push(WidthConstraint {
+            value,
+            unit: unit.to_string(),
+            inclusive: bound.inclusive,
+            lower: bound.lower,
+        });
+    }
+
+    /// Provable width constraints of one side's media segments. Segments
+    /// without a width bound contribute nothing, which only widens the
+    /// side's interval and weakens exclusivity claims.
+    fn constraints(&self, segments: &[&str]) -> Vec<WidthConstraint> {
+        let mut constraints = Vec::new();
+        for segment in segments {
+            if let Some(key) = self.keys_by_name.get(segment) {
+                match parse_media_condition(key) {
+                    Some(ParsedMediaCondition::Components(components)) => {
+                        for component in &components {
+                            Self::component_constraints(component, &mut constraints);
+                        }
+                    }
+                    Some(ParsedMediaCondition::Whole(_)) | None => {}
+                }
+                continue;
+            }
+            if let Some(token) = self.theme_tokens.get(&format!("breakpoint-{segment}")) {
+                if let Some((value, unit)) = parse_dimension(token) {
+                    constraints.push(WidthConstraint {
+                        value,
+                        unit: unit.to_string(),
+                        inclusive: true,
+                        lower: true,
+                    });
+                }
+                continue;
+            }
+            if let Some(rest) = segment.strip_prefix("max-") {
+                if let Some(token) = self.theme_tokens.get(&format!("breakpoint-{rest}")) {
+                    if let Some((value, unit)) = parse_dimension(token) {
+                        constraints.push(WidthConstraint {
+                            value,
+                            unit: unit.to_string(),
+                            inclusive: false,
+                            lower: false,
+                        });
+                    }
+                    continue;
+                }
+                if let Some(value) = rest.strip_prefix('[').and_then(|inner| inner.strip_suffix(']'))
+                    && let Some((value, unit)) = parse_dimension(value)
+                {
+                    constraints.push(WidthConstraint {
+                        value,
+                        unit: unit.to_string(),
+                        inclusive: true,
+                        lower: false,
+                    });
+                }
+                continue;
+            }
+            if let Some(value) = segment
+                .strip_prefix("min-[")
+                .and_then(|inner| inner.strip_suffix(']'))
+                && let Some((value, unit)) = parse_dimension(value)
+            {
+                constraints.push(WidthConstraint {
+                    value,
+                    unit: unit.to_string(),
+                    inclusive: true,
+                    lower: true,
+                });
+            }
+        }
+        constraints
+    }
+
+    /// True when the two sides can never match together: some unit has one
+    /// side's upper bound strictly below the other side's lower bound.
+    fn provably_exclusive(&self, left: &[&str], right: &[&str]) -> bool {
+        let left_constraints = self.constraints(left);
+        let right_constraints = self.constraints(right);
+        let disjoint = |uppers: &[&WidthConstraint], lowers: &[&WidthConstraint]| {
+            uppers.iter().any(|upper| {
+                lowers.iter().any(|lower| {
+                    upper.unit == lower.unit
+                        && (upper.value < lower.value
+                            || (upper.value == lower.value && !(upper.inclusive && lower.inclusive)))
+                })
+            })
+        };
+        fn split(constraints: &[WidthConstraint]) -> (Vec<&WidthConstraint>, Vec<&WidthConstraint>) {
+            let uppers: Vec<&WidthConstraint> =
+                constraints.iter().filter(|bound| !bound.lower).collect();
+            let lowers: Vec<&WidthConstraint> =
+                constraints.iter().filter(|bound| bound.lower).collect();
+            (uppers, lowers)
+        }
+        let (left_uppers, left_lowers) = split(&left_constraints);
+        let (right_uppers, right_lowers) = split(&right_constraints);
+        disjoint(&left_uppers, &right_lowers) || disjoint(&right_uppers, &left_lowers)
+    }
+
+    /// The RFC's ordering-sensitive pair: conflicting declarations under
+    /// distinct, possibly co-matching media conditions whose emitted order
+    /// is unproven.
+    fn ordering_sensitive(&self, left: &BatchMatch, right: &BatchMatch) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        let (left_media, left_residual) = self.split_candidate(&left.candidate);
+        let (right_media, right_residual) = self.split_candidate(&right.candidate);
+        if left_media == right_media || left_residual != right_residual {
+            return false;
+        }
+        let conflicting = tailwind_utilities_conflict(
+            &format!("probe:{}", tailwind_utility_parts(&left.candidate).1),
+            &format!("probe:{}", tailwind_utility_parts(&right.candidate).1),
+        ) || left.properties.iter().any(|left_property| {
+            right
+                .properties
+                .iter()
+                .any(|right_property| css_properties_conflict(left_property, right_property))
+        });
+        if !conflicting {
+            return false;
+        }
+        if self.provably_exclusive(&left_media, &right_media) {
+            return false;
+        }
+        // A base rule paired with a later media rule from the same
+        // stylesheet keeps its original winner: variant CSS always follows
+        // base utilities.
+        if left.stylesheet == right.stylesheet {
+            let (base, media) = if left_media.is_empty() {
+                (Some(left), Some(right))
+            } else if right_media.is_empty() {
+                (Some(right), Some(left))
+            } else {
+                (None, None)
+            };
+            if let (Some(base), Some(media)) = (base, media)
+                && media.rule.start > base.rule.start
+            {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 /// Span of a rule in the analysis source (the compiled CSS for preprocessor
@@ -1004,18 +1233,20 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
         candidate_maps.push(maps);
     }
 
+    let media_context = MediaVariantContext::new(&request);
     let mut blocked_rules: Vec<RuleConflicts> = vec![HashMap::new(); request.stylesheets.len()];
     for matches in match_groups.values() {
         for (left_index, left) in matches.iter().enumerate() {
             for right in &matches[left_index + 1..] {
-                if left.stylesheet != right.stylesheet
+                if (left.stylesheet != right.stylesheet
                     && (tailwind_utilities_conflict(&left.candidate, &right.candidate)
                         || (tailwind_variants_match(&left.candidate, &right.candidate)
                             && left.properties.iter().any(|left_property| {
                                 right.properties.iter().any(|right_property| {
                                     css_properties_conflict(left_property, right_property)
                                 })
-                            })))
+                            }))))
+                    || media_context.ordering_sensitive(left, right)
                 {
                     let pair = if left.candidate <= right.candidate {
                         (left.candidate.clone(), right.candidate.clone())
@@ -1099,11 +1330,6 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
     }
     let mut current = originals.clone();
     let mut applied_edits: HashMap<String, Vec<Vec<Edit>>> = HashMap::new();
-    for file in &request.files {
-        if !file.prior_edits.is_empty() {
-            applied_edits.insert(file.path.clone(), file.prior_edits.clone());
-        }
-    }
     let mut deleted = HashSet::new();
     let mut unlinked = HashSet::new();
     let mut candidates = BTreeSet::new();
@@ -1290,7 +1516,10 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
                 syntax: analysis_syntax,
                 is_module,
                 can_move_at_rules,
-                can_move_global_at_rules: request.global_at_rule_moves,
+                can_move_global_at_rules: request
+                    .sheet
+                    .global_at_rule_moves
+                    .unwrap_or(request.global_at_rule_moves),
                 relative_urls_stable,
             },
         )?;
@@ -3979,6 +4208,127 @@ mod tests {
             serde_json::json!(["dark:text-[white]", "motion-reduce:starting:@md:grid"])
         );
         assert_eq!(response["convertedRules"], 2);
+    }
+
+    #[test]
+    fn orders_a_base_rule_before_a_later_media_rule() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": ".button { margin: 8px; }\n@media (width <= 700px) { .button { margin: 4px; } }\n",
+            "mediaNames": { "(width <= 700px)": "width-lte-700px" },
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        // The media rule follows the base rule, matching Tailwind's output
+        // order, so both migrate.
+        assert_eq!(response["convertedRules"], 2);
+        assert_eq!(
+            response["candidates"],
+            serde_json::json!(["m-[8px]", "width-lte-700px:m-[4px]"])
+        );
+    }
+
+    #[test]
+    fn retains_a_media_rule_authored_before_its_base_rule() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": "@media (width <= 700px) { .button { margin: 4px; } }\n.button { margin: 8px; }\n",
+            "mediaNames": { "(width <= 700px)": "width-lte-700px" },
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        // The authored base rule wins whenever the media condition matches,
+        // but Tailwind would emit the media variant after the base utility
+        // and flip the winner, so the pair is retained.
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 2);
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| warning["code"] == "batch-stylesheet-conflict")
+        );
+    }
+
+    #[test]
+    fn retains_overlapping_media_rules_with_unproven_order() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": "@media (width <= 700px) { .button { margin: 4px; } }\n@media (width <= 800px) { .button { margin: 6px; } }\n",
+            "mediaNames": {
+                "(width <= 700px)": "width-lte-700px",
+                "(width <= 800px)": "width-lte-800px"
+            },
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        // Both conditions match at 600px and the emitted variant order is
+        // unproven, so the pair is retained.
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 2);
+    }
+
+    #[test]
+    fn converts_mutually_exclusive_media_rules() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": "@media (width <= 700px) { .button { margin: 4px; } }\n@media (width >= 900px) { .button { margin: 6px; } }\n",
+            "mediaNames": {
+                "(width <= 700px)": "width-lte-700px",
+                "(width >= 900px)": "width-gte-900px"
+            },
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        // The width intervals are disjoint, so no ordering can change the
+        // rendered result and both rules migrate.
+        assert_eq!(response["convertedRules"], 2);
+    }
+
+    #[test]
+    fn gates_overlapping_arbitrary_media_variants_under_an_empty_map() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": "@media (width <= 700px) { .button { margin: 4px; } }\n@media (width <= 800px) { .button { margin: 6px; } }\n",
+            "mediaNames": {},
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        // An explicitly empty map still means extraction ran; the fallback
+        // arbitrary variants overlap with an unproven order and retain.
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 2);
     }
 
     #[test]

@@ -48,8 +48,9 @@ import { verifyVueSource } from "./parser/vue.ts";
 import { preparePackageVue, vueWarningsOnlyResult } from "./plan/vue.ts";
 import { verifySnapshots, writeChanges } from "./util/write.ts";
 import type {
+  DesignSystem,
+  HtmlContext,
   LoadedTailwind,
-  SourceEdit,
   PreparedVue,
   MigrateOptions,
   MigrationContext,
@@ -465,7 +466,7 @@ async function preparePackage(
     ownEntries.length === 0 &&
     configuredEntry === undefined &&
     options.workspaces &&
-    options.extractMediaQueries === true
+    options.extractMediaQueries !== false
   ) {
     // Ancestry identifies candidates only; selecting an ancestor entry
     // requires the dual loading and scan proofs, level by level from the
@@ -691,12 +692,6 @@ async function preparePackage(
   };
 }
 
-interface MemberState {
-  prepared: PreparedPackage;
-  request: PlannerRequest;
-  plan: Plan;
-}
-
 type BlockedRules = Map<
   number,
   Map<string, { ruleId: RuleSpan; authoredSpan: RuleSpan; candidates: Set<string> }>
@@ -731,10 +726,8 @@ async function planPreparedGroup(
   // that those consumers load the shared entry too: through the consumer
   // package's own dual proofs when it shares the entry, trivially when the
   // consumer package owns this entry, and never from outside the group.
-  // Like ancestor resolution, this discipline stays scoped to extraction
-  // until part 4 flips the default with the packaged snapshots.
   const membersByRoot = new Map(active.map((member) => [member.packageRoot, member]));
-  for (const member of options.extractMediaQueries === true ? active : []) {
+  for (const member of options.extractMediaQueries !== false ? active : []) {
     member.stylesheets = member.stylesheets.filter((stylesheet) => {
       const foreignConsumers = member.files.filter(
         (file) =>
@@ -795,33 +788,45 @@ async function planPreparedGroup(
   const groupWritable = !(await entryUnsafe(entry.path, workspaceRoot, targetable));
   const mediaWarnings: MigrationWarning[] = [];
   let extraction: MediaExtraction | undefined;
-  if (options.extractMediaQueries === true) {
+  // Malformed member inputs must stay attributable to their member even
+  // when the group batch would be the first to parse them: the collection
+  // pass doubles as per-member input isolation, so it always runs and
+  // under force only the failing member is skipped.
+  const collections: MediaCollection[] = [];
+  // Reassigning `active` below does not disturb this iteration over the
+  // current array, and each member is visited exactly once.
+  for (const member of active) {
+    try {
+      collections.push(collectMemberMediaConditions(member.stylesheets, entry));
+    } catch (error) {
+      if (!options.force || !isRecoverablePlanningError(error)) throw error;
+      results.push({ failure: packageFailure(workspaceRoot, member.packageRoot, error) });
+      active = active.filter((remaining) => remaining !== member);
+    }
+  }
+  if (active.length === 0) return results;
+  let names = extraction?.names;
+  let generated = extraction?.generated ?? [];
+  if (options.extractMediaQueries !== false) {
     if (!groupWritable) {
-      mediaWarnings.push({
-        code: "media-query-definition-fallback",
-        file: entry.path,
-        start: 0,
-        end: 0,
-        message:
-          "The Tailwind entry could not be edited safely, so media behavior was preserved with arbitrary variants.",
-      });
-    } else {
-      // Collection failures are attributable to one member: under force
-      // only that member is skipped, while resolution failures affect the
-      // shared allocation and skip the group.
-      const collections: MediaCollection[] = [];
-      // Reassigning `active` below does not disturb this iteration over
-      // the current array, and each member is visited exactly once.
-      for (const member of active) {
-        try {
-          collections.push(collectMemberMediaConditions(member.stylesheets, entry));
-        } catch (error) {
-          if (!options.force || !isRecoverablePlanningError(error)) throw error;
-          results.push({ failure: packageFailure(workspaceRoot, member.packageRoot, error) });
-          active = active.filter((remaining) => remaining !== member);
-        }
+      // The promised fallback is arbitrary variants, not the legacy
+      // conversions: an authoritative empty map sends every condition to
+      // its arbitrary form, because nothing about the unsafe entry's
+      // variants was verified. The warning only applies when there is
+      // media behavior to preserve.
+      names = {};
+      generated = [];
+      if (collections.some((collection) => collection.components.length > 0)) {
+        mediaWarnings.push({
+          code: "media-query-definition-fallback",
+          file: entry.path,
+          start: 0,
+          end: 0,
+          message:
+            "The Tailwind entry could not be edited safely, so media behavior was preserved with arbitrary variants.",
+        });
       }
-      if (active.length === 0) return results;
+    } else {
       try {
         extraction = planMediaExtraction({
           collections,
@@ -835,181 +840,170 @@ async function planPreparedGroup(
       } catch (error) {
         return recoverGroup(error, !isRecoverablePlanningError(error));
       }
+      names = extraction.names;
+      generated = extraction.generated;
     }
   }
 
-  let names = extraction?.names;
-  let generated = extraction?.generated ?? [];
-  // Order-sensitive at-rule registrations already present in the entry
-  // graph; a moved definition colliding with them, or with another
-  // stylesheet's move, has no proven precedence and is retained.
-  const baseIdentities = new Set(
-    atRuleIdentities(
-      [entry.css, ...entry.graphSources.map((graphSource) => graphSource.source)].join("\n"),
-    ),
-  );
-  // Registrations that stay in place participate as base identities:
-  // moving the same registration into the entry would flip precedence
-  // against them. Only modules of members with movable at-rules are
-  // excluded, because their moves are compared through the planned delta.
-  for (const member of active) {
-    for (const stylesheet of member.stylesheets) {
-      // Preprocessor and Vue modules never move their at-rules, so their
-      // retained registrations stay in the base like plain stylesheets.
-      const movableModule =
-        stylesheet.isModule === true &&
-        (stylesheet.syntax === undefined || stylesheet.syntax === "css") &&
-        (stylesheet.vueBlocks === undefined || stylesheet.vueBlocks.length === 0);
-      if (member.sharedProofs === undefined && movableModule) continue;
-      for (const identity of atRuleIdentities(stylesheet.analysisSource ?? stylesheet.cssSource)) {
+  let plan: Plan = {
+    files: [],
+    deletedFiles: [],
+    unlinkedFiles: [],
+    candidates: [],
+    rules: [],
+    warnings: [],
+    convertedRules: 0,
+    retainedRules: 0,
+  };
+  let augmented = entry.css;
+  const blocked: BlockedRules = new Map();
+
+  // The whole group plans as one native batch, so cross-member conflicts
+  // on shared consumers go through the same analysis as conflicts inside
+  // one package. The finalization loop below can drop a member and replan.
+  finalization: for (;;) {
+    // Order-sensitive at-rule registrations whose moves would need an
+    // unprovable precedence stay in place: everything already in the entry
+    // graph, every stylesheet that cannot move its at-rules, and every
+    // movable stylesheet colliding with another one. Within one stylesheet
+    // moved blocks keep their source order, so only cross-stylesheet
+    // collisions gate.
+    const baseIdentities = new Set(
+      atRuleIdentities(
+        [entry.css, ...entry.graphSources.map((graphSource) => graphSource.source)].join("\n"),
+      ),
+    );
+    const sheets = active.flatMap((member) =>
+      member.stylesheets.map((stylesheet) => ({ member, stylesheet })),
+    );
+    const movable = ({ member, stylesheet }: (typeof sheets)[number]): boolean =>
+      member.sharedProofs === undefined &&
+      stylesheet.isModule === true &&
+      (stylesheet.syntax === undefined || stylesheet.syntax === "css") &&
+      (stylesheet.vueBlocks === undefined || stylesheet.vueBlocks.length === 0);
+    for (const sheet of sheets) {
+      if (movable(sheet)) continue;
+      for (const identity of atRuleIdentities(
+        sheet.stylesheet.analysisSource ?? sheet.stylesheet.cssSource,
+      )) {
         baseIdentities.add(identity);
       }
     }
-  }
-  const unwritableMembers = new Set<PreparedPackage>();
-  const blockedByMember = new Map<PreparedPackage, BlockedRules>();
-  let states: MemberState[] = [];
-  let composed = entry.css;
-  let augmented = entry.css;
-  let system = entry.designSystem;
+    const sheetIdentities = sheets.map((sheet) =>
+      movable(sheet)
+        ? new Set(atRuleIdentities(sheet.stylesheet.analysisSource ?? sheet.stylesheet.cssSource))
+        : new Set<string>(),
+    );
+    const movesDisabled = new Set<number>();
+    for (const [index, identities] of sheetIdentities.entries()) {
+      for (const identity of identities) {
+        if (baseIdentities.has(identity)) movesDisabled.add(index);
+        for (const [other, otherIdentities] of sheetIdentities.entries()) {
+          if (other !== index && otherIdentities.has(identity)) {
+            movesDisabled.add(index);
+            movesDisabled.add(other);
+          }
+        }
+      }
+    }
 
-  // Rebuild the complete composition from the shared snapshot with the
-  // current member set, blocked rules, and name map. Returns the group's
-  // final results when planning exhausts the group early.
-  const replanGroup = async (): Promise<PlanResult[] | undefined> => {
+    // Every member contributes its prepared view of the shared file
+    // corpus. The version prepared by a file's owning package carries the
+    // right element metadata, while stylesheet-link contexts merge across
+    // members: a page owned by one package may consume another member's
+    // stylesheet through a link only that member's preparation resolved.
+    const filesByPath = new Map<string, PlannedFile>();
+    const contextsByPath = new Map<string, HtmlContext[]>();
+    for (const member of active) {
+      for (const file of member.files) {
+        if (file.htmlStylesheets !== undefined && file.htmlStylesheets.length > 0) {
+          const contexts = contextsByPath.get(file.path) ?? [];
+          contexts.push(...file.htmlStylesheets);
+          contextsByPath.set(file.path, contexts);
+        }
+        if (
+          !filesByPath.has(file.path) ||
+          context.pathOwners.get(file.path) === member.packageRoot
+        ) {
+          filesByPath.set(file.path, file);
+        }
+      }
+    }
+    const files = [...filesByPath.values()]
+      .map((file) => {
+        const contexts = contextsByPath.get(file.path);
+        if (contexts === undefined) return file;
+        const seen = new Set<string>();
+        const merged = contexts.filter((linked) => {
+          const key = `${linked.cssPath}\0${linked.variants.join(",")}\0${linked.direct}\0${linked.analyzable}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+        return { ...file, htmlStylesheets: merged };
+      })
+      .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
+
     planning: for (;;) {
-      composed = entry.css;
-      states = [];
-      const identityOwners = new Map<string, PreparedPackage>();
-      // Consumer files can be edited by more than one member (a component
-      // may use stylesheets from two packages), so edits chain through the
-      // composition exactly like the entry source: each member plans over
-      // the previous members' planned sources, and the accumulated edit
-      // history rides along so prepared element offsets rebase natively.
-      const composedFiles = new Map<string, string>();
-      const composedEdits = new Map<string, SourceEdit[][]>();
-      for (const member of active) {
-        const blocked = blockedByMember.get(member);
-        const memberWritable = groupWritable && !unwritableMembers.has(member);
-        const request: PlannerRequest = {
-          stylesheets: member.stylesheets.map((stylesheet, index) => {
-            const rules = blocked?.get(index);
-            return rules
-              ? {
-                  ...stylesheet,
-                  blockedRules: [...rules.values()].map((blockedRule) => blockedRule.ruleId),
-                }
-              : stylesheet;
-          }),
-          tailwindPath: entry.path,
-          tailwindSource: composed,
-          utilityPrefix: entry.designSystem.theme.prefix,
-          themeTokens: entry.themeTokens,
-          ...(names ? { mediaNames: names } : {}),
-          ...(memberWritable ? {} : { entryWritable: false }),
-          // Actively applied global at-rules from an ancestor-shared
-          // member would activate in every other flow loading the entry.
-          ...(member.sharedProofs ? { globalAtRuleMoves: false } : {}),
-          files: member.files.map((file) => {
-            const chained = composedFiles.get(file.path);
-            if (chained === undefined || chained === file.source) return file;
-            return { ...file, source: chained, priorEdits: composedEdits.get(file.path) };
-          }),
-        };
-        let plan: Plan;
-        try {
-          plan = JSON.parse(planBatchMigration(JSON.stringify(request)));
-        } catch (error) {
-          if (!options.force || !isRecoverablePlanningError(error)) throw error;
-          results.push({ failure: packageFailure(workspaceRoot, member.packageRoot, error) });
-          active = active.filter((remaining) => remaining !== member);
-          if (active.length === 0) return results;
-          continue planning;
-        }
-        // Adopt the member's planned entry source into the group composition;
-        // intermediate package plans must not claim the shared entry.
-        const plannedEntry = plan.files.findIndex((file) => file.path === entry.path);
-        if (plannedEntry >= 0) {
-          if (!memberWritable) {
-            throw new Error(`The planner claimed an unwritable Tailwind entry: ${entry.path}`);
-          }
-          const delta = plan.files[plannedEntry].source;
-          plan.files.splice(plannedEntry, 1);
-          if (!delta.startsWith(composed)) {
-            throw new Error(
-              `The planner rewrote the Tailwind entry instead of appending: ${entry.path}`,
-            );
-          }
-          const identities = atRuleIdentities(delta.slice(composed.length));
-          // A duplicate inside one member's own delta means two of its
-          // stylesheets move the same registration; their runtime load
-          // order is equally unproven, so the member keeps its at-rules.
-          const withinDelta = new Set<string>();
-          let collided = false;
-          for (const identity of identities) {
-            if (withinDelta.has(identity) || baseIdentities.has(identity)) {
-              unwritableMembers.add(member);
-              collided = true;
-            } else if (identityOwners.has(identity)) {
-              const owner = identityOwners.get(identity);
-              if (owner !== undefined) unwritableMembers.add(owner);
-              unwritableMembers.add(member);
-              collided = true;
-            }
-            withinDelta.add(identity);
-          }
-          if (collided) continue planning;
-          for (const identity of identities) identityOwners.set(identity, member);
-          composed = delta;
-        }
-        for (const file of plan.files) composedFiles.set(file.path, file.source);
-        // The response history includes the supplied prior edits, so it
-        // replaces the accumulated entry rather than extending it.
-        for (const [path, edits] of Object.entries(plan.appliedEdits ?? {})) {
-          composedEdits.set(path, edits);
-        }
-        delete plan.appliedEdits;
-        states.push({ prepared: member, request, plan });
+      const request: PlannerRequest = {
+        stylesheets: sheets.map(({ member, stylesheet }, index) => {
+          const rules = blocked.get(index);
+          const movesOff = member.sharedProofs !== undefined || movesDisabled.has(index);
+          return {
+            ...stylesheet,
+            ...(rules
+              ? { blockedRules: [...rules.values()].map((blockedRule) => blockedRule.ruleId) }
+              : {}),
+            // Actively applied global at-rules from an ancestor-shared
+            // member would activate in every other flow loading the
+            // entry, and colliding registrations have no proven order.
+            ...(movesOff ? { globalAtRuleMoves: false } : {}),
+          };
+        }),
+        tailwindPath: entry.path,
+        tailwindSource: entry.css,
+        utilityPrefix: entry.designSystem.theme.prefix,
+        themeTokens: entry.themeTokens,
+        ...(names ? { mediaNames: names } : {}),
+        ...(groupWritable ? {} : { entryWritable: false }),
+        files,
+      };
+      try {
+        plan = JSON.parse(planBatchMigration(JSON.stringify(request)));
+      } catch (error) {
+        // The collection pre-pass already isolated per-member input
+        // failures, so a batch failure affects the shared plan itself.
+        return recoverGroup(error, !isRecoverablePlanningError(error));
       }
-      // Only the last member editing a path claims its final composed
-      // source; earlier members' edits are already contained in it, and
-      // the merged transaction rejects duplicate path claims.
-      const lastClaim = new Map<string, MemberState>();
-      for (const state of states) {
-        for (const file of state.plan.files) lastClaim.set(file.path, state);
+      // The batch chains entry additions internally and returns one final
+      // entry source; the group re-emits it as its own single claim.
+      let composed = entry.css;
+      const plannedEntry = plan.files.findIndex((file) => file.path === entry.path);
+      if (plannedEntry >= 0) {
+        if (!groupWritable) {
+          throw new Error(`The planner claimed an unwritable Tailwind entry: ${entry.path}`);
+        }
+        composed = plan.files[plannedEntry].source;
+        plan.files.splice(plannedEntry, 1);
+        if (!composed.startsWith(entry.css)) {
+          throw new Error(
+            `The planner rewrote the Tailwind entry instead of appending: ${entry.path}`,
+          );
+        }
       }
-      for (const state of states) {
-        state.plan.files = state.plan.files.filter((file) => lastClaim.get(file.path) === state);
-      }
-      // HTML link removals compose the same way: every member's unlinked
-      // stylesheets strip their links from the page's final composed
-      // source, which stays claimed by exactly one member.
-      removeGroupHtmlLinks(states);
 
       const currentExtraction = names !== undefined ? { names, generated } : undefined;
-      const used: { key: string; name: string }[] = [];
-      if (currentExtraction) {
-        // First-use order inside each member's rules carries the cascade
-        // proof; member order is only a deterministic tiebreaker.
-        const seen = new Set<string>();
-        for (const state of states) {
-          for (const definition of usedGeneratedDefinitions(currentExtraction, state.plan)) {
-            if (!seen.has(definition.name)) {
-              seen.add(definition.name);
-              used.push(definition);
-            }
-          }
-        }
-      }
+      const used = currentExtraction ? usedGeneratedDefinitions(currentExtraction, plan) : [];
       augmented = currentExtraction ? appendMediaDefinitions(composed, used) : composed;
+      let system: DesignSystem;
       try {
         system = augmented === entry.css ? entry.designSystem : await entry.loadWith(augmented);
       } catch (error) {
         if (isIntegrityError(error)) throw error;
         // Isolate generated definitions before declaring the composed base
-        // invalid: fall every generated condition back to its arbitrary form
-        // and replan. A failure with no generated definition left comes from
-        // the composed base or another planner defect and is fatal.
+        // invalid: fall every generated condition back to its arbitrary
+        // form and replan. A failure with no generated definition left
+        // comes from the composed base or another planner defect.
         if (names !== undefined && generated.length > 0) {
           const generatedKeys = new Set(generated.map((definition) => definition.key));
           names = Object.fromEntries(
@@ -1018,9 +1012,6 @@ async function planPreparedGroup(
           generated = [];
           continue planning;
         }
-        // The failure comes from the composed base rather than an
-        // extractable definition; it affects every package sharing the
-        // entry, so the whole group is skipped under the force policy.
         return recoverGroup(error);
       }
       if (currentExtraction && names !== undefined) {
@@ -1040,78 +1031,67 @@ async function planPreparedGroup(
       }
 
       // A candidate Tailwind refuses to compile retains its owning rule(s)
-      // instead of aborting the run: block those rules and replan until every
-      // applied candidate compiles. Replanning any member rebuilds the whole
-      // composition from the shared snapshot, so no moved block survives for
-      // a rule that is no longer migrated.
+      // instead of aborting the run: block those rules and replan until
+      // every applied candidate compiles.
       const replanSystem = currentExtraction ? system : entry.designSystem;
-      let progressed = false;
-      for (const state of states) {
-        const failing = invalidCandidates(replanSystem, state.plan.candidates);
-        if (failing.length === 0) continue;
-        let blocked = blockedByMember.get(state.prepared);
-        if (!blocked) blockedByMember.set(state.prepared, (blocked = new Map()));
-        if (accumulateBlockedRules(blocked, state.plan, failing)) progressed = true;
-        else throw new Error(`Tailwind did not generate CSS for candidate: ${failing[0]}`);
+      const failing = invalidCandidates(replanSystem, plan.candidates);
+      if (failing.length > 0) {
+        if (!accumulateBlockedRules(blocked, plan, failing)) {
+          throw new Error(`Tailwind did not generate CSS for candidate: ${failing[0]}`);
+        }
+        continue planning;
       }
-      if (progressed) continue planning;
       break;
     }
-    return undefined;
-  };
 
-  {
-    const early = await replanGroup();
-    if (early) return early;
-  }
-
-  // Finalization can still fail recoverably under force (for example a
-  // missing preprocessor discovered during post-edit verification). A
-  // failed member's definitions and moved blocks are already part of the
-  // composed entry, so the composition is rebuilt without that member
-  // before the entry edit is emitted; the loop is bounded by the member
-  // count.
-  finalization: for (;;) {
-    const finished: PlanResult[] = [];
-    for (const state of states) {
-      const blocked = blockedByMember.get(state.prepared);
-      if (blocked) {
-        for (const [index, rules] of blocked) {
-          const cssPath = state.request.stylesheets[index].cssPath;
-          for (const { authoredSpan, candidates } of rules.values()) {
-            const failed = [...candidates]
-              .sort()
-              .map((candidate) => `\`${candidate}\``)
-              .join(", ");
-            state.plan.warnings.push({
-              code: "candidate-compilation-failure",
-              file: cssPath,
-              // ruleId is a compiled-domain span; warnings anchor to the
-              // authored file.
-              start: authoredSpan.start,
-              end: authoredSpan.end,
-              message: `Tailwind did not generate CSS for ${failed}, so the rule is retained.`,
-            });
-          }
-        }
+    for (const [index, rules] of blocked) {
+      const cssPath = sheets[index].stylesheet.cssPath;
+      for (const { authoredSpan, candidates } of rules.values()) {
+        const failed = [...candidates]
+          .sort()
+          .map((candidate) => `\`${candidate}\``)
+          .join(", ");
+        plan.warnings.push({
+          code: "candidate-compilation-failure",
+          file: cssPath,
+          // ruleId is a compiled-domain span; warnings anchor to the
+          // authored file.
+          start: authoredSpan.start,
+          end: authoredSpan.end,
+          message: `Tailwind did not generate CSS for ${failed}, so the rule is retained.`,
+        });
       }
-      // Identical group-level warnings deduplicate in the merged report.
-      state.plan.warnings.push(...mediaWarnings);
-      state.plan.warnings.push(...state.prepared.warnings);
-      const result = await finishMemberPlan(context, state.prepared, state.plan);
-      if (result.failure) {
-        results.push(result);
-        active = active.filter((member) => member !== state.prepared);
-        if (active.length === 0) return results;
-        const early = await replanGroup();
-        if (early) return early;
-        continue finalization;
-      }
-      finished.push(result);
     }
-    results.push(...finished);
-    break;
+    plan.warnings.push(...mediaWarnings);
+    for (const member of active) plan.warnings.push(...member.warnings);
+    removeGroupHtmlLinks(plan, active);
+
+    // Finalization can still fail recoverably under force (for example a
+    // missing preprocessor discovered during post-edit verification). The
+    // failed file's owning member is dropped and the group replans from
+    // the snapshot, bounded by the member count.
+    const failure = await finishGroupPlan(context, active, plan);
+    if (failure === undefined) break;
+    if (!options.force || failure.fatal) throw failure.error;
+    const failed = failure.member ?? active[0];
+    results.push({ failure: packageFailure(workspaceRoot, failed.packageRoot, failure.error) });
+    active = active.filter((member) => member !== failed);
+    if (active.length === 0) return results;
+    blocked.clear();
+    plan.warnings = [];
+    continue finalization;
   }
+
+  // Duplicated preparation warnings from members sharing a foreign page
+  // collapse inside the single group plan.
+  const seenWarnings = new Set<string>();
+  plan.warnings = plan.warnings.filter((warning) => {
+    const key = `${warning.code}\0${warning.file}\0${warning.start}\0${warning.end}\0${warning.message}`;
+    if (seenWarnings.has(key)) return false;
+    seenWarnings.add(key);
+    return true;
+  });
+  results.push({ plan });
 
   if (augmented !== entry.css) {
     results.push({
@@ -1205,118 +1185,154 @@ function atRuleIdentities(css: string): string[] {
 
 // The per-member planning tail: HTML link removal, planned-source
 // verification, and preprocessor recompilation checks.
-async function finishMemberPlan(
-  context: MigrationContext,
-  prepared: PreparedPackage,
-  plan: Plan,
-): Promise<PlanResult> {
-  const { options, workspaceRoot, snapshots } = context;
-  const { packageRoot, preparedHtml, preparedVue, styleCompilers, stylesheets } = prepared;
-  const recover = (error: unknown, fatal = false): PlanResult => {
-    if (!options.force || fatal) throw error;
-    return { failure: packageFailure(workspaceRoot, packageRoot, error) };
-  };
+interface GroupFinishFailure {
+  error: unknown;
+  /// The member whose file or stylesheet failed, when attributable.
+  member?: PreparedPackage;
+  fatal: boolean;
+}
 
-  plan.warnings.push(...preparedHtml.warnings);
-  plan.warnings.push(...preparedVue.warnings);
+// The group planning tail: preparation warnings, planned-source
+// verification, and preprocessor recompilation checks over the single
+// group plan. Failures attribute to the owning member so force can drop
+// it and replan the rest.
+async function finishGroupPlan(
+  context: MigrationContext,
+  members: PreparedPackage[],
+  plan: Plan,
+): Promise<GroupFinishFailure | undefined> {
+  const { snapshots } = context;
+  const membersByRoot = new Map(members.map((member) => [member.packageRoot, member]));
+  const ownerOf = (path: string): PreparedPackage | undefined => {
+    const root = context.pathOwners.get(path);
+    return root === undefined ? undefined : membersByRoot.get(root);
+  };
+  for (const member of members) {
+    plan.warnings.push(...member.preparedHtml.warnings);
+    plan.warnings.push(...member.preparedVue.warnings);
+  }
   try {
     for (const file of plan.files.filter((file) => extname(file.path) === ".html")) {
-      parseHtmlSource(file.path, file.source);
+      try {
+        parseHtmlSource(file.path, file.source);
+      } catch (error) {
+        // The original page parsed during preparation, so a planned source
+        // that does not is an invalid plan: fatal even under force.
+        return { error, member: ownerOf(file.path), fatal: true };
+      }
     }
     for (const file of plan.files.filter((file) => extname(file.path) === ".vue")) {
-      const vueCompiler = preparedVue.compiler;
+      const owner = ownerOf(file.path);
+      const preparedVue = owner?.preparedVue ?? members[0].preparedVue;
+      const vueCompiler = preparedVue.compiler ?? members[0].preparedVue.compiler;
       if (!vueCompiler) throw new Error(`No Vue compiler is available to verify ${file.path}`);
-      const includeUnscoped = preparedVue.unscopedPaths.has(file.path);
-      const blocks = verifyVueSource(vueCompiler, file.path, file.source, includeUnscoped);
-      // Blocks the migration never edited are byte-identical to the authored
-      // input and need no recompilation; a caller that only received a
-      // template edit must not suddenly require a preprocessor.
-      const untouched = new Map<string, number>();
-      for (const block of verifyVueSource(
-        vueCompiler,
-        file.path,
-        snapshots.get(file.path) ?? "",
-        includeUnscoped,
-      )) {
-        const key = `${block.syntax}\0${block.content}`;
-        untouched.set(key, (untouched.get(key) ?? 0) + 1);
-      }
-      for (const [index, block] of blocks.entries()) {
-        const key = `${block.syntax}\0${block.content}`;
-        const remaining = untouched.get(key) ?? 0;
-        if (remaining > 0) {
-          untouched.set(key, remaining - 1);
-          continue;
+      try {
+        const includeUnscoped = preparedVue.unscopedPaths.has(file.path);
+        const blocks = verifyVueSource(vueCompiler, file.path, file.source, includeUnscoped);
+        // Blocks the migration never edited are byte-identical to the
+        // authored input and need no recompilation; a caller that only
+        // received a template edit must not suddenly require a
+        // preprocessor.
+        const untouched = new Map<string, number>();
+        for (const block of verifyVueSource(
+          vueCompiler,
+          file.path,
+          snapshots.get(file.path) ?? "",
+          includeUnscoped,
+        )) {
+          const key = `${block.syntax}\0${block.content}`;
+          untouched.set(key, (untouched.get(key) ?? 0) + 1);
         }
-        if (block.syntax === "css") {
-          validateCss(block.content);
-        } else {
+        for (const [index, block] of blocks.entries()) {
+          const key = `${block.syntax}\0${block.content}`;
+          const remaining = untouched.get(key) ?? 0;
+          if (remaining > 0) {
+            untouched.set(key, remaining - 1);
+            continue;
+          }
+          if (block.syntax === "css") {
+            validateCss(block.content);
+          } else {
+            const compilerOwner = owner ?? members[0];
+            validateCss(
+              (
+                await compileStyleEntry(
+                  compilerOwner.styleCompilers,
+                  compilerOwner.packageRoot,
+                  `${file.path}.${index}.${block.syntax}`,
+                  block.content,
+                  { virtualEntry: true },
+                )
+              ).css,
+            );
+          }
+        }
+      } catch (error) {
+        return { error, member: owner, fatal: !isMissingStyleCompilerError(error) };
+      }
+    }
+    for (const member of members) {
+      for (const stylesheet of member.stylesheets.filter((stylesheet) =>
+        isPreprocessorPath(stylesheet.cssPath),
+      )) {
+        const changed = plan.files.find((file) => file.path === stylesheet.cssPath);
+        if (!changed && !plan.deletedFiles.includes(stylesheet.cssPath)) continue;
+        const source = changed?.source ?? "";
+        try {
           validateCss(
             (
               await compileStyleEntry(
-                styleCompilers,
-                packageRoot,
-                `${file.path}.${index}.${block.syntax}`,
-                block.content,
-                { virtualEntry: true },
+                member.styleCompilers,
+                member.packageRoot,
+                stylesheet.cssPath,
+                source,
               )
             ).css,
           );
+        } catch (error) {
+          return { error, member, fatal: !isMissingStyleCompilerError(error) };
         }
       }
     }
-    for (const stylesheet of stylesheets.filter((stylesheet) =>
-      isPreprocessorPath(stylesheet.cssPath),
-    )) {
-      const changed = plan.files.find((file) => file.path === stylesheet.cssPath);
-      if (!changed && !plan.deletedFiles.includes(stylesheet.cssPath)) continue;
-      const source = changed?.source ?? "";
-      validateCss(
-        (await compileStyleEntry(styleCompilers, packageRoot, stylesheet.cssPath, source)).css,
-      );
-    }
   } catch (error) {
-    return recover(error, !isMissingStyleCompilerError(error));
+    return { error, fatal: !isMissingStyleCompilerError(error) };
   }
-  return { plan };
+  return undefined;
 }
 
-function removeGroupHtmlLinks(states: MemberState[]): void {
-  const claimants = new Map<string, { state: MemberState; file: SourceFile }>();
-  for (const state of states) {
-    for (const file of state.plan.files) claimants.set(file.path, { state, file });
-  }
-  for (const state of states) {
-    const unlinked = new Set(state.plan.unlinkedFiles);
-    const linksByFile = new Map<string, Set<string>>();
-    for (const link of state.prepared.preparedHtml.removableLinks) {
+// Every member's unlinked stylesheets strip their links from the page's
+// final composed source inside the single group plan.
+function removeGroupHtmlLinks(plan: Plan, members: PreparedPackage[]): void {
+  const unlinked = new Set(plan.unlinkedFiles);
+  const linksByFile = new Map<string, Set<string>>();
+  const originals = new Map<string, string>();
+  for (const member of members) {
+    for (const link of member.preparedHtml.removableLinks) {
       if (!unlinked.has(link.cssPath)) continue;
       const links = linksByFile.get(link.filePath) ?? new Set();
       links.add(`${link.href}\0${link.media}`);
       linksByFile.set(link.filePath, links);
     }
-
-    for (const [filePath, removable] of linksByFile) {
-      const claimed = claimants.get(filePath);
-      const original = state.prepared.preparedHtml.files.find((file) => file.path === filePath);
-      const source = claimed?.file.source ?? original?.source;
-      if (source === undefined) continue;
-      const links = parseHtmlSource(filePath, source)
-        .links.filter((link) => removable.has(`${link.href}\0${link.media}`))
-        .sort((left, right) => right.tagStart - left.tagStart);
-      let bytes = Buffer.from(source);
-      for (const link of links) {
-        bytes = Buffer.concat([bytes.subarray(0, link.tagStart), bytes.subarray(link.tagEnd)]);
-      }
-      const updated = bytes.toString();
-      if (updated === source) continue;
-      if (claimed) claimed.file.source = updated;
-      else {
-        const file = { path: filePath, source: updated };
-        state.plan.files.push(file);
-        claimants.set(filePath, { state, file });
-      }
+    for (const file of member.preparedHtml.files) {
+      if (!originals.has(file.path)) originals.set(file.path, file.source);
     }
+  }
+
+  for (const [filePath, removable] of linksByFile) {
+    const planned = plan.files.find((file) => file.path === filePath);
+    const source = planned?.source ?? originals.get(filePath);
+    if (source === undefined) continue;
+    const links = parseHtmlSource(filePath, source)
+      .links.filter((link) => removable.has(`${link.href}\0${link.media}`))
+      .sort((left, right) => right.tagStart - left.tagStart);
+    let bytes = Buffer.from(source);
+    for (const link of links) {
+      bytes = Buffer.concat([bytes.subarray(0, link.tagStart), bytes.subarray(link.tagEnd)]);
+    }
+    const updated = bytes.toString();
+    if (updated === source) continue;
+    if (planned) planned.source = updated;
+    else plan.files.push({ path: filePath, source: updated });
   }
 }
 

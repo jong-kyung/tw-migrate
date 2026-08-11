@@ -23,6 +23,7 @@ snapshot_cases! {
     style_dynamic_global_warning => default_setup,
     style_eof => default_setup,
     style_explicit_selection => default_setup,
+    style_media_extraction => default_setup,
     style_extension_references => default_setup,
     style_functional_spacing => default_setup,
     style_global_classes_ids => default_setup,

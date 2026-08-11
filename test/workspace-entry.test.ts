@@ -200,7 +200,7 @@ test("composes edits when one component consumes two members' stylesheets", asyn
     "globals.css": '@import "tailwindcss";\n',
     "shared.module.css": ".frame { margin: 7px; }\n",
     "main.tsx": "import './globals.css';\n",
-    ...app("app"),
+    ...app("app", ".button { padding: 13px; }\n"),
   });
   // The child component consumes the root-owned module and its own module,
   // so both members edit the same file and the group must compose the
@@ -257,7 +257,7 @@ test("composes html link removals across members on one page", async () => {
   // must compose into one final claim instead of aborting the merge.
   const html = await readFile(join(cwd, "packages/site/index.html"), "utf8");
   expect(html).toContain('<head><link rel="stylesheet" href="../../globals.css"></head>');
-  expect(html).toMatch(/class="rootbox appbox p-\[13px\] m-\[7px\]"/);
+  expect(html).toMatch(/class="rootbox appbox m-\[7px\] p-\[13px\]"/);
   expect(report.failures).toEqual([]);
 });
 
@@ -484,4 +484,20 @@ test("same-named modules across packages keep distinct keyframe scopes", async (
   const entry = await readFile(join(cwd, "globals.css"), "utf8");
   expect(entry.match(/@keyframes tw-migrate-[0-9a-f]+-fade/g)).toHaveLength(2);
   expect(report.failures).toEqual([]);
+});
+
+test("attributes malformed inputs with extraction disabled", async () => {
+  const cwd = await workspace({
+    "package.json": '{"private":true}',
+    "globals.css": '@import "tailwindcss";\n',
+    "Button.module.css": ".broken { color: red }}}\n",
+    "Button.tsx":
+      "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n",
+  });
+  const report = await migrate({ cwd, extractMediaQueries: false, force: true, write: true });
+
+  // The collection pass runs for isolation even when extraction is off,
+  // so the malformed stylesheet stays a package-attributed failure.
+  expect(report.failures).toHaveLength(1);
+  expect(await readFile(join(cwd, "Button.module.css"), "utf8")).toContain(".broken");
 });
