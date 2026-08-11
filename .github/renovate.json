@@ -6,53 +6,108 @@
     ":timezone(Asia/Seoul)",
     "helpers:pinGitHubActionDigestsToSemver"
   ],
-  "schedule": ["before 9am on monday"],
+  "schedule": [
+    "before 9am on monday"
+  ],
   "prConcurrentLimit": 5,
   "prHourlyLimit": 2,
-  "labels": ["dependencies"],
+  "labels": [
+    "dependencies"
+  ],
   "rangeStrategy": "bump",
   "minimumReleaseAge": "3 days",
-  "postUpdateOptions": ["pnpmDedupe"],
+  "postUpdateOptions": [
+    "pnpmDedupe"
+  ],
   "lockFileMaintenance": {
     "enabled": true,
-    "schedule": ["before 9am on monday"]
+    "schedule": [
+      "before 9am on monday"
+    ]
   },
   "packageRules": [
     {
-      "matchDepNames": ["node"],
-      "matchUpdateTypes": ["major"],
+      "matchDepNames": [
+        "node"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
       "enabled": false
     },
     {
       "groupName": "napi-rs",
-      "matchPackageNames": ["napi", "napi-derive", "napi-build", "@napi-rs/cli"]
+      "matchPackageNames": [
+        "napi",
+        "napi-derive",
+        "napi-build",
+        "@napi-rs/cli"
+      ]
     },
     {
       "groupName": "oxc",
-      "matchManagers": ["cargo"],
-      "matchPackageNames": ["/^oxc/"]
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchPackageNames": [
+        "/^oxc/"
+      ]
     },
     {
       "groupName": "github-actions",
-      "matchManagers": ["github-actions"]
+      "matchManagers": [
+        "github-actions"
+      ]
     },
     {
       "groupName": "npm devDependencies (non-major)",
-      "matchManagers": ["npm"],
-      "matchDepTypes": ["devDependencies", "catalog"],
-      "matchUpdateTypes": ["patch", "minor"]
+      "matchManagers": [
+        "npm"
+      ],
+      "matchDepTypes": [
+        "devDependencies",
+        "catalog"
+      ],
+      "matchUpdateTypes": [
+        "patch",
+        "minor"
+      ]
     },
     {
       "groupName": "pnpm package manager",
-      "matchManagers": ["npm"],
-      "matchDepTypes": ["packageManager"],
-      "matchDepNames": ["pnpm"],
-      "schedule": ["before 10am on the first day of the month"]
+      "matchManagers": [
+        "npm"
+      ],
+      "matchDepTypes": [
+        "packageManager"
+      ],
+      "matchDepNames": [
+        "pnpm"
+      ],
+      "schedule": [
+        "before 10am on the first day of the month"
+      ]
     },
     {
-      "matchManagers": ["cargo"],
-      "matchUpdateTypes": ["major"],
-      "addLabels": ["cargo-major"]
+      "groupName": "vite-plus",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchPackageNames": [
+        "vite-plus",
+        "@voidzero-dev/vite-plus-*"
+      ]
+    },
+    {
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "addLabels": [
+        "cargo-major"
+      ]
     }
   ],
   "customManagers": [
