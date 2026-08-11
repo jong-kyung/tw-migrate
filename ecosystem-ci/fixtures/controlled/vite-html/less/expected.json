@@ -1,9 +1,10 @@
 {
   "first": {
     "changedFiles": [
-      "index.html"
+      "index.html",
+      "src/tailwind.css"
     ],
-    "diff": "--- a/index.html\n+++ b/index.html\n@@ -1,8 +1,8 @@\n-<!doctype html>\n-<html lang=\"en\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><link rel=\"stylesheet\" href=\"/src/tailwind.css\"><link rel=\"stylesheet\" href=\"/src/style.less\"><title>Ecosystem fixture</title></head>\n-<body><main>\n-  <article class=\"card\" data-probe=\"card\" data-identity=\"card\">Card</article>\n-  <button class=\"action\" data-identity=\"action\">Toggle details</button>\n-  <section class=\"responsive\" data-probe=\"responsive-layout\" data-identity=\"responsive\">Responsive</section>\n-</main></body></html>\n \n+<!doctype html>\n+<html lang=\"en\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><link rel=\"stylesheet\" href=\"/src/tailwind.css\"><link rel=\"stylesheet\" href=\"/src/style.less\"><title>Ecosystem fixture</title></head>\n+<body><main>\n+  <article class=\"card hover:bg-[#d2dce6] p-[13px] text-[#141e28]\" data-probe=\"card\" data-identity=\"card\">Card</article>\n+  <button class=\"action focus-visible:[outline-offset:3px] focus:[outline:2px_solid_#1e5a96]\" data-identity=\"action\">Toggle details</button>\n+  <section class=\"responsive [@media_(min-width:700px)]:w-[200px] w-[100px]\" data-probe=\"responsive-layout\" data-identity=\"responsive\">Responsive</section>\n+</main></body></html>\n \n",
+    "diff": "--- a/index.html\n+++ b/index.html\n@@ -1,8 +1,8 @@\n-<!doctype html>\n-<html lang=\"en\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><link rel=\"stylesheet\" href=\"/src/tailwind.css\"><link rel=\"stylesheet\" href=\"/src/style.less\"><title>Ecosystem fixture</title></head>\n-<body><main>\n-  <article class=\"card\" data-probe=\"card\" data-identity=\"card\">Card</article>\n-  <button class=\"action\" data-identity=\"action\">Toggle details</button>\n-  <section class=\"responsive\" data-probe=\"responsive-layout\" data-identity=\"responsive\">Responsive</section>\n-</main></body></html>\n \n+<!doctype html>\n+<html lang=\"en\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><link rel=\"stylesheet\" href=\"/src/tailwind.css\"><link rel=\"stylesheet\" href=\"/src/style.less\"><title>Ecosystem fixture</title></head>\n+<body><main>\n+  <article class=\"card hover:bg-[#d2dce6] p-[13px] text-[#141e28]\" data-probe=\"card\" data-identity=\"card\">Card</article>\n+  <button class=\"action focus-visible:[outline-offset:3px] focus:[outline:2px_solid_#1e5a96]\" data-identity=\"action\">Toggle details</button>\n+  <section class=\"responsive w-[100px] width-gte-700px:w-[200px]\" data-probe=\"responsive-layout\" data-identity=\"responsive\">Responsive</section>\n+</main></body></html>\n \n--- a/src/tailwind.css\n+++ b/src/tailwind.css\n@@ -1,2 +1,8 @@\n-@import \"tailwindcss\";\n \n+@import \"tailwindcss\";\n+\n+@custom-variant width-gte-700px {\n+  @media (width >= 700px) {\n+    @slot;\n+  }\n+}\n \n",
     "convertedRules": 0,
     "retainedRules": 6,
     "rules": [
@@ -92,7 +93,7 @@
         "selector": ".responsive",
         "status": "retained",
         "candidates": [
-          "[@media_(min-width:700px)]:w-[200px]"
+          "width-gte-700px:w-[200px]"
         ],
         "file": "src/style.less",
         "ruleId": {
@@ -106,13 +107,13 @@
       }
     ],
     "candidates": [
-      "[@media_(min-width:700px)]:w-[200px]",
       "focus-visible:[outline-offset:3px]",
       "focus:[outline:2px_solid_#1e5a96]",
       "hover:bg-[#d2dce6]",
       "p-[13px]",
       "text-[#141e28]",
-      "w-[100px]"
+      "w-[100px]",
+      "width-gte-700px:w-[200px]"
     ],
     "warnings": [
       {
@@ -184,8 +185,9 @@
     ],
     "failures": []
   },
-  "source": ".card {\n  padding: 13px;\n  color: rgb(20, 30, 40);\n}\n.card:hover {\n  background-color: rgb(210, 220, 230);\n}\n.action:focus {\n  outline: 2px solid rgb(30, 90, 150);\n}\n.action:focus-visible {\n  outline-offset: 3px;\n}\n.responsive {\n  width: 100px;\n}\n@media (min-width: 700px) {\n  .responsive {\n    width: 200px;\n  }\n}\n",
   "changedFiles": {
-    "index.html": "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><link rel=\"stylesheet\" href=\"/src/tailwind.css\"><link rel=\"stylesheet\" href=\"/src/style.less\"><title>Ecosystem fixture</title></head>\n<body><main>\n  <article class=\"card hover:bg-[#d2dce6] p-[13px] text-[#141e28]\" data-probe=\"card\" data-identity=\"card\">Card</article>\n  <button class=\"action focus-visible:[outline-offset:3px] focus:[outline:2px_solid_#1e5a96]\" data-identity=\"action\">Toggle details</button>\n  <section class=\"responsive [@media_(min-width:700px)]:w-[200px] w-[100px]\" data-probe=\"responsive-layout\" data-identity=\"responsive\">Responsive</section>\n</main></body></html>\n"
-  }
+    "index.html": "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><link rel=\"stylesheet\" href=\"/src/tailwind.css\"><link rel=\"stylesheet\" href=\"/src/style.less\"><title>Ecosystem fixture</title></head>\n<body><main>\n  <article class=\"card hover:bg-[#d2dce6] p-[13px] text-[#141e28]\" data-probe=\"card\" data-identity=\"card\">Card</article>\n  <button class=\"action focus-visible:[outline-offset:3px] focus:[outline:2px_solid_#1e5a96]\" data-identity=\"action\">Toggle details</button>\n  <section class=\"responsive w-[100px] width-gte-700px:w-[200px]\" data-probe=\"responsive-layout\" data-identity=\"responsive\">Responsive</section>\n</main></body></html>\n",
+    "src/tailwind.css": "@import \"tailwindcss\";\n\n@custom-variant width-gte-700px {\n  @media (width >= 700px) {\n    @slot;\n  }\n}\n"
+  },
+  "source": ".card {\n  padding: 13px;\n  color: rgb(20, 30, 40);\n}\n.card:hover {\n  background-color: rgb(210, 220, 230);\n}\n.action:focus {\n  outline: 2px solid rgb(30, 90, 150);\n}\n.action:focus-visible {\n  outline-offset: 3px;\n}\n.responsive {\n  width: 100px;\n}\n@media (min-width: 700px) {\n  .responsive {\n    width: 200px;\n  }\n}\n"
 }

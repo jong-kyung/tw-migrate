@@ -2102,6 +2102,197 @@
       }
     },
     {
+      "id": "media-components",
+      "kind": "controlled",
+      "runtime": "react-vite",
+      "style": "css",
+      "fixture": "media-components",
+      "scope": "package",
+      "source": {
+        "path": "src/Card.module.css",
+        "before": ".card",
+        "after": "width-lte-700px:w-[80px]"
+      },
+      "probes": {
+        "card-narrow": {
+          "route": "/",
+          "viewport": {
+            "width": 600,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Ready"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "data",
+            "value": "card"
+          },
+          "cardinality": 1,
+          "identity": ["card"]
+        },
+        "card-wide": {
+          "route": "/",
+          "viewport": {
+            "width": 1280,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Ready"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "data",
+            "value": "card"
+          },
+          "cardinality": 1,
+          "identity": ["card"]
+        }
+      }
+    },
+    {
+      "id": "media-stacked",
+      "kind": "controlled",
+      "runtime": "react-vite",
+      "style": "css",
+      "fixture": "media-stacked",
+      "source": {
+        "path": "src/App.module.css",
+        "before": ".panel",
+        "after": "screen:width-gte-900px:landscape:p-[32px]"
+      },
+      "probes": {
+        "panel-landscape": {
+          "route": "/",
+          "viewport": {
+            "width": 1280,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Ready"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "data",
+            "value": "panel"
+          },
+          "cardinality": 1,
+          "identity": ["panel"]
+        },
+        "panel-narrow": {
+          "route": "/",
+          "viewport": {
+            "width": 600,
+            "height": 900
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Ready"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "data",
+            "value": "panel"
+          },
+          "cardinality": 1,
+          "identity": ["panel"]
+        },
+        "panel-portrait-wide": {
+          "route": "/",
+          "viewport": {
+            "width": 900,
+            "height": 1400
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Ready"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "data",
+            "value": "panel"
+          },
+          "cardinality": 1,
+          "identity": ["panel"]
+        }
+      }
+    },
+    {
+      "id": "media-workspace",
+      "kind": "controlled",
+      "runtime": "react-vite",
+      "style": "css",
+      "fixture": "media-workspace",
+      "scope": "workspaces",
+      "source": {
+        "path": "packages/app/src/Card.module.css",
+        "before": ".card",
+        "after": "width-lte-700px:m-[7px]"
+      },
+      "probes": {
+        "card-narrow": {
+          "route": "/",
+          "viewport": {
+            "width": 600,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Ready"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "data",
+            "value": "card"
+          },
+          "cardinality": 1,
+          "identity": ["card"]
+        },
+        "card-wide": {
+          "route": "/",
+          "viewport": {
+            "width": 1280,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Ready"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "data",
+            "value": "card"
+          },
+          "cardinality": 1,
+          "identity": ["card"]
+        }
+      }
+    },
+    {
       "id": "production-react-vite-css",
       "kind": "smoke",
       "fixture": "react-vite-css"

@@ -38,6 +38,12 @@ export interface ControlledProject {
   kind: "controlled";
   runtime: (typeof controlledRuntimes)[number];
   style: (typeof controlledStyles)[number];
+  /** Fixture subpath under fixtures/controlled, when the case does not
+   * live in the runtime/style matrix cell. */
+  fixture?: string;
+  /** How the migration runs: one stylesheet by default, the whole
+   * package, or the workspace. */
+  scope?: "package" | "workspaces";
   source: ProjectSource;
   probes: Record<string, Probe>;
 }

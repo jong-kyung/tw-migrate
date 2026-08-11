@@ -1,0 +1,11 @@
+.panel {
+  padding: 4px;
+}
+@media screen and (min-width: 900px) and (orientation: landscape) {
+  .panel {
+    padding: 32px;
+  }
+}
+.retained {
+  display: block;
+}

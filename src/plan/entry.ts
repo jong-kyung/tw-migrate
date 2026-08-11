@@ -522,6 +522,11 @@ export function proveSharedEntry(options: SharedEntryProofOptions): SharedEntryP
   const inboundSeeds: string[] = [];
   for (const file of options.packageSources) {
     if (options.owned(file.path) || extname(file.path) === ".html") continue;
+    // A foreign file that itself unconditionally loads the shared entry
+    // provides an entry-covered flow: the natural monorepo composition
+    // where the root application imports the entry and the child's
+    // components exposes nothing. Deeper foreign chains stay conservative.
+    if (importsEntry(file, options.entry)) continue;
     for (const record of sourceImports(file)) {
       if (record.typeOnly) continue;
       const resolved = resolveInbound(dirname(file.path), record.specifier);

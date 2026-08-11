@@ -1,0 +1,11 @@
+.badge {
+  padding: 5px;
+}
+@media (max-width: 700px) {
+  .badge {
+    margin: 3px;
+  }
+}
+.retained {
+  display: block;
+}

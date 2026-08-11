@@ -1,0 +1,86 @@
+{
+  "first": {
+    "changedFiles": [
+      "src/App.jsx",
+      "src/App.module.css",
+      "src/tailwind.css"
+    ],
+    "diff": "--- a/src/App.jsx\n+++ b/src/App.jsx\n@@ -1,9 +1,9 @@\n-import styles from './App.module.css';\n-\n-export default function App() {\n-  return <main>\n-    <section className={styles.panel} data-probe=\"panel\" data-identity=\"panel\">Panel</section>\n-    <button data-identity=\"ready\">Ready</button>\n-  </main>;\n-}\n \n+import styles from './App.module.css';\n+\n+export default function App() {\n+  return <main>\n+    <section className=\"p-[4px] screen:width-gte-900px:landscape:p-[32px]\" data-probe=\"panel\" data-identity=\"panel\">Panel</section>\n+    <button data-identity=\"ready\">Ready</button>\n+  </main>;\n+}\n \n--- a/src/App.module.css\n+++ b/src/App.module.css\n@@ -1,12 +1,6 @@\n-.panel {\n-  padding: 4px;\n-}\n-@media screen and (min-width: 900px) and (orientation: landscape) {\n-  .panel {\n-    padding: 32px;\n-  }\n-}\n-.retained {\n-  display: block;\n-}\n \n+\n+\n+.retained {\n+  display: block;\n+}\n \n--- a/src/tailwind.css\n+++ b/src/tailwind.css\n@@ -1,2 +1,14 @@\n-@import \"tailwindcss\";\n \n+@import \"tailwindcss\";\n+\n+@custom-variant screen {\n+  @media screen {\n+    @slot;\n+  }\n+}\n+\n+@custom-variant width-gte-900px {\n+  @media (width >= 900px) {\n+    @slot;\n+  }\n+}\n \n",
+    "convertedRules": 2,
+    "retainedRules": 1,
+    "rules": [
+      {
+        "selector": ".panel",
+        "status": "converted",
+        "candidates": [
+          "p-[4px]"
+        ],
+        "file": "src/App.module.css",
+        "ruleId": {
+          "start": 0,
+          "end": 26
+        },
+        "authoredSpan": {
+          "start": 0,
+          "end": 26
+        }
+      },
+      {
+        "selector": ".panel",
+        "status": "converted",
+        "candidates": [
+          "screen:width-gte-900px:landscape:p-[32px]"
+        ],
+        "file": "src/App.module.css",
+        "ruleId": {
+          "start": 97,
+          "end": 128
+        },
+        "authoredSpan": {
+          "start": 97,
+          "end": 128
+        }
+      },
+      {
+        "selector": ".retained",
+        "status": "retained",
+        "candidates": [
+          "[display:block]"
+        ],
+        "file": "src/App.module.css",
+        "ruleId": {
+          "start": 131,
+          "end": 162
+        },
+        "authoredSpan": {
+          "start": 131,
+          "end": 162
+        }
+      }
+    ],
+    "candidates": [
+      "p-[4px]",
+      "screen:width-gte-900px:landscape:p-[32px]"
+    ],
+    "warnings": [
+      {
+        "code": "unresolved-selector-target",
+        "file": "src/App.module.css",
+        "start": 131,
+        "end": 162,
+        "message": "No exclusively supported className references were found.",
+        "line": 9,
+        "column": 1,
+        "endLine": 11,
+        "endColumn": 2
+      }
+    ],
+    "failures": []
+  },
+  "changedFiles": {
+    "src/App.jsx": "import styles from './App.module.css';\n\nexport default function App() {\n  return <main>\n    <section className=\"p-[4px] screen:width-gte-900px:landscape:p-[32px]\" data-probe=\"panel\" data-identity=\"panel\">Panel</section>\n    <button data-identity=\"ready\">Ready</button>\n  </main>;\n}\n",
+    "src/App.module.css": "\n\n.retained {\n  display: block;\n}\n",
+    "src/tailwind.css": "@import \"tailwindcss\";\n\n@custom-variant screen {\n  @media screen {\n    @slot;\n  }\n}\n\n@custom-variant width-gte-900px {\n  @media (width >= 900px) {\n    @slot;\n  }\n}\n"
+  },
+  "source": "\n\n.retained {\n  display: block;\n}\n"
+}

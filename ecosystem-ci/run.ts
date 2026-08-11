@@ -216,7 +216,14 @@ function validateExternalStart(value: unknown, label: string): void {
 function validateCommon(project: Unknown, label: string): void {
   nonempty(project.id, `${label}.id`);
   validateSource(project.source, `${label}.source`);
-  validateProbes(project.probes, `${label}.probes`, project.kind === "controlled");
+  // The fixed probe-name matrix belongs to the runtime/style matrix
+  // cells; scenario fixtures declare their own probe set like external
+  // cases do.
+  validateProbes(
+    project.probes,
+    `${label}.probes`,
+    project.kind === "controlled" && !("fixture" in project),
+  );
 }
 
 function validateProject(value: unknown, index: number): void {
@@ -225,13 +232,16 @@ function validateProject(value: unknown, index: number): void {
   if (project.kind === "controlled") {
     exactKeys(
       project,
-      ["id", "kind", "runtime", "style", "source", "probes"],
+      ["id", "kind", "runtime", "style", "fixture", "scope", "source", "probes"],
       ["id", "kind", "runtime", "style", "source", "probes"],
       label,
     );
     if (!runtimes.has(project.runtime as string))
       throw new Error(`${label}.runtime is unsupported`);
     if (!styles.has(project.style as string)) throw new Error(`${label}.style is unsupported`);
+    if ("fixture" in project) nonempty(project.fixture, `${label}.fixture`);
+    if ("scope" in project && project.scope !== "package" && project.scope !== "workspaces")
+      throw new Error(`${label}.scope must be "package" or "workspaces"`);
   } else if (project.kind === "smoke") {
     exactKeys(project, ["id", "kind", "fixture"], ["id", "kind", "fixture"], label);
     nonempty(project.fixture, `${label}.fixture`);
@@ -361,7 +371,7 @@ export function validateManifest(value: unknown): Manifest {
     if (ids.has(project.id)) throw new Error(`duplicate project id ${JSON.stringify(project.id)}`);
     ids.add(project.id);
     if (project.kind === "controlled") {
-      const cell = `${project.runtime}/${project.style}`;
+      const cell = project.fixture ?? `${project.runtime}/${project.style}`;
       if (cells.has(cell))
         throw new Error(`duplicate controlled matrix cell ${JSON.stringify(cell)}`);
       cells.add(cell);

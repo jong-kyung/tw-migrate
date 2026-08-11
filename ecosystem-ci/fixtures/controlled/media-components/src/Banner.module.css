@@ -1,0 +1,11 @@
+.banner {
+  height: 50px;
+}
+@media (max-width: 700px) {
+  .banner {
+    height: 40px;
+  }
+}
+.retained {
+  display: block;
+}

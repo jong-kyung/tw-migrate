@@ -559,8 +559,7 @@ async function prepareDriver(
     "ecosystem-ci",
     "fixtures",
     "controlled",
-    project.runtime,
-    project.style,
+    ...(project.fixture ? [project.fixture] : [project.runtime, project.style]),
   );
   const driverRoot = join(runRoot, "driver");
   try {
@@ -922,7 +921,11 @@ export async function runLifecycle({
       );
       const first = await module.migrate({
         cwd: driverRoot,
-        styleFile: project.source.path,
+        ...(project.scope === "workspaces"
+          ? { workspaces: true }
+          : project.scope === "package"
+            ? {}
+            : { styleFile: project.source.path }),
         write: true,
       });
       await writeFile(
@@ -936,7 +939,11 @@ export async function runLifecycle({
       const treeBeforeSecond = await snapshotMigrationSources(driverRoot);
       const second = await module.migrate({
         cwd: driverRoot,
-        styleFile: project.source.path,
+        ...(project.scope === "workspaces"
+          ? { workspaces: true }
+          : project.scope === "package"
+            ? {}
+            : { styleFile: project.source.path }),
         write: true,
       });
       const treeAfterSecond = await snapshotMigrationSources(driverRoot);

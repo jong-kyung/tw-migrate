@@ -1,0 +1,11 @@
+.card {
+  padding: 13px;
+}
+@media (max-width: 700px) {
+  .card {
+    margin: 7px;
+  }
+}
+.retained {
+  display: block;
+}

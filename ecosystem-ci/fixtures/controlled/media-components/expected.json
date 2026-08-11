@@ -1,0 +1,151 @@
+{
+  "first": {
+    "changedFiles": [
+      "src/Banner.jsx",
+      "src/Banner.module.css",
+      "src/Card.jsx",
+      "src/Card.module.css",
+      "src/tailwind.css"
+    ],
+    "diff": "--- a/src/Banner.jsx\n+++ b/src/Banner.jsx\n@@ -1,6 +1,6 @@\n-import styles from './Banner.module.css';\n-\n-export default function Banner() {\n-  return <aside className={styles.banner} data-probe=\"banner\" data-identity=\"banner\">Banner</aside>;\n-}\n \n+import styles from './Banner.module.css';\n+\n+export default function Banner() {\n+  return <aside className=\"h-[50px] width-lte-700px:h-[40px]\" data-probe=\"banner\" data-identity=\"banner\">Banner</aside>;\n+}\n \n--- a/src/Banner.module.css\n+++ b/src/Banner.module.css\n@@ -1,12 +1,6 @@\n-.banner {\n-  height: 50px;\n-}\n-@media (max-width: 700px) {\n-  .banner {\n-    height: 40px;\n-  }\n-}\n-.retained {\n-  display: block;\n-}\n \n+\n+\n+.retained {\n+  display: block;\n+}\n \n--- a/src/Card.jsx\n+++ b/src/Card.jsx\n@@ -1,6 +1,6 @@\n-import styles from './Card.module.css';\n-\n-export default function Card() {\n-  return <article className={styles.card} data-probe=\"card\" data-identity=\"card\">Card</article>;\n-}\n \n+import styles from './Card.module.css';\n+\n+export default function Card() {\n+  return <article className=\"w-[100px] width-lte-700px:w-[80px]\" data-probe=\"card\" data-identity=\"card\">Card</article>;\n+}\n \n--- a/src/Card.module.css\n+++ b/src/Card.module.css\n@@ -1,12 +1,6 @@\n-.card {\n-  width: 100px;\n-}\n-@media (max-width: 700px) {\n-  .card {\n-    width: 80px;\n-  }\n-}\n-.retained {\n-  display: block;\n-}\n \n+\n+\n+.retained {\n+  display: block;\n+}\n \n--- a/src/tailwind.css\n+++ b/src/tailwind.css\n@@ -1,2 +1,8 @@\n-@import \"tailwindcss\";\n \n+@import \"tailwindcss\";\n+\n+@custom-variant width-lte-700px {\n+  @media (width <= 700px) {\n+    @slot;\n+  }\n+}\n \n",
+    "convertedRules": 4,
+    "retainedRules": 2,
+    "rules": [
+      {
+        "selector": ".banner",
+        "status": "converted",
+        "candidates": [
+          "h-[50px]"
+        ],
+        "file": "src/Banner.module.css",
+        "ruleId": {
+          "start": 0,
+          "end": 27
+        },
+        "authoredSpan": {
+          "start": 0,
+          "end": 27
+        }
+      },
+      {
+        "selector": ".banner",
+        "status": "converted",
+        "candidates": [
+          "width-lte-700px:h-[40px]"
+        ],
+        "file": "src/Banner.module.css",
+        "ruleId": {
+          "start": 58,
+          "end": 89
+        },
+        "authoredSpan": {
+          "start": 58,
+          "end": 89
+        }
+      },
+      {
+        "selector": ".retained",
+        "status": "retained",
+        "candidates": [
+          "[display:block]"
+        ],
+        "file": "src/Banner.module.css",
+        "ruleId": {
+          "start": 92,
+          "end": 123
+        },
+        "authoredSpan": {
+          "start": 92,
+          "end": 123
+        }
+      },
+      {
+        "selector": ".card",
+        "status": "converted",
+        "candidates": [
+          "w-[100px]"
+        ],
+        "file": "src/Card.module.css",
+        "ruleId": {
+          "start": 0,
+          "end": 25
+        },
+        "authoredSpan": {
+          "start": 0,
+          "end": 25
+        }
+      },
+      {
+        "selector": ".card",
+        "status": "converted",
+        "candidates": [
+          "width-lte-700px:w-[80px]"
+        ],
+        "file": "src/Card.module.css",
+        "ruleId": {
+          "start": 56,
+          "end": 84
+        },
+        "authoredSpan": {
+          "start": 56,
+          "end": 84
+        }
+      },
+      {
+        "selector": ".retained",
+        "status": "retained",
+        "candidates": [
+          "[display:block]"
+        ],
+        "file": "src/Card.module.css",
+        "ruleId": {
+          "start": 87,
+          "end": 118
+        },
+        "authoredSpan": {
+          "start": 87,
+          "end": 118
+        }
+      }
+    ],
+    "candidates": [
+      "h-[50px]",
+      "w-[100px]",
+      "width-lte-700px:h-[40px]",
+      "width-lte-700px:w-[80px]"
+    ],
+    "warnings": [
+      {
+        "code": "unresolved-selector-target",
+        "file": "src/Banner.module.css",
+        "start": 92,
+        "end": 123,
+        "message": "No exclusively supported className references were found.",
+        "line": 9,
+        "column": 1,
+        "endLine": 11,
+        "endColumn": 2
+      },
+      {
+        "code": "unresolved-selector-target",
+        "file": "src/Card.module.css",
+        "start": 87,
+        "end": 118,
+        "message": "No exclusively supported className references were found.",
+        "line": 9,
+        "column": 1,
+        "endLine": 11,
+        "endColumn": 2
+      }
+    ],
+    "failures": []
+  },
+  "changedFiles": {
+    "src/Banner.jsx": "import styles from './Banner.module.css';\n\nexport default function Banner() {\n  return <aside className=\"h-[50px] width-lte-700px:h-[40px]\" data-probe=\"banner\" data-identity=\"banner\">Banner</aside>;\n}\n",
+    "src/Banner.module.css": "\n\n.retained {\n  display: block;\n}\n",
+    "src/Card.jsx": "import styles from './Card.module.css';\n\nexport default function Card() {\n  return <article className=\"w-[100px] width-lte-700px:w-[80px]\" data-probe=\"card\" data-identity=\"card\">Card</article>;\n}\n",
+    "src/Card.module.css": "\n\n.retained {\n  display: block;\n}\n",
+    "src/tailwind.css": "@import \"tailwindcss\";\n\n@custom-variant width-lte-700px {\n  @media (width <= 700px) {\n    @slot;\n  }\n}\n"
+  },
+  "source": "\n\n.retained {\n  display: block;\n}\n"
+}

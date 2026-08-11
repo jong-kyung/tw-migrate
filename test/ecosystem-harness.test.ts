@@ -157,6 +157,9 @@ test("admits the complete controlled runtime and stylesheet matrix", async () =>
       ["vite-html-sass", "controlled", "vite-html", "sass"],
       ["vite-html-less", "controlled", "vite-html", "less"],
       ["vue-vite-css", "controlled", "vue-vite", "css"],
+      ["media-components", "controlled", "react-vite", "css"],
+      ["media-stacked", "controlled", "react-vite", "css"],
+      ["media-workspace", "controlled", "react-vite", "css"],
     ],
   );
   assert.deepEqual(
@@ -621,7 +624,7 @@ test("no arguments print usage and --all is the only full-run selection", async 
   assert.throws(() => runHarness([], loaded, () => assert.fail("must not execute")), /Usage:/);
   const calls: string[][] = [];
   const selected = runHarness(["--all"], loaded, (args) => calls.push(args));
-  assert.equal(selected.length, 13);
+  assert.equal(selected.length, 16);
   assert.deepEqual(calls, [
     [
       "run",

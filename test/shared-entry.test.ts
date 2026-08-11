@@ -167,6 +167,18 @@ test("a foreign deep import of a child source exposes its closure", () => {
   expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
 });
 
+test("an entry-loading foreign importer exposes nothing", () => {
+  // The root application both loads the entry and composes the child's
+  // component, which is the natural monorepo topology.
+  const rootMain = file(
+    join(root, "src", "main.tsx"),
+    "import '../globals.css';\nimport { Button } from '../packages/app/Button.tsx';\nexport const render = Button;\n",
+  );
+  const proofs = prove({ packageSources: [loader, consumer, rootMain] });
+
+  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(true);
+});
+
 test("keeps consumers outside child ownership unproven", () => {
   // A sibling package's file consumes the child's stylesheet through a
   // cross-package import and is reachable from the child's loader, but it
