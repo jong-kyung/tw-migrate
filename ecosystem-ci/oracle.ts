@@ -236,15 +236,21 @@ export function assertOracle({
   post,
   withheld,
   candidateTokens,
+  witnessExempt = new Set<string>(),
 }: {
   baseline: CaptureSet;
   post: CaptureSet;
   withheld: CaptureSet;
   candidateTokens: string[];
+  /** Probe names whose elements depend on a stylesheet other than the
+   * witness source; they skip the causal witness but stay in the
+   * baseline-versus-post comparison above. */
+  witnessExempt?: Set<string>;
 }): void {
   assertSameElements(post, baseline, "pre/post computed styles, identity, count, and order");
   assert.ok(candidateTokens.length > 0, "causal witness requires expected candidate tokens");
   for (const [probeName, capture] of Object.entries(baseline)) {
+    if (witnessExempt.has(probeName)) continue;
     // The captures the lifecycle passes are already normalized to standard
     // properties, but the guard stays: assertion inputs are not proven to have
     // passed through normalizeStyleEntries, and a custom-property difference

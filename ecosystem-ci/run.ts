@@ -97,10 +97,13 @@ function validateAction(value: unknown, label: string): void {
 function validateProbe(value: unknown, label: string): void {
   const probe = exactKeys(
     value,
-    ["route", "viewport", "readiness", "selector", "cardinality", "identity", "action"],
+    ["route", "viewport", "readiness", "selector", "cardinality", "identity", "action", "witness"],
     ["route", "viewport", "readiness", "selector", "cardinality", "identity"],
     label,
   );
+  if ("witness" in probe && probe.witness !== false) {
+    throw new Error(`${label}.witness may only be false`);
+  }
   nonempty(probe.route, `${label}.route`);
   validateViewport(probe.viewport, `${label}.viewport`);
   const readiness = exactKeys(
@@ -239,7 +242,10 @@ function validateProject(value: unknown, index: number): void {
     if (!runtimes.has(project.runtime as string))
       throw new Error(`${label}.runtime is unsupported`);
     if (!styles.has(project.style as string)) throw new Error(`${label}.style is unsupported`);
-    if ("fixture" in project) nonempty(project.fixture, `${label}.fixture`);
+    if ("fixture" in project) {
+      nonempty(project.fixture, `${label}.fixture`);
+      validateRelativePath(project.fixture, `${label}.fixture`);
+    }
     if ("scope" in project && project.scope !== "package" && project.scope !== "workspaces")
       throw new Error(`${label}.scope must be "package" or "workspaces"`);
   } else if (project.kind === "smoke") {

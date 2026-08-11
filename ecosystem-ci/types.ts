@@ -22,6 +22,10 @@ export interface Probe {
   cardinality: number;
   identity: string[];
   action?: ProbeAction;
+  /** False exempts the probe from the causal witness: its element depends
+   * on a stylesheet other than the case's witness source, while the
+   * baseline-versus-post comparison still covers it. */
+  witness?: false;
 }
 
 interface ProjectSource {

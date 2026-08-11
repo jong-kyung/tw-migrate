@@ -2289,6 +2289,50 @@
           },
           "cardinality": 1,
           "identity": ["card"]
+        },
+        "badge-narrow": {
+          "route": "/",
+          "viewport": {
+            "width": 600,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Ready"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "data",
+            "value": "badge"
+          },
+          "cardinality": 1,
+          "identity": ["badge"],
+          "witness": false
+        },
+        "badge-wide": {
+          "route": "/",
+          "viewport": {
+            "width": 1280,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Ready"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "data",
+            "value": "badge"
+          },
+          "cardinality": 1,
+          "identity": ["badge"],
+          "witness": false
         }
       }
     },

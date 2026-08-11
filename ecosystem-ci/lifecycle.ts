@@ -991,7 +991,17 @@ export async function runLifecycle({
       await clearGeneratedCaches(driverRoot);
       server = await startServer(project, driverRoot, artifactRoot, "post");
       const post = await capture("post", server.url, "post-captured");
-      assertOracle({ baseline, post, withheld, candidateTokens: expected.first.candidates });
+      assertOracle({
+        baseline,
+        post,
+        withheld,
+        candidateTokens: expected.first.candidates,
+        witnessExempt: new Set(
+          Object.entries(project.probes)
+            .filter(([, probe]) => probe.witness === false)
+            .map(([name]) => name),
+        ),
+      });
       await mark("complete");
       return { first, ledger };
     },
