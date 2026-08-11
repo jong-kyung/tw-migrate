@@ -208,6 +208,7 @@ test("rejects invalid manifests before execution", () => {
       probes: { base: { ...probe(), witness: false } },
     }),
   ]);
+  errorFor([external({ probes: { base: { ...probe(), witness: false } } })]);
   errorFor([external({ probes: {} })]);
   errorFor([external({ probes: { base: probe({ action: { type: "hovre", selector } }) } })]);
   errorFor([external({ probes: { base: probe({ selector: { type: "datta", value: "card" } }) } })]);

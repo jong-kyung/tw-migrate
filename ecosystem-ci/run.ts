@@ -227,13 +227,19 @@ function validateCommon(project: Unknown, label: string): void {
     `${label}.probes`,
     project.kind === "controlled" && !("fixture" in project),
   );
+  const probes = Object.entries(object(project.probes, `${label}.probes`));
   if (
     project.kind === "controlled" &&
-    Object.values(object(project.probes, `${label}.probes`)).every(
-      (probe) => object(probe, `${label}.probes`).witness === false,
-    )
+    probes.every(([, probe]) => object(probe, `${label}.probes`).witness === false)
   ) {
     throw new Error(`${label}.probes must keep at least one causal-witness probe`);
+  }
+  // The external lifecycle runs the causal witness for every probe, so a
+  // witness exemption there would be silently ignored rather than honored.
+  for (const [name, probe] of probes) {
+    if (project.kind !== "controlled" && "witness" in object(probe, `${label}.probes`)) {
+      throw new Error(`${label}.probes.${name}.witness is only supported for controlled cases`);
+    }
   }
 }
 
