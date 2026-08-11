@@ -1,0 +1,19 @@
+.panel {
+  padding: 4px;
+}
+@media screen and (min-width: 900px) and (orientation: landscape) {
+  .panel {
+    padding: 32px;
+  }
+}
+.alert {
+  padding: 6px;
+}
+@media (max-width: 600px), print {
+  .alert {
+    padding: 24px;
+  }
+}
+.retained {
+  display: block;
+}

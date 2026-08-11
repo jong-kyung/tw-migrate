@@ -1,0 +1,11 @@
+.badge {
+  padding: 5px;
+}
+@media (min-width: 900px) {
+  .badge {
+    margin: 4px;
+  }
+}
+.retained {
+  display: block;
+}

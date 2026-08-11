@@ -157,6 +157,10 @@ test("admits the complete controlled runtime and stylesheet matrix", async () =>
       ["vite-html-sass", "controlled", "vite-html", "sass"],
       ["vite-html-less", "controlled", "vite-html", "less"],
       ["vue-vite-css", "controlled", "vue-vite", "css"],
+      ["media-components", "controlled", "react-vite", "css"],
+      ["media-stacked", "controlled", "react-vite", "css"],
+      ["media-workspace", "controlled", "react-vite", "css"],
+      ["media-workspace-split", "controlled", "react-vite", "css"],
     ],
   );
   assert.deepEqual(
@@ -198,6 +202,13 @@ test("rejects invalid manifests before execution", () => {
   delete missingSource.source;
   errorFor([missingSource]);
   errorFor([controlled({ probes: {} })]);
+  errorFor([
+    controlled({
+      fixture: "react-vite/css",
+      probes: { base: { ...probe(), witness: false } },
+    }),
+  ]);
+  errorFor([external({ probes: { base: { ...probe(), witness: false } } })]);
   errorFor([external({ probes: {} })]);
   errorFor([external({ probes: { base: probe({ action: { type: "hovre", selector } }) } })]);
   errorFor([external({ probes: { base: probe({ selector: { type: "datta", value: "card" } }) } })]);
@@ -621,7 +632,7 @@ test("no arguments print usage and --all is the only full-run selection", async 
   assert.throws(() => runHarness([], loaded, () => assert.fail("must not execute")), /Usage:/);
   const calls: string[][] = [];
   const selected = runHarness(["--all"], loaded, (args) => calls.push(args));
-  assert.equal(selected.length, 13);
+  assert.equal(selected.length, 17);
   assert.deepEqual(calls, [
     [
       "run",
@@ -895,7 +906,7 @@ test("case jobs run after non-cancelled partial package failure while preserving
   // Smoke and external cases share the single gated case job.
   assert.match(
     workflow,
-    /case: \[.*vue-vite-css, production-react-vite-css, external-namechecker, external-stylized-components\]/,
+    /case: \[.*vue-vite-css, media-components, media-stacked, media-workspace, media-workspace-split, production-react-vite-css, external-namechecker, external-stylized-components\]/,
   );
 });
 

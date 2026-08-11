@@ -22,6 +22,10 @@ export interface Probe {
   cardinality: number;
   identity: string[];
   action?: ProbeAction;
+  /** False exempts the probe from the causal witness: its element depends
+   * on a stylesheet other than the case's witness source, while the
+   * baseline-versus-post comparison still covers it. */
+  witness?: false;
 }
 
 interface ProjectSource {
@@ -38,6 +42,12 @@ export interface ControlledProject {
   kind: "controlled";
   runtime: (typeof controlledRuntimes)[number];
   style: (typeof controlledStyles)[number];
+  /** Fixture subpath under fixtures/controlled, when the case does not
+   * live in the runtime/style matrix cell. */
+  fixture?: string;
+  /** How the migration runs: one stylesheet by default, the whole
+   * package, or the workspace. */
+  scope?: "package" | "workspaces";
   source: ProjectSource;
   probes: Record<string, Probe>;
 }
