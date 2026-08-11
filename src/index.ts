@@ -1204,7 +1204,9 @@ async function finishGroupPlan(
       try {
         parseHtmlSource(file.path, file.source);
       } catch (error) {
-        return { error, member: ownerOf(file.path), fatal: false };
+        // The original page parsed during preparation, so a planned source
+        // that does not is an invalid plan: fatal even under force.
+        return { error, member: ownerOf(file.path), fatal: true };
       }
     }
     for (const file of plan.files.filter((file) => extname(file.path) === ".vue")) {
