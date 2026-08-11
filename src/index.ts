@@ -805,16 +805,27 @@ async function planPreparedGroup(
     }
   }
   if (active.length === 0) return results;
+  let names = extraction?.names;
+  let generated = extraction?.generated ?? [];
   if (options.extractMediaQueries !== false) {
     if (!groupWritable) {
-      mediaWarnings.push({
-        code: "media-query-definition-fallback",
-        file: entry.path,
-        start: 0,
-        end: 0,
-        message:
-          "The Tailwind entry could not be edited safely, so media behavior was preserved with arbitrary variants.",
-      });
+      // The promised fallback is arbitrary variants, not the legacy
+      // conversions: an authoritative empty map sends every condition to
+      // its arbitrary form, because nothing about the unsafe entry's
+      // variants was verified. The warning only applies when there is
+      // media behavior to preserve.
+      names = {};
+      generated = [];
+      if (collections.some((collection) => collection.components.length > 0)) {
+        mediaWarnings.push({
+          code: "media-query-definition-fallback",
+          file: entry.path,
+          start: 0,
+          end: 0,
+          message:
+            "The Tailwind entry could not be edited safely, so media behavior was preserved with arbitrary variants.",
+        });
+      }
     } else {
       try {
         extraction = planMediaExtraction({
@@ -829,11 +840,11 @@ async function planPreparedGroup(
       } catch (error) {
         return recoverGroup(error, !isRecoverablePlanningError(error));
       }
+      names = extraction.names;
+      generated = extraction.generated;
     }
   }
 
-  let names = extraction?.names;
-  let generated = extraction?.generated ?? [];
   let plan: Plan = {
     files: [],
     deletedFiles: [],

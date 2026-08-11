@@ -115,6 +115,51 @@ test("does not augment a gitignored Tailwind entry discovered through HTML", asy
   );
 });
 
+test("an unsafe entry falls back to arbitrary variants, not legacy names", async () => {
+  const cwd = await tempDir();
+  execFileSync("git", ["init", "-q"], { cwd });
+  await Promise.all([
+    writeFile(join(cwd, "package.json"), '{"private":true}'),
+    writeFile(join(cwd, ".gitignore"), "globals.css\n"),
+    writeFile(join(cwd, "globals.css"), '@import "tailwindcss";\n'),
+    writeFile(
+      join(cwd, "Button.module.css"),
+      "@media (prefers-color-scheme: dark) { .button { margin: 7px; } }\n",
+    ),
+    writeFile(join(cwd, "Button.tsx"), consumerTsx),
+    writeFile(join(cwd, "index.html"), '<link rel="stylesheet" href="globals.css">\n'),
+  ]);
+
+  const report = await migrate({ cwd, extractMediaQueries: true, write: true });
+
+  // Nothing about the unsafe entry's variants was verified, so even a
+  // condition the legacy path would convert to `dark:` stays arbitrary.
+  expect(report.candidates).toContain("[@media_(prefers-color-scheme:dark)]:m-[7px]");
+  expect(report.candidates.join(" ")).not.toMatch(/(?:^| )dark:/);
+});
+
+test("an unsafe entry without media conditions warns nothing", async () => {
+  const cwd = await tempDir();
+  execFileSync("git", ["init", "-q"], { cwd });
+  await Promise.all([
+    writeFile(join(cwd, "package.json"), '{"private":true}'),
+    writeFile(join(cwd, ".gitignore"), "globals.css\n"),
+    writeFile(join(cwd, "globals.css"), '@import "tailwindcss";\n'),
+    writeFile(join(cwd, "Button.module.css"), ".button { padding: 13px; }\n"),
+    writeFile(join(cwd, "Button.tsx"), consumerTsx),
+    writeFile(join(cwd, "index.html"), '<link rel="stylesheet" href="globals.css">\n'),
+  ]);
+
+  const report = await migrate({ cwd, extractMediaQueries: true, write: true });
+
+  // There is no media behavior to preserve, so the fallback warning
+  // would only be noise.
+  expect(report.warnings.map((warning) => warning.code)).not.toContain(
+    "media-query-definition-fallback",
+  );
+  expect(report.candidates).toContain("p-[13px]");
+});
+
 test("appends definitions used by retained global rules", async () => {
   const cwd = await tempDir();
   await Promise.all([
