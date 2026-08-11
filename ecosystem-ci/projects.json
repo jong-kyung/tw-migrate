@@ -2135,6 +2135,27 @@
           "cardinality": 1,
           "identity": ["card"]
         },
+        "card-boundary": {
+          "route": "/",
+          "viewport": {
+            "width": 700,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Ready"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "data",
+            "value": "card"
+          },
+          "cardinality": 1,
+          "identity": ["card"]
+        },
         "card-wide": {
           "route": "/",
           "viewport": {
@@ -2155,6 +2176,50 @@
           },
           "cardinality": 1,
           "identity": ["card"]
+        },
+        "banner-narrow": {
+          "route": "/",
+          "viewport": {
+            "width": 600,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Ready"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "data",
+            "value": "banner"
+          },
+          "cardinality": 1,
+          "identity": ["banner"],
+          "witness": false
+        },
+        "banner-wide": {
+          "route": "/",
+          "viewport": {
+            "width": 1280,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Ready"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "data",
+            "value": "banner"
+          },
+          "cardinality": 1,
+          "identity": ["banner"],
+          "witness": false
         }
       }
     },
@@ -2232,6 +2297,48 @@
           },
           "cardinality": 1,
           "identity": ["panel"]
+        },
+        "alert-narrow": {
+          "route": "/",
+          "viewport": {
+            "width": 560,
+            "height": 900
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Ready"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "data",
+            "value": "alert"
+          },
+          "cardinality": 1,
+          "identity": ["alert"]
+        },
+        "alert-wide": {
+          "route": "/",
+          "viewport": {
+            "width": 1280,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Ready"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "data",
+            "value": "alert"
+          },
+          "cardinality": 1,
+          "identity": ["alert"]
         }
       }
     },
@@ -2246,6 +2353,107 @@
         "path": "packages/app/src/Card.module.css",
         "before": ".card",
         "after": "width-lte-700px:m-[7px]"
+      },
+      "probes": {
+        "card-narrow": {
+          "route": "/",
+          "viewport": {
+            "width": 600,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Ready"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "data",
+            "value": "card"
+          },
+          "cardinality": 1,
+          "identity": ["card"]
+        },
+        "card-wide": {
+          "route": "/",
+          "viewport": {
+            "width": 1280,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Ready"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "data",
+            "value": "card"
+          },
+          "cardinality": 1,
+          "identity": ["card"]
+        },
+        "badge-narrow": {
+          "route": "/",
+          "viewport": {
+            "width": 600,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Ready"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "data",
+            "value": "badge"
+          },
+          "cardinality": 1,
+          "identity": ["badge"],
+          "witness": false
+        },
+        "badge-wide": {
+          "route": "/",
+          "viewport": {
+            "width": 1280,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "role",
+              "value": "button",
+              "name": "Ready"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "data",
+            "value": "badge"
+          },
+          "cardinality": 1,
+          "identity": ["badge"],
+          "witness": false
+        }
+      }
+    },
+    {
+      "id": "media-workspace-split",
+      "kind": "controlled",
+      "runtime": "react-vite",
+      "style": "css",
+      "fixture": "media-workspace-split",
+      "scope": "workspaces",
+      "source": {
+        "path": "packages/app/src/Card.module.css",
+        "before": ".card",
+        "after": "width-lte-640px:m-[6px]"
       },
       "probes": {
         "card-narrow": {

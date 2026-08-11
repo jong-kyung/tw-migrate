@@ -6,6 +6,14 @@
     padding: 32px;
   }
 }
+.alert {
+  padding: 6px;
+}
+@media (max-width: 600px), print {
+  .alert {
+    padding: 24px;
+  }
+}
 .retained {
   display: block;
 }

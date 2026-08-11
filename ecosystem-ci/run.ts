@@ -227,6 +227,14 @@ function validateCommon(project: Unknown, label: string): void {
     `${label}.probes`,
     project.kind === "controlled" && !("fixture" in project),
   );
+  if (
+    project.kind === "controlled" &&
+    Object.values(object(project.probes, `${label}.probes`)).every(
+      (probe) => object(probe, `${label}.probes`).witness === false,
+    )
+  ) {
+    throw new Error(`${label}.probes must keep at least one causal-witness probe`);
+  }
 }
 
 function validateProject(value: unknown, index: number): void {

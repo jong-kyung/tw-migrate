@@ -5,8 +5,8 @@
       "src/App.module.css",
       "src/tailwind.css"
     ],
-    "diff": "--- a/src/App.jsx\n+++ b/src/App.jsx\n@@ -1,9 +1,9 @@\n-import styles from './App.module.css';\n-\n-export default function App() {\n-  return <main>\n-    <section className={styles.panel} data-probe=\"panel\" data-identity=\"panel\">Panel</section>\n-    <button data-identity=\"ready\">Ready</button>\n-  </main>;\n-}\n \n+import styles from './App.module.css';\n+\n+export default function App() {\n+  return <main>\n+    <section className=\"p-[4px] screen:width-gte-900px:landscape:p-[32px]\" data-probe=\"panel\" data-identity=\"panel\">Panel</section>\n+    <button data-identity=\"ready\">Ready</button>\n+  </main>;\n+}\n \n--- a/src/App.module.css\n+++ b/src/App.module.css\n@@ -1,12 +1,6 @@\n-.panel {\n-  padding: 4px;\n-}\n-@media screen and (min-width: 900px) and (orientation: landscape) {\n-  .panel {\n-    padding: 32px;\n-  }\n-}\n-.retained {\n-  display: block;\n-}\n \n+\n+\n+.retained {\n+  display: block;\n+}\n \n--- a/src/tailwind.css\n+++ b/src/tailwind.css\n@@ -1,2 +1,14 @@\n-@import \"tailwindcss\";\n \n+@import \"tailwindcss\";\n+\n+@custom-variant screen {\n+  @media screen {\n+    @slot;\n+  }\n+}\n+\n+@custom-variant width-gte-900px {\n+  @media (width >= 900px) {\n+    @slot;\n+  }\n+}\n \n",
-    "convertedRules": 2,
+    "diff": "--- a/src/App.jsx\n+++ b/src/App.jsx\n@@ -1,10 +1,10 @@\n-import styles from './App.module.css';\n-\n-export default function App() {\n-  return <main>\n-    <section className={styles.panel} data-probe=\"panel\" data-identity=\"panel\">Panel</section>\n-    <aside className={styles.alert} data-probe=\"alert\" data-identity=\"alert\">Alert</aside>\n-    <button data-identity=\"ready\">Ready</button>\n-  </main>;\n-}\n \n+import styles from './App.module.css';\n+\n+export default function App() {\n+  return <main>\n+    <section className=\"p-[4px] screen:width-gte-900px:landscape:p-[32px]\" data-probe=\"panel\" data-identity=\"panel\">Panel</section>\n+    <aside className=\"p-[6px] width-lte-600px-or-print:p-[24px]\" data-probe=\"alert\" data-identity=\"alert\">Alert</aside>\n+    <button data-identity=\"ready\">Ready</button>\n+  </main>;\n+}\n \n--- a/src/App.module.css\n+++ b/src/App.module.css\n@@ -1,20 +1,8 @@\n-.panel {\n-  padding: 4px;\n-}\n-@media screen and (min-width: 900px) and (orientation: landscape) {\n-  .panel {\n-    padding: 32px;\n-  }\n-}\n-.alert {\n-  padding: 6px;\n-}\n-@media (max-width: 600px), print {\n-  .alert {\n-    padding: 24px;\n-  }\n-}\n-.retained {\n-  display: block;\n-}\n \n+\n+\n+\n+\n+.retained {\n+  display: block;\n+}\n \n--- a/src/tailwind.css\n+++ b/src/tailwind.css\n@@ -1,2 +1,20 @@\n-@import \"tailwindcss\";\n \n+@import \"tailwindcss\";\n+\n+@custom-variant screen {\n+  @media screen {\n+    @slot;\n+  }\n+}\n+\n+@custom-variant width-gte-900px {\n+  @media (width >= 900px) {\n+    @slot;\n+  }\n+}\n+\n+@custom-variant width-lte-600px-or-print {\n+  @media (width <= 600px), print {\n+    @slot;\n+  }\n+}\n \n",
+    "convertedRules": 4,
     "retainedRules": 1,
     "rules": [
       {
@@ -42,6 +42,38 @@
         }
       },
       {
+        "selector": ".alert",
+        "status": "converted",
+        "candidates": [
+          "p-[6px]"
+        ],
+        "file": "src/App.module.css",
+        "ruleId": {
+          "start": 131,
+          "end": 157
+        },
+        "authoredSpan": {
+          "start": 131,
+          "end": 157
+        }
+      },
+      {
+        "selector": ".alert",
+        "status": "converted",
+        "candidates": [
+          "width-lte-600px-or-print:p-[24px]"
+        ],
+        "file": "src/App.module.css",
+        "ruleId": {
+          "start": 195,
+          "end": 226
+        },
+        "authoredSpan": {
+          "start": 195,
+          "end": 226
+        }
+      },
+      {
         "selector": ".retained",
         "status": "retained",
         "candidates": [
@@ -49,38 +81,40 @@
         ],
         "file": "src/App.module.css",
         "ruleId": {
-          "start": 131,
-          "end": 162
+          "start": 229,
+          "end": 260
         },
         "authoredSpan": {
-          "start": 131,
-          "end": 162
+          "start": 229,
+          "end": 260
         }
       }
     ],
     "candidates": [
       "p-[4px]",
-      "screen:width-gte-900px:landscape:p-[32px]"
+      "p-[6px]",
+      "screen:width-gte-900px:landscape:p-[32px]",
+      "width-lte-600px-or-print:p-[24px]"
     ],
     "warnings": [
       {
         "code": "unresolved-selector-target",
         "file": "src/App.module.css",
-        "start": 131,
-        "end": 162,
+        "start": 229,
+        "end": 260,
         "message": "No exclusively supported className references were found.",
-        "line": 9,
+        "line": 17,
         "column": 1,
-        "endLine": 11,
+        "endLine": 19,
         "endColumn": 2
       }
     ],
     "failures": []
   },
   "changedFiles": {
-    "src/App.jsx": "import styles from './App.module.css';\n\nexport default function App() {\n  return <main>\n    <section className=\"p-[4px] screen:width-gte-900px:landscape:p-[32px]\" data-probe=\"panel\" data-identity=\"panel\">Panel</section>\n    <button data-identity=\"ready\">Ready</button>\n  </main>;\n}\n",
-    "src/App.module.css": "\n\n.retained {\n  display: block;\n}\n",
-    "src/tailwind.css": "@import \"tailwindcss\";\n\n@custom-variant screen {\n  @media screen {\n    @slot;\n  }\n}\n\n@custom-variant width-gte-900px {\n  @media (width >= 900px) {\n    @slot;\n  }\n}\n"
+    "src/App.jsx": "import styles from './App.module.css';\n\nexport default function App() {\n  return <main>\n    <section className=\"p-[4px] screen:width-gte-900px:landscape:p-[32px]\" data-probe=\"panel\" data-identity=\"panel\">Panel</section>\n    <aside className=\"p-[6px] width-lte-600px-or-print:p-[24px]\" data-probe=\"alert\" data-identity=\"alert\">Alert</aside>\n    <button data-identity=\"ready\">Ready</button>\n  </main>;\n}\n",
+    "src/App.module.css": "\n\n\n\n.retained {\n  display: block;\n}\n",
+    "src/tailwind.css": "@import \"tailwindcss\";\n\n@custom-variant screen {\n  @media screen {\n    @slot;\n  }\n}\n\n@custom-variant width-gte-900px {\n  @media (width >= 900px) {\n    @slot;\n  }\n}\n\n@custom-variant width-lte-600px-or-print {\n  @media (width <= 600px), print {\n    @slot;\n  }\n}\n"
   },
-  "source": "\n\n.retained {\n  display: block;\n}\n"
+  "source": "\n\n\n\n.retained {\n  display: block;\n}\n"
 }
