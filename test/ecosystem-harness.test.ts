@@ -905,7 +905,7 @@ test("case jobs run after non-cancelled partial package failure while preserving
   // Smoke and external cases share the single gated case job.
   assert.match(
     workflow,
-    /case: \[.*vue-vite-css, production-react-vite-css, external-namechecker, external-stylized-components\]/,
+    /case: \[.*vue-vite-css, media-components, media-stacked, media-workspace, media-workspace-split, production-react-vite-css, external-namechecker, external-stylized-components\]/,
   );
 });
 
