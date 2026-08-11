@@ -788,6 +788,23 @@ async function planPreparedGroup(
   const groupWritable = !(await entryUnsafe(entry.path, workspaceRoot, targetable));
   const mediaWarnings: MigrationWarning[] = [];
   let extraction: MediaExtraction | undefined;
+  // Malformed member inputs must stay attributable to their member even
+  // when the group batch would be the first to parse them: the collection
+  // pass doubles as per-member input isolation, so it always runs and
+  // under force only the failing member is skipped.
+  const collections: MediaCollection[] = [];
+  // Reassigning `active` below does not disturb this iteration over the
+  // current array, and each member is visited exactly once.
+  for (const member of active) {
+    try {
+      collections.push(collectMemberMediaConditions(member.stylesheets, entry));
+    } catch (error) {
+      if (!options.force || !isRecoverablePlanningError(error)) throw error;
+      results.push({ failure: packageFailure(workspaceRoot, member.packageRoot, error) });
+      active = active.filter((remaining) => remaining !== member);
+    }
+  }
+  if (active.length === 0) return results;
   if (options.extractMediaQueries !== false) {
     if (!groupWritable) {
       mediaWarnings.push({
@@ -799,22 +816,6 @@ async function planPreparedGroup(
           "The Tailwind entry could not be edited safely, so media behavior was preserved with arbitrary variants.",
       });
     } else {
-      // Collection failures are attributable to one member: under force
-      // only that member is skipped, while resolution failures affect the
-      // shared allocation and skip the group.
-      const collections: MediaCollection[] = [];
-      // Reassigning `active` below does not disturb this iteration over
-      // the current array, and each member is visited exactly once.
-      for (const member of active) {
-        try {
-          collections.push(collectMemberMediaConditions(member.stylesheets, entry));
-        } catch (error) {
-          if (!options.force || !isRecoverablePlanningError(error)) throw error;
-          results.push({ failure: packageFailure(workspaceRoot, member.packageRoot, error) });
-          active = active.filter((remaining) => remaining !== member);
-        }
-      }
-      if (active.length === 0) return results;
       try {
         extraction = planMediaExtraction({
           collections,

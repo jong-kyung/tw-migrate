@@ -745,6 +745,10 @@ struct WidthConstraint {
 /// when the pair is a base rule and a later media rule from the same
 /// stylesheet, whose variant CSS always follows base utilities.
 struct MediaVariantContext<'a> {
+    /// True when a map was supplied at all: an explicitly empty map still
+    /// means extraction ran and every condition fell back to arbitrary
+    /// variants, which the gate must keep covering.
+    enabled: bool,
     keys_by_name: HashMap<&'a str, &'a str>,
     theme_tokens: &'a HashMap<String, String>,
 }
@@ -758,6 +762,7 @@ impl<'a> MediaVariantContext<'a> {
             }
         }
         Self {
+            enabled: request.media_names.is_some(),
             keys_by_name,
             theme_tokens: &request.theme_tokens,
         }
@@ -905,7 +910,7 @@ impl<'a> MediaVariantContext<'a> {
     /// distinct, possibly co-matching media conditions whose emitted order
     /// is unproven.
     fn ordering_sensitive(&self, left: &BatchMatch, right: &BatchMatch) -> bool {
-        if self.keys_by_name.is_empty() {
+        if !self.enabled {
             return false;
         }
         let (left_media, left_residual) = self.split_candidate(&left.candidate);
@@ -4303,6 +4308,27 @@ mod tests {
         // The width intervals are disjoint, so no ordering can change the
         // rendered result and both rules migrate.
         assert_eq!(response["convertedRules"], 2);
+    }
+
+    #[test]
+    fn gates_overlapping_arbitrary_media_variants_under_an_empty_map() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": "@media (width <= 700px) { .button { margin: 4px; } }\n@media (width <= 800px) { .button { margin: 6px; } }\n",
+            "mediaNames": {},
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response: serde_json::Value =
+            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+
+        // An explicitly empty map still means extraction ran; the fallback
+        // arbitrary variants overlap with an unproven order and retain.
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 2);
     }
 
     #[test]
