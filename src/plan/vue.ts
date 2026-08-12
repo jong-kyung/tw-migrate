@@ -393,7 +393,12 @@ export async function preparePackageVue({
   let vueShadowUnverifiable = vueGraph.unresolvedStyleImport;
   for (const [path, source] of styleSources) {
     if (pathOwners.get(path) !== packageRoot) continue;
-    if (stylesheetAnalysis(path, source).selectorsUnverifiable) {
+    try {
+      if (stylesheetAnalysis(path, source).selectorsUnverifiable) {
+        vueShadowUnverifiable = true;
+        continue;
+      }
+    } catch {
       vueShadowUnverifiable = true;
       continue;
     }

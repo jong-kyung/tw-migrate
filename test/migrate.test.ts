@@ -592,6 +592,20 @@ test("interpolated preprocessor selectors make the shadow corpus unverifiable", 
   assert.equal(report.convertedRules, 0);
 });
 
+test("unparseable scan-only stylesheets make the Vue shadow corpus unverifiable", async () => {
+  const cwd = await fixture();
+  const vue =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  await Promise.all([
+    writeFile(join(cwd, "Card.vue"), vue),
+    writeFile(join(cwd, "broken.css"), "}"),
+  ]);
+  const report = await migrate({ cwd, styleFile: "Card.vue" });
+  assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+  assert.equal(report.convertedRules, 0);
+  assert.deepEqual(report.failures, []);
+});
+
 test("warns when a Vue element already carries a conflicting utility", async () => {
   const cwd = await fixture();
   const vue =
