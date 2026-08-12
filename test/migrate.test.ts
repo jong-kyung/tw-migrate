@@ -1493,6 +1493,17 @@ test("Options API instance aliases through assignment retain the CSS Module", as
   assert.match(await readFile(join(cwd, "Card.vue"), "utf8"), /<style module>/);
 });
 
+test("TypeScript template assertions do not break the module closure", async () => {
+  const cwd = await fixture();
+  await writeFile(
+    join(cwd, "Card.vue"),
+    '<template>\n  <p :class="$style.card" :title="(note as string)">Card</p>\n  <span>Leaf</span>\n</template>\n<script setup lang="ts">\nconst note: unknown = "n";\n</script>\n<style module>\n.card { padding: 13px; }\n</style>\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Card.vue", write: true });
+  assert.deepEqual(report.changedFiles, ["Card.vue"]);
+  assert.doesNotMatch(await readFile(join(cwd, "Card.vue"), "utf8"), /<style module>/);
+});
+
 test("Vue inline event handlers use statement context for module closure", async () => {
   const cwd = await fixture();
   const component = (handler: string) =>

@@ -245,6 +245,9 @@ interface TemplateState {
   hasSlot: boolean;
   moduleClosureBroken: boolean;
   referencesUseCssModule: boolean;
+  /// Synthetic path for template expression parsing, carrying the SFC's
+  /// script language so TypeScript assertions parse in TypeScript SFCs.
+  expressionPath: string;
 }
 
 // Resolve the target project's own Vue 3 compiler. Vue 2 resolves but is
@@ -465,6 +468,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     blocks.push(block);
   }
 
+  const scriptLang = descriptor.scriptSetup?.lang ?? descriptor.script?.lang;
   const state: TemplateState = {
     elements: [],
     components: [],
@@ -473,6 +477,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     hasSlot: false,
     moduleClosureBroken: false,
     referencesUseCssModule: false,
+    expressionPath: scriptLang === "ts" || scriptLang === "tsx" ? "Component.ts" : "Component.js",
   };
   visitTemplateNode(source, template.ast, state);
   const alwaysRenderedRoots = template.ast.children.filter(
@@ -683,7 +688,7 @@ function visitTemplateNode(source: string, node: TemplateNode, state: TemplateSt
       const expression = prop.exp?.content
         ? prop.name === "on"
           ? templateHandler(prop.exp.content)
-          : templateExpression(prop.exp.content)
+          : templateExpression(state.expressionPath, prop.exp.content)
         : undefined;
       if (prop.exp?.content && !expression) state.moduleClosureBroken = true;
       let provenModuleExpression = false;
@@ -719,7 +724,7 @@ function visitTemplateNode(source: string, node: TemplateNode, state: TemplateSt
       }
       if (expression?.referencesUseCssModule) state.referencesUseCssModule = true;
       if (prop.arg && !prop.arg.isStatic && prop.arg.content) {
-        const argExpression = templateExpression(prop.arg.content);
+        const argExpression = templateExpression(state.expressionPath, prop.arg.content);
         state.moduleClosureBroken ||= argExpression?.usesCssModule ?? true;
         state.referencesUseCssModule ||= argExpression?.referencesUseCssModule ?? false;
       }
@@ -734,7 +739,7 @@ function visitTemplateNode(source: string, node: TemplateNode, state: TemplateSt
     else if (node.tagType === TAG_ELEMENT) state.elements.push(element);
   }
   if (node.type === NODE_INTERPOLATION && node.content?.content) {
-    const interpolation = templateExpression(node.content.content);
+    const interpolation = templateExpression(state.expressionPath, node.content.content);
     state.moduleClosureBroken ||= interpolation?.usesCssModule ?? true;
     state.referencesUseCssModule ||= interpolation?.referencesUseCssModule ?? false;
   }
@@ -750,9 +755,9 @@ function attributeRemovalStart(source: string, node: TemplateNode, prop: Templat
   return /[\r\n]/.test(source.slice(start, attributeStart)) ? attributeStart : start;
 }
 
-function templateExpression(source: string): ExpressionAnalysis | undefined {
+function templateExpression(path: string, source: string): ExpressionAnalysis | undefined {
   try {
-    return expressionAnalysis("Component.js", source);
+    return expressionAnalysis(path, source);
   } catch {
     return undefined;
   }
