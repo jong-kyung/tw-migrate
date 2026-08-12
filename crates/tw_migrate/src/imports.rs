@@ -19,9 +19,9 @@ use serde::Serialize;
 
 use crate::{at_rules::parse_css, js_rewrite::source_type_for_path};
 use oxc_css_parser::ast::{
-    AtRulePrelude, CombinatorKind, ComplexSelectorChild, ComponentValue, Function, FunctionName,
-    ImportPrelude, ImportPreludeHref, InterpolableIdent, InterpolableStr, MediaQuery, SimpleSelector,
-    Statement, UrlValue,
+    AtRulePrelude, CombinatorKind, ComplexSelectorChild, ComponentValue, CompoundSelector, Function,
+    FunctionName, ImportPrelude, ImportPreludeHref, InterpolableIdent, InterpolableStr, MediaQuery,
+    PseudoClassSelectorArgKind, SimpleSelector, Statement, UrlValue,
 };
 use oxc_css_parser::{Syntax, token};
 
@@ -539,6 +539,74 @@ fn selector_is_unverifiable(selector: &oxc_css_parser::ast::ComplexSelector<'_>)
     })
 }
 
+fn collect_compound_scope_escapes(
+    compound: &CompoundSelector<'_>,
+    source: &str,
+    analysis: &mut StylesheetAnalysis,
+) -> bool {
+    let mut found = false;
+    for simple in &compound.children {
+        let escape_bounds = match simple {
+            SimpleSelector::PseudoClass(pseudo) if scope_escape_name(&pseudo.name) => Some(
+                pseudo
+                    .arg
+                    .as_ref()
+                    .map(|arg| (arg.l_paren.end, arg.r_paren.start)),
+            ),
+            SimpleSelector::PseudoElement(pseudo) if scope_escape_name(&pseudo.name) => Some(
+                pseudo
+                    .arg
+                    .as_ref()
+                    .map(|arg| (arg.l_paren.end, arg.r_paren.start)),
+            ),
+            _ => None,
+        };
+        if let Some(bounds) = escape_bounds {
+            found = true;
+            if let Some((start, end)) = bounds {
+                analysis
+                    .scope_escapes
+                    .push(format!("{} {{}}", &source[start..end]));
+            } else {
+                analysis.scope_escapes_unverifiable = true;
+            }
+            continue;
+        }
+
+        let SimpleSelector::PseudoClass(pseudo) = simple else {
+            continue;
+        };
+        let Some(arg) = &pseudo.arg else { continue };
+        match &arg.kind {
+            PseudoClassSelectorArgKind::CompoundSelectorList(list) => {
+                for selector in &list.selectors {
+                    found |= collect_compound_scope_escapes(selector, source, analysis);
+                }
+            }
+            PseudoClassSelectorArgKind::RelativeSelectorList(list) => {
+                for selector in &list.selectors {
+                    found |= collect_scope_escapes(&selector.complex_selector, source, analysis);
+                }
+            }
+            PseudoClassSelectorArgKind::SelectorList(list) => {
+                for selector in &list.selectors {
+                    found |= collect_scope_escapes(selector, source, analysis);
+                }
+            }
+            PseudoClassSelectorArgKind::Nth(nth) => {
+                if let Some(list) = nth.matcher.as_ref().and_then(|matcher| matcher.selector.as_ref())
+                {
+                    for selector in &list.selectors {
+                        found |= collect_scope_escapes(selector, source, analysis);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
 fn collect_scope_escapes(
     selector: &oxc_css_parser::ast::ComplexSelector<'_>,
     source: &str,
@@ -560,32 +628,7 @@ fn collect_scope_escapes(
             }
             ComplexSelectorChild::Combinator(_) => {}
             ComplexSelectorChild::CompoundSelector(compound) => {
-                for simple in &compound.children {
-                    let bounds = match simple {
-                        SimpleSelector::PseudoClass(pseudo) if scope_escape_name(&pseudo.name) => {
-                            found = true;
-                            pseudo
-                                .arg
-                                .as_ref()
-                                .map(|arg| (arg.l_paren.end, arg.r_paren.start))
-                        }
-                        SimpleSelector::PseudoElement(pseudo) if scope_escape_name(&pseudo.name) => {
-                            found = true;
-                            pseudo
-                                .arg
-                                .as_ref()
-                                .map(|arg| (arg.l_paren.end, arg.r_paren.start))
-                        }
-                        _ => continue,
-                    };
-                    if let Some((start, end)) = bounds {
-                        analysis
-                            .scope_escapes
-                            .push(format!("{} {{}}", &source[start..end]));
-                    } else {
-                        analysis.scope_escapes_unverifiable = true;
-                    }
-                }
+                found |= collect_compound_scope_escapes(compound, source, analysis);
             }
         }
     }
@@ -1326,14 +1369,20 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(
             &super::stylesheet_analysis_json(
                 "/p/scoped.css",
-                ".a :deep(.inside:is(.x, .y)) {}\n.b::v-global(.free) {}\n.c :global .open {}\n.d /deep/ .legacy {}\n",
+                ".a :deep(.inside:is(.x, .y)) {}\n.b::v-global(.free) {}\n.c :global .open {}\n.d /deep/ .legacy {}\n.e :deep(.host):is(:deep(.card), :not(:global(.note))) {}\n",
             )
             .unwrap(),
         )
         .unwrap();
         assert_eq!(
             parsed["scopeEscapes"],
-            serde_json::json!([".inside:is(.x, .y) {}", ".free {}"])
+            serde_json::json!([
+                ".inside:is(.x, .y) {}",
+                ".free {}",
+                ".host {}",
+                ".card {}",
+                ".note {}"
+            ])
         );
         assert_eq!(parsed["scopeEscapesUnverifiable"], true);
         assert_eq!(parsed["selectorsUnverifiable"], false);

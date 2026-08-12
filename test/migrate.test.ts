@@ -661,6 +661,21 @@ test("a :deep escape in another SFC shadows scoped deletion", async () => {
   assert.equal(report.convertedRules, 0);
 });
 
+test("a deep escape nested in a functional pseudo shadows scoped deletion", async () => {
+  const cwd = await fixture();
+  const child =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  const parent =
+    '<template>\n  <div class="wrap">P</div>\n</template>\n<style scoped>\n.wrap :deep(.host) :is(:deep(.card)) { padding: 20px; }\n</style>\n';
+  await Promise.all([
+    writeFile(join(cwd, "Child.vue"), child),
+    writeFile(join(cwd, "Parent.vue"), parent),
+  ]);
+  const report = await migrate({ cwd, styleFile: "Child.vue" });
+  assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+  assert.equal(report.convertedRules, 0);
+});
+
 test("a parsed nested deep escape does not shadow unrelated scoped rules", async () => {
   const cwd = await fixture();
   const child =
