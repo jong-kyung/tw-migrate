@@ -525,7 +525,7 @@ test("--case selects exactly one project and maps it to a Vitest project filter"
     ["react-vite-css"],
   );
   assert.deepEqual(calls, [
-    ["run", "--config", "ecosystem-ci/vitest.config.ts", "--project", "react-vite-css"],
+    ["run", "--config", "ecosystem-ci/vite.config.ts", "--project", "react-vite-css"],
   ]);
 });
 
@@ -599,7 +599,7 @@ test("external cases require the explicit CI-only entrypoint", async () => {
       [
         "run",
         "--config",
-        "ecosystem-ci/vitest.config.ts",
+        "ecosystem-ci/vite.config.ts",
         "--project",
         "external-stylized-components",
       ],
@@ -637,7 +637,7 @@ test("no arguments print usage and --all is the only full-run selection", async 
     [
       "run",
       "--config",
-      "ecosystem-ci/vitest.config.ts",
+      "ecosystem-ci/vite.config.ts",
       ...selected.flatMap(({ id }) => ["--project", id]),
     ],
   ]);
