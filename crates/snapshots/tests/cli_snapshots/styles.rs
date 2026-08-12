@@ -1,6 +1,7 @@
 use super::*;
 
 snapshot_cases! {
+    commented_preprocessor_reference => default_setup,
     style_alias_retained => default_setup,
     style_bom => default_setup,
     style_breakpoint_range => default_setup,
