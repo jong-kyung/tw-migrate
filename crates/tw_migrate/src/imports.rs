@@ -118,6 +118,7 @@ struct SourceCollector<'s> {
     scoping: &'s Scoping,
     use_css_module_symbols: Vec<SymbolId>,
     vue_namespace_symbols: Vec<SymbolId>,
+    this_alias_symbols: Vec<SymbolId>,
     analysis: SourceAnalysis,
 }
 
@@ -130,6 +131,11 @@ impl SourceCollector<'_> {
 
     fn is_unbound(&self, identifier: &IdentifierReference<'_>) -> bool {
         self.symbol(identifier).is_none()
+    }
+
+    fn is_this_alias(&self, expression: &Expression<'_>) -> bool {
+        matches!(expression, Expression::ThisExpression(_))
+            || matches!(expression, Expression::Identifier(identifier) if self.symbol(identifier).is_some_and(|symbol| self.this_alias_symbols.contains(&symbol)))
     }
 
     fn collect_glob_argument(&mut self, argument: &Argument<'_>) -> bool {
@@ -270,14 +276,25 @@ impl<'a> Visit<'a> for SourceCollector<'_> {
     }
 
     fn visit_variable_declarator(&mut self, declarator: &VariableDeclarator<'a>) {
-        if matches!(declarator.init.as_ref(), Some(Expression::ThisExpression(_)))
-            && let BindingPattern::ObjectPattern(pattern) = &declarator.id
-            && pattern
-                .properties
-                .iter()
-                .any(|property| property.key.is_specific_static_name("$style"))
+        if let Some(init) = &declarator.init
+            && self.is_this_alias(init)
         {
-            self.analysis.uses_css_module = true;
+            match &declarator.id {
+                BindingPattern::BindingIdentifier(identifier) => {
+                    if let Some(symbol) = identifier.symbol_id.get() {
+                        self.this_alias_symbols.push(symbol);
+                    }
+                }
+                BindingPattern::ObjectPattern(pattern)
+                    if pattern
+                        .properties
+                        .iter()
+                        .any(|property| property.key.is_specific_static_name("$style")) =>
+                {
+                    self.analysis.uses_css_module = true;
+                }
+                _ => {}
+            }
         }
         walk::walk_variable_declarator(self, declarator);
     }
@@ -341,7 +358,7 @@ impl<'a> Visit<'a> for SourceCollector<'_> {
     }
 
     fn visit_static_member_expression(&mut self, member: &oxc_ast::ast::StaticMemberExpression<'a>) {
-        if member.property.name == "$style" && matches!(&member.object, Expression::ThisExpression(_)) {
+        if member.property.name == "$style" && self.is_this_alias(&member.object) {
             self.analysis.uses_css_module = true;
         }
         if member.property.name == "useCssModule"
@@ -359,7 +376,7 @@ impl<'a> Visit<'a> for SourceCollector<'_> {
         &mut self,
         member: &oxc_ast::ast::ComputedMemberExpression<'a>,
     ) {
-        if matches!(&member.object, Expression::ThisExpression(_))
+        if self.is_this_alias(&member.object)
             && matches!(&member.expression, Expression::StringLiteral(literal) if literal.value == "$style")
         {
             self.analysis.uses_css_module = true;
@@ -421,6 +438,7 @@ pub fn source_analysis_json(path: &str, source: &str) -> Result<String, String> 
         scoping: semantic.semantic.scoping(),
         use_css_module_symbols,
         vue_namespace_symbols,
+        this_alias_symbols: Vec::new(),
         analysis: SourceAnalysis {
             imports: Vec::new(),
             static_imports: Vec::new(),
@@ -1221,6 +1239,8 @@ mod tests {
         for source in [
             "export default { mounted() { const { $style: styles } = this; void styles.card; } };",
             "export default { mounted() { const { $style } = this; void $style.card; } };",
+            "export default { mounted() { const vm = this; void vm.$style.card; } };",
+            "export default { mounted() { const vm = this; const self = vm; void self['$style'].card; } };",
         ] {
             let parsed: serde_json::Value = serde_json::from_str(
                 &super::source_analysis_json("/p/Card.vue.js", source).unwrap(),
