@@ -4,8 +4,8 @@ import { join } from "node:path";
 
 import { classInsertionOffset, offsetLookup, utf8OffsetMap } from "./html.ts";
 import { loadProjectModule } from "./style-compiler.ts";
-import { staticImportBindings, staticImports, staticStringExpression } from "../native.ts";
-import type { StaticImportBinding } from "../native.ts";
+import { sourceAnalysis, staticStringExpression } from "../native.ts";
+import type { SourceAnalysis, StaticImportBinding } from "../native.ts";
 import type { MigrationWarning } from "../types.ts";
 import type { SourceMapping } from "./style-compiler.ts";
 
@@ -207,6 +207,9 @@ export type VueAnalysis =
       scriptText: string;
       scriptStyleImports: string[];
       scriptImportsUnverifiable: boolean;
+      scriptHasDynamicImport: boolean;
+      scriptVueReferences: string[];
+      scriptVueGlobPatterns: string[];
       styleBlockImports: VueStyleImport[];
       componentImports: StaticImportBinding[];
       fallthroughUnverifiable: boolean;
@@ -459,14 +462,15 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
   const scriptText = [descriptor.script?.content, descriptor.scriptSetup?.content]
     .filter(Boolean)
     .join("\n");
-  const fallthroughUnverifiable =
-    Boolean(descriptor.script) ||
-    descriptor.scriptSetup?.src !== undefined ||
-    /\b(?:defineOptions|defineProps|inheritAttrs)\b/.test(descriptor.scriptSetup?.content ?? "");
   // A script whose imports cannot be read (external src, unsupported
   // language, parse failure) may still load global CSS invisible to the
   // shadow corpus, so its presence alone opens that surface.
   let scriptImportsUnverifiable = false;
+  let setupAnalysis: SourceAnalysis | undefined;
+  let scriptUsesCssModule = false;
+  let scriptHasDynamicImport = false;
+  const scriptVueReferences: string[] = [];
+  const scriptVueGlobPatterns: string[] = [];
   const styleImports = [descriptor.script, descriptor.scriptSetup].flatMap((script) => {
     if (!script) return [];
     if (script.src || !SUPPORTED_SCRIPT_LANGUAGES.has(script.lang)) {
@@ -474,28 +478,26 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
       return [];
     }
     try {
-      return staticImports(`${path}.${script.lang ?? "js"}`, script.content);
+      const analysis = sourceAnalysis(`${path}.${script.lang ?? "js"}`, script.content);
+      if (script === descriptor.scriptSetup) setupAnalysis = analysis;
+      if (analysis.usesCssModule) scriptUsesCssModule = true;
+      if (analysis.hasDynamicImport) scriptHasDynamicImport = true;
+      scriptVueReferences.push(
+        ...analysis.imports.filter((record) => !record.typeOnly).map((record) => record.specifier),
+      );
+      scriptVueGlobPatterns.push(...analysis.vueGlobPatterns);
+      return analysis.staticImports;
     } catch {
       scriptImportsUnverifiable = true;
       return [];
     }
   });
-
-  let componentImports: StaticImportBinding[] = [];
-  if (
-    descriptor.scriptSetup &&
-    !descriptor.scriptSetup.src &&
-    SUPPORTED_SCRIPT_LANGUAGES.has(descriptor.scriptSetup.lang)
-  ) {
-    try {
-      componentImports = staticImportBindings(
-        `${path}.${descriptor.scriptSetup.lang ?? "js"}`,
-        descriptor.scriptSetup.content,
-      );
-    } catch {
-      componentImports = [];
-    }
-  }
+  const fallthroughUnverifiable =
+    Boolean(descriptor.script) ||
+    descriptor.scriptSetup?.src !== undefined ||
+    (Boolean(descriptor.scriptSetup) && !setupAnalysis) ||
+    setupAnalysis?.hasVueFallthroughMacro === true;
+  const componentImports: StaticImportBinding[] = setupAnalysis?.defaultImports ?? [];
 
   const offsets = utf8OffsetMap(source, [
     ...warnings.flatMap((warning) => [warning.start, warning.end]),
@@ -552,7 +554,8 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
       moduleSiblingUnsupported ||
       // An unreadable script could reference `$style` invisibly.
       scriptImportsUnverifiable ||
-      /\$style|useCssModule/.test([...state.expressionTexts, scriptText].join("\n")),
+      scriptUsesCssModule ||
+      /\$style|useCssModule/.test(state.expressionTexts.join("\n")),
     htmlElements: state.elements.map(toByteSite),
     componentSites: state.components.map(toByteSite),
     // Slot and template roots are element nodes without a template site, so
@@ -583,6 +586,9 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     // must resolve differently, so they stay separate.
     scriptStyleImports: [...new Set(styleImports)],
     scriptImportsUnverifiable,
+    scriptHasDynamicImport,
+    scriptVueReferences,
+    scriptVueGlobPatterns,
     styleBlockImports: styleBlockImports.map((entry) => ({
       ...entry,
       start: offset(entry.start),

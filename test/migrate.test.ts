@@ -803,6 +803,23 @@ test("closes Vue root fallthrough through static component callers", async () =>
   assert.doesNotMatch(await readFile(join(cwd, "Child.vue"), "utf8"), /<style/);
 });
 
+test("shadowed Vue macros do not open proven root fallthrough", async () => {
+  const cwd = await fixture();
+  await Promise.all([
+    writeFile(
+      join(cwd, "Child.vue"),
+      '<template>\n  <div class="passed">Child</div>\n</template>\n<script setup>\nconst defineProps = () => {};\nconst note = "defineOptions inheritAttrs";\ndefineProps();\n</script>\n<style scoped>\n.passed { padding: 13px; }\n</style>\n',
+    ),
+    writeFile(
+      join(cwd, "App.vue"),
+      '<template>\n  <Child class="passed" />\n  <main>App</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+    ),
+  ]);
+  const report = await migrate({ cwd, write: true });
+  assert.ok(!report.warnings.some((entry) => entry.code === "open-root-fallthrough"));
+  assert.doesNotMatch(await readFile(join(cwd, "Child.vue"), "utf8"), /<style/);
+});
+
 test("dynamic Vue import globs keep caller fallthrough open", async () => {
   const cwd = await fixture();
   await Promise.all([
@@ -827,6 +844,27 @@ test("dynamic Vue import globs keep caller fallthrough open", async () => {
         rule.file === "Child.vue" && rule.selector === ".passed" && rule.status === "retained",
     ),
   );
+});
+
+test("comments and strings that resemble Vue loaders do not open caller fallthrough", async () => {
+  const cwd = await fixture();
+  await Promise.all([
+    writeFile(
+      join(cwd, "Child.vue"),
+      '<template>\n  <div class="passed">Child</div>\n</template>\n<style scoped>\n.passed { padding: 13px; }\n</style>\n',
+    ),
+    writeFile(
+      join(cwd, "App.vue"),
+      '<template>\n  <Child class="passed" />\n  <main>App</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+    ),
+    writeFile(
+      join(cwd, "registry.ts"),
+      '// import("./Comment.vue");\nexport const note = \'import.meta.glob("./*.vue")\';\n',
+    ),
+  ]);
+  const report = await migrate({ cwd, write: true });
+  assert.ok(!report.warnings.some((entry) => entry.code === "open-root-fallthrough"));
+  assert.doesNotMatch(await readFile(join(cwd, "Child.vue"), "utf8"), /<style/);
 });
 
 test("extensionless local globs keep caller fallthrough open", async () => {
@@ -1271,6 +1309,17 @@ test("preserves multiline whitespace around rewritten $style bindings", async ()
     await readFile(join(cwd, "Card.vue"), "utf8"),
     '<template>\n  <p\n    class="p-[13px]"\n  >A</p>\n  <span>B</span>\n</template>\n',
   );
+});
+
+test("shadowed Vue names and string contents do not retain a CSS Module", async () => {
+  const cwd = await fixture();
+  await writeFile(
+    join(cwd, "Card.vue"),
+    '<template>\n  <p :class="$style.card">A</p>\n  <span>B</span>\n</template>\n<script setup>\nconst useCssModule = () => {};\nconst note = "$style defineProps defineOptions inheritAttrs";\nuseCssModule();\n</script>\n<style module>\n.card { padding: 13px; }\n</style>\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Card.vue", write: true });
+  assert.deepEqual(report.changedFiles, ["Card.vue"]);
+  assert.doesNotMatch(await readFile(join(cwd, "Card.vue"), "utf8"), /<style module>/);
 });
 
 test("$style outside proven member sites retains the module", async () => {

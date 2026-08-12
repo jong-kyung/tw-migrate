@@ -3,7 +3,7 @@ import { basename, dirname, extname, join, relative, resolve, sep } from "node:p
 
 import { utf8OffsetMap } from "../parser/html.ts";
 import { MISSING_STYLE_COMPILER_MESSAGES, isPreprocessorPath } from "../parser/style-compiler.ts";
-import type { CssImport, MigrationFailure, SourceFile } from "../types.ts";
+import type { CssImport, MigrationFailure } from "../types.ts";
 
 export const SOURCE_EXTENSIONS = new Set([
   ".html",
@@ -54,14 +54,6 @@ export function stylesheetSyntax(path: string): string | undefined {
 export function isStylesheetModule(path: string): boolean {
   const syntax = stylesheetSyntax(path);
   return syntax !== undefined && path.endsWith(`.module.${syntax}`);
-}
-
-export function sourceReferencesStyle(file: SourceFile, stylePath: string): boolean {
-  let importPath = normalizedRelativePath(dirname(file.path), stylePath);
-  if (!importPath.startsWith(".")) importPath = `./${importPath}`;
-  return [`'${importPath}'`, `"${importPath}"`, `\`${importPath}\``].some((literal) =>
-    file.source.includes(literal),
-  );
 }
 
 export function isProjectInput(workspaceRoot: string, path: string): boolean {

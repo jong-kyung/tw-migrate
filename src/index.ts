@@ -22,7 +22,6 @@ import {
   rejectSymlinkTarget,
   snapshotFile,
   snapshotLoadedSource,
-  sourceReferencesStyle,
   stylesheetSyntax,
   SOURCE_EXTENSIONS,
 } from "./util/shared.ts";
@@ -543,7 +542,8 @@ async function preparePackage(
             !preparedHtml.generatedPaths.has(path) &&
             (!isPreprocessorPath(path) ||
               preparedHtml.stylePaths.has(path) ||
-              packageSources.some((file) => sourceReferencesStyle(file, path))),
+              preparedVue.stylePaths.has(path) ||
+              packageSources.some((file) => importsStylesheet(file, path))),
         );
   if (targets.length === 0 && preparedVue.stylesheets.length === 0) {
     return vueWarningsOnlyResult(preparedVue);

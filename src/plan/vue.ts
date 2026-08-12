@@ -1,6 +1,6 @@
 import { dirname, extname, join, resolve } from "node:path";
 
-import { staticImports, validateCss } from "../native.ts";
+import { sourceAnalysis, validateCss } from "../native.ts";
 import { compileStyleEntry, isPreprocessorPath } from "../parser/style-compiler.ts";
 import type { StyleCompilers } from "../parser/style-compiler.ts";
 import { analyzeVueSource, loadProjectVueCompiler } from "../parser/vue.ts";
@@ -59,22 +59,13 @@ function vueReferenceTarget(
   return [target, `${target}.vue`, join(target, "index.vue")].find((path) => vuePaths.has(path));
 }
 
-function vueLiteralTargets(file: SourceFile, vuePaths: Set<string>): Set<string> {
+function vueGlobTargets(patterns: string[], vuePaths: Set<string>): Set<string> {
   return new Set(
-    [...file.source.matchAll(/(["'`])([^"'`\r\n]+)\1/g)].flatMap((match) => {
-      // A local glob can match `.vue` files without spelling the extension
-      // (`import.meta.glob("./components/*")`), so any glob-bearing local
-      // pattern conservatively opens every caller surface.
-      if (
-        /[?*[\]{}]/.test(match[2]) &&
-        (match[2].includes("vue") || isLocalVueReference(match[2]))
-      ) {
-        return [...vuePaths];
-      }
-      const target = vueReferenceTarget(file.path, match[2], vuePaths);
-      if (target) return [target];
-      return match[2].includes(".vue") ? [...vuePaths] : [];
-    }),
+    patterns.flatMap((pattern) =>
+      /[?*[\]{}]/.test(pattern) && (pattern.includes("vue") || isLocalVueReference(pattern))
+        ? [...vuePaths]
+        : [],
+    ),
   );
 }
 
@@ -144,25 +135,40 @@ function buildVueComponentGraph(
 
   for (const file of sourceFiles) {
     let references: string[];
+    let vueReferences: string[];
     let blockReferences: string[] = [];
+    let hasDynamicImport = false;
+    let vueGlobPatterns: string[] = [];
     if (extname(file.path) === ".vue") {
       const fileAnalysis = analyses.get(file.path);
       if (fileAnalysis && !fileAnalysis.retained) {
         references = fileAnalysis.scriptStyleImports;
+        vueReferences = fileAnalysis.scriptVueReferences;
         blockReferences = fileAnalysis.styleBlockImports.map((entry) => entry.reference);
+        hasDynamicImport = fileAnalysis.scriptHasDynamicImport;
+        vueGlobPatterns = fileAnalysis.scriptVueGlobPatterns;
       } else {
         references = [];
+        vueReferences = [];
       }
     } else {
       try {
-        references = staticImports(file.path, file.source);
+        const analysis = sourceAnalysis(file.path, file.source);
+        references = analysis.staticImports;
+        vueReferences = analysis.imports
+          .filter((record) => !record.typeOnly)
+          .map((record) => record.specifier);
+        hasDynamicImport = analysis.hasDynamicImport;
+        vueGlobPatterns = analysis.vueGlobPatterns;
       } catch {
         references = [];
+        vueReferences = [];
+        hasDynamicImport = true;
       }
     }
     if (
-      /\bimport\s*\(/.test(file.source) ||
-      references.some(
+      hasDynamicImport ||
+      vueReferences.some(
         (reference) =>
           !stylesheetReference.test(reference) &&
           isLocalVueReference(reference) &&
@@ -189,7 +195,7 @@ function buildVueComponentGraph(
       unresolvedStyleImport = true;
     }
     const imported = new Set(
-      references.flatMap((reference) => {
+      vueReferences.flatMap((reference) => {
         const target = vueReferenceTarget(file.path, reference, vuePaths);
         return target ? [target] : [];
       }),
@@ -199,7 +205,7 @@ function buildVueComponentGraph(
         callerOpen.add(target);
       }
     }
-    for (const target of vueLiteralTargets(file, vuePaths)) {
+    for (const target of vueGlobTargets(vueGlobPatterns, vuePaths)) {
       if (!imported.has(target)) callerOpen.add(target);
     }
   }

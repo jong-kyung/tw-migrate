@@ -5,13 +5,16 @@
 //! module records are reported.
 
 use oxc_allocator::Allocator;
-use oxc_ast::ast::{Argument, Expression};
+use oxc_ast::ast::{
+    Argument, ArrayExpressionElement, Expression, IdentifierReference, ImportDeclarationSpecifier,
+};
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::Parser;
-use oxc_span::SourceType;
+use oxc_semantic::{Scoping, SemanticBuilder};
+use oxc_syntax::symbol::SymbolId;
 use serde::Serialize;
 
-use crate::at_rules::parse_css;
+use crate::{at_rules::parse_css, js_rewrite::source_type_for_path};
 use oxc_css_parser::ast::{
     AtRulePrelude, ComponentValue, Function, FunctionName, ImportPreludeHref, InterpolableIdent,
     InterpolableStr, MediaQuery, Statement, UrlValue,
@@ -32,23 +35,97 @@ struct SourceImport {
     dynamic: bool,
 }
 
-struct ImportCollector {
-    imports: Vec<SourceImport>,
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DefaultImportBinding {
+    source: String,
+    local: String,
 }
 
-impl<'a> Visit<'a> for ImportCollector {
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SourceAnalysis {
+    imports: Vec<SourceImport>,
+    static_imports: Vec<String>,
+    default_imports: Vec<DefaultImportBinding>,
+    vue_glob_patterns: Vec<String>,
+    has_dynamic_import: bool,
+    has_vue_fallthrough_macro: bool,
+    uses_css_module: bool,
+}
+
+struct SourceCollector<'s> {
+    scoping: &'s Scoping,
+    use_css_module_symbols: Vec<SymbolId>,
+    vue_namespace_symbols: Vec<SymbolId>,
+    analysis: SourceAnalysis,
+}
+
+impl SourceCollector<'_> {
+    fn symbol(&self, identifier: &IdentifierReference<'_>) -> Option<SymbolId> {
+        self.scoping
+            .get_reference(identifier.reference_id.get()?)
+            .symbol_id()
+    }
+
+    fn is_unbound(&self, identifier: &IdentifierReference<'_>) -> bool {
+        self.symbol(identifier).is_none()
+    }
+
+    fn collect_glob_argument(&mut self, argument: &Argument<'_>) {
+        match argument {
+            Argument::StringLiteral(literal) => {
+                self.analysis.vue_glob_patterns.push(literal.value.to_string());
+            }
+            Argument::TemplateLiteral(template) if template.expressions.is_empty() => {
+                if let Some(value) = template
+                    .quasis
+                    .first()
+                    .and_then(|quasi| quasi.value.cooked.as_ref())
+                {
+                    self.analysis.vue_glob_patterns.push(value.to_string());
+                }
+            }
+            Argument::ArrayExpression(array) => {
+                for element in &array.elements {
+                    match element {
+                        ArrayExpressionElement::StringLiteral(literal) => self
+                            .analysis
+                            .vue_glob_patterns
+                            .push(literal.value.to_string()),
+                        ArrayExpressionElement::TemplateLiteral(template)
+                            if template.expressions.is_empty() =>
+                        {
+                            if let Some(value) = template
+                                .quasis
+                                .first()
+                                .and_then(|quasi| quasi.value.cooked.as_ref())
+                            {
+                                self.analysis.vue_glob_patterns.push(value.to_string());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl<'a> Visit<'a> for SourceCollector<'_> {
     fn visit_import_declaration(&mut self, decl: &oxc_ast::ast::ImportDeclaration<'a>) {
         let type_only = decl.import_kind.is_type()
             || decl.specifiers.as_ref().is_some_and(|specifiers| {
                 !specifiers.is_empty()
                     && specifiers.iter().all(|specifier| match specifier {
-                        oxc_ast::ast::ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                        ImportDeclarationSpecifier::ImportSpecifier(named) => {
                             named.import_kind.is_type()
                         }
                         _ => false,
                     })
             });
-        self.imports.push(SourceImport {
+        self.analysis.imports.push(SourceImport {
             specifier: decl.source.value.to_string(),
             type_only,
             // An import attribute clause such as `with { type: 'css' }`
@@ -56,6 +133,19 @@ impl<'a> Visit<'a> for ImportCollector {
             // record cannot prove unconditional loading.
             dynamic: decl.with_clause.is_some(),
         });
+        if !type_only && decl.phase.is_none() {
+            self.analysis
+                .static_imports
+                .push(decl.source.value.to_string());
+            for specifier in decl.specifiers.iter().flatten() {
+                if let ImportDeclarationSpecifier::ImportDefaultSpecifier(specifier) = specifier {
+                    self.analysis.default_imports.push(DefaultImportBinding {
+                        source: decl.source.value.to_string(),
+                        local: specifier.local.name.to_string(),
+                    });
+                }
+            }
+        }
         walk::walk_import_declaration(self, decl);
     }
 
@@ -66,7 +156,7 @@ impl<'a> Visit<'a> for ImportCollector {
                     .specifiers
                     .iter()
                     .all(|specifier| specifier.export_kind.is_type()));
-        self.imports.push(SourceImport {
+        self.analysis.imports.push(SourceImport {
             specifier: decl.source.value.to_string(),
             type_only,
             dynamic: false,
@@ -75,7 +165,7 @@ impl<'a> Visit<'a> for ImportCollector {
     }
 
     fn visit_export_all_declaration(&mut self, decl: &oxc_ast::ast::ExportAllDeclaration<'a>) {
-        self.imports.push(SourceImport {
+        self.analysis.imports.push(SourceImport {
             specifier: decl.source.value.to_string(),
             type_only: decl.export_kind.is_type(),
             dynamic: false,
@@ -84,8 +174,9 @@ impl<'a> Visit<'a> for ImportCollector {
     }
 
     fn visit_import_expression(&mut self, expression: &oxc_ast::ast::ImportExpression<'a>) {
+        self.analysis.has_dynamic_import = true;
         if let Expression::StringLiteral(literal) = &expression.source {
-            self.imports.push(SourceImport {
+            self.analysis.imports.push(SourceImport {
                 specifier: literal.value.to_string(),
                 type_only: false,
                 dynamic: true,
@@ -101,7 +192,7 @@ impl<'a> Visit<'a> for ImportCollector {
         if let oxc_ast::ast::TSModuleReference::ExternalModuleReference(reference) =
             &decl.module_reference
         {
-            self.imports.push(SourceImport {
+            self.analysis.imports.push(SourceImport {
                 specifier: reference.expression.value.to_string(),
                 type_only: decl.import_kind.is_type(),
                 dynamic: false,
@@ -111,35 +202,129 @@ impl<'a> Visit<'a> for ImportCollector {
     }
 
     fn visit_call_expression(&mut self, call: &oxc_ast::ast::CallExpression<'a>) {
-        if let Expression::Identifier(callee) = &call.callee
-            && callee.name == "require"
-            && let Some(Argument::StringLiteral(literal)) = call.arguments.first()
-        {
-            self.imports.push(SourceImport {
-                specifier: literal.value.to_string(),
-                type_only: false,
-                dynamic: true,
-            });
+        if let Expression::Identifier(callee) = &call.callee {
+            if callee.name == "require"
+                && let Some(Argument::StringLiteral(literal)) = call.arguments.first()
+            {
+                self.analysis.imports.push(SourceImport {
+                    specifier: literal.value.to_string(),
+                    type_only: false,
+                    dynamic: true,
+                });
+            }
+            if matches!(callee.name.as_str(), "defineOptions" | "defineProps")
+                && self.is_unbound(callee)
+            {
+                self.analysis.has_vue_fallthrough_macro = true;
+            }
+            if self
+                .symbol(callee)
+                .is_some_and(|symbol| self.use_css_module_symbols.contains(&symbol))
+            {
+                self.analysis.uses_css_module = true;
+            }
+        } else if let Expression::StaticMemberExpression(member) = &call.callee {
+            if member.property.name == "glob"
+                && matches!(&member.object, Expression::ImportMeta(_))
+                && let Some(argument) = call.arguments.first()
+            {
+                self.collect_glob_argument(argument);
+            } else if member.property.name == "useCssModule"
+                && let Expression::Identifier(object) = &member.object
+                && self
+                    .symbol(object)
+                    .is_some_and(|symbol| self.vue_namespace_symbols.contains(&symbol))
+            {
+                self.analysis.uses_css_module = true;
+            }
         }
         walk::walk_call_expression(self, call);
     }
+
+    fn visit_identifier_reference(&mut self, identifier: &IdentifierReference<'a>) {
+        if identifier.name == "$style" && self.is_unbound(identifier) {
+            self.analysis.uses_css_module = true;
+        }
+        walk::walk_identifier_reference(self, identifier);
+    }
+
+    fn visit_static_member_expression(&mut self, member: &oxc_ast::ast::StaticMemberExpression<'a>) {
+        if member.property.name == "$style" && matches!(&member.object, Expression::ThisExpression(_)) {
+            self.analysis.uses_css_module = true;
+        }
+        walk::walk_static_member_expression(self, member);
+    }
+
+    fn visit_computed_member_expression(
+        &mut self,
+        member: &oxc_ast::ast::ComputedMemberExpression<'a>,
+    ) {
+        if matches!(&member.object, Expression::ThisExpression(_))
+            && matches!(&member.expression, Expression::StringLiteral(literal) if literal.value == "$style")
+        {
+            self.analysis.uses_css_module = true;
+        }
+        walk::walk_computed_member_expression(self, member);
+    }
 }
 
-/// Parse one JavaScript or TypeScript source and return its module records
-/// as JSON. A file that does not parse is an error, which the caller treats
-/// as having no provable imports.
-pub fn collect_source_imports_json(source: &str, path: &str) -> Result<String, String> {
-    let source_type = SourceType::from_path(path).unwrap_or_default();
+/// Parse and semantically analyze one JavaScript or TypeScript source once,
+/// returning every fact the TypeScript orchestration layer needs.
+pub fn source_analysis_json(path: &str, source: &str) -> Result<String, String> {
+    let source_type = source_type_for_path(path)?;
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, source, source_type).parse();
     if parsed.panicked || !parsed.diagnostics.is_empty() {
         return Err(format!("Failed to parse {path}"));
     }
-    let mut collector = ImportCollector {
-        imports: Vec::new(),
+    let semantic = SemanticBuilder::new_compiler().build(&parsed.program);
+    if !semantic.diagnostics.is_empty() {
+        return Err(format!("Failed to analyze {path}"));
+    }
+    let mut use_css_module_symbols = Vec::new();
+    let mut vue_namespace_symbols = Vec::new();
+    for statement in &parsed.program.body {
+        let oxc_ast::ast::Statement::ImportDeclaration(declaration) = statement else {
+            continue;
+        };
+        if declaration.source.value != "vue" || declaration.import_kind.is_type() {
+            continue;
+        }
+        for specifier in declaration.specifiers.iter().flatten() {
+            match specifier {
+                ImportDeclarationSpecifier::ImportSpecifier(specifier)
+                    if specifier.imported.name() == "useCssModule"
+                        && !specifier.import_kind.is_type() =>
+                {
+                    if let Some(symbol) = specifier.local.symbol_id.get() {
+                        use_css_module_symbols.push(symbol);
+                    }
+                }
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(specifier) => {
+                    if let Some(symbol) = specifier.local.symbol_id.get() {
+                        vue_namespace_symbols.push(symbol);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut collector = SourceCollector {
+        scoping: semantic.semantic.scoping(),
+        use_css_module_symbols,
+        vue_namespace_symbols,
+        analysis: SourceAnalysis {
+            imports: Vec::new(),
+            static_imports: Vec::new(),
+            default_imports: Vec::new(),
+            vue_glob_patterns: Vec::new(),
+            has_dynamic_import: false,
+            has_vue_fallthrough_macro: false,
+            uses_css_module: false,
+        },
     };
     collector.visit_program(&parsed.program);
-    serde_json::to_string(&collector.imports).map_err(|error| error.to_string())
+    serde_json::to_string(&collector.analysis).map_err(|error| error.to_string())
 }
 
 #[derive(Serialize)]
@@ -374,10 +559,11 @@ pub fn collect_css_directives_json(source: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     fn imports(source: &str, path: &str) -> Vec<(String, bool, bool)> {
-        let parsed: Vec<serde_json::Value> =
-            serde_json::from_str(&super::collect_source_imports_json(source, path).unwrap())
-                .unwrap();
-        parsed
+        let parsed: serde_json::Value =
+            serde_json::from_str(&super::source_analysis_json(path, source).unwrap()).unwrap();
+        parsed["imports"]
+            .as_array()
+            .unwrap()
             .iter()
             .map(|import| {
                 (
@@ -425,7 +611,59 @@ mod tests {
 
     #[test]
     fn rejects_unparseable_sources() {
-        assert!(super::collect_source_imports_json("import from from;", "/p/x.ts").is_err());
+        assert!(super::source_analysis_json("/p/x.ts", "import from from;").is_err());
+    }
+
+    #[test]
+    fn analyzes_vue_syntax_semantically() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/registry.ts",
+                "import Child from './Child.vue';\n\
+                 import { useCssModule as css } from 'vue';\n\
+                 import * as Vue from 'vue';\n\
+                 const patterns = import.meta.glob(['./*.vue', `./nested/*`]);\n\
+                 const lazy = import('./Lazy.vue');\n\
+                 defineProps<{ class?: string }>();\n\
+                 css();\n\
+                 Vue.useCssModule();\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            parsed["defaultImports"],
+            serde_json::json!([{ "source": "./Child.vue", "local": "Child" }])
+        );
+        assert_eq!(
+            parsed["vueGlobPatterns"],
+            serde_json::json!(["./*.vue", "./nested/*"])
+        );
+        assert_eq!(parsed["hasDynamicImport"], true);
+        assert_eq!(parsed["hasVueFallthroughMacro"], true);
+        assert_eq!(parsed["usesCssModule"], true);
+    }
+
+    #[test]
+    fn ignores_vue_names_in_comments_strings_and_shadowed_bindings() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/component.ts",
+                "// import('./Comment.vue'); defineProps(); useCssModule(); $style\n\
+                 const text = \"defineOptions inheritAttrs useCssModule $style\";\n\
+                 const defineProps = () => {};\n\
+                 const useCssModule = () => {};\n\
+                 const unrelated = { $style: true };\n\
+                 defineProps();\n\
+                 useCssModule();\n\
+                 unrelated.$style;\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["hasDynamicImport"], false);
+        assert_eq!(parsed["hasVueFallthroughMacro"], false);
+        assert_eq!(parsed["usesCssModule"], false);
     }
 
     #[test]

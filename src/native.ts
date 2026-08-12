@@ -9,15 +9,29 @@ export interface StaticImportBinding {
   local: string;
 }
 
+export interface SourceImportRecord {
+  specifier: string;
+  typeOnly: boolean;
+  dynamic: boolean;
+}
+
+export interface SourceAnalysis {
+  imports: SourceImportRecord[];
+  staticImports: string[];
+  defaultImports: StaticImportBinding[];
+  vueGlobPatterns: string[];
+  hasDynamicImport: boolean;
+  hasVueFallthroughMacro: boolean;
+  usesCssModule: boolean;
+}
+
 interface Binding {
   collectMediaConditions: (request: string) => string;
-  collectSourceImports: (source: string, path: string) => string;
+  sourceAnalysis: (path: string, source: string) => string;
   collectCssDirectives: (source: string) => string;
   mediaProbeKey: (css: string) => string;
   decodeSourceMap: (sourceMap: string) => string;
   planBatchMigration: (request: string) => string;
-  staticImportBindings: (path: string, source: string) => StaticImportBinding[];
-  staticImports: (path: string, source: string) => string[];
   staticStringExpression: (path: string, source: string) => string | null;
   validateCss: (source: string) => void;
 }
@@ -53,13 +67,20 @@ try {
 
 export const {
   collectMediaConditions,
-  collectSourceImports,
   collectCssDirectives,
   mediaProbeKey,
   decodeSourceMap,
   planBatchMigration,
-  staticImportBindings,
-  staticImports,
   staticStringExpression,
   validateCss,
 } = binding;
+
+const sourceAnalysisCache = new Map<string, { source: string; analysis: SourceAnalysis }>();
+
+export function sourceAnalysis(path: string, source: string): SourceAnalysis {
+  const cached = sourceAnalysisCache.get(path);
+  if (cached?.source === source) return cached.analysis;
+  const analysis = JSON.parse(binding.sourceAnalysis(path, source)) as SourceAnalysis;
+  sourceAnalysisCache.set(path, { source, analysis });
+  return analysis;
+}

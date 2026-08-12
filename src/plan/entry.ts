@@ -13,7 +13,8 @@
 import { createRequire } from "node:module";
 import { dirname, extname, join, resolve } from "node:path";
 
-import { collectCssDirectives, collectSourceImports } from "../native.ts";
+import { collectCssDirectives, sourceAnalysis } from "../native.ts";
+import type { SourceImportRecord } from "../native.ts";
 import { parseHtmlSource } from "../parser/html.ts";
 import { isWithin, maskCssComments } from "../util/shared.ts";
 import type { PreparedSourceFile } from "../types.ts";
@@ -215,22 +216,11 @@ export function scanProof(options: {
   return isWithin(dirname(options.entry), options.packageRoot) ? "automatic" : null;
 }
 
-interface SourceImportRecord {
-  specifier: string;
-  typeOnly: boolean;
-  dynamic: boolean;
-}
-
-const importRecordCache = new Map<string, { source: string; records: SourceImportRecord[] }>();
-
 /// Parsed module records of one source file through the native oxc parser.
 /// Vue SFC scripts are extracted first; a file that does not parse has no
-/// provable imports, which only makes proofs fail conservatively. Records
-/// are memoized by path and content because every package's proofs scan
-/// the workspace corpus.
+/// provable imports, which only makes proofs fail conservatively. Native
+/// source analysis is memoized by path and content.
 function sourceImports(file: { path: string; source: string }): SourceImportRecord[] {
-  const cached = importRecordCache.get(file.path);
-  if (cached !== undefined && cached.source === file.source) return cached.records;
   const extension = extname(file.path);
   if (extension === ".html") return [];
   const sources =
@@ -250,32 +240,14 @@ function sourceImports(file: { path: string; source: string }): SourceImportReco
           return { source: match[2], path: `${file.path}${scriptExtension}` };
         })
       : [{ source: file.source, path: file.path }];
-  const records: SourceImportRecord[] = [];
-  for (const script of sources) {
+  return sources.flatMap((script) => {
     try {
-      const parsed: unknown = JSON.parse(collectSourceImports(script.source, script.path));
-      if (!Array.isArray(parsed)) continue;
-      for (const record of parsed) {
-        if (
-          record !== null &&
-          typeof record === "object" &&
-          typeof record.specifier === "string" &&
-          typeof record.typeOnly === "boolean" &&
-          typeof record.dynamic === "boolean"
-        ) {
-          records.push({
-            specifier: record.specifier,
-            typeOnly: record.typeOnly,
-            dynamic: record.dynamic,
-          });
-        }
-      }
+      return sourceAnalysis(script.path, script.source).imports;
     } catch {
       // Unparseable sources prove nothing.
+      return [];
     }
-  }
-  importRecordCache.set(file.path, { source: file.source, records });
-  return records;
+  });
 }
 
 const RESOLVABLE_EXTENSIONS = [
