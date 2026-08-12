@@ -1452,6 +1452,29 @@ test("shadowed Vue names and string contents do not retain a CSS Module", async 
   assert.doesNotMatch(await readFile(join(cwd, "Card.vue"), "utf8"), /<style module>/);
 });
 
+test("useCssModule used only from the template retains the CSS Module", async () => {
+  const cwd = await fixture();
+  await writeFile(
+    join(cwd, "Card.vue"),
+    '<template>\n  <p :class="$style.card" :data-kind="useCssModule().card">Card</p>\n  <span>Leaf</span>\n</template>\n<script setup>\nimport { useCssModule } from "vue";\n</script>\n<style module>\n.card { padding: 13px; }\n</style>\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Card.vue", write: true });
+  assert.ok(report.warnings.some((entry) => entry.code === "unsupported-css-module-reference"));
+  assert.ok(!report.changedFiles.includes("Card.vue"));
+  assert.match(await readFile(join(cwd, "Card.vue"), "utf8"), /<style module>/);
+});
+
+test("Options API instance aliases through assignment retain the CSS Module", async () => {
+  const cwd = await fixture();
+  await writeFile(
+    join(cwd, "Card.vue"),
+    '<template>\n  <p :class="$style.card">Card</p>\n  <span>Leaf</span>\n</template>\n<script>\nexport default { mounted() { let vm; vm = this; void vm.$style.card; } };\n</script>\n<style module>\n.card { padding: 13px; }\n</style>\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Card.vue", write: true });
+  assert.ok(report.warnings.some((entry) => entry.code === "unsupported-css-module-reference"));
+  assert.match(await readFile(join(cwd, "Card.vue"), "utf8"), /<style module>/);
+});
+
 test("Vue inline event handlers use statement context for module closure", async () => {
   const cwd = await fixture();
   const component = (handler: string) =>

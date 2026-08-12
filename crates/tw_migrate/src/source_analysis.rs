@@ -5,13 +5,14 @@
 //! and analyzed semantically before any fact is reported.
 
 use oxc_allocator::Allocator;
+use oxc_ast::AstKind;
 use oxc_ast::ast::{
     Argument, ArrayExpressionElement, BindingPattern, Expression, IdentifierReference,
     ImportDeclarationSpecifier, VariableDeclarator,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::Parser;
-use oxc_semantic::{Scoping, SemanticBuilder};
+use oxc_semantic::{Semantic, SemanticBuilder};
 use oxc_syntax::symbol::SymbolId;
 use serde::Serialize;
 
@@ -44,18 +45,47 @@ struct ExpressionAnalysis {
     static_string: Option<String>,
     vue_module_member: Option<String>,
     uses_css_module: bool,
+    references_use_css_module: bool,
 }
 
+/// Template expressions carry no bindings of their own, so any `$style` or
+/// `useCssModule` reference is a potential CSS Module access; the caller
+/// decides whether a script-provided binding shadows the Vue API.
 struct ExpressionCollector {
     uses_css_module: bool,
+    references_use_css_module: bool,
+}
+
+impl ExpressionCollector {
+    fn record(&mut self, name: &str) {
+        if name == "$style" {
+            self.uses_css_module = true;
+        }
+        if name == "useCssModule" {
+            self.references_use_css_module = true;
+        }
+    }
 }
 
 impl<'a> Visit<'a> for ExpressionCollector {
     fn visit_identifier_reference(&mut self, identifier: &IdentifierReference<'a>) {
-        if identifier.name == "$style" {
-            self.uses_css_module = true;
-        }
+        self.record(&identifier.name);
         walk::walk_identifier_reference(self, identifier);
+    }
+
+    fn visit_static_member_expression(&mut self, member: &oxc_ast::ast::StaticMemberExpression<'a>) {
+        self.record(&member.property.name);
+        walk::walk_static_member_expression(self, member);
+    }
+
+    fn visit_computed_member_expression(
+        &mut self,
+        member: &oxc_ast::ast::ComputedMemberExpression<'a>,
+    ) {
+        if let Expression::StringLiteral(literal) = &member.expression {
+            self.record(&literal.value);
+        }
+        walk::walk_computed_member_expression(self, member);
     }
 }
 
@@ -83,12 +113,16 @@ pub fn expression_analysis_json(path: &str, source: &str) -> Result<String, Stri
     };
     let mut collector = ExpressionCollector {
         uses_css_module: false,
+        references_use_css_module: false,
     };
     collector.visit_expression(&expression);
+    // The proven `$style.member` form is rewritten rather than retained, so
+    // it does not additionally count as an unresolvable API reference.
     serde_json::to_string(&ExpressionAnalysis {
         static_string,
         vue_module_member,
         uses_css_module: collector.uses_css_module,
+        references_use_css_module: collector.references_use_css_module,
     })
     .map_err(|error| error.to_string())
 }
@@ -104,19 +138,25 @@ struct SourceAnalysis {
     has_dynamic_import: bool,
     has_vue_fallthrough_macro: bool,
     uses_css_module: bool,
+    /// An unbound `useCssModule` reference: possibly the Vue API through
+    /// tooling-provided auto-imports, so CSS Module closure stays open.
+    has_unbound_use_css_module: bool,
+    /// A root-scope binding named `useCssModule` that is not the Vue
+    /// import; template references resolve to it instead of the Vue API.
+    defines_root_use_css_module: bool,
 }
 
-struct SourceCollector<'s> {
-    scoping: &'s Scoping,
+struct SourceCollector<'s, 'a> {
+    semantic: &'s Semantic<'a>,
     use_css_module_symbols: Vec<SymbolId>,
     vue_namespace_symbols: Vec<SymbolId>,
-    this_alias_symbols: Vec<SymbolId>,
     analysis: SourceAnalysis,
 }
 
-impl SourceCollector<'_> {
+impl<'a> SourceCollector<'_, 'a> {
     fn symbol(&self, identifier: &IdentifierReference<'_>) -> Option<SymbolId> {
-        self.scoping
+        self.semantic
+            .scoping()
             .get_reference(identifier.reference_id.get()?)
             .symbol_id()
     }
@@ -125,13 +165,51 @@ impl SourceCollector<'_> {
         self.symbol(identifier).is_none()
     }
 
-    fn is_this_alias(&self, expression: &Expression<'_>) -> bool {
+    /// True when the expression is provably not the component instance: a
+    /// literal-shaped value, or an identifier whose only binding is such a
+    /// value and is never reassigned.
+    fn provably_non_instance_expression(expression: &Expression<'_>) -> bool {
+        matches!(
+            expression.get_inner_expression(),
+            Expression::ObjectExpression(_)
+                | Expression::ArrayExpression(_)
+                | Expression::StringLiteral(_)
+                | Expression::NumericLiteral(_)
+                | Expression::BigIntLiteral(_)
+                | Expression::BooleanLiteral(_)
+                | Expression::NullLiteral(_)
+                | Expression::RegExpLiteral(_)
+                | Expression::TemplateLiteral(_)
+                | Expression::ArrowFunctionExpression(_)
+                | Expression::FunctionExpression(_)
+                | Expression::ClassExpression(_)
+        )
+    }
+
+    fn provably_non_instance_symbol(&self, symbol: SymbolId) -> bool {
+        if self.semantic.scoping().symbol_is_mutated(symbol) {
+            return false;
+        }
+        match self.semantic.symbol_declaration(symbol).kind() {
+            AstKind::VariableDeclarator(declarator) => declarator
+                .init
+                .as_ref()
+                .is_some_and(Self::provably_non_instance_expression),
+            AstKind::Function(_) | AstKind::Class(_) => true,
+            _ => false,
+        }
+    }
+
+    /// The old text scan treated every `$style` access as CSS Module usage.
+    /// Semantic analysis relaxes that only for objects provably unrelated
+    /// to the component instance; aliases through assignment, calls such as
+    /// `getCurrentInstance().proxy`, and unbound names all stay usage.
+    fn may_be_instance(&self, expression: &Expression<'_>) -> bool {
         match expression.get_inner_expression() {
-            Expression::ThisExpression(_) => true,
             Expression::Identifier(identifier) => self
                 .symbol(identifier)
-                .is_some_and(|symbol| self.this_alias_symbols.contains(&symbol)),
-            _ => false,
+                .is_none_or(|symbol| !self.provably_non_instance_symbol(symbol)),
+            expression => !Self::provably_non_instance_expression(expression),
         }
     }
 
@@ -184,7 +262,7 @@ impl SourceCollector<'_> {
     }
 }
 
-impl<'a> Visit<'a> for SourceCollector<'_> {
+impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
     fn visit_import_declaration(&mut self, decl: &oxc_ast::ast::ImportDeclaration<'a>) {
         let type_only = decl.import_kind.is_type()
             || decl.specifiers.as_ref().is_some_and(|specifiers| {
@@ -289,38 +367,32 @@ impl<'a> Visit<'a> for SourceCollector<'_> {
             }
         }
         if let Some(init) = &declarator.init
-            && self.is_this_alias(init)
+            && self.may_be_instance(init)
+            && let BindingPattern::ObjectPattern(pattern) = &declarator.id
+            && pattern
+                .properties
+                .iter()
+                .any(|property| property.key.is_specific_static_name("$style"))
         {
-            match &declarator.id {
-                BindingPattern::BindingIdentifier(identifier) => {
-                    if let Some(symbol) = identifier.symbol_id.get() {
-                        self.this_alias_symbols.push(symbol);
-                    }
-                }
-                BindingPattern::ObjectPattern(pattern)
-                    if pattern
-                        .properties
-                        .iter()
-                        .any(|property| property.key.is_specific_static_name("$style")) =>
-                {
-                    self.analysis.uses_css_module = true;
-                }
-                _ => {}
-            }
+            self.analysis.uses_css_module = true;
         }
         walk::walk_variable_declarator(self, declarator);
     }
 
     fn visit_call_expression(&mut self, call: &oxc_ast::ast::CallExpression<'a>) {
         if let Expression::Identifier(callee) = &call.callee {
-            if callee.name == "require"
-                && let Some(Argument::StringLiteral(literal)) = call.arguments.first()
-            {
-                self.analysis.imports.push(SourceImport {
-                    specifier: literal.value.to_string(),
-                    type_only: false,
-                    dynamic: true,
-                });
+            if callee.name == "require" {
+                if let Some(Argument::StringLiteral(literal)) = call.arguments.first() {
+                    self.analysis.imports.push(SourceImport {
+                        specifier: literal.value.to_string(),
+                        type_only: false,
+                        dynamic: true,
+                    });
+                } else {
+                    // A require whose target cannot be read statically may
+                    // load any module, so caller surfaces stay open.
+                    self.analysis.has_dynamic_import = true;
+                }
             }
             if matches!(callee.name.as_str(), "defineOptions" | "defineProps")
                 && self.is_unbound(callee)
@@ -360,6 +432,9 @@ impl<'a> Visit<'a> for SourceCollector<'_> {
         if identifier.name == "$style" && self.is_unbound(identifier) {
             self.analysis.uses_css_module = true;
         }
+        if identifier.name == "useCssModule" && self.is_unbound(identifier) {
+            self.analysis.has_unbound_use_css_module = true;
+        }
         if self
             .symbol(identifier)
             .is_some_and(|symbol| self.use_css_module_symbols.contains(&symbol))
@@ -370,7 +445,7 @@ impl<'a> Visit<'a> for SourceCollector<'_> {
     }
 
     fn visit_static_member_expression(&mut self, member: &oxc_ast::ast::StaticMemberExpression<'a>) {
-        if member.property.name == "$style" && self.is_this_alias(&member.object) {
+        if member.property.name == "$style" && self.may_be_instance(&member.object) {
             self.analysis.uses_css_module = true;
         }
         if member.property.name == "useCssModule"
@@ -388,8 +463,8 @@ impl<'a> Visit<'a> for SourceCollector<'_> {
         &mut self,
         member: &oxc_ast::ast::ComputedMemberExpression<'a>,
     ) {
-        if self.is_this_alias(&member.object)
-            && matches!(&member.expression, Expression::StringLiteral(literal) if literal.value == "$style")
+        if matches!(&member.expression, Expression::StringLiteral(literal) if literal.value == "$style")
+            && self.may_be_instance(&member.object)
         {
             self.analysis.uses_css_module = true;
         }
@@ -414,7 +489,12 @@ pub fn source_analysis_json(path: &str, source: &str) -> Result<String, String> 
     if parsed.panicked || !parsed.diagnostics.is_empty() {
         return Err(format!("Failed to parse {path}"));
     }
-    let semantic = SemanticBuilder::new_compiler().build(&parsed.program);
+    // Instance-alias checks resolve symbols back to their declaring node,
+    // which needs the full node store rather than the compiler profile.
+    let semantic = SemanticBuilder::new()
+        .with_build_nodes(true)
+        .with_check_syntax_error(true)
+        .build(&parsed.program);
     if !semantic.diagnostics.is_empty() {
         return Err(format!("Failed to analyze {path}"));
     }
@@ -446,11 +526,14 @@ pub fn source_analysis_json(path: &str, source: &str) -> Result<String, String> 
             }
         }
     }
+    let scoping = semantic.semantic.scoping();
+    let defines_root_use_css_module = scoping
+        .get_binding(scoping.root_scope_id(), "useCssModule".into())
+        .is_some_and(|symbol| !use_css_module_symbols.contains(&symbol));
     let mut collector = SourceCollector {
-        scoping: semantic.semantic.scoping(),
+        semantic: &semantic.semantic,
         use_css_module_symbols,
         vue_namespace_symbols,
-        this_alias_symbols: Vec::new(),
         analysis: SourceAnalysis {
             imports: Vec::new(),
             static_imports: Vec::new(),
@@ -460,6 +543,8 @@ pub fn source_analysis_json(path: &str, source: &str) -> Result<String, String> 
             has_dynamic_import: false,
             has_vue_fallthrough_macro: false,
             uses_css_module: false,
+            has_unbound_use_css_module: false,
+            defines_root_use_css_module,
         },
     };
     collector.visit_program(&parsed.program);
@@ -487,20 +572,29 @@ mod tests {
 
     #[test]
     fn analyzes_template_expressions_structurally() {
-        for (source, static_string, member, uses_css_module) in [
-            ("'card'", Some("card"), None, false),
-            ("`card`", Some("card"), None, false),
-            ("$style.card", None, Some("card"), true),
-            ("active ? $style.card : ''", None, None, true),
-            ("'$style.card useCssModule()'", Some("$style.card useCssModule()"), None, false),
+        for (source, static_string, member, uses_css_module, references_api) in [
+            ("'card'", Some("card"), None, false, false),
+            ("`card`", Some("card"), None, false, false),
+            ("$style.card", None, Some("card"), true, false),
+            ("active ? $style.card : ''", None, None, true, false),
+            ("useCssModule().card", None, None, false, true),
+            ("vm.$style.card", None, None, true, false),
+            (
+                "'$style.card useCssModule()'",
+                Some("$style.card useCssModule()"),
+                None,
+                false,
+                false,
+            ),
         ] {
             let parsed: serde_json::Value = serde_json::from_str(
                 &super::expression_analysis_json("Component.js", source).unwrap(),
             )
             .unwrap();
-            assert_eq!(parsed["staticString"], serde_json::json!(static_string));
-            assert_eq!(parsed["vueModuleMember"], serde_json::json!(member));
-            assert_eq!(parsed["usesCssModule"], uses_css_module);
+            assert_eq!(parsed["staticString"], serde_json::json!(static_string), "{source}");
+            assert_eq!(parsed["vueModuleMember"], serde_json::json!(member), "{source}");
+            assert_eq!(parsed["usesCssModule"], uses_css_module, "{source}");
+            assert_eq!(parsed["referencesUseCssModule"], references_api, "{source}");
         }
     }
 
@@ -541,6 +635,20 @@ mod tests {
     #[test]
     fn rejects_unparseable_sources() {
         assert!(super::source_analysis_json("/p/x.ts", "import from from;").is_err());
+    }
+
+    #[test]
+    fn marks_nonliteral_requires_dynamic() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/registry.js",
+                "const name = 'Card'; require(`./${name}.vue`);",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["imports"], serde_json::json!([]));
+        assert_eq!(parsed["hasDynamicImport"], true);
     }
 
     #[test]
@@ -586,6 +694,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed["usesCssModule"], false);
+        // The binding exists but is the Vue API, not a local shadow.
+        assert_eq!(parsed["definesRootUseCssModule"], false);
+    }
+
+    #[test]
+    fn distinguishes_local_use_css_module_shadows_from_unbound_references() {
+        let shadowed: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.vue.js",
+                "const useCssModule = () => {}; useCssModule();",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(shadowed["definesRootUseCssModule"], true);
+        assert_eq!(shadowed["hasUnboundUseCssModule"], false);
+
+        let unbound: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json("/p/Card.vue.js", "const styles = useCssModule();")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(unbound["definesRootUseCssModule"], false);
+        assert_eq!(unbound["hasUnboundUseCssModule"], true);
     }
 
     #[test]
@@ -615,6 +747,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(unrelated["usesCssModule"], false);
+    }
+
+    #[test]
+    fn recognizes_untracked_instance_aliases() {
+        for source in [
+            "let vm; vm = this; void vm.$style.card;",
+            "export default { mounted() { later(); const vm = this; function later() { void vm.$style.card; } } };",
+            "import { getCurrentInstance } from 'vue'; void getCurrentInstance().proxy.$style.card;",
+            "import { getCurrentInstance } from 'vue'; const instance = getCurrentInstance(); void instance.proxy.$style.card;",
+        ] {
+            let parsed: serde_json::Value = serde_json::from_str(
+                &super::source_analysis_json("/p/Card.vue.ts", source).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(parsed["usesCssModule"], true, "{source}");
+        }
     }
 
     #[test]
@@ -676,5 +824,7 @@ mod tests {
         assert_eq!(parsed["hasDynamicImport"], false);
         assert_eq!(parsed["hasVueFallthroughMacro"], false);
         assert_eq!(parsed["usesCssModule"], false);
+        assert_eq!(parsed["hasUnboundUseCssModule"], false);
+        assert_eq!(parsed["definesRootUseCssModule"], true);
     }
 }

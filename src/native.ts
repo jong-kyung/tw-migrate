@@ -23,6 +23,7 @@ export interface ExpressionAnalysis {
   staticString: string | null;
   vueModuleMember: string | null;
   usesCssModule: boolean;
+  referencesUseCssModule: boolean;
 }
 
 export interface SourceAnalysis {
@@ -34,6 +35,8 @@ export interface SourceAnalysis {
   hasDynamicImport: boolean;
   hasVueFallthroughMacro: boolean;
   usesCssModule: boolean;
+  hasUnboundUseCssModule: boolean;
+  definesRootUseCssModule: boolean;
 }
 
 export interface StylesheetAnalysis {
@@ -136,6 +139,8 @@ function sourceAnalysisResult(value: unknown): value is SourceAnalysis {
       value.hasDynamicImport,
       value.hasVueFallthroughMacro,
       value.usesCssModule,
+      value.hasUnboundUseCssModule,
+      value.definesRootUseCssModule,
     ].every((item) => typeof item === "boolean")
   );
 }
@@ -151,7 +156,8 @@ export function expressionAnalysis(path: string, source: string): ExpressionAnal
       object(value) &&
       (typeof value.staticString === "string" || value.staticString === null) &&
       (typeof value.vueModuleMember === "string" || value.vueModuleMember === null) &&
-      typeof value.usesCssModule === "boolean",
+      typeof value.usesCssModule === "boolean" &&
+      typeof value.referencesUseCssModule === "boolean",
   );
 }
 

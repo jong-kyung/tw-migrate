@@ -554,6 +554,17 @@ mod tests {
     }
 
     #[test]
+    fn collects_conditional_loading_import_modifiers() {
+        let source = "@import \"./layered.css\" layer(base);\n@import \"./grid.css\" supports(display: grid);\n";
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json("/p/main.css", source).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["imports"][0]["media"], "layer(base)");
+        assert_eq!(parsed["imports"][1]["media"], "supports(display: grid)");
+    }
+
+    #[test]
     fn collects_theme_tokens_and_global_at_rule_identities() {
         let parsed: serde_json::Value = serde_json::from_str(
             &super::stylesheet_analysis_json(

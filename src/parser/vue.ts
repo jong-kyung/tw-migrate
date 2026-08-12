@@ -244,6 +244,7 @@ interface TemplateState {
   vHtml: boolean;
   hasSlot: boolean;
   moduleClosureBroken: boolean;
+  referencesUseCssModule: boolean;
 }
 
 // Resolve the target project's own Vue 3 compiler. Vue 2 resolves but is
@@ -471,6 +472,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     vHtml: false,
     hasSlot: false,
     moduleClosureBroken: false,
+    referencesUseCssModule: false,
   };
   visitTemplateNode(source, template.ast, state);
   const alwaysRenderedRoots = template.ast.children.filter(
@@ -508,7 +510,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     try {
       const analysis = sourceAnalysis(`${path}.${script.lang ?? "js"}`, script.content);
       if (script === descriptor.scriptSetup) setupAnalysis = analysis;
-      if (analysis.usesCssModule) scriptUsesCssModule = true;
+      if (analysis.usesCssModule || analysis.hasUnboundUseCssModule) scriptUsesCssModule = true;
       if (analysis.hasDynamicImport) scriptHasDynamicImport = true;
       scriptImports.push(...analysis.imports);
       scriptVueReferences.push(
@@ -585,7 +587,11 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
       // An unreadable script could reference `$style` invisibly.
       scriptImportsUnverifiable ||
       scriptUsesCssModule ||
-      state.moduleClosureBroken,
+      state.moduleClosureBroken ||
+      // A template reference to `useCssModule` resolves to the Vue API
+      // unless the setup script provides a local binding with that name;
+      // Options API scripts never expose root constants to the template.
+      (state.referencesUseCssModule && setupAnalysis?.definesRootUseCssModule !== true),
     htmlElements: state.elements.map(toByteSite),
     componentSites: state.components.map(toByteSite),
     // Slot and template roots are element nodes without a template site, so
@@ -711,8 +717,11 @@ function visitTemplateNode(source: string, node: TemplateNode, state: TemplateSt
       if (!provenModuleExpression && expression?.usesCssModule) {
         state.moduleClosureBroken = true;
       }
+      if (expression?.referencesUseCssModule) state.referencesUseCssModule = true;
       if (prop.arg && !prop.arg.isStatic && prop.arg.content) {
-        state.moduleClosureBroken ||= templateExpression(prop.arg.content)?.usesCssModule ?? true;
+        const argExpression = templateExpression(prop.arg.content);
+        state.moduleClosureBroken ||= argExpression?.usesCssModule ?? true;
+        state.referencesUseCssModule ||= argExpression?.referencesUseCssModule ?? false;
       }
       // Injected markup carries no scope attribute, so scoped proofs are
       // unaffected -- but it can use any class an unscoped rule targets.
@@ -725,7 +734,9 @@ function visitTemplateNode(source: string, node: TemplateNode, state: TemplateSt
     else if (node.tagType === TAG_ELEMENT) state.elements.push(element);
   }
   if (node.type === NODE_INTERPOLATION && node.content?.content) {
-    state.moduleClosureBroken ||= templateExpression(node.content.content)?.usesCssModule ?? true;
+    const interpolation = templateExpression(node.content.content);
+    state.moduleClosureBroken ||= interpolation?.usesCssModule ?? true;
+    state.referencesUseCssModule ||= interpolation?.referencesUseCssModule ?? false;
   }
   for (const child of node.children ?? []) visitTemplateNode(source, child, state);
 }
@@ -753,7 +764,14 @@ function templateHandler(source: string): ExpressionAnalysis | undefined {
       "Component.handler.ts",
       `async function handler($event) { ${source} }`,
     );
-    return { staticString: null, vueModuleMember: null, usesCssModule: analysis.usesCssModule };
+    return {
+      staticString: null,
+      vueModuleMember: null,
+      usesCssModule: analysis.usesCssModule,
+      // Handler sources carry no bindings of their own, so an unbound
+      // reference is a potential Vue API call the script may not shadow.
+      referencesUseCssModule: analysis.hasUnboundUseCssModule,
+    };
   } catch {
     return undefined;
   }
