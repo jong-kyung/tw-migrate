@@ -276,6 +276,21 @@ impl<'a> Visit<'a> for SourceCollector<'_> {
     }
 
     fn visit_variable_declarator(&mut self, declarator: &VariableDeclarator<'a>) {
+        if let Some(Expression::Identifier(namespace)) = &declarator.init
+            && self
+                .symbol(namespace)
+                .is_some_and(|symbol| self.vue_namespace_symbols.contains(&symbol))
+            && let BindingPattern::ObjectPattern(pattern) = &declarator.id
+        {
+            for property in &pattern.properties {
+                if property.key.is_specific_static_name("useCssModule")
+                    && let BindingPattern::BindingIdentifier(identifier) = &property.value
+                    && let Some(symbol) = identifier.symbol_id.get()
+                {
+                    self.use_css_module_symbols.push(symbol);
+                }
+            }
+        }
         if let Some(init) = &declarator.init
             && self.is_this_alias(init)
         {
@@ -1262,15 +1277,17 @@ mod tests {
 
     #[test]
     fn recognizes_computed_vue_namespace_css_module_references() {
-        let parsed: serde_json::Value = serde_json::from_str(
-            &super::source_analysis_json(
-                "/p/Card.vue.ts",
-                "import * as Vue from 'vue'; Vue['useCssModule']();",
+        for source in [
+            "import * as Vue from 'vue'; Vue['useCssModule']();",
+            "import * as Vue from 'vue'; const { useCssModule } = Vue; useCssModule();",
+            "import * as Vue from 'vue'; const { useCssModule: css } = Vue; css();",
+        ] {
+            let parsed: serde_json::Value = serde_json::from_str(
+                &super::source_analysis_json("/p/Card.vue.ts", source).unwrap(),
             )
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(parsed["usesCssModule"], true);
+            .unwrap();
+            assert_eq!(parsed["usesCssModule"], true);
+        }
 
         let shadowed: serde_json::Value = serde_json::from_str(
             &super::source_analysis_json(
