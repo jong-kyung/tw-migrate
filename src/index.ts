@@ -877,6 +877,7 @@ async function planPreparedGroup(
     // collisions gate.
     const baseIdentities = new Set(
       atRuleIdentities(
+        `${entry.path}.group-base.css`,
         [entry.css, ...entry.graphSources.map((graphSource) => graphSource.source)].join("\n"),
       ),
     );
@@ -1165,26 +1166,29 @@ async function entryUnsafe(
 /// keyframes are renamed to unique migration names and never collide;
 /// `@font-face` has no prelude and is identified by its font-family
 /// descriptor.
-function atRuleIdentities(css: string, syntax = "css"): string[] {
-  return css.trim() === ""
-    ? []
-    : stylesheetAnalysis(`global-at-rules.${syntax}`, css).globalAtRuleIdentities;
+function atRuleIdentities(key: string, css: string): string[] {
+  return css.trim() === "" ? [] : stylesheetAnalysis(key, css).globalAtRuleIdentities;
 }
 
+/// Analysis keys carry each sheet's real identity so the native cache can
+/// serve repeated scans, including across finalization replans; a shared
+/// synthetic key would thrash the one cache slot on every distinct sheet.
 function stylesheetAtRuleIdentities(stylesheet: StylesheetEntry): string[] {
   if (stylesheet.vueAtRuleIdentities) return stylesheet.vueAtRuleIdentities;
   if (stylesheet.vueBlocks) {
-    return stylesheet.vueBlocks.flatMap((block) =>
+    return stylesheet.vueBlocks.flatMap((block, index) =>
       atRuleIdentities(
+        `${stylesheet.cssPath}.${index}.at-rules.${block.analysisSource ? "css" : block.syntax}`,
         block.analysisSource ?? block.content,
-        block.analysisSource ? "css" : block.syntax,
       ),
     );
   }
-  return atRuleIdentities(
-    stylesheet.analysisSource ?? stylesheet.cssSource,
-    stylesheet.analysisSource ? "css" : stylesheet.syntax,
-  );
+  return stylesheet.analysisSource === undefined
+    ? atRuleIdentities(
+        `${stylesheet.cssPath}.at-rules.${stylesheet.syntax ?? "css"}`,
+        stylesheet.cssSource,
+      )
+    : atRuleIdentities(`${stylesheet.cssPath}.at-rules.css`, stylesheet.analysisSource);
 }
 
 // The per-member planning tail: HTML link removal, planned-source
