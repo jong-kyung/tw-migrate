@@ -484,6 +484,7 @@ export function proveSharedEntry(options: SharedEntryProofOptions): SharedEntryP
     return undefined;
   };
   const inboundSeeds: string[] = [];
+  let foreignUnverifiable = false;
   for (const file of options.packageSources) {
     if (options.owned(file.path) || extname(file.path) === ".html") continue;
     // A foreign file that itself unconditionally loads the shared entry
@@ -491,21 +492,29 @@ export function proveSharedEntry(options: SharedEntryProofOptions): SharedEntryP
     // where the root application imports the entry and the child's
     // components exposes nothing. Deeper foreign chains stay conservative.
     if (importsEntry(file, options.entry)) continue;
-    for (const record of sourceImports(file)) {
+    const records = sourceImports(file);
+    // An unreadable foreign source can deep-import any child file without
+    // contributing seeds this loop could see, so the whole exposure
+    // surface turns conservative instead of silently dropping its edges.
+    if (records.includes(OPAQUE_SOURCE_IMPORT)) {
+      foreignUnverifiable = true;
+      continue;
+    }
+    for (const record of records) {
       if (record.typeOnly) continue;
       const resolved = resolveInbound(dirname(file.path), record.specifier);
       if (resolved !== undefined) inboundSeeds.push(resolved);
     }
   }
-  const exposed = exposedFiles(
-    options.packageRoot,
-    options.packageJson,
-    ownedSources,
-    inboundSeeds,
-  );
+  const exposed = foreignUnverifiable
+    ? "all"
+    : exposedFiles(options.packageRoot, options.packageJson, ownedSources, inboundSeeds);
 
   const provenConsumer = (consumer: PreparedSourceFile): boolean =>
     options.owned(consumer.path) &&
+    // An unparseable consumer matched through filename evidence can veto a
+    // proof but never satisfies one: its real imports are unknowable.
+    !sourceImports(consumer).includes(OPAQUE_SOURCE_IMPORT) &&
     reachable.has(consumer.path) &&
     (exposed === "all" ? false : !exposed.has(consumer.path)) &&
     (scan === "literal" || !options.ignoredPaths.has(consumer.path));

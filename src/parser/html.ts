@@ -61,6 +61,10 @@ export function parseHtmlSource(path: string, source: string): ParsedHtml {
   const errors: { code: string }[] = [];
   const document = parse(source, {
     sourceCodeLocationInfo: true,
+    // Without scripting, `<noscript>` content parses as real elements, so
+    // stylesheet links and style tags inside it keep defeating deletion
+    // proofs the way the browser's no-JS fallback rendering would.
+    scriptingEnabled: false,
     onParseError(error) {
       if (error.code !== "missing-doctype") errors.push(error);
     },

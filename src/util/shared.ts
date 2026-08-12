@@ -161,7 +161,10 @@ export function indexStylesheetDependents(
         references = [...references, ...possibleTargets()];
       }
     } catch {
-      references = possibleTargets();
+      // A stylesheet the parser rejects proves nothing about where its
+      // references point, including across package boundaries, so every
+      // candidate target in the workspace conservatively gains the edge.
+      references = allPossibleTargets;
     }
     for (const reference of new Set(references)) {
       const targets = styleSources.has(reference)

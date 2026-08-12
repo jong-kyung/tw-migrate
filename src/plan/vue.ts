@@ -285,17 +285,21 @@ export async function preparePackageVue({
     warnings: [],
     compiler: undefined,
   };
-  // An explicit non-vue stylesheet selection plans only that stylesheet.
-  if (explicitStyle && extname(explicitStyle) !== ".vue") return none;
+  // An explicit non-vue stylesheet selection plans no Vue style blocks,
+  // but the package's SFC scripts still carry import records that
+  // shared-entry proofs consume, so analysis proceeds without selection.
+  const analysisOnly = Boolean(explicitStyle) && extname(explicitStyle ?? "") !== ".vue";
   // Ignore filtering scopes what gets migrated, never what gets scanned: a
   // gitignored SFC's retained style blocks still shadow scoped deletions.
   const ownedVue = sourceFiles.filter(
     (file) => extname(file.path) === ".vue" && pathOwners.get(file.path) === packageRoot,
   );
-  const selected = ownedVue.filter(
-    (file) => targetable.has(file.path) && (!explicitStyle || file.path === explicitStyle),
-  );
-  if (selected.length === 0) return none;
+  const selected = analysisOnly
+    ? []
+    : ownedVue.filter(
+        (file) => targetable.has(file.path) && (!explicitStyle || file.path === explicitStyle),
+      );
+  if (ownedVue.length === 0 || (!analysisOnly && selected.length === 0)) return none;
 
   const loaded = await loadProjectVueCompiler(packageRoot);
   const warnings: MigrationWarning[] = [];

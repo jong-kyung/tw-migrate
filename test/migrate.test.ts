@@ -2153,6 +2153,23 @@ test("HTML script text resembling a style tag does not open the Vue shadow corpu
   assert.doesNotMatch(await readFile(join(cwd, "Card.vue"), "utf8"), /<style/);
 });
 
+test("noscript style fallbacks open the Vue shadow corpus", async () => {
+  const cwd = await fixture();
+  await Promise.all([
+    writeFile(
+      join(cwd, "Card.vue"),
+      '<template>\n  <div class="card">Card</div>\n  <span>Leaf</span>\n</template>\n<style scoped>\n.card { margin: 7px; }\n</style>\n',
+    ),
+    writeFile(
+      join(cwd, "index.html"),
+      "<noscript><style>.card { margin: 9px; }</style></noscript>\n",
+    ),
+  ]);
+  const report = await migrate({ cwd, styleFile: "Card.vue" });
+  assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
+  assert.equal(report.convertedRules, 0);
+});
+
 test("caller template edits do not recompile untouched preprocessor blocks", async () => {
   const cwd = await fixture();
   await Promise.all([
