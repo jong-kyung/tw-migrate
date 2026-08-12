@@ -145,8 +145,20 @@ function sourceAnalysisResult(value: unknown): value is SourceAnalysis {
   );
 }
 
+// The caches hold whole source texts, so a long-lived process invoking the
+// public migrate() API repeatedly needs an eviction bound; insertion order
+// approximates least-recently-analyzed within one migration.
+const ANALYSIS_CACHE_LIMIT = 4096;
 const sourceAnalysisCache = new Map<string, { source: string; analysis: SourceAnalysis }>();
 const stylesheetAnalysisCache = new Map<string, { source: string; analysis: StylesheetAnalysis }>();
+
+function bound(cache: Map<string, unknown>): void {
+  while (cache.size > ANALYSIS_CACHE_LIMIT) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+}
 
 export function expressionAnalysis(path: string, source: string): ExpressionAnalysis {
   return decode(
@@ -170,6 +182,7 @@ export function sourceAnalysis(path: string, source: string): SourceAnalysis {
     sourceAnalysisResult,
   );
   sourceAnalysisCache.set(path, { source, analysis });
+  bound(sourceAnalysisCache);
   return analysis;
 }
 
@@ -206,5 +219,6 @@ export function stylesheetAnalysis(path: string, source: string): StylesheetAnal
       typeof value.globalAtRulesUnverifiable === "boolean",
   );
   stylesheetAnalysisCache.set(path, { source, analysis });
+  bound(stylesheetAnalysisCache);
   return analysis;
 }
