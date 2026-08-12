@@ -168,7 +168,7 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
             try {
               return parseHtmlSource(path, source).links.length > 0;
             } catch {
-              return true;
+              return /<link\b/i.test(source);
             }
           })();
         if (!scope.targetable.has(path) && !mayReferenceModule) return undefined;

@@ -59,6 +59,18 @@ test("canonicalizes aliased cwd paths before Git discovery", async () => {
   }
 });
 
+test("ignores malformed scan-only HTML without stylesheet links", async () => {
+  const cwd = await fixture();
+  execFileSync("git", ["init", "-q"], { cwd });
+  await Promise.all([
+    writeFile(join(cwd, ".gitignore"), "ignored.html\n"),
+    writeFile(join(cwd, "ignored.html"), '<div id="a" id="b"></div>\n'),
+  ]);
+  const report = await migrate({ cwd });
+  assert.equal(report.convertedRules, 1);
+  assert.deepEqual(report.failures, []);
+});
+
 test("returns structured migration report fields", async () => {
   const cwd = await fixture();
   const report = await migrate({ cwd });
