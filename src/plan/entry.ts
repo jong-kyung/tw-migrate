@@ -11,7 +11,7 @@
 // migrates.
 
 import { createRequire } from "node:module";
-import { dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 
 import { collectCssDirectives, sourceAnalysis } from "../native.ts";
 import type { SourceImportRecord } from "../native.ts";
@@ -552,9 +552,10 @@ export function importsStylesheet(
 ): boolean {
   return sourceImports(file).some(
     (record) =>
-      !record.typeOnly &&
-      record.specifier.startsWith(".") &&
-      resolve(dirname(file.path), record.specifier) === stylePath,
+      (record === OPAQUE_SOURCE_IMPORT && file.source.includes(basename(stylePath))) ||
+      (!record.typeOnly &&
+        record.specifier.startsWith(".") &&
+        resolve(dirname(file.path), record.specifier) === stylePath),
   );
 }
 

@@ -215,6 +215,7 @@ export type VueAnalysis =
       scriptHasDynamicImport: boolean;
       scriptVueReferences: string[];
       scriptVueGlobPatterns: string[];
+      scriptVueGlobUnverifiable: boolean;
       styleBlockImports: VueStyleImport[];
       componentImports: StaticImportBinding[];
       fallthroughUnverifiable: boolean;
@@ -395,6 +396,13 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
         `The <style lang="${style.lang}"> language is not supported.`,
       );
       shadowPreprocessorTexts.push(style.content);
+      try {
+        if (stylesheetAnalysis(`${path}.css`, style.content).selectorsUnverifiable) {
+          escapeUnverifiable = true;
+        }
+      } catch {
+        escapeUnverifiable = true;
+      }
       continue;
     }
     // Vue exposes content bounds but not the outer tag bounds. Limit the
@@ -426,6 +434,13 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
       unscopedBlocks.push(block);
       if (style.lang && style.lang !== "css") {
         unscopedShadowPreprocessorTexts.push(style.content);
+        try {
+          if (stylesheetAnalysis(`${path}.${style.lang}`, style.content).selectorsUnverifiable) {
+            escapeUnverifiable = true;
+          }
+        } catch {
+          escapeUnverifiable = true;
+        }
       } else {
         unscopedShadowCssTexts.push(style.content);
       }
@@ -440,7 +455,9 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
       if (escapes.scopeEscapes.length > 0) {
         block.shadowSource = escapes.scopeShadowCss.join("\n") || "/* scope escapes extracted */";
       }
-      if (escapes.scopeEscapesUnverifiable) escapeUnverifiable = true;
+      if (escapes.scopeEscapesUnverifiable || escapes.selectorsUnverifiable) {
+        escapeUnverifiable = true;
+      }
     } catch {
       escapeUnverifiable = true;
     }
@@ -481,6 +498,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
   let scriptHasDynamicImport = false;
   const scriptVueReferences: string[] = [];
   const scriptVueGlobPatterns: string[] = [];
+  let scriptVueGlobUnverifiable = false;
   const styleImports = [descriptor.script, descriptor.scriptSetup].flatMap((script) => {
     if (!script) return [];
     if (script.src || !SUPPORTED_SCRIPT_LANGUAGES.has(script.lang)) {
@@ -497,6 +515,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
         ...analysis.imports.filter((record) => !record.typeOnly).map((record) => record.specifier),
       );
       scriptVueGlobPatterns.push(...analysis.vueGlobPatterns);
+      if (analysis.vueGlobUnverifiable) scriptVueGlobUnverifiable = true;
       return analysis.staticImports;
     } catch {
       scriptImportsUnverifiable = true;
@@ -601,6 +620,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     scriptHasDynamicImport,
     scriptVueReferences,
     scriptVueGlobPatterns,
+    scriptVueGlobUnverifiable,
     styleBlockImports: styleBlockImports.map((entry) => ({
       ...entry,
       start: offset(entry.start),

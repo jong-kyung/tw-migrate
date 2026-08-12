@@ -64,13 +64,6 @@ impl<'a> Visit<'a> for ExpressionCollector {
         }
         walk::walk_identifier_reference(self, identifier);
     }
-
-    fn visit_call_expression(&mut self, call: &oxc_ast::ast::CallExpression<'a>) {
-        if matches!(&call.callee, Expression::Identifier(callee) if callee.name == "useCssModule") {
-            self.uses_css_module = true;
-        }
-        walk::walk_call_expression(self, call);
-    }
 }
 
 pub fn expression_analysis_json(path: &str, source: &str) -> Result<String, String> {
@@ -114,6 +107,7 @@ struct SourceAnalysis {
     static_imports: Vec<String>,
     default_imports: Vec<DefaultImportBinding>,
     vue_glob_patterns: Vec<String>,
+    vue_glob_unverifiable: bool,
     has_dynamic_import: bool,
     has_vue_fallthrough_macro: bool,
     uses_css_module: bool,
@@ -137,10 +131,11 @@ impl SourceCollector<'_> {
         self.symbol(identifier).is_none()
     }
 
-    fn collect_glob_argument(&mut self, argument: &Argument<'_>) {
+    fn collect_glob_argument(&mut self, argument: &Argument<'_>) -> bool {
         match argument {
             Argument::StringLiteral(literal) => {
                 self.analysis.vue_glob_patterns.push(literal.value.to_string());
+                true
             }
             Argument::TemplateLiteral(template) if template.expressions.is_empty() => {
                 if let Some(value) = template
@@ -149,9 +144,13 @@ impl SourceCollector<'_> {
                     .and_then(|quasi| quasi.value.cooked.as_ref())
                 {
                     self.analysis.vue_glob_patterns.push(value.to_string());
+                    true
+                } else {
+                    false
                 }
             }
             Argument::ArrayExpression(array) => {
+                let mut readable = true;
                 for element in &array.elements {
                     match element {
                         ArrayExpressionElement::StringLiteral(literal) => self
@@ -167,13 +166,16 @@ impl SourceCollector<'_> {
                                 .and_then(|quasi| quasi.value.cooked.as_ref())
                             {
                                 self.analysis.vue_glob_patterns.push(value.to_string());
+                            } else {
+                                readable = false;
                             }
                         }
-                        _ => {}
+                        _ => readable = false,
                     }
                 }
+                readable
             }
-            _ => {}
+            _ => false,
         }
     }
 }
@@ -196,7 +198,7 @@ impl<'a> Visit<'a> for SourceCollector<'_> {
             // An import attribute clause such as `with { type: 'css' }`
             // constructs a stylesheet object without applying it, so the
             // record cannot prove unconditional loading.
-            dynamic: decl.with_clause.is_some(),
+            dynamic: decl.with_clause.is_some() || decl.phase.is_some(),
         });
         if !type_only && decl.phase.is_none() {
             self.analysis
@@ -291,9 +293,14 @@ impl<'a> Visit<'a> for SourceCollector<'_> {
         } else if let Expression::StaticMemberExpression(member) = &call.callee {
             if member.property.name == "glob"
                 && matches!(&member.object, Expression::ImportMeta(_))
-                && let Some(argument) = call.arguments.first()
             {
-                self.collect_glob_argument(argument);
+                if call
+                    .arguments
+                    .first()
+                    .is_none_or(|argument| !self.collect_glob_argument(argument))
+                {
+                    self.analysis.vue_glob_unverifiable = true;
+                }
             } else if member.property.name == "useCssModule"
                 && let Expression::Identifier(object) = &member.object
                 && self
@@ -310,11 +317,25 @@ impl<'a> Visit<'a> for SourceCollector<'_> {
         if identifier.name == "$style" && self.is_unbound(identifier) {
             self.analysis.uses_css_module = true;
         }
+        if self
+            .symbol(identifier)
+            .is_some_and(|symbol| self.use_css_module_symbols.contains(&symbol))
+        {
+            self.analysis.uses_css_module = true;
+        }
         walk::walk_identifier_reference(self, identifier);
     }
 
     fn visit_static_member_expression(&mut self, member: &oxc_ast::ast::StaticMemberExpression<'a>) {
         if member.property.name == "$style" && matches!(&member.object, Expression::ThisExpression(_)) {
+            self.analysis.uses_css_module = true;
+        }
+        if member.property.name == "useCssModule"
+            && let Expression::Identifier(object) = &member.object
+            && self
+                .symbol(object)
+                .is_some_and(|symbol| self.vue_namespace_symbols.contains(&symbol))
+        {
             self.analysis.uses_css_module = true;
         }
         walk::walk_static_member_expression(self, member);
@@ -374,6 +395,7 @@ pub fn source_analysis_json(path: &str, source: &str) -> Result<String, String> 
             }
         }
     }
+    let imported_use_css_module = !use_css_module_symbols.is_empty();
     let mut collector = SourceCollector {
         scoping: semantic.semantic.scoping(),
         use_css_module_symbols,
@@ -383,9 +405,10 @@ pub fn source_analysis_json(path: &str, source: &str) -> Result<String, String> 
             static_imports: Vec::new(),
             default_imports: Vec::new(),
             vue_glob_patterns: Vec::new(),
+            vue_glob_unverifiable: false,
             has_dynamic_import: false,
             has_vue_fallthrough_macro: false,
-            uses_css_module: false,
+            uses_css_module: imported_use_css_module,
         },
     };
     collector.visit_program(&parsed.program);
@@ -410,6 +433,7 @@ struct StylesheetAnalysis {
     scope_escapes: Vec<String>,
     scope_shadow_css: Vec<String>,
     scope_escapes_unverifiable: bool,
+    selectors_unverifiable: bool,
     theme_tokens: BTreeMap<String, String>,
     global_at_rule_identities: Vec<String>,
 }
@@ -474,6 +498,23 @@ fn scope_escape_name(name: &InterpolableIdent<'_>) -> bool {
         InterpolableIdent::Literal(name)
             if matches!(name.name, "deep" | "global" | "slotted" | "v-deep" | "v-global" | "v-slotted")
     )
+}
+
+fn selector_is_unverifiable(selector: &oxc_css_parser::ast::ComplexSelector<'_>) -> bool {
+    selector.children.iter().any(|child| {
+        let ComplexSelectorChild::CompoundSelector(compound) = child else {
+            return false;
+        };
+        compound.children.iter().any(|simple| match simple {
+            SimpleSelector::Class(class) => !matches!(class.name, InterpolableIdent::Literal(_)),
+            SimpleSelector::Id(id) => !matches!(id.name, InterpolableIdent::Literal(_)),
+            SimpleSelector::Type(oxc_css_parser::ast::TypeSelector::TagName(tag)) => {
+                !matches!(tag.name.name, InterpolableIdent::Literal(_))
+            }
+            SimpleSelector::Nesting(nesting) => nesting.suffix.is_some(),
+            _ => false,
+        })
+    })
 }
 
 fn collect_scope_escapes(
@@ -603,6 +644,7 @@ fn collect_at_rule_metadata(
             }
             _ => {}
         }
+        collect_at_rule_metadata(&block.statements, source, analysis);
     }
 }
 
@@ -648,6 +690,9 @@ fn collect_stylesheet_statements(
                 let mut direct = false;
                 for selector in &rule.selector.selectors {
                     direct |= collect_scope_escapes(selector, source, analysis);
+                    if selector_is_unverifiable(selector) {
+                        analysis.selectors_unverifiable = true;
+                    }
                 }
                 let nested = collect_stylesheet_statements(&rule.block.statements, source, analysis);
                 if nested {
@@ -750,6 +795,7 @@ pub fn stylesheet_analysis_json(path: &str, source: &str) -> Result<String, Stri
         scope_escapes: Vec::new(),
         scope_shadow_css: Vec::new(),
         scope_escapes_unverifiable: false,
+        selectors_unverifiable: false,
         theme_tokens: BTreeMap::new(),
         global_at_rule_identities: Vec::new(),
     };
@@ -1072,7 +1118,8 @@ mod tests {
                  const patterns = import.meta.glob(['./*.vue', `./nested/*`]);\n\
                  const lazy = import('./Lazy.vue');\n\
                  defineProps<{ class?: string }>();\n\
-                 css();\n\
+                 const getStyles = css;\n\
+                 getStyles();\n\
                  Vue.useCssModule();\n",
             )
             .unwrap(),
@@ -1087,8 +1134,23 @@ mod tests {
             serde_json::json!(["./*.vue", "./nested/*"])
         );
         assert_eq!(parsed["hasDynamicImport"], true);
+        assert_eq!(parsed["vueGlobUnverifiable"], false);
         assert_eq!(parsed["hasVueFallthroughMacro"], true);
         assert_eq!(parsed["usesCssModule"], true);
+    }
+
+    #[test]
+    fn marks_unreadable_vue_globs_unverifiable() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/registry.ts",
+                "const pattern = './*.vue'; import.meta.glob(pattern);",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["vueGlobPatterns"], serde_json::json!([]));
+        assert_eq!(parsed["vueGlobUnverifiable"], true);
     }
 
     #[test]
@@ -1173,6 +1235,7 @@ mod tests {
                 "/p/theme.css",
                 "@theme { --spacing-card: calc(1rem + 2px); }\n\
                  @font-face { font-family: \"My  Font\"; src: url(font.woff2); }\n\
+                 @media print { @font-face { font-family: Print; src: url(print.woff2); } }\n\
                  @property --angle { syntax: \"<angle>\"; }\n\
                  @page :left { margin: 1cm; }\n",
             )
@@ -1185,7 +1248,7 @@ mod tests {
         );
         assert_eq!(
             parsed["globalAtRuleIdentities"],
-            serde_json::json!(["font-face my font", "property --angle", "page"])
+            serde_json::json!(["font-face my font", "font-face print", "property --angle", "page"])
         );
     }
 
@@ -1204,6 +1267,20 @@ mod tests {
             serde_json::json!([".inside:is(.x, .y) {}", ".free {}"])
         );
         assert_eq!(parsed["scopeEscapesUnverifiable"], true);
+        assert_eq!(parsed["selectorsUnverifiable"], false);
+    }
+
+    #[test]
+    fn marks_interpolated_selectors_unverifiable() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/main.scss",
+                "$kind: card;\n.#{$kind} {}\n.block { &-active {} }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["selectorsUnverifiable"], true);
     }
 
     #[test]

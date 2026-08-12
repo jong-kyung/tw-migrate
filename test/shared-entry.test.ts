@@ -3,7 +3,12 @@ import { expect, test } from "vite-plus/test";
 import { join, resolve, sep } from "node:path";
 
 import { sourceAnalysis } from "../src/native.ts";
-import { proveSharedEntry, scanProof, tailwindEntryCatalog } from "../src/plan/entry.ts";
+import {
+  importsStylesheet,
+  proveSharedEntry,
+  scanProof,
+  tailwindEntryCatalog,
+} from "../src/plan/entry.ts";
 import { indexStylesheetDependents } from "../src/util/shared.ts";
 import type { PreparedSourceFile } from "../src/types.ts";
 
@@ -59,6 +64,16 @@ test("keeps dependency targets conservative when a stylesheet cannot parse", () 
   );
 
   expect(dependents.get(module)).toEqual([opaque]);
+});
+
+test("keeps filename evidence from an opaque stylesheet consumer", () => {
+  const stylePath = join(child, "theme.scss");
+  expect(
+    importsStylesheet(
+      file(join(child, "broken.ts"), "import './theme.scss';\nconst = ;\n"),
+      stylePath,
+    ),
+  ).toBe(true);
 });
 
 test("contains opaque stylesheet dependencies to their owning package", () => {
@@ -307,6 +322,15 @@ test("a prepared vue loader carries records parsed with its script language", ()
   const proofs = prove({ packageSources: [vueLoader, consumer] });
 
   expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(true);
+});
+
+test("source-phase imports do not prove shared entry loading", () => {
+  const sourceLoader = file(
+    join(child, "loader.js"),
+    "import source sheet from '../../globals.css';\nvoid sheet;\n",
+  );
+
+  expect(prove({ packageSources: [sourceLoader, consumer] })).toBe(null);
 });
 
 test("emitted javascript specifiers expose their typescript sources", () => {

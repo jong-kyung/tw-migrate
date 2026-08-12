@@ -1,6 +1,6 @@
 import { dirname, extname, join, resolve } from "node:path";
 
-import { sourceAnalysis, validateCss } from "../native.ts";
+import { sourceAnalysis, stylesheetAnalysis, validateCss } from "../native.ts";
 import { parseHtmlSource } from "../parser/html.ts";
 import { compileStyleEntry } from "../parser/style-compiler.ts";
 import type { StyleCompilers } from "../parser/style-compiler.ts";
@@ -60,13 +60,16 @@ function vueReferenceTarget(
   return [target, `${target}.vue`, join(target, "index.vue")].find((path) => vuePaths.has(path));
 }
 
-function vueGlobTargets(patterns: string[], vuePaths: Set<string>): Set<string> {
+function vueGlobTargets(importer: string, patterns: string[], vuePaths: Set<string>): Set<string> {
   return new Set(
-    patterns.flatMap((pattern) =>
-      /[?*[\]{}]/.test(pattern) && (pattern.includes("vue") || isLocalVueReference(pattern))
-        ? [...vuePaths]
-        : [],
-    ),
+    patterns.flatMap((pattern) => {
+      if (/[?*[\]{}]/.test(pattern)) {
+        return pattern.includes("vue") || isLocalVueReference(pattern) ? [...vuePaths] : [];
+      }
+      const target = vueReferenceTarget(importer, pattern, vuePaths);
+      if (target) return [target];
+      return pattern.includes(".vue") ? [...vuePaths] : [];
+    }),
   );
 }
 
@@ -140,6 +143,7 @@ function buildVueComponentGraph(
     let blockReferences: string[] = [];
     let hasDynamicImport = false;
     let vueGlobPatterns: string[] = [];
+    let vueGlobUnverifiable = false;
     if (extname(file.path) === ".vue") {
       const fileAnalysis = analyses.get(file.path);
       if (fileAnalysis && !fileAnalysis.retained) {
@@ -148,6 +152,7 @@ function buildVueComponentGraph(
         blockReferences = fileAnalysis.styleBlockImports.map((entry) => entry.reference);
         hasDynamicImport = fileAnalysis.scriptHasDynamicImport;
         vueGlobPatterns = fileAnalysis.scriptVueGlobPatterns;
+        vueGlobUnverifiable = fileAnalysis.scriptVueGlobUnverifiable;
       } else {
         references = [];
         vueReferences = [];
@@ -161,6 +166,7 @@ function buildVueComponentGraph(
           .map((record) => record.specifier);
         hasDynamicImport = analysis.hasDynamicImport;
         vueGlobPatterns = analysis.vueGlobPatterns;
+        vueGlobUnverifiable = analysis.vueGlobUnverifiable;
       } catch {
         references = [];
         vueReferences = [];
@@ -169,6 +175,7 @@ function buildVueComponentGraph(
     }
     if (
       hasDynamicImport ||
+      vueGlobUnverifiable ||
       vueReferences.some(
         (reference) =>
           !stylesheetReference.test(reference) &&
@@ -206,7 +213,7 @@ function buildVueComponentGraph(
         callerOpen.add(target);
       }
     }
-    for (const target of vueGlobTargets(vueGlobPatterns, vuePaths)) {
+    for (const target of vueGlobTargets(file.path, vueGlobPatterns, vuePaths)) {
       if (!imported.has(target)) callerOpen.add(target);
     }
   }
@@ -386,6 +393,10 @@ export async function preparePackageVue({
   let vueShadowUnverifiable = vueGraph.unresolvedStyleImport;
   for (const [path, source] of styleSources) {
     if (pathOwners.get(path) !== packageRoot) continue;
+    if (stylesheetAnalysis(path, source).selectorsUnverifiable) {
+      vueShadowUnverifiable = true;
+      continue;
+    }
     // Module class and id names are localized at build time; the planner
     // indexes only their global (type/attribute/:global) selector surface.
     if (isStylesheetModule(path)) vueShadowModuleCss.push(source);

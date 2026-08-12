@@ -30,6 +30,7 @@ export interface SourceAnalysis {
   staticImports: string[];
   defaultImports: StaticImportBinding[];
   vueGlobPatterns: string[];
+  vueGlobUnverifiable: boolean;
   hasDynamicImport: boolean;
   hasVueFallthroughMacro: boolean;
   usesCssModule: boolean;
@@ -42,6 +43,7 @@ export interface StylesheetAnalysis {
   scopeEscapes: string[];
   scopeShadowCss: string[];
   scopeEscapesUnverifiable: boolean;
+  selectorsUnverifiable: boolean;
   themeTokens: Record<string, string>;
   globalAtRuleIdentities: string[];
 }
@@ -96,17 +98,70 @@ export const {
   validateCss,
 } = binding;
 
+function object(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
+
+function decode<T>(label: string, json: string, valid: (value: unknown) => value is T): T {
+  const value: unknown = JSON.parse(json);
+  if (!valid(value)) throw new Error(`Invalid native ${label} result`);
+  return value;
+}
+
+function sourceImport(value: unknown): value is SourceImportRecord {
+  return (
+    object(value) &&
+    typeof value.specifier === "string" &&
+    typeof value.typeOnly === "boolean" &&
+    typeof value.dynamic === "boolean"
+  );
+}
+
+function sourceAnalysisResult(value: unknown): value is SourceAnalysis {
+  return (
+    object(value) &&
+    Array.isArray(value.imports) &&
+    value.imports.every(sourceImport) &&
+    Array.isArray(value.staticImports) &&
+    value.staticImports.every((item) => typeof item === "string") &&
+    Array.isArray(value.defaultImports) &&
+    value.defaultImports.every(
+      (item) => object(item) && typeof item.source === "string" && typeof item.local === "string",
+    ) &&
+    Array.isArray(value.vueGlobPatterns) &&
+    value.vueGlobPatterns.every((item) => typeof item === "string") &&
+    [
+      value.vueGlobUnverifiable,
+      value.hasDynamicImport,
+      value.hasVueFallthroughMacro,
+      value.usesCssModule,
+    ].every((item) => typeof item === "boolean")
+  );
+}
+
 const sourceAnalysisCache = new Map<string, { source: string; analysis: SourceAnalysis }>();
 const stylesheetAnalysisCache = new Map<string, { source: string; analysis: StylesheetAnalysis }>();
 
 export function expressionAnalysis(path: string, source: string): ExpressionAnalysis {
-  return JSON.parse(binding.expressionAnalysis(path, source)) as ExpressionAnalysis;
+  return decode(
+    "expression analysis",
+    binding.expressionAnalysis(path, source),
+    (value): value is ExpressionAnalysis =>
+      object(value) &&
+      (typeof value.staticString === "string" || value.staticString === null) &&
+      (typeof value.vueModuleMember === "string" || value.vueModuleMember === null) &&
+      typeof value.usesCssModule === "boolean",
+  );
 }
 
 export function sourceAnalysis(path: string, source: string): SourceAnalysis {
   const cached = sourceAnalysisCache.get(path);
   if (cached?.source === source) return cached.analysis;
-  const analysis = JSON.parse(binding.sourceAnalysis(path, source)) as SourceAnalysis;
+  const analysis = decode(
+    "source analysis",
+    binding.sourceAnalysis(path, source),
+    sourceAnalysisResult,
+  );
   sourceAnalysisCache.set(path, { source, analysis });
   return analysis;
 }
@@ -114,7 +169,34 @@ export function sourceAnalysis(path: string, source: string): SourceAnalysis {
 export function stylesheetAnalysis(path: string, source: string): StylesheetAnalysis {
   const cached = stylesheetAnalysisCache.get(path);
   if (cached?.source === source) return cached.analysis;
-  const analysis = JSON.parse(binding.stylesheetAnalysis(path, source)) as StylesheetAnalysis;
+  const analysis = decode(
+    "stylesheet analysis",
+    binding.stylesheetAnalysis(path, source),
+    (value): value is StylesheetAnalysis =>
+      object(value) &&
+      Array.isArray(value.references) &&
+      value.references.every((item) => typeof item === "string") &&
+      Array.isArray(value.imports) &&
+      value.imports.every(
+        (item) =>
+          object(item) &&
+          typeof item.href === "string" &&
+          typeof item.media === "string" &&
+          typeof item.start === "number" &&
+          typeof item.end === "number",
+      ) &&
+      [value.unverifiable, value.scopeEscapesUnverifiable, value.selectorsUnverifiable].every(
+        (item) => typeof item === "boolean",
+      ) &&
+      Array.isArray(value.scopeEscapes) &&
+      value.scopeEscapes.every((item) => typeof item === "string") &&
+      Array.isArray(value.scopeShadowCss) &&
+      value.scopeShadowCss.every((item) => typeof item === "string") &&
+      object(value.themeTokens) &&
+      Object.values(value.themeTokens).every((item) => typeof item === "string") &&
+      Array.isArray(value.globalAtRuleIdentities) &&
+      value.globalAtRuleIdentities.every((item) => typeof item === "string"),
+  );
   stylesheetAnalysisCache.set(path, { source, analysis });
   return analysis;
 }

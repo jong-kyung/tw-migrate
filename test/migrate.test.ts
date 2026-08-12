@@ -861,6 +861,40 @@ test("dynamic Vue import globs keep caller fallthrough open", async () => {
   );
 });
 
+test("exact Vue import globs keep caller fallthrough open", async () => {
+  const cwd = await fixture();
+  await Promise.all([
+    writeFile(
+      join(cwd, "Child.vue"),
+      '<template>\n  <div class="passed">Child</div>\n</template>\n<style scoped>\n.passed { padding: 13px; }\n</style>\n',
+    ),
+    writeFile(
+      join(cwd, "App.vue"),
+      '<template>\n  <Child />\n  <main>App</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+    ),
+    writeFile(join(cwd, "registry.ts"), 'import.meta.glob("./Child.vue");\n'),
+  ]);
+  const report = await migrate({ cwd });
+  assert.ok(report.warnings.some((entry) => entry.code === "open-root-fallthrough"));
+});
+
+test("unreadable Vue import globs keep caller fallthrough open", async () => {
+  const cwd = await fixture();
+  await Promise.all([
+    writeFile(
+      join(cwd, "Child.vue"),
+      '<template>\n  <div class="passed">Child</div>\n</template>\n<style scoped>\n.passed { padding: 13px; }\n</style>\n',
+    ),
+    writeFile(
+      join(cwd, "App.vue"),
+      '<template>\n  <Child />\n  <main>App</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+    ),
+    writeFile(join(cwd, "registry.ts"), 'const pattern = "./*.vue"; import.meta.glob(pattern);\n'),
+  ]);
+  const report = await migrate({ cwd });
+  assert.ok(report.warnings.some((entry) => entry.code === "open-root-fallthrough"));
+});
+
 test("comments and strings that resemble Vue loaders do not open caller fallthrough", async () => {
   const cwd = await fixture();
   await Promise.all([
@@ -1330,7 +1364,7 @@ test("shadowed Vue names and string contents do not retain a CSS Module", async 
   const cwd = await fixture();
   await writeFile(
     join(cwd, "Card.vue"),
-    '<template>\n  <p :class="$style.card">A</p>\n  <span :title="\'$style useCssModule\'">B</span>\n</template>\n<script setup>\nconst useCssModule = () => {};\nconst note = "$style defineProps defineOptions inheritAttrs";\nuseCssModule();\n</script>\n<style module>\n.card { padding: 13px; }\n</style>\n',
+    '<template>\n  <p :class="$style.card">A</p>\n  <span :title="\'$style useCssModule\'" @click="useCssModule()">B</span>\n</template>\n<script setup>\nconst useCssModule = () => {};\nconst note = "$style defineProps defineOptions inheritAttrs";\nuseCssModule();\n</script>\n<style module>\n.card { padding: 13px; }\n</style>\n',
   );
   const report = await migrate({ cwd, styleFile: "Card.vue", write: true });
   assert.deepEqual(report.changedFiles, ["Card.vue"]);
