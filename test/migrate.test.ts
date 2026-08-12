@@ -859,6 +859,24 @@ test("closes Vue root fallthrough through static component callers", async () =>
   assert.doesNotMatch(await readFile(join(cwd, "Child.vue"), "utf8"), /<style/);
 });
 
+test("a plain HTML page does not open Vue caller fallthrough", async () => {
+  const cwd = await fixture();
+  await Promise.all([
+    writeFile(
+      join(cwd, "Child.vue"),
+      '<template>\n  <div class="passed">Child</div>\n</template>\n<style scoped>\n.passed { padding: 13px; }\n</style>\n',
+    ),
+    writeFile(
+      join(cwd, "App.vue"),
+      '<template>\n  <Child class="passed" />\n  <main>App</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+    ),
+    writeFile(join(cwd, "index.html"), '<div id="app"></div>\n'),
+  ]);
+  const report = await migrate({ cwd, write: true });
+  assert.ok(!report.warnings.some((entry) => entry.code === "open-root-fallthrough"));
+  assert.doesNotMatch(await readFile(join(cwd, "Child.vue"), "utf8"), /<style/);
+});
+
 test("shadowed Vue macros do not open proven root fallthrough", async () => {
   const cwd = await fixture();
   await Promise.all([

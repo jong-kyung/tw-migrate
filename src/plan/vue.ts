@@ -138,6 +138,11 @@ function buildVueComponentGraph(
   }
 
   for (const file of sourceFiles) {
+    // HTML documents cannot import components through JavaScript syntax,
+    // and script-driven loading sits outside the proof scope, so a page
+    // never opens caller surfaces; without this skip the analysis failure
+    // on the .html extension would read as a dynamic import.
+    if (extname(file.path) === ".html") continue;
     let references: string[];
     let vueReferences: string[];
     let blockReferences: string[] = [];
