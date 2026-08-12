@@ -143,19 +143,25 @@ export function indexStylesheetDependents(
   const allPossibleTargets = [...styleSources.keys()].filter(
     (path) => isStylesheetModule(path) || isPreprocessorPath(path),
   );
+  const targetsByOwner = new Map<string | undefined, string[]>();
+  if (pathOwners) {
+    for (const path of allPossibleTargets) {
+      const owner = pathOwners.get(path);
+      targetsByOwner.set(owner, [...(targetsByOwner.get(owner) ?? []), path]);
+    }
+  }
   for (const [path, source] of styleSources) {
-    const possibleTargets = allPossibleTargets.filter(
-      (target) => !pathOwners || pathOwners.get(target) === pathOwners.get(path),
-    );
+    const possibleTargets = (): string[] =>
+      pathOwners ? (targetsByOwner.get(pathOwners.get(path)) ?? []) : allPossibleTargets;
     let references: string[];
     try {
       const analysis = stylesheetAnalysis(path, source);
       references = analysis.references;
       if (analysis.unverifiable) {
-        references = [...references, ...possibleTargets];
+        references = [...references, ...possibleTargets()];
       }
     } catch {
-      references = possibleTargets;
+      references = possibleTargets();
     }
     for (const reference of new Set(references)) {
       const targets = styleSources.has(reference)
