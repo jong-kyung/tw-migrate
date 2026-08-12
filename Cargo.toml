@@ -13,7 +13,7 @@ insta = "=1.48.0"
 napi = { version = "3.12.0", default-features = false, features = ["napi9"] }
 napi-build = "2.4.0"
 napi-derive = "3.6.2"
-oxc-css-parser = "0.0.10"
+oxc-css-parser = "0.0.11"
 oxc_allocator = "0.143.0"
 oxc_ast = "0.143.0"
 oxc_ast_visit = "0.143.0"
