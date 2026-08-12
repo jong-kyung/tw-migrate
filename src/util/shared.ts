@@ -1,7 +1,7 @@
 import { lstat, readFile } from "node:fs/promises";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 
-import { stylesheetAnalysis } from "../native.ts";
+import { errorCode, stylesheetAnalysis } from "../native.ts";
 import { MISSING_STYLE_COMPILER_MESSAGES, isPreprocessorPath } from "../parser/style-compiler.ts";
 import type { CssImport, MigrationFailure } from "../types.ts";
 
@@ -29,11 +29,9 @@ export const IGNORED_DIRECTORIES = new Set([".git", ".next", "build", "dist", "n
 
 export const RECOVERABLE_INPUT_ERROR = "TW_MIGRATE_RECOVERABLE_INPUT:";
 
-export function errorCode(error: unknown): string | undefined {
-  return error instanceof Error && "code" in error && typeof error.code === "string"
-    ? error.code
-    : undefined;
-}
+// The single errorCode implementation lives in native.ts, below this
+// module in the import graph, so both layers share one definition.
+export { errorCode };
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

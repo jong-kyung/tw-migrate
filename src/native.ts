@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 
-function errorCode(error: unknown): string | undefined {
+export function errorCode(error: unknown): string | undefined {
   return error instanceof Error && "code" in error && typeof error.code === "string"
     ? error.code
     : undefined;
