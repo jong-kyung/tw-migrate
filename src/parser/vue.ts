@@ -216,6 +216,9 @@ export type VueAnalysis =
       scriptVueReferences: string[];
       scriptVueGlobPatterns: string[];
       scriptVueGlobUnverifiable: boolean;
+      /// True when a retained unsupported block keeps style content outside
+      /// the analyzable block arrays, hiding possible global registrations.
+      hasOpaqueStyleBlocks: boolean;
       styleBlockImports: VueStyleImport[];
       componentImports: StaticImportBinding[];
       fallthroughUnverifiable: boolean;
@@ -349,6 +352,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
   const shadowPreprocessorTexts: string[] = [];
   const unscopedShadowPreprocessorTexts: string[] = [];
   let escapeUnverifiable = false;
+  let opaqueStyleBlocks = false;
   let moduleSiblingUnsupported = false;
   for (const style of descriptor.styles) {
     const start = style.loc.start.offset;
@@ -366,6 +370,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
       );
       if (usesDefaultModuleBinding) moduleSiblingUnsupported = true;
       escapeUnverifiable = true;
+      opaqueStyleBlocks = true;
       continue;
     }
     if (style.src !== undefined) {
@@ -373,6 +378,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
         warn("unsupported-sfc-block", start, end, "A <style module src> block is not supported.");
         if (usesDefaultModuleBinding) moduleSiblingUnsupported = true;
         escapeUnverifiable = true;
+        opaqueStyleBlocks = true;
       } else {
         styleBlockImports.push({ reference: style.src, start, end });
       }
@@ -386,6 +392,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
       // the module shadow channel (type selectors stay global).
       warn("unsupported-sfc-block", start, end, "Named <style module> blocks are not supported.");
       shadowModuleCssTexts.push(style.content);
+      opaqueStyleBlocks = true;
       continue;
     }
     if (!SUPPORTED_STYLE_LANGUAGES.has(style.lang)) {
@@ -400,6 +407,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
         `The <style lang="${style.lang}"> language is not supported.`,
       );
       shadowPreprocessorTexts.push(style.content);
+      opaqueStyleBlocks = true;
       try {
         if (stylesheetAnalysis(`${path}.css`, style.content).selectorsUnverifiable) {
           escapeUnverifiable = true;
@@ -416,6 +424,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     if (outerStart < 0 || !closing) {
       warn("unsupported-sfc-block", start, end, "The style block tags could not be located.");
       escapeUnverifiable = true;
+      opaqueStyleBlocks = true;
       continue;
     }
     const block: VueStyleBlock = {
@@ -632,6 +641,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     scriptVueReferences,
     scriptVueGlobPatterns,
     scriptVueGlobUnverifiable,
+    hasOpaqueStyleBlocks: opaqueStyleBlocks,
     styleBlockImports: styleBlockImports.map((entry) => ({
       ...entry,
       start: offset(entry.start),

@@ -715,19 +715,24 @@ export async function preparePackageVue({
       ...analysis.unscopedBlocks,
     ];
     let vueAtRuleIdentities: string[] | null;
-    try {
-      const registrations = allStyleBlocks.map((block) =>
-        stylesheetAnalysis(
-          `${file.path}.${block.analysisSource ? "css" : block.syntax}`,
-          block.analysisSource ?? block.content,
-        ),
-      );
-      vueAtRuleIdentities = registrations.some((entry) => entry.globalAtRulesUnverifiable)
-        ? null
-        : registrations.flatMap((entry) => entry.globalAtRuleIdentities);
-    } catch {
+    if (analysis.hasOpaqueStyleBlocks) {
+      // A retained unsupported block can hold registrations none of the
+      // analyzable arrays see, so the whole SFC surface turns opaque.
       vueAtRuleIdentities = null;
-    }
+    } else
+      try {
+        const registrations = allStyleBlocks.map((block) =>
+          stylesheetAnalysis(
+            `${file.path}.${block.analysisSource ? "css" : block.syntax}`,
+            block.analysisSource ?? block.content,
+          ),
+        );
+        vueAtRuleIdentities = registrations.some((entry) => entry.globalAtRulesUnverifiable)
+          ? null
+          : registrations.flatMap((entry) => entry.globalAtRuleIdentities);
+      } catch {
+        vueAtRuleIdentities = null;
+      }
     const vueBlocks = migrateUnscoped ? analysis.unscopedBlocks : analysis.blocks;
     if (vueBlocks.length === 0 && !migrateModule) continue;
     const vueRetention = migrateUnscoped ? undefined : retention;
