@@ -1791,6 +1791,21 @@ test("retained Vue blocks prevent conflicting global at-rule moves", async () =>
   assert.match(await readFile(join(cwd, "Card.vue"), "utf8"), /initial-value: red/);
 });
 
+test("opaque Vue registration identities prevent global at-rule moves", async () => {
+  const cwd = await fixture({
+    css: '@property --brand { syntax: "<color>"; inherits: false; initial-value: blue; }\n.button { padding: 13px; }\n',
+  });
+  await writeFile(
+    join(cwd, "Card.vue"),
+    '<template>\n  <p class="card">Card</p>\n  <span>Leaf</span>\n</template>\n<style lang="scss">\n$name: brand;\n@property --#{$name} { syntax: "<color>"; inherits: false; initial-value: red; }\n</style>\n<style scoped>\n.card { margin: 7px; }\n</style>\n',
+  );
+  const report = await migrate({ cwd, write: true });
+  assert.equal(report.convertedRules, 1);
+  assert.doesNotMatch(await readFile(join(cwd, "globals.css"), "utf8"), /@property --brand/);
+  assert.match(await readFile(join(cwd, "Button.module.css"), "utf8"), /@property --brand/);
+  assert.match(await readFile(join(cwd, "Card.vue"), "utf8"), /@property --#\{\$name\}/);
+});
+
 test("a $style member without a module rule retains the whole module", async () => {
   const cwd = await fixture();
   // Deleting the only rule would empty the block, drop the runtime `$style`

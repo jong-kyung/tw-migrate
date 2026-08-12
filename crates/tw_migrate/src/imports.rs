@@ -496,6 +496,7 @@ struct StylesheetAnalysis {
     selectors_unverifiable: bool,
     theme_tokens: BTreeMap<String, String>,
     global_at_rule_identities: Vec<String>,
+    global_at_rules_unverifiable: bool,
 }
 
 fn stylesheet_syntax(path: &str) -> Result<Syntax, String> {
@@ -712,6 +713,7 @@ fn registration_prelude(prelude: Option<&AtRulePrelude<'_>>) -> Option<String> {
 fn collect_at_rule_metadata(
     statements: &[Statement<'_>],
     source: &str,
+    syntax: Syntax,
     analysis: &mut StylesheetAnalysis,
 ) {
     for statement in statements {
@@ -768,18 +770,22 @@ fn collect_at_rule_metadata(
                 | "property"
                 | "view-transition") =>
             {
-                let prelude = registration_prelude(at_rule.prelude.as_ref()).unwrap_or_else(|| {
-                    source[at_rule.name.span.end..block.span.start]
-                        .trim()
-                        .to_string()
-                });
-                analysis
-                    .global_at_rule_identities
-                    .push(format!("{name} {prelude}"));
+                if let Some(prelude) = registration_prelude(at_rule.prelude.as_ref()) {
+                    analysis
+                        .global_at_rule_identities
+                        .push(format!("{name} {prelude}"));
+                } else if syntax == Syntax::Css {
+                    let prelude = source[at_rule.name.span.end..block.span.start].trim();
+                    analysis
+                        .global_at_rule_identities
+                        .push(format!("{name} {prelude}"));
+                } else {
+                    analysis.global_at_rules_unverifiable = true;
+                }
             }
             _ => {}
         }
-        collect_at_rule_metadata(&block.statements, source, analysis);
+        collect_at_rule_metadata(&block.statements, source, syntax, analysis);
     }
 }
 
@@ -933,9 +939,10 @@ pub fn stylesheet_analysis_json(path: &str, source: &str) -> Result<String, Stri
         selectors_unverifiable: false,
         theme_tokens: BTreeMap::new(),
         global_at_rule_identities: Vec::new(),
+        global_at_rules_unverifiable: false,
     };
     collect_stylesheet_statements(&parsed.statements, source, &mut analysis);
-    collect_at_rule_metadata(&parsed.statements, source, &mut analysis);
+    collect_at_rule_metadata(&parsed.statements, source, syntax, &mut analysis);
     if syntax == Syntax::Css {
         collect_loading_imports(&parsed.statements, source, &mut analysis);
     }
@@ -1483,6 +1490,20 @@ mod tests {
         );
         assert_eq!(parsed["scopeEscapesUnverifiable"], true);
         assert_eq!(parsed["selectorsUnverifiable"], false);
+    }
+
+    #[test]
+    fn marks_interpolated_registration_identities_unverifiable() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/main.scss",
+                "$name: brand;\n@property --#{$name} { syntax: \"<color>\"; }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["globalAtRuleIdentities"], serde_json::json!([]));
+        assert_eq!(parsed["globalAtRulesUnverifiable"], true);
     }
 
     #[test]

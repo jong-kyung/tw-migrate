@@ -46,6 +46,7 @@ export interface StylesheetAnalysis {
   selectorsUnverifiable: boolean;
   themeTokens: Record<string, string>;
   globalAtRuleIdentities: string[];
+  globalAtRulesUnverifiable: boolean;
 }
 
 interface Binding {
@@ -195,7 +196,8 @@ export function stylesheetAnalysis(path: string, source: string): StylesheetAnal
       object(value.themeTokens) &&
       Object.values(value.themeTokens).every((item) => typeof item === "string") &&
       Array.isArray(value.globalAtRuleIdentities) &&
-      value.globalAtRuleIdentities.every((item) => typeof item === "string"),
+      value.globalAtRuleIdentities.every((item) => typeof item === "string") &&
+      typeof value.globalAtRulesUnverifiable === "boolean",
   );
   stylesheetAnalysisCache.set(path, { source, analysis });
   return analysis;

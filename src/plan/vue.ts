@@ -707,13 +707,15 @@ export async function preparePackageVue({
     ];
     let vueAtRuleIdentities: string[] | null;
     try {
-      vueAtRuleIdentities = allStyleBlocks.flatMap(
-        (block) =>
-          stylesheetAnalysis(
-            `${file.path}.${block.analysisSource ? "css" : block.syntax}`,
-            block.analysisSource ?? block.content,
-          ).globalAtRuleIdentities,
+      const registrations = allStyleBlocks.map((block) =>
+        stylesheetAnalysis(
+          `${file.path}.${block.analysisSource ? "css" : block.syntax}`,
+          block.analysisSource ?? block.content,
+        ),
       );
+      vueAtRuleIdentities = registrations.some((entry) => entry.globalAtRulesUnverifiable)
+        ? null
+        : registrations.flatMap((entry) => entry.globalAtRuleIdentities);
     } catch {
       vueAtRuleIdentities = null;
     }
