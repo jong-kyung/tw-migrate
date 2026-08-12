@@ -350,6 +350,14 @@ impl<'a> Visit<'a> for SourceCollector<'_> {
         {
             self.analysis.uses_css_module = true;
         }
+        if matches!(&member.expression, Expression::StringLiteral(literal) if literal.value == "useCssModule")
+            && let Expression::Identifier(object) = &member.object
+            && self
+                .symbol(object)
+                .is_some_and(|symbol| self.vue_namespace_symbols.contains(&symbol))
+        {
+            self.analysis.uses_css_module = true;
+        }
         walk::walk_computed_member_expression(self, member);
     }
 }
@@ -1137,6 +1145,29 @@ mod tests {
         assert_eq!(parsed["vueGlobUnverifiable"], false);
         assert_eq!(parsed["hasVueFallthroughMacro"], true);
         assert_eq!(parsed["usesCssModule"], true);
+    }
+
+    #[test]
+    fn recognizes_computed_vue_namespace_css_module_references() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.vue.ts",
+                "import * as Vue from 'vue'; Vue['useCssModule']();",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["usesCssModule"], true);
+
+        let shadowed: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.vue.ts",
+                "const Vue = {}; Vue['useCssModule']();",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(shadowed["usesCssModule"], false);
     }
 
     #[test]
