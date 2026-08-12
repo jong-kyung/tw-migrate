@@ -1452,6 +1452,24 @@ test("shadowed Vue names and string contents do not retain a CSS Module", async 
   assert.doesNotMatch(await readFile(join(cwd, "Card.vue"), "utf8"), /<style module>/);
 });
 
+test("Vue inline event handlers use statement context for module closure", async () => {
+  const cwd = await fixture();
+  const component = (handler: string) =>
+    `<template>\n  <p :class="$style.card" @click="${handler}">Card</p>\n  <span>Leaf</span>\n</template>\n<script setup>\nconst first = () => {};\nconst second = () => {};\n</script>\n<style module>\n.card { padding: 13px; }\n</style>\n`;
+  await Promise.all([
+    writeFile(join(cwd, "Clean.vue"), component("first(); second()")),
+    writeFile(join(cwd, "Used.vue"), component("first(); $style.card")),
+  ]);
+
+  const clean = await migrate({ cwd, styleFile: "Clean.vue" });
+  assert.equal(clean.convertedRules, 1);
+  assert.ok(!clean.warnings.some((entry) => entry.code === "unsupported-css-module-reference"));
+
+  const used = await migrate({ cwd, styleFile: "Used.vue" });
+  assert.equal(used.convertedRules, 0);
+  assert.ok(used.warnings.some((entry) => entry.code === "unsupported-css-module-reference"));
+});
+
 test("destructured Options API CSS Module references retain the module", async () => {
   const cwd = await fixture();
   await writeFile(

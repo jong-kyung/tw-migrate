@@ -674,7 +674,11 @@ function visitTemplateNode(source: string, node: TemplateNode, state: TemplateSt
     let moduleBinding: VueModuleBinding | undefined;
     for (const prop of node.props ?? []) {
       if (prop.type !== PROP_DIRECTIVE) continue;
-      const expression = prop.exp?.content ? templateExpression(prop.exp.content) : undefined;
+      const expression = prop.exp?.content
+        ? prop.name === "on"
+          ? templateHandler(prop.exp.content)
+          : templateExpression(prop.exp.content)
+        : undefined;
       if (prop.exp?.content && !expression) state.moduleClosureBroken = true;
       let provenModuleExpression = false;
       if (prop.name === "bind") {
@@ -738,6 +742,18 @@ function attributeRemovalStart(source: string, node: TemplateNode, prop: Templat
 function templateExpression(source: string): ExpressionAnalysis | undefined {
   try {
     return expressionAnalysis("Component.js", source);
+  } catch {
+    return undefined;
+  }
+}
+
+function templateHandler(source: string): ExpressionAnalysis | undefined {
+  try {
+    const analysis = sourceAnalysis(
+      "Component.handler.ts",
+      `async function handler($event) { ${source} }`,
+    );
+    return { staticString: null, vueModuleMember: null, usesCssModule: analysis.usesCssModule };
   } catch {
     return undefined;
   }
