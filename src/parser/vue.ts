@@ -248,6 +248,9 @@ interface TemplateState {
   hasSlot: boolean;
   moduleClosureBroken: boolean;
   referencesUseCssModule: boolean;
+  /// Identifier names referenced from template expressions, matched after
+  /// script analysis against helper aliases the script provides.
+  expressionReferences: Set<string>;
   /// Synthetic path for template expression parsing, carrying the SFC's
   /// script language so TypeScript assertions parse in TypeScript SFCs.
   expressionPath: string;
@@ -486,6 +489,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     hasSlot: false,
     moduleClosureBroken: false,
     referencesUseCssModule: false,
+    expressionReferences: new Set(),
     expressionPath: scriptLang === "ts" || scriptLang === "tsx" ? "Component.ts" : "Component.js",
   };
   visitTemplateNode(source, template.ast, state);
@@ -605,7 +609,12 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
       // A template reference to `useCssModule` resolves to the Vue API
       // unless the setup script provides a local binding with that name;
       // Options API scripts never expose root constants to the template.
-      (state.referencesUseCssModule && setupAnalysis?.definesRootUseCssModule !== true),
+      (state.referencesUseCssModule && setupAnalysis?.definesRootUseCssModule !== true) ||
+      // A template call through a script-provided helper alias, such as
+      // `import { useCssModule as css } from "vue"`, is a Vue API call.
+      (setupAnalysis?.useCssModuleLocals ?? []).some((name) =>
+        state.expressionReferences.has(name),
+      ),
     htmlElements: state.elements.map(toByteSite),
     componentSites: state.components.map(toByteSite),
     // Slot and template roots are element nodes without a template site, so
@@ -733,10 +742,12 @@ function visitTemplateNode(source: string, node: TemplateNode, state: TemplateSt
         state.moduleClosureBroken = true;
       }
       if (expression?.referencesUseCssModule) state.referencesUseCssModule = true;
+      for (const name of expression?.references ?? []) state.expressionReferences.add(name);
       if (prop.arg && !prop.arg.isStatic && prop.arg.content) {
         const argExpression = templateExpression(state.expressionPath, prop.arg.content);
         state.moduleClosureBroken ||= argExpression?.usesCssModule ?? true;
         state.referencesUseCssModule ||= argExpression?.referencesUseCssModule ?? false;
+        for (const name of argExpression?.references ?? []) state.expressionReferences.add(name);
       }
       // Injected markup carries no scope attribute, so scoped proofs are
       // unaffected -- but it can use any class an unscoped rule targets.
@@ -752,6 +763,7 @@ function visitTemplateNode(source: string, node: TemplateNode, state: TemplateSt
     const interpolation = templateExpression(state.expressionPath, node.content.content);
     state.moduleClosureBroken ||= interpolation?.usesCssModule ?? true;
     state.referencesUseCssModule ||= interpolation?.referencesUseCssModule ?? false;
+    for (const name of interpolation?.references ?? []) state.expressionReferences.add(name);
   }
   for (const child of node.children ?? []) visitTemplateNode(source, child, state);
 }
@@ -786,6 +798,7 @@ function templateHandler(source: string): ExpressionAnalysis | undefined {
       // Handler sources carry no bindings of their own, so an unbound
       // reference is a potential Vue API call the script may not shadow.
       referencesUseCssModule: analysis.hasUnboundUseCssModule,
+      references: analysis.unboundReferences,
     };
   } catch {
     return undefined;

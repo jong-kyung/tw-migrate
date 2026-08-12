@@ -1504,6 +1504,38 @@ test("TypeScript template assertions do not break the module closure", async () 
   assert.doesNotMatch(await readFile(join(cwd, "Card.vue"), "utf8"), /<style module>/);
 });
 
+test("aliased useCssModule imports used only from templates retain the module", async () => {
+  const cwd = await fixture();
+  await writeFile(
+    join(cwd, "Card.vue"),
+    '<template>\n  <p :class="$style.card" :data-kind="css().card">Card</p>\n  <span>Leaf</span>\n</template>\n<script setup>\nimport { useCssModule as css } from "vue";\n</script>\n<style module>\n.card { padding: 13px; }\n</style>\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Card.vue", write: true });
+  assert.ok(report.warnings.some((entry) => entry.code === "unsupported-css-module-reference"));
+  assert.match(await readFile(join(cwd, "Card.vue"), "utf8"), /<style module>/);
+});
+
+test("unreadable Vue scripts keep caller fallthrough open", async () => {
+  const cwd = await fixture();
+  await Promise.all([
+    writeFile(
+      join(cwd, "Child.vue"),
+      '<template>\n  <div class="passed">Child</div>\n</template>\n<style scoped>\n.passed { padding: 13px; }\n</style>\n',
+    ),
+    writeFile(
+      join(cwd, "App.vue"),
+      '<template>\n  <Child />\n  <main>App</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+    ),
+    writeFile(
+      join(cwd, "Loader.vue"),
+      '<template>\n  <div>Loader</div>\n</template>\n<script src="./external.coffee"></script>\n',
+    ),
+  ]);
+  const report = await migrate({ cwd, styleFile: "Child.vue" });
+  assert.ok(report.warnings.some((entry) => entry.code === "open-root-fallthrough"));
+  assert.equal(report.convertedRules, 0);
+});
+
 test("Vue inline event handlers use statement context for module closure", async () => {
   const cwd = await fixture();
   const component = (handler: string) =>

@@ -24,6 +24,7 @@ export interface ExpressionAnalysis {
   vueModuleMember: string | null;
   usesCssModule: boolean;
   referencesUseCssModule: boolean;
+  references: string[];
 }
 
 export interface SourceAnalysis {
@@ -37,6 +38,8 @@ export interface SourceAnalysis {
   usesCssModule: boolean;
   hasUnboundUseCssModule: boolean;
   definesRootUseCssModule: boolean;
+  useCssModuleLocals: string[];
+  unboundReferences: string[];
 }
 
 export interface StylesheetAnalysis {
@@ -134,6 +137,10 @@ function sourceAnalysisResult(value: unknown): value is SourceAnalysis {
     ) &&
     Array.isArray(value.vueGlobPatterns) &&
     value.vueGlobPatterns.every((item) => typeof item === "string") &&
+    Array.isArray(value.useCssModuleLocals) &&
+    value.useCssModuleLocals.every((item) => typeof item === "string") &&
+    Array.isArray(value.unboundReferences) &&
+    value.unboundReferences.every((item) => typeof item === "string") &&
     [
       value.vueGlobUnverifiable,
       value.hasDynamicImport,
@@ -169,7 +176,9 @@ export function expressionAnalysis(path: string, source: string): ExpressionAnal
       (typeof value.staticString === "string" || value.staticString === null) &&
       (typeof value.vueModuleMember === "string" || value.vueModuleMember === null) &&
       typeof value.usesCssModule === "boolean" &&
-      typeof value.referencesUseCssModule === "boolean",
+      typeof value.referencesUseCssModule === "boolean" &&
+      Array.isArray(value.references) &&
+      value.references.every((item) => typeof item === "string"),
   );
 }
 

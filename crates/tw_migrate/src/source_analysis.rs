@@ -46,6 +46,9 @@ struct ExpressionAnalysis {
     vue_module_member: Option<String>,
     uses_css_module: bool,
     references_use_css_module: bool,
+    /// Identifier reference names, for matching script-provided helper
+    /// aliases the expression may call.
+    references: Vec<String>,
 }
 
 /// Template expressions carry no bindings of their own, so any `$style` or
@@ -54,6 +57,7 @@ struct ExpressionAnalysis {
 struct ExpressionCollector {
     uses_css_module: bool,
     references_use_css_module: bool,
+    references: Vec<String>,
 }
 
 impl ExpressionCollector {
@@ -70,6 +74,9 @@ impl ExpressionCollector {
 impl<'a> Visit<'a> for ExpressionCollector {
     fn visit_identifier_reference(&mut self, identifier: &IdentifierReference<'a>) {
         self.record(&identifier.name);
+        if !self.references.iter().any(|name| name == identifier.name.as_str()) {
+            self.references.push(identifier.name.to_string());
+        }
         walk::walk_identifier_reference(self, identifier);
     }
 
@@ -114,6 +121,7 @@ pub fn expression_analysis_json(path: &str, source: &str) -> Result<String, Stri
     let mut collector = ExpressionCollector {
         uses_css_module: false,
         references_use_css_module: false,
+        references: Vec::new(),
     };
     collector.visit_expression(&expression);
     // The proven `$style.member` form is rewritten rather than retained, so
@@ -123,6 +131,7 @@ pub fn expression_analysis_json(path: &str, source: &str) -> Result<String, Stri
         vue_module_member,
         uses_css_module: collector.uses_css_module,
         references_use_css_module: collector.references_use_css_module,
+        references: collector.references,
     })
     .map_err(|error| error.to_string())
 }
@@ -144,6 +153,13 @@ struct SourceAnalysis {
     /// A root-scope binding named `useCssModule` that is not the Vue
     /// import; template references resolve to it instead of the Vue API.
     defines_root_use_css_module: bool,
+    /// Local names bound to the Vue `useCssModule` helper, including
+    /// import aliases and namespace destructures, so template analysis can
+    /// recognize calls through them.
+    use_css_module_locals: Vec<String>,
+    /// Unbound identifier reference names, for handler sources whose
+    /// bindings live in the surrounding script.
+    unbound_references: Vec<String>,
 }
 
 struct SourceCollector<'s, 'a> {
@@ -353,7 +369,8 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
     }
 
     fn visit_variable_declarator(&mut self, declarator: &VariableDeclarator<'a>) {
-        if let Some(Expression::Identifier(namespace)) = &declarator.init
+        if let Some(Expression::Identifier(namespace)) =
+            declarator.init.as_ref().map(|init| init.get_inner_expression())
             && self
                 .symbol(namespace)
                 .is_some_and(|symbol| self.vue_namespace_symbols.contains(&symbol))
@@ -366,6 +383,9 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
                             && let Some(symbol) = identifier.symbol_id.get()
                         {
                             self.use_css_module_symbols.push(symbol);
+                            self.analysis
+                                .use_css_module_locals
+                                .push(identifier.name.to_string());
                         }
                     }
                 }
@@ -470,8 +490,20 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
         if identifier.name == "$style" && self.is_unbound(identifier) {
             self.analysis.uses_css_module = true;
         }
-        if identifier.name == "useCssModule" && self.is_unbound(identifier) {
-            self.analysis.has_unbound_use_css_module = true;
+        if self.is_unbound(identifier) {
+            if identifier.name == "useCssModule" {
+                self.analysis.has_unbound_use_css_module = true;
+            }
+            if !self
+                .analysis
+                .unbound_references
+                .iter()
+                .any(|name| name == identifier.name.as_str())
+            {
+                self.analysis
+                    .unbound_references
+                    .push(identifier.name.to_string());
+            }
         }
         if self
             .symbol(identifier)
@@ -537,6 +569,7 @@ pub fn source_analysis_json(path: &str, source: &str) -> Result<String, String> 
         return Err(format!("Failed to analyze {path}"));
     }
     let mut use_css_module_symbols = Vec::new();
+    let mut use_css_module_locals: Vec<String> = Vec::new();
     let mut vue_namespace_symbols = Vec::new();
     for statement in &parsed.program.body {
         let oxc_ast::ast::Statement::ImportDeclaration(declaration) = statement else {
@@ -553,6 +586,7 @@ pub fn source_analysis_json(path: &str, source: &str) -> Result<String, String> 
                 {
                     if let Some(symbol) = specifier.local.symbol_id.get() {
                         use_css_module_symbols.push(symbol);
+                        use_css_module_locals.push(specifier.local.name.to_string());
                     }
                 }
                 ImportDeclarationSpecifier::ImportNamespaceSpecifier(specifier) => {
@@ -579,6 +613,8 @@ pub fn source_analysis_json(path: &str, source: &str) -> Result<String, String> 
             uses_css_module: false,
             has_unbound_use_css_module: false,
             defines_root_use_css_module: false,
+            use_css_module_locals: use_css_module_locals.clone(),
+            unbound_references: Vec::new(),
         },
     };
     collector.visit_program(&parsed.program);
@@ -753,6 +789,20 @@ mod tests {
     }
 
     #[test]
+    fn lists_helper_locals_and_unbound_references() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.vue.ts",
+                "import { useCssModule as css } from 'vue';\nimport * as Vue from 'vue';\nconst { useCssModule: helper } = Vue;\nfirst(); second();\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["useCssModuleLocals"], serde_json::json!(["css", "helper"]));
+        assert_eq!(parsed["unboundReferences"], serde_json::json!(["first", "second"]));
+    }
+
+    #[test]
     fn distinguishes_local_use_css_module_shadows_from_unbound_references() {
         let shadowed: serde_json::Value = serde_json::from_str(
             &super::source_analysis_json(
@@ -839,6 +889,7 @@ mod tests {
         for source in [
             "import * as Vue from 'vue'; Vue['useCssModule']();",
             "import * as Vue from 'vue'; const V = Vue; V.useCssModule();",
+            "import * as Vue from 'vue'; const V = Vue as typeof Vue; V.useCssModule();",
             "import * as Vue from 'vue'; const { useCssModule } = Vue; useCssModule();",
             "import * as Vue from 'vue'; const { useCssModule: css } = Vue; css();",
         ] {
