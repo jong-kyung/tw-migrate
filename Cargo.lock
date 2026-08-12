@@ -426,9 +426,9 @@ checksum = "d211803b9b6b570f68772237e415a029d5a50c65d382910b879fb19d3271f94d"
 
 [[package]]
 name = "oxc-css-parser"
-version = "0.0.10"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7762bb29c1dd9a1aa0eb29c997d2127efe3603f411f03fa7f525af111b1fdf0f"
+checksum = "c68989474118e8cfb760b85615bb07f91cf5a85e04632d1dce3aab2785f4fb88"
 dependencies = [
  "oxc_allocator",
 ]
