@@ -635,6 +635,21 @@ test("a :deep escape in another SFC shadows scoped deletion", async () => {
   assert.equal(report.convertedRules, 0);
 });
 
+test("a parsed nested deep escape does not shadow unrelated scoped rules", async () => {
+  const cwd = await fixture();
+  const child =
+    '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
+  const parent =
+    '<template>\n  <div class="wrap">P</div>\n</template>\n<style scoped>\n.wrap :deep(.other:is(.x, .y)) { padding: 20px; }\n</style>\n';
+  await Promise.all([
+    writeFile(join(cwd, "Child.vue"), child),
+    writeFile(join(cwd, "Parent.vue"), parent),
+  ]);
+  const report = await migrate({ cwd, styleFile: "Child.vue", write: true });
+  assert.equal(report.convertedRules, 1);
+  assert.doesNotMatch(await readFile(join(cwd, "Child.vue"), "utf8"), /<style/);
+});
+
 test("a paren-less deep combinator makes the shadow corpus unverifiable", async () => {
   const cwd = await fixture();
   const child =
@@ -1315,7 +1330,7 @@ test("shadowed Vue names and string contents do not retain a CSS Module", async 
   const cwd = await fixture();
   await writeFile(
     join(cwd, "Card.vue"),
-    '<template>\n  <p :class="$style.card">A</p>\n  <span>B</span>\n</template>\n<script setup>\nconst useCssModule = () => {};\nconst note = "$style defineProps defineOptions inheritAttrs";\nuseCssModule();\n</script>\n<style module>\n.card { padding: 13px; }\n</style>\n',
+    '<template>\n  <p :class="$style.card">A</p>\n  <span :title="\'$style useCssModule\'">B</span>\n</template>\n<script setup>\nconst useCssModule = () => {};\nconst note = "$style defineProps defineOptions inheritAttrs";\nuseCssModule();\n</script>\n<style module>\n.card { padding: 13px; }\n</style>\n',
   );
   const report = await migrate({ cwd, styleFile: "Card.vue", write: true });
   assert.deepEqual(report.changedFiles, ["Card.vue"]);
@@ -1872,6 +1887,20 @@ test("a scan-excluded HTML shell defeats the unscoped sole-source proof", async 
   const report = await migrate({ cwd });
   assert.ok(report.warnings.some((entry) => entry.code === "unscoped-style-block"));
   assert.equal(report.convertedRules, 0);
+});
+
+test("HTML script text resembling a style tag does not open the Vue shadow corpus", async () => {
+  const cwd = await fixture();
+  await Promise.all([
+    writeFile(
+      join(cwd, "Card.vue"),
+      '<template>\n  <div class="card">Card</div>\n  <span>Leaf</span>\n</template>\n<style scoped>\n.card { margin: 7px; }\n</style>\n',
+    ),
+    writeFile(join(cwd, "index.html"), '<script>const tag = "<style>";</script>\n'),
+  ]);
+  const report = await migrate({ cwd, styleFile: "Card.vue", write: true });
+  assert.deepEqual(report.changedFiles, ["Card.vue"]);
+  assert.doesNotMatch(await readFile(join(cwd, "Card.vue"), "utf8"), /<style/);
 });
 
 test("caller template edits do not recompile untouched preprocessor blocks", async () => {

@@ -19,6 +19,12 @@ export interface SourceImportRecord {
   dynamic: boolean;
 }
 
+export interface ExpressionAnalysis {
+  staticString: string | null;
+  vueModuleMember: string | null;
+  usesCssModule: boolean;
+}
+
 export interface SourceAnalysis {
   imports: SourceImportRecord[];
   staticImports: string[];
@@ -33,6 +39,11 @@ export interface StylesheetAnalysis {
   references: string[];
   imports: { href: string; media: string; start: number; end: number }[];
   unverifiable: boolean;
+  scopeEscapes: string[];
+  scopeShadowCss: string[];
+  scopeEscapesUnverifiable: boolean;
+  themeTokens: Record<string, string>;
+  globalAtRuleIdentities: string[];
 }
 
 interface Binding {
@@ -43,7 +54,7 @@ interface Binding {
   mediaProbeKey: (css: string) => string;
   decodeSourceMap: (sourceMap: string) => string;
   planBatchMigration: (request: string) => string;
-  staticStringExpression: (path: string, source: string) => string | null;
+  expressionAnalysis: (path: string, source: string) => string;
   validateCss: (source: string) => void;
 }
 
@@ -82,12 +93,15 @@ export const {
   mediaProbeKey,
   decodeSourceMap,
   planBatchMigration,
-  staticStringExpression,
   validateCss,
 } = binding;
 
 const sourceAnalysisCache = new Map<string, { source: string; analysis: SourceAnalysis }>();
 const stylesheetAnalysisCache = new Map<string, { source: string; analysis: StylesheetAnalysis }>();
+
+export function expressionAnalysis(path: string, source: string): ExpressionAnalysis {
+  return JSON.parse(binding.expressionAnalysis(path, source)) as ExpressionAnalysis;
+}
 
 export function sourceAnalysis(path: string, source: string): SourceAnalysis {
   const cached = sourceAnalysisCache.get(path);

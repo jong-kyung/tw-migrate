@@ -54,8 +54,8 @@ pub fn validate_css(source: String) -> napi::Result<()> {
 }
 
 #[napi]
-pub fn static_string_expression(path: String, source: String) -> napi::Result<Option<String>> {
-    js_rewrite::static_string_expression(&path, &source).map_err(napi::Error::from_reason)
+pub fn expression_analysis(path: String, source: String) -> napi::Result<String> {
+    imports::expression_analysis_json(&path, &source).map_err(napi::Error::from_reason)
 }
 
 #[napi]
@@ -108,24 +108,6 @@ pub fn plan_batch_migration(request: String) -> napi::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn extracts_only_direct_static_string_expressions() {
-        assert_eq!(
-            crate::js_rewrite::static_string_expression("Component.js", "'card'").unwrap(),
-            Some("card".to_string())
-        );
-        assert_eq!(
-            crate::js_rewrite::static_string_expression("Component.js", "`card`").unwrap(),
-            Some("card".to_string())
-        );
-        for expression in ["['card']", "active ? 'card' : 'other'", "`card-${size}`"] {
-            assert_eq!(
-                crate::js_rewrite::static_string_expression("Component.js", expression).unwrap(),
-                None
-            );
-        }
-    }
-
     #[test]
     fn decodes_source_map_mappings() {
         let decoded = super::decode_source_map_json(

@@ -1,7 +1,8 @@
 import { dirname, extname, join, resolve } from "node:path";
 
 import { sourceAnalysis, validateCss } from "../native.ts";
-import { compileStyleEntry, isPreprocessorPath } from "../parser/style-compiler.ts";
+import { parseHtmlSource } from "../parser/html.ts";
+import { compileStyleEntry } from "../parser/style-compiler.ts";
 import type { StyleCompilers } from "../parser/style-compiler.ts";
 import { analyzeVueSource, loadProjectVueCompiler } from "../parser/vue.ts";
 import {
@@ -380,48 +381,39 @@ export async function preparePackageVue({
   // (interpolation or `&`-concatenation in preprocessor text, inline HTML
   // style blocks, unanalyzable SFCs, unextractable escapes) marks the whole
   // corpus unverifiable and retains every closed deletion.
-  const generatesSelectors = (text: string): boolean => /#\{|@\{|&[\w-]/.test(text);
   const vueShadowCss: ShadowCssEntry[] = [];
   const vueShadowModuleCss: string[] = [];
   let vueShadowUnverifiable = vueGraph.unresolvedStyleImport;
   for (const [path, source] of styleSources) {
     if (pathOwners.get(path) !== packageRoot) continue;
-    if (isPreprocessorPath(path) && generatesSelectors(source)) {
-      vueShadowUnverifiable = true;
-      continue;
-    }
     // Module class and id names are localized at build time; the planner
     // indexes only their global (type/attribute/:global) selector surface.
     if (isStylesheetModule(path)) vueShadowModuleCss.push(source);
     else vueShadowCss.push({ path, source });
   }
   for (const file of sourceFiles) {
-    if (
-      extname(file.path) === ".html" &&
-      pathOwners.get(file.path) === packageRoot &&
-      /<style/i.test(file.source)
-    ) {
-      vueShadowUnverifiable = true;
+    if (extname(file.path) === ".html" && pathOwners.get(file.path) === packageRoot) {
+      try {
+        if (parseHtmlSource(file.path, file.source).hasStyle) vueShadowUnverifiable = true;
+      } catch {
+        vueShadowUnverifiable = true;
+      }
     }
   }
   for (const file of ownedVue) {
     const analysis = analysisOf(file.path);
     if (analysis.retained) {
-      if (/<style/i.test(file.source)) vueShadowUnverifiable = true;
+      if (analysis.styleRanges.length > 0) vueShadowUnverifiable = true;
       continue;
     }
     if (analysis.escapeUnverifiable || analysis.scriptImportsUnverifiable) {
       vueShadowUnverifiable = true;
     }
     for (const text of analysis.shadowPreprocessorTexts) {
-      if (generatesSelectors(text)) vueShadowUnverifiable = true;
-      else vueShadowCss.push({ path: file.path, source: text });
+      vueShadowCss.push({ path: file.path, source: text });
     }
     for (const text of analysis.unscopedShadowPreprocessorTexts) {
-      if (generatesSelectors(text)) vueShadowUnverifiable = true;
-      else {
-        vueShadowCss.push({ path: file.path, source: text, migratingUnscoped: true });
-      }
+      vueShadowCss.push({ path: file.path, source: text, migratingUnscoped: true });
     }
     vueShadowCss.push(
       ...analysis.shadowCssTexts.map((source) => ({ path: file.path, source })),
@@ -432,7 +424,7 @@ export async function preparePackageVue({
       })),
       ...analysis.blocks.map((block) => ({
         path: file.path,
-        source: block.analysisSource ?? block.content,
+        source: block.shadowSource ?? block.analysisSource ?? block.content,
         scoped: true,
       })),
     );
@@ -743,19 +735,24 @@ export async function preparePackageVue({
     if (analysis.retained) continue;
     const elements = elementsByFile.get(file.path) ?? [];
     const contextPaths = [...new Set(elements.flatMap((element) => element.cssPaths))];
-    if (contextPaths.length === 0) continue;
-    await rejectSymlinkTarget(file.path, packageRoot);
+    if (contextPaths.length > 0) await rejectSymlinkTarget(file.path, packageRoot);
     files.set(file.path, {
       ...file,
-      htmlElements: elements,
-      htmlStylesheets: contextPaths.map((cssPath) => ({
-        cssPath,
-        variants: [],
-        direct: cssPath === file.path,
-        analyzable: true,
-      })),
-      htmlReferencesSafe: !analysis.dynamic,
-      htmlScriptText: analysis.scriptText,
+      ...(contextPaths.length > 0
+        ? {
+            htmlElements: elements,
+            htmlStylesheets: contextPaths.map((cssPath) => ({
+              cssPath,
+              variants: [],
+              direct: cssPath === file.path,
+              analyzable: true,
+            })),
+            htmlReferencesSafe: !analysis.dynamic,
+            htmlScriptText: analysis.scriptText,
+          }
+        : {}),
+      sourceImports: analysis.scriptImports,
+      sourceImportsUnverifiable: analysis.scriptImportsUnverifiable,
     });
   }
   return {

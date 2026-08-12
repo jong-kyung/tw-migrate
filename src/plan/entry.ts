@@ -212,38 +212,34 @@ export function scanProof(options: {
   return isWithin(dirname(options.entry), options.packageRoot) ? "automatic" : null;
 }
 
+const OPAQUE_SOURCE_IMPORT: SourceImportRecord = {
+  specifier: "#unverifiable-source",
+  typeOnly: false,
+  dynamic: true,
+};
+
 /// Parsed module records of one source file through the native oxc parser.
-/// Vue SFC scripts are extracted first; a file that does not parse has no
-/// provable imports, which only makes proofs fail conservatively. Native
-/// source analysis is memoized by path and content.
-function sourceImports(file: { path: string; source: string }): SourceImportRecord[] {
+/// Vue records come from the project-local SFC compiler path, which extracts
+/// each script block before Oxc analysis. An unreadable source contributes an
+/// unresolved alias so exposure proofs fail conservatively.
+function sourceImports(file: {
+  path: string;
+  source: string;
+  sourceImports?: SourceImportRecord[];
+  sourceImportsUnverifiable?: boolean;
+}): SourceImportRecord[] {
   const extension = extname(file.path);
   if (extension === ".html") return [];
-  const sources =
-    extension === ".vue"
-      ? [
-          // A commented-out script block never executes, so it must not
-          // contribute loader or reachability records.
-          ...file.source
-            .replace(/<!--[\s\S]*?-->/g, "")
-            .matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi),
-        ].map((match) => {
-          // Parse each block with its declared language so JSX blocks are
-          // not rejected by the TypeScript grammar.
-          const lang = match[1].match(/\blang\s*=\s*["']?(\w+)/)?.[1]?.toLowerCase();
-          const scriptExtension =
-            lang === "tsx" || lang === "jsx" || lang === "js" ? `.${lang}` : ".ts";
-          return { source: match[2], path: `${file.path}${scriptExtension}` };
-        })
-      : [{ source: file.source, path: file.path }];
-  return sources.flatMap((script) => {
-    try {
-      return sourceAnalysis(script.path, script.source).imports;
-    } catch {
-      // Unparseable sources prove nothing.
-      return [];
-    }
-  });
+  if (extension === ".vue") {
+    return file.sourceImports && !file.sourceImportsUnverifiable
+      ? file.sourceImports
+      : [OPAQUE_SOURCE_IMPORT];
+  }
+  try {
+    return sourceAnalysis(file.path, file.source).imports;
+  } catch {
+    return [OPAQUE_SOURCE_IMPORT];
+  }
 }
 
 const RESOLVABLE_EXTENSIONS = [

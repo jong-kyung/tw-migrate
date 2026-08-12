@@ -1,4 +1,5 @@
 import type { HtmlElementAttributes } from "./parser/html.ts";
+import type { SourceImportRecord } from "./native.ts";
 import type { SourceMapping } from "./parser/style-compiler.ts";
 import type { VueCompiler, VueStyleBlock, VueTemplateSite } from "./parser/vue.ts";
 
@@ -81,6 +82,8 @@ export interface PreparedSourceFile extends SourceFile {
   htmlStylesheets?: HtmlContext[];
   htmlReferencesSafe?: boolean;
   htmlScriptText?: string;
+  sourceImports?: SourceImportRecord[];
+  sourceImportsUnverifiable?: boolean;
 }
 
 export interface PlannedFile extends PreparedSourceFile {

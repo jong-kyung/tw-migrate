@@ -4,6 +4,8 @@
 //! as runtime loading, so the sources are parsed with oxc and only actual
 //! module records are reported.
 
+use std::collections::BTreeMap;
+
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     Argument, ArrayExpressionElement, Expression, IdentifierReference, ImportDeclarationSpecifier,
@@ -16,8 +18,9 @@ use serde::Serialize;
 
 use crate::{at_rules::parse_css, js_rewrite::source_type_for_path};
 use oxc_css_parser::ast::{
-    AtRulePrelude, ComponentValue, Function, FunctionName, ImportPrelude,
-    ImportPreludeHref, InterpolableIdent, InterpolableStr, MediaQuery, Statement, UrlValue,
+    AtRulePrelude, CombinatorKind, ComplexSelectorChild, ComponentValue, Function, FunctionName,
+    ImportPrelude, ImportPreludeHref, InterpolableIdent, InterpolableStr, MediaQuery, SimpleSelector,
+    Statement, UrlValue,
 };
 use oxc_css_parser::{Syntax, token};
 
@@ -40,6 +43,68 @@ struct SourceImport {
 struct DefaultImportBinding {
     source: String,
     local: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExpressionAnalysis {
+    static_string: Option<String>,
+    vue_module_member: Option<String>,
+    uses_css_module: bool,
+}
+
+struct ExpressionCollector {
+    uses_css_module: bool,
+}
+
+impl<'a> Visit<'a> for ExpressionCollector {
+    fn visit_identifier_reference(&mut self, identifier: &IdentifierReference<'a>) {
+        if identifier.name == "$style" {
+            self.uses_css_module = true;
+        }
+        walk::walk_identifier_reference(self, identifier);
+    }
+
+    fn visit_call_expression(&mut self, call: &oxc_ast::ast::CallExpression<'a>) {
+        if matches!(&call.callee, Expression::Identifier(callee) if callee.name == "useCssModule") {
+            self.uses_css_module = true;
+        }
+        walk::walk_call_expression(self, call);
+    }
+}
+
+pub fn expression_analysis_json(path: &str, source: &str) -> Result<String, String> {
+    let allocator = Allocator::default();
+    let expression = Parser::new(&allocator, source, source_type_for_path(path)?)
+        .parse_expression()
+        .map_err(|diagnostics| format!("Failed to parse {path}: {diagnostics:?}"))?;
+    let static_string = match &expression {
+        Expression::StringLiteral(literal) => Some(literal.value.to_string()),
+        Expression::TemplateLiteral(template) if template.expressions.is_empty() => template
+            .quasis
+            .first()
+            .and_then(|quasi| quasi.value.cooked.as_ref())
+            .map(ToString::to_string),
+        _ => None,
+    };
+    let vue_module_member = match &expression {
+        Expression::StaticMemberExpression(member)
+            if matches!(&member.object, Expression::Identifier(object) if object.name == "$style") =>
+        {
+            Some(member.property.name.to_string())
+        }
+        _ => None,
+    };
+    let mut collector = ExpressionCollector {
+        uses_css_module: false,
+    };
+    collector.visit_expression(&expression);
+    serde_json::to_string(&ExpressionAnalysis {
+        static_string,
+        vue_module_member,
+        uses_css_module: collector.uses_css_module,
+    })
+    .map_err(|error| error.to_string())
 }
 
 #[derive(Serialize)]
@@ -342,6 +407,11 @@ struct StylesheetAnalysis {
     references: Vec<String>,
     imports: Vec<StylesheetImport>,
     unverifiable: bool,
+    scope_escapes: Vec<String>,
+    scope_shadow_css: Vec<String>,
+    scope_escapes_unverifiable: bool,
+    theme_tokens: BTreeMap<String, String>,
+    global_at_rule_identities: Vec<String>,
 }
 
 fn stylesheet_syntax(path: &str) -> Result<Syntax, String> {
@@ -398,10 +468,150 @@ fn import_media(source: &str, prelude: &ImportPrelude<'_>) -> String {
         .unwrap_or_default()
 }
 
-fn collect_stylesheet_statements(
+fn scope_escape_name(name: &InterpolableIdent<'_>) -> bool {
+    matches!(
+        name,
+        InterpolableIdent::Literal(name)
+            if matches!(name.name, "deep" | "global" | "slotted" | "v-deep" | "v-global" | "v-slotted")
+    )
+}
+
+fn collect_scope_escapes(
+    selector: &oxc_css_parser::ast::ComplexSelector<'_>,
+    source: &str,
+    analysis: &mut StylesheetAnalysis,
+) -> bool {
+    let mut found = false;
+    for child in &selector.children {
+        match child {
+            ComplexSelectorChild::Combinator(combinator)
+                if matches!(
+                    combinator.kind,
+                    CombinatorKind::Deep
+                        | CombinatorKind::ShadowChild
+                        | CombinatorKind::ShadowDescendant
+                ) =>
+            {
+                found = true;
+                analysis.scope_escapes_unverifiable = true;
+            }
+            ComplexSelectorChild::Combinator(_) => {}
+            ComplexSelectorChild::CompoundSelector(compound) => {
+                for simple in &compound.children {
+                    let bounds = match simple {
+                        SimpleSelector::PseudoClass(pseudo) if scope_escape_name(&pseudo.name) => {
+                            found = true;
+                            pseudo
+                                .arg
+                                .as_ref()
+                                .map(|arg| (arg.l_paren.end, arg.r_paren.start))
+                        }
+                        SimpleSelector::PseudoElement(pseudo) if scope_escape_name(&pseudo.name) => {
+                            found = true;
+                            pseudo
+                                .arg
+                                .as_ref()
+                                .map(|arg| (arg.l_paren.end, arg.r_paren.start))
+                        }
+                        _ => continue,
+                    };
+                    if let Some((start, end)) = bounds {
+                        analysis
+                            .scope_escapes
+                            .push(format!("{} {{}}", &source[start..end]));
+                    } else {
+                        analysis.scope_escapes_unverifiable = true;
+                    }
+                }
+            }
+        }
+    }
+    found
+}
+
+fn declaration_value(source: &str, declaration: &oxc_css_parser::ast::Declaration<'_>) -> String {
+    let Some(first) = declaration.value.first() else {
+        return String::new();
+    };
+    let last = declaration.value.last().expect("checked");
+    source[first.span().start..last.span().end].trim().to_string()
+}
+
+fn collect_at_rule_metadata(
     statements: &[Statement<'_>],
+    source: &str,
     analysis: &mut StylesheetAnalysis,
 ) {
+    for statement in statements {
+        let Statement::AtRule(at_rule) = statement else {
+            continue;
+        };
+        let Some(block) = &at_rule.block else {
+            continue;
+        };
+        if at_rule.name.name == "theme" {
+            for statement in &block.statements {
+                let Statement::Declaration(declaration) = statement else {
+                    continue;
+                };
+                let InterpolableIdent::Literal(name) = &declaration.name else {
+                    continue;
+                };
+                if let Some(token) = name.name.strip_prefix("--") {
+                    analysis
+                        .theme_tokens
+                        .insert(token.to_string(), declaration_value(source, declaration));
+                }
+            }
+        }
+        match at_rule.name.name {
+            "font-face" => {
+                let family = block.statements.iter().find_map(|statement| {
+                    let Statement::Declaration(declaration) = statement else {
+                        return None;
+                    };
+                    let InterpolableIdent::Literal(name) = &declaration.name else {
+                        return None;
+                    };
+                    (name.name == "font-family").then(|| {
+                        declaration_value(source, declaration)
+                            .trim_matches(['"', '\''])
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                            .to_lowercase()
+                    })
+                });
+                analysis
+                    .global_at_rule_identities
+                    .push(format!("font-face {}", family.unwrap_or_default()));
+            }
+            "page" => analysis.global_at_rule_identities.push("page".to_string()),
+            name
+                @ ("color-profile"
+                | "counter-style"
+                | "font-feature-values"
+                | "font-palette-values"
+                | "position-try"
+                | "property"
+                | "view-transition") =>
+            {
+                let prelude = source[at_rule.name.span.end..block.span.start].trim();
+                analysis
+                    .global_at_rule_identities
+                    .push(format!("{name} {prelude}"));
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_stylesheet_statements(
+    statements: &[Statement<'_>],
+    source: &str,
+    analysis: &mut StylesheetAnalysis,
+) -> bool {
+    let mut has_scope_escape = false;
     for statement in statements {
         match statement {
             Statement::AtRule(at_rule) => {
@@ -430,11 +640,28 @@ fn collect_stylesheet_statements(
                     _ => {}
                 }
                 if let Some(block) = &at_rule.block {
-                    collect_stylesheet_statements(&block.statements, analysis);
+                    has_scope_escape |=
+                        collect_stylesheet_statements(&block.statements, source, analysis);
                 }
             }
             Statement::QualifiedRule(rule) => {
-                collect_stylesheet_statements(&rule.block.statements, analysis);
+                let mut direct = false;
+                for selector in &rule.selector.selectors {
+                    direct |= collect_scope_escapes(selector, source, analysis);
+                }
+                let nested = collect_stylesheet_statements(&rule.block.statements, source, analysis);
+                if nested {
+                    // Reconstructing mixed declaration and nested-rule scope is
+                    // outside this collector; retain conservatively.
+                    analysis.scope_escapes_unverifiable = true;
+                }
+                if !direct && !nested {
+                    analysis.scope_shadow_css.push(format!(
+                        "{} {{}}",
+                        &source[rule.selector.span.start..rule.selector.span.end]
+                    ));
+                }
+                has_scope_escape |= direct || nested;
             }
             Statement::Declaration(declaration) => {
                 let InterpolableIdent::Literal(name) = &declaration.name else {
@@ -476,6 +703,7 @@ fn collect_stylesheet_statements(
             _ => {}
         }
     }
+    has_scope_escape
 }
 
 fn collect_loading_imports(
@@ -519,8 +747,14 @@ pub fn stylesheet_analysis_json(path: &str, source: &str) -> Result<String, Stri
         references: Vec::new(),
         imports: Vec::new(),
         unverifiable: false,
+        scope_escapes: Vec::new(),
+        scope_shadow_css: Vec::new(),
+        scope_escapes_unverifiable: false,
+        theme_tokens: BTreeMap::new(),
+        global_at_rule_identities: Vec::new(),
     };
-    collect_stylesheet_statements(&parsed.statements, &mut analysis);
+    collect_stylesheet_statements(&parsed.statements, source, &mut analysis);
+    collect_at_rule_metadata(&parsed.statements, source, &mut analysis);
     if syntax == Syntax::Css {
         collect_loading_imports(&parsed.statements, source, &mut analysis);
     }
@@ -770,6 +1004,25 @@ mod tests {
     }
 
     #[test]
+    fn analyzes_template_expressions_structurally() {
+        for (source, static_string, member, uses_css_module) in [
+            ("'card'", Some("card"), None, false),
+            ("`card`", Some("card"), None, false),
+            ("$style.card", None, Some("card"), true),
+            ("active ? $style.card : ''", None, None, true),
+            ("'$style.card useCssModule()'", Some("$style.card useCssModule()"), None, false),
+        ] {
+            let parsed: serde_json::Value = serde_json::from_str(
+                &super::expression_analysis_json("Component.js", source).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(parsed["staticString"], serde_json::json!(static_string));
+            assert_eq!(parsed["vueModuleMember"], serde_json::json!(member));
+            assert_eq!(parsed["usesCssModule"], uses_css_module);
+        }
+    }
+
+    #[test]
     fn collects_runtime_and_type_only_imports() {
         let collected = imports(
             "import '../globals.css';\n\
@@ -911,6 +1164,46 @@ mod tests {
                 "end": end
             }])
         );
+    }
+
+    #[test]
+    fn collects_theme_tokens_and_global_at_rule_identities() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/theme.css",
+                "@theme { --spacing-card: calc(1rem + 2px); }\n\
+                 @font-face { font-family: \"My  Font\"; src: url(font.woff2); }\n\
+                 @property --angle { syntax: \"<angle>\"; }\n\
+                 @page :left { margin: 1cm; }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            parsed["themeTokens"],
+            serde_json::json!({ "spacing-card": "calc(1rem + 2px)" })
+        );
+        assert_eq!(
+            parsed["globalAtRuleIdentities"],
+            serde_json::json!(["font-face my font", "property --angle", "page"])
+        );
+    }
+
+    #[test]
+    fn collects_vue_scope_escapes_from_selector_nodes() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/scoped.css",
+                ".a :deep(.inside:is(.x, .y)) {}\n.b::v-global(.free) {}\n.c :global .open {}\n.d /deep/ .legacy {}\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            parsed["scopeEscapes"],
+            serde_json::json!([".inside:is(.x, .y) {}", ".free {}"])
+        );
+        assert_eq!(parsed["scopeEscapesUnverifiable"], true);
     }
 
     #[test]

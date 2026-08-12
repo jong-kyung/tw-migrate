@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { collectCssDirectives } from "./native.ts";
+import { collectCssDirectives, stylesheetAnalysis } from "./native.ts";
 import { loadProjectModule } from "./parser/style-compiler.ts";
 import { isProjectInput, snapshotFile } from "./util/shared.ts";
 import type { DesignSystem, LoadedTailwind, StylesheetLoader } from "./types.ts";
@@ -91,12 +91,7 @@ export async function loadTailwind(
 }
 
 function extractThemeTokens(css: string): Record<string, string> {
-  const tokens: Record<string, string> = {};
-  for (const block of css.matchAll(/@theme[^{]*\{([^}]*)\}/gs)) {
-    for (const match of block[1].matchAll(/--([\w-]+):\s*([^;{}]+);/g))
-      tokens[match[1]] = match[2].trim();
-  }
-  return tokens;
+  return stylesheetAnalysis("theme.css", css).themeTokens;
 }
 
 /// Import specifiers of one stylesheet through the structured directive

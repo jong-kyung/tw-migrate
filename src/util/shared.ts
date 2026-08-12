@@ -135,10 +135,6 @@ export function normalizedRelativePath(root: string, path: string): string {
   return relative(root, path).split(sep).join("/");
 }
 
-export function maskCssComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\r\n]/g, " "));
-}
-
 export function indexStylesheetDependents(
   styleSources: Map<string, string>,
 ): Map<string, string[]> {

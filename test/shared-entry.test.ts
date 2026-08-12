@@ -2,6 +2,7 @@ import { expect, test } from "vite-plus/test";
 
 import { join, resolve, sep } from "node:path";
 
+import { sourceAnalysis } from "../src/native.ts";
 import { proveSharedEntry, scanProof, tailwindEntryCatalog } from "../src/plan/entry.ts";
 import { indexStylesheetDependents } from "../src/util/shared.ts";
 import type { PreparedSourceFile } from "../src/types.ts";
@@ -276,11 +277,16 @@ test("wildcard positive scopes prove no literal coverage", () => {
   ).toBe(null);
 });
 
-test("a vue loader parses with its declared script language", () => {
-  const vueLoader = file(
-    join(child, "App.vue"),
-    "<script setup lang=\"tsx\">\nimport '../../globals.css';\nimport { Button } from './Button.tsx';\nconst render = () => <Button />;\n</script>\n<template><div /></template>\n",
-  );
+test("a prepared vue loader carries records parsed with its script language", () => {
+  const script =
+    "import '../../globals.css';\nimport { Button } from './Button.tsx';\nconst render = () => <Button />;\n";
+  const vueLoader = {
+    ...file(
+      join(child, "App.vue"),
+      `<script setup lang="tsx">\n${script}</script>\n<template><div /></template>\n`,
+    ),
+    sourceImports: sourceAnalysis("App.vue.tsx", script).imports,
+  };
   const proofs = prove({ packageSources: [vueLoader, consumer] });
 
   expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(true);
