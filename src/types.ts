@@ -112,6 +112,8 @@ export interface StylesheetEntry {
   vueShadowCss?: string[];
   vueShadowModuleCss?: string[];
   vueShadowUnverifiable?: boolean;
+  /** Complete SFC registration surface for collision checks; null when opaque. */
+  vueAtRuleIdentities?: string[] | null;
   blockedRules?: RuleSpan[];
   /** Per-stylesheet override: false keeps actively applied global
    * at-rules in place for shared-entry members and colliding

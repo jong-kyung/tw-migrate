@@ -897,7 +897,14 @@ async function planPreparedGroup(
     const sheetIdentities = sheets.map((sheet) =>
       movable(sheet) ? new Set(stylesheetAtRuleIdentities(sheet.stylesheet)) : new Set<string>(),
     );
-    const movesDisabled = new Set<number>();
+    const opaqueVueRegistrations = sheets.some(
+      ({ stylesheet }) => stylesheet.vueAtRuleIdentities === null,
+    );
+    const movesDisabled = new Set<number>(
+      opaqueVueRegistrations
+        ? sheets.flatMap((sheet, index) => (movable(sheet) ? [index] : []))
+        : [],
+    );
     for (const [index, identities] of sheetIdentities.entries()) {
       for (const identity of identities) {
         if (baseIdentities.has(identity)) movesDisabled.add(index);
@@ -1165,6 +1172,7 @@ function atRuleIdentities(css: string, syntax = "css"): string[] {
 }
 
 function stylesheetAtRuleIdentities(stylesheet: StylesheetEntry): string[] {
+  if (stylesheet.vueAtRuleIdentities) return stylesheet.vueAtRuleIdentities;
   if (stylesheet.vueBlocks) {
     return stylesheet.vueBlocks.flatMap((block) =>
       atRuleIdentities(

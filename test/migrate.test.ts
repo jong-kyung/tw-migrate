@@ -1703,6 +1703,25 @@ test("a retained co-located unscoped rule shadows the module entry", async () =>
   assert.ok(report.warnings.some((entry) => entry.code === "shadowed-scoped-rule"));
 });
 
+test("retained Vue blocks prevent conflicting global at-rule moves", async () => {
+  const cwd = await fixture();
+  await Promise.all([
+    writeFile(
+      join(cwd, "Card.vue"),
+      '<template>\n  <p class="card">Card</p>\n  <span>Leaf</span>\n</template>\n<style>\n@property --brand { syntax: "<color>"; inherits: false; initial-value: red; }\n</style>\n<style scoped>\n.card { padding: 13px; }\n</style>\n',
+    ),
+    writeFile(
+      join(cwd, "Button.module.css"),
+      '@property --brand { syntax: "<color>"; inherits: false; initial-value: blue; }\n.button { padding: 13px; }\n',
+    ),
+  ]);
+  const report = await migrate({ cwd, write: true });
+  assert.equal(report.convertedRules, 2);
+  assert.doesNotMatch(await readFile(join(cwd, "globals.css"), "utf8"), /@property --brand/);
+  assert.match(await readFile(join(cwd, "Button.module.css"), "utf8"), /initial-value: blue/);
+  assert.match(await readFile(join(cwd, "Card.vue"), "utf8"), /initial-value: red/);
+});
+
 test("a $style member without a module rule retains the whole module", async () => {
   const cwd = await fixture();
   // Deleting the only rule would empty the block, drop the runtime `$style`

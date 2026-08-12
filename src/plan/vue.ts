@@ -700,6 +700,23 @@ export async function preparePackageVue({
     }
     // Module blocks were already compiled alongside the scoped blocks for
     // the shadow corpus; recompiling here would double the preprocessor work.
+    const allStyleBlocks = [
+      ...analysis.blocks,
+      ...analysis.moduleBlocks,
+      ...analysis.unscopedBlocks,
+    ];
+    let vueAtRuleIdentities: string[] | null;
+    try {
+      vueAtRuleIdentities = allStyleBlocks.flatMap(
+        (block) =>
+          stylesheetAnalysis(
+            `${file.path}.${block.analysisSource ? "css" : block.syntax}`,
+            block.analysisSource ?? block.content,
+          ).globalAtRuleIdentities,
+      );
+    } catch {
+      vueAtRuleIdentities = null;
+    }
     const vueBlocks = migrateUnscoped ? analysis.unscopedBlocks : analysis.blocks;
     if (vueBlocks.length === 0 && !migrateModule) continue;
     const vueRetention = migrateUnscoped ? undefined : retention;
@@ -730,6 +747,7 @@ export async function preparePackageVue({
         vueShadowCss: shadowCss,
         vueShadowModuleCss,
         vueShadowUnverifiable,
+        vueAtRuleIdentities,
       });
     }
     if (vueBlocks.length > 0) {
@@ -745,6 +763,7 @@ export async function preparePackageVue({
         vueShadowCss: vueRetention ? undefined : shadowCss,
         vueShadowModuleCss: vueRetention ? undefined : vueShadowModuleCss,
         vueShadowUnverifiable: vueRetention ? undefined : vueShadowUnverifiable,
+        vueAtRuleIdentities,
       });
     }
   }
