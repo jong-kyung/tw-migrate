@@ -216,6 +216,28 @@ impl<'a> SourceCollector<'_, 'a> {
         }
     }
 
+    /// A computed key that is provably the string `$style`: an inline
+    /// literal, or an identifier whose only binding is an unmutated string
+    /// literal initializer.
+    fn is_style_key(&self, expression: &Expression<'_>) -> bool {
+        match expression.get_inner_expression() {
+            Expression::StringLiteral(literal) => literal.value == "$style",
+            Expression::Identifier(identifier) => self.symbol(identifier).is_some_and(|symbol| {
+                if self.semantic.scoping().symbol_is_mutated(symbol) {
+                    return false;
+                }
+                match self.semantic.symbol_declaration(symbol).kind() {
+                    AstKind::VariableDeclarator(declarator) => matches!(
+                        declarator.init.as_ref().map(|init| init.get_inner_expression()),
+                        Some(Expression::StringLiteral(literal)) if literal.value == "$style"
+                    ),
+                    _ => false,
+                }
+            }),
+            _ => false,
+        }
+    }
+
     /// The old text scan treated every `$style` access as CSS Module usage.
     /// Semantic analysis relaxes that only for objects provably unrelated
     /// to the component instance; aliases through assignment, calls such as
@@ -413,6 +435,17 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
     }
 
     fn visit_assignment_expression(&mut self, assignment: &oxc_ast::ast::AssignmentExpression<'a>) {
+        // Assigning a namespace after declaration carries its identity to
+        // the target, matching the declarator alias path.
+        if let AssignmentTarget::AssignmentTargetIdentifier(target) = &assignment.left
+            && let Expression::Identifier(namespace) = assignment.right.get_inner_expression()
+            && self
+                .symbol(namespace)
+                .is_some_and(|symbol| self.vue_namespace_symbols.contains(&symbol))
+            && let Some(symbol) = self.symbol(target)
+        {
+            self.vue_namespace_symbols.push(symbol);
+        }
         // Assignment destructuring reads `$style` off the instance just like
         // a declarator pattern does.
         if let AssignmentTarget::ObjectAssignmentTarget(pattern) = &assignment.left
@@ -440,9 +473,10 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
                         type_only: false,
                         dynamic: true,
                     });
-                } else {
-                    // A require whose target cannot be read statically may
-                    // load any module, so caller surfaces stay open.
+                } else if self.is_unbound(callee) {
+                    // A CommonJS require whose target cannot be read
+                    // statically may load any module, so caller surfaces
+                    // stay open; a locally bound `require` is not a loader.
                     self.analysis.has_dynamic_import = true;
                 }
             }
@@ -533,9 +567,7 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
         &mut self,
         member: &oxc_ast::ast::ComputedMemberExpression<'a>,
     ) {
-        if matches!(&member.expression, Expression::StringLiteral(literal) if literal.value == "$style")
-            && self.may_be_instance(&member.object)
-        {
+        if self.is_style_key(&member.expression) && self.may_be_instance(&member.object) {
             self.analysis.uses_css_module = true;
         }
         if matches!(&member.expression, Expression::StringLiteral(literal) if literal.value == "useCssModule")
@@ -742,6 +774,19 @@ mod tests {
     }
 
     #[test]
+    fn ignores_locally_bound_require_helpers() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/registry.js",
+                "const require = (name) => name; const x = 'Card'; require(`./${x}.vue`);",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["hasDynamicImport"], false);
+    }
+
+    #[test]
     fn analyzes_vue_syntax_semantically() {
         let parsed: serde_json::Value = serde_json::from_str(
             &super::source_analysis_json(
@@ -843,6 +888,7 @@ mod tests {
             "export default { mounted() { const { $style } = this; void $style.card; } };",
             "export default { mounted() { const vm = this; void vm.$style.card; } };",
             "export default { mounted() { const vm = this; const self = vm; void self['$style'].card; } };",
+            "export default { mounted() { const key = '$style'; void this[key].card; } };",
             "const vm = this as ComponentPublicInstance; void vm.$style.card;",
             "const vm = this satisfies ComponentPublicInstance; void vm.$style.card;",
             "const vm = this!; void vm.$style.card;",
@@ -890,6 +936,7 @@ mod tests {
             "import * as Vue from 'vue'; Vue['useCssModule']();",
             "import * as Vue from 'vue'; const V = Vue; V.useCssModule();",
             "import * as Vue from 'vue'; const V = Vue as typeof Vue; V.useCssModule();",
+            "import * as Vue from 'vue'; let V; V = Vue; V.useCssModule();",
             "import * as Vue from 'vue'; const { useCssModule } = Vue; useCssModule();",
             "import * as Vue from 'vue'; const { useCssModule: css } = Vue; css();",
         ] {
