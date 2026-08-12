@@ -155,7 +155,11 @@ function buildVueComponentGraph(
         references = fileAnalysis.scriptStyleImports;
         vueReferences = fileAnalysis.scriptVueReferences;
         blockReferences = fileAnalysis.styleBlockImports.map((entry) => entry.reference);
-        hasDynamicImport = fileAnalysis.scriptHasDynamicImport;
+        // An unreadable script (external src, unsupported language, parse
+        // failure) can load components invisibly, so its caller surface
+        // stays open like any dynamic loader.
+        hasDynamicImport =
+          fileAnalysis.scriptHasDynamicImport || fileAnalysis.scriptImportsUnverifiable;
         vueGlobPatterns = fileAnalysis.scriptVueGlobPatterns;
         vueGlobUnverifiable = fileAnalysis.scriptVueGlobUnverifiable;
       } else {
@@ -290,21 +294,20 @@ export async function preparePackageVue({
     warnings: [],
     compiler: undefined,
   };
-  // An explicit non-vue stylesheet selection plans no Vue style blocks,
-  // but the package's SFC scripts still carry import records that
-  // shared-entry proofs consume, so analysis proceeds without selection.
-  const analysisOnly = Boolean(explicitStyle) && extname(explicitStyle ?? "") !== ".vue";
+  // An explicit non-vue stylesheet selection plans only that stylesheet.
+  // Shared-entry proofs never run in this mode because styleFile rejects
+  // workspaces, so skipping Vue analysis loses nothing and avoids loading
+  // the project's Vue compiler for an unrelated migration.
+  if (explicitStyle && extname(explicitStyle) !== ".vue") return none;
   // Ignore filtering scopes what gets migrated, never what gets scanned: a
   // gitignored SFC's retained style blocks still shadow scoped deletions.
   const ownedVue = sourceFiles.filter(
     (file) => extname(file.path) === ".vue" && pathOwners.get(file.path) === packageRoot,
   );
-  const selected = analysisOnly
-    ? []
-    : ownedVue.filter(
-        (file) => targetable.has(file.path) && (!explicitStyle || file.path === explicitStyle),
-      );
-  if (ownedVue.length === 0 || (!analysisOnly && selected.length === 0)) return none;
+  const selected = ownedVue.filter(
+    (file) => targetable.has(file.path) && (!explicitStyle || file.path === explicitStyle),
+  );
+  if (selected.length === 0) return none;
 
   const loaded = await loadProjectVueCompiler(packageRoot);
   const warnings: MigrationWarning[] = [];
