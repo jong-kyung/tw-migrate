@@ -417,7 +417,6 @@ pub fn source_analysis_json(path: &str, source: &str) -> Result<String, String> 
             }
         }
     }
-    let imported_use_css_module = !use_css_module_symbols.is_empty();
     let mut collector = SourceCollector {
         scoping: semantic.semantic.scoping(),
         use_css_module_symbols,
@@ -430,7 +429,7 @@ pub fn source_analysis_json(path: &str, source: &str) -> Result<String, String> 
             vue_glob_unverifiable: false,
             has_dynamic_import: false,
             has_vue_fallthrough_macro: false,
-            uses_css_module: imported_use_css_module,
+            uses_css_module: false,
         },
     };
     collector.visit_program(&parsed.program);
@@ -1202,6 +1201,19 @@ mod tests {
         assert_eq!(parsed["vueGlobUnverifiable"], false);
         assert_eq!(parsed["hasVueFallthroughMacro"], true);
         assert_eq!(parsed["usesCssModule"], true);
+    }
+
+    #[test]
+    fn ignores_unused_use_css_module_imports() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.vue.js",
+                "import { useCssModule } from 'vue';",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["usesCssModule"], false);
     }
 
     #[test]
