@@ -221,6 +221,31 @@ fn collect_scope_escapes(
     found
 }
 
+/// The font-family descriptor value from parsed tokens only, normalized
+/// the way families compare: case-insensitive with quoted and unquoted
+/// spellings equivalent. Interpolated or otherwise nonliteral values
+/// return None so the registration surface turns opaque.
+fn font_family_identity(declaration: &oxc_css_parser::ast::Declaration<'_>) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for value in &declaration.value {
+        match value {
+            ComponentValue::InterpolableStr(value) => parts.push(literal_str(value)?),
+            ComponentValue::InterpolableIdent(ident) => {
+                parts.push(literal_ident(ident)?.to_string());
+            }
+            _ => return None,
+        }
+    }
+    Some(
+        parts
+            .join(" ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase(),
+    )
+}
+
 fn declaration_value(source: &str, declaration: &oxc_css_parser::ast::Declaration<'_>) -> String {
     let Some(first) = declaration.value.first() else {
         return String::new();
@@ -287,25 +312,26 @@ fn collect_at_rule_metadata(
         }
         match at_rule.name.name {
             "font-face" => {
-                let family = block.statements.iter().find_map(|statement| {
+                let declaration = block.statements.iter().find_map(|statement| {
                     let Statement::Declaration(declaration) = statement else {
                         return None;
                     };
                     let InterpolableIdent::Literal(name) = &declaration.name else {
                         return None;
                     };
-                    (name.name == "font-family").then(|| {
-                        declaration_value(source, declaration)
-                            .trim_matches(['"', '\''])
-                            .split_whitespace()
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                            .to_lowercase()
-                    })
+                    (name.name == "font-family").then_some(declaration)
                 });
-                analysis
-                    .global_at_rule_identities
-                    .push(format!("font-face {}", family.unwrap_or_default()));
+                match declaration.map(font_family_identity) {
+                    Some(Some(family)) => analysis
+                        .global_at_rule_identities
+                        .push(format!("font-face {family}")),
+                    // A nonliteral family can resolve to any name, so its
+                    // collision surface is unknowable.
+                    Some(None) => analysis.global_at_rules_unverifiable = true,
+                    None => analysis
+                        .global_at_rule_identities
+                        .push("font-face ".to_string()),
+                }
             }
             "page" => analysis.global_at_rule_identities.push("page".to_string()),
             name
@@ -617,6 +643,20 @@ mod tests {
         );
         assert_eq!(parsed["scopeEscapesUnverifiable"], true);
         assert_eq!(parsed["selectorsUnverifiable"], false);
+    }
+
+    #[test]
+    fn marks_interpolated_font_families_unverifiable() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/main.scss",
+                "$family: Brand;\n@font-face { font-family: #{$family}; src: url(a.woff2); }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["globalAtRuleIdentities"], serde_json::json!([]));
+        assert_eq!(parsed["globalAtRulesUnverifiable"], true);
     }
 
     #[test]
