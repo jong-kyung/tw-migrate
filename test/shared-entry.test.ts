@@ -76,7 +76,7 @@ test("keeps filename evidence from an opaque stylesheet consumer", () => {
   ).toBe(true);
 });
 
-test("unparseable stylesheets keep cross-package dependency targets conservative", () => {
+test("unreadable stylesheets keep cross-package dependency targets conservative", () => {
   const goodModule = join(root, "good", "Good.module.css");
   const brokenModule = join(root, "broken", "Broken.module.scss");
   const interpolated = join(root, "broken", "theme.scss");
@@ -86,18 +86,14 @@ test("unparseable stylesheets keep cross-package dependency targets conservative
       [brokenModule, ".broken {\n"],
       [interpolated, '$name: "x";\n@use "./#{$name}";\n'],
     ]),
-    new Map([
-      [goodModule, join(root, "good")],
-      [brokenModule, join(root, "broken")],
-      [interpolated, join(root, "broken")],
-    ]),
   );
 
-  // A parse failure hides references that may cross package boundaries, so
-  // every workspace target gains the edge; a parsed sheet whose remaining
-  // references are unreadable stays scoped to its owning package.
-  expect(dependents.get(goodModule)).toEqual([brokenModule]);
+  // A parse failure and an interpolated reference both hide targets that
+  // may cross package boundaries, so every workspace candidate gains the
+  // edge from either kind of unreadable sheet.
+  expect(dependents.get(goodModule)).toEqual([brokenModule, interpolated]);
   expect(dependents.get(brokenModule)).toEqual([interpolated]);
+  expect(dependents.get(interpolated)).toEqual([brokenModule]);
 });
 
 test("proves scan coverage through literal scopes and automatic bases", () => {

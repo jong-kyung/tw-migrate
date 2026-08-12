@@ -135,28 +135,21 @@ export function normalizedRelativePath(root: string, path: string): string {
 
 export function indexStylesheetDependents(
   styleSources: Map<string, string>,
-  pathOwners?: Map<string, string | undefined>,
 ): Map<string, string[]> {
   const dependents = new Map<string, string[]>();
   const allPossibleTargets = [...styleSources.keys()].filter(
     (path) => isStylesheetModule(path) || isPreprocessorPath(path),
   );
-  const targetsByOwner = new Map<string | undefined, string[]>();
-  if (pathOwners) {
-    for (const path of allPossibleTargets) {
-      const owner = pathOwners.get(path);
-      targetsByOwner.set(owner, [...(targetsByOwner.get(owner) ?? []), path]);
-    }
-  }
   for (const [path, source] of styleSources) {
-    const possibleTargets = (): string[] =>
-      pathOwners ? (targetsByOwner.get(pathOwners.get(path)) ?? []) : allPossibleTargets;
     let references: string[];
     try {
       const analysis = stylesheetAnalysis(path, source);
       references = analysis.references;
       if (analysis.unverifiable) {
-        references = [...references, ...possibleTargets()];
+        // An interpolated or otherwise unreadable reference can resolve
+        // into any workspace package, so scoping the fallback narrower
+        // than the corpus would drop real cross-package edges.
+        references = [...references, ...allPossibleTargets];
       }
     } catch {
       // A stylesheet the parser rejects proves nothing about where its

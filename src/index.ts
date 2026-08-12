@@ -196,7 +196,7 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
     snapshots,
     styleSources,
     sourceFiles,
-    styleDependents: indexStylesheetDependents(styleSources, scope.pathOwners),
+    styleDependents: indexStylesheetDependents(styleSources),
     vueStyleRanges,
     entryCatalog: tailwindEntryCatalog(styleSources, scope.pathOwners),
     ignoredPaths: options.workspaces
