@@ -1751,7 +1751,7 @@ test("retained Vue blocks prevent conflicting global at-rule moves", async () =>
     ),
     writeFile(
       join(cwd, "Button.module.css"),
-      '@property --brand { syntax: "<color>"; inherits: false; initial-value: blue; }\n.button { padding: 13px; }\n',
+      '@property /* docs */ --brand { syntax: "<color>"; inherits: false; initial-value: blue; }\n.button { padding: 13px; }\n',
     ),
   ]);
   const report = await migrate({ cwd, write: true });

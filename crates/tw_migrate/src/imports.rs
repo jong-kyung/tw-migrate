@@ -19,9 +19,10 @@ use serde::Serialize;
 
 use crate::{at_rules::parse_css, js_rewrite::source_type_for_path};
 use oxc_css_parser::ast::{
-    AtRulePrelude, CombinatorKind, ComplexSelectorChild, ComponentValue, CompoundSelector, Function,
-    FunctionName, ImportPrelude, ImportPreludeHref, InterpolableIdent, InterpolableStr, MediaQuery,
-    PseudoClassSelectorArgKind, SimpleSelector, Statement, UrlValue,
+    AtRulePrelude, ColorProfilePrelude, CombinatorKind, ComplexSelectorChild, ComponentValue,
+    CompoundSelector, FontFamilyName, Function, FunctionName, ImportPrelude, ImportPreludeHref,
+    InterpolableIdent, InterpolableStr, MediaQuery, PseudoClassSelectorArgKind, SimpleSelector,
+    Statement, UrlValue,
 };
 use oxc_css_parser::{Syntax, token};
 
@@ -675,6 +676,34 @@ fn declaration_value(source: &str, declaration: &oxc_css_parser::ast::Declaratio
     source[first.span().start..last.span().end].trim().to_string()
 }
 
+fn literal_ident<'a>(value: &'a InterpolableIdent<'a>) -> Option<&'a str> {
+    let InterpolableIdent::Literal(value) = value else {
+        return None;
+    };
+    Some(value.name)
+}
+
+fn registration_prelude(prelude: Option<&AtRulePrelude<'_>>) -> Option<String> {
+    match prelude? {
+        AtRulePrelude::ColorProfile(ColorProfilePrelude::DashedIdent(value))
+        | AtRulePrelude::CounterStyle(value)
+        | AtRulePrelude::FontPaletteValues(value)
+        | AtRulePrelude::PositionTry(value)
+        | AtRulePrelude::Property(value) => literal_ident(value).map(str::to_string),
+        AtRulePrelude::ColorProfile(ColorProfilePrelude::DeviceCmyk(value)) => {
+            Some(value.name.to_string())
+        }
+        AtRulePrelude::FontFeatureValues(FontFamilyName::Str(value)) => literal_str(value),
+        AtRulePrelude::FontFeatureValues(FontFamilyName::Unquoted(value)) => value
+            .idents
+            .iter()
+            .map(literal_ident)
+            .collect::<Option<Vec<_>>>()
+            .map(|names| names.join(" ")),
+        _ => None,
+    }
+}
+
 fn collect_at_rule_metadata(
     statements: &[Statement<'_>],
     source: &str,
@@ -734,7 +763,11 @@ fn collect_at_rule_metadata(
                 | "property"
                 | "view-transition") =>
             {
-                let prelude = source[at_rule.name.span.end..block.span.start].trim();
+                let prelude = registration_prelude(at_rule.prelude.as_ref()).unwrap_or_else(|| {
+                    source[at_rule.name.span.end..block.span.start]
+                        .trim()
+                        .to_string()
+                });
                 analysis
                     .global_at_rule_identities
                     .push(format!("{name} {prelude}"));
@@ -1398,6 +1431,7 @@ mod tests {
                  @font-face { font-family: \"My  Font\"; src: url(font.woff2); }\n\
                  @media print { @font-face { font-family: Print; src: url(print.woff2); } }\n\
                  @property --angle { syntax: \"<angle>\"; }\n\
+                 @property /* docs */ --angle { syntax: \"<angle>\"; }\n\
                  @page :left { margin: 1cm; }\n",
             )
             .unwrap(),
@@ -1409,7 +1443,13 @@ mod tests {
         );
         assert_eq!(
             parsed["globalAtRuleIdentities"],
-            serde_json::json!(["font-face my font", "font-face print", "property --angle", "page"])
+            serde_json::json!([
+                "font-face my font",
+                "font-face print",
+                "property --angle",
+                "property --angle",
+                "page"
+            ])
         );
     }
 
