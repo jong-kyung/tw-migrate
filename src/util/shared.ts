@@ -1,7 +1,7 @@
 import { lstat, readFile } from "node:fs/promises";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 
-import { utf8OffsetMap } from "../parser/html.ts";
+import { stylesheetAnalysis } from "../native.ts";
 import { MISSING_STYLE_COMPILER_MESSAGES, isPreprocessorPath } from "../parser/style-compiler.ts";
 import type { CssImport, MigrationFailure } from "../types.ts";
 
@@ -143,23 +143,25 @@ export function indexStylesheetDependents(
   styleSources: Map<string, string>,
 ): Map<string, string[]> {
   const dependents = new Map<string, string[]>();
-  for (const [path, rawSource] of styleSources) {
-    const source = maskCssComments(rawSource);
-    const references = [
-      ...[...source.matchAll(/composes\s*:[^;{}]*?\bfrom\s+["']([^"']+)["']/g)].map(
-        (match) => match[1],
-      ),
-      ...[...source.matchAll(/@(?:use|forward)\s+["']([^"']+)["']/g)].map((match) => match[1]),
-      ...[...source.matchAll(/@import\s+(?:\([^)]*\)\s*)?(?:([^;{}]+);|([^;{}\r\n]+))/g)].flatMap(
-        (statement) =>
-          [...(statement[1] ?? statement[2]).matchAll(/["']([^"']+)["']/g)].map(
-            (match) => match[1],
-          ),
-      ),
-      ...[...source.matchAll(/@import\s+url\(\s*([^"'()\s]+)\s*\)/g)].map((match) => match[1]),
-    ];
+  const possibleTargets = [...styleSources.keys()].filter(
+    (path) => isStylesheetModule(path) || isPreprocessorPath(path),
+  );
+  for (const [path, source] of styleSources) {
+    let references: string[];
+    try {
+      const analysis = stylesheetAnalysis(path, source);
+      references = analysis.references;
+      if (analysis.unverifiable) {
+        references = [...references, ...possibleTargets];
+      }
+    } catch {
+      references = possibleTargets;
+    }
     for (const reference of new Set(references)) {
-      for (const target of stylesheetReferenceTargets(path, reference, styleSources)) {
+      const targets = styleSources.has(reference)
+        ? [reference]
+        : stylesheetReferenceTargets(path, reference, styleSources);
+      for (const target of targets) {
         if (target === path || (!isStylesheetModule(target) && !isPreprocessorPath(target)))
           continue;
         const paths = dependents.get(target) ?? [];
@@ -201,79 +203,6 @@ export function stylesheetReferenceTargets(
   return candidates.filter((path) => styleSources.has(path));
 }
 
-export function cssImports(source: string): CssImport[] {
-  const imports: CssImport[] = [];
-  const masked = maskCssComments(source);
-  let depth = 0;
-  let quote;
-  // Browsers ignore @import once any block rule has appeared, so imports
-  // after the first top-level `{` never load and must not be traversed.
-  let importsAllowed = true;
-  for (let index = 0; index < masked.length; index += 1) {
-    const character = masked[index];
-    if (quote) {
-      if (character === "\\") index += 1;
-      else if (character === quote) quote = undefined;
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      quote = character;
-      continue;
-    }
-    if (character === "{") {
-      depth += 1;
-      importsAllowed = false;
-      continue;
-    }
-    if (character === "}") {
-      depth = Math.max(0, depth - 1);
-      continue;
-    }
-    if (
-      !importsAllowed ||
-      depth !== 0 ||
-      masked.slice(index, index + 7).toLowerCase() !== "@import" ||
-      /[-\w]/.test(masked[index + 7] ?? "")
-    )
-      continue;
-
-    let end = index + 7;
-    let importQuote;
-    let parentheses = 0;
-    for (; end < masked.length; end += 1) {
-      const next = masked[end];
-      if (importQuote) {
-        if (next === "\\") end += 1;
-        else if (next === importQuote) importQuote = undefined;
-      } else if (next === '"' || next === "'") importQuote = next;
-      else if (next === "(") parentheses += 1;
-      else if (next === ")") parentheses = Math.max(0, parentheses - 1);
-      else if (next === ";" && parentheses === 0) break;
-    }
-    if (end >= masked.length) continue;
-    const statement = masked.slice(index, end + 1);
-    const match =
-      /^@import\s+(?:url\(\s*)?(?:["']([^"']+)["']|([^"'()\s;]+))\s*\)?\s*([^;]*);$/i.exec(
-        statement,
-      );
-    if (match)
-      imports.push({
-        href: match[1] ?? match[2],
-        media: match[3].trim(),
-        start: index,
-        end: end + 1,
-      });
-    index = end;
-  }
-  // Offsets are collected as string indices and converted together, so the
-  // source prefix is scanned once rather than twice per import.
-  const offsets = utf8OffsetMap(
-    source,
-    imports.flatMap((imported) => [imported.start, imported.end]),
-  );
-  return imports.map((imported) => ({
-    ...imported,
-    start: offsets.get(imported.start) ?? imported.start,
-    end: offsets.get(imported.end) ?? imported.end,
-  }));
+export function cssImports(path: string, source: string): CssImport[] {
+  return stylesheetAnalysis(path, source).imports;
 }

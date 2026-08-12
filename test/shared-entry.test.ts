@@ -3,6 +3,7 @@ import { expect, test } from "vite-plus/test";
 import { join, resolve, sep } from "node:path";
 
 import { proveSharedEntry, scanProof, tailwindEntryCatalog } from "../src/plan/entry.ts";
+import { indexStylesheetDependents } from "../src/util/shared.ts";
 import type { PreparedSourceFile } from "../src/types.ts";
 
 // Platform-resolved so separators and drive letters match what the proof
@@ -14,7 +15,7 @@ const entry = join(root, "globals.css");
 test("catalogs Tailwind entries by owning package", () => {
   const styleSources = new Map([
     [entry, '@import "tailwindcss";\n'],
-    [join(root, "plain.css"), ".a { color: red; }\n"],
+    [join(root, "plain.css"), ".a { content: '@import \"tailwindcss\"'; }\n"],
     [join(child, "own.css"), '@import "tailwindcss" prefix(tw);\n'],
   ]);
   const owners = new Map<string, string | undefined>([
@@ -29,6 +30,34 @@ test("catalogs Tailwind entries by owning package", () => {
       [child, [join(child, "own.css")]],
     ]),
   );
+});
+
+test("indexes parser-proven stylesheet dependencies", () => {
+  const module = join(root, "Button.module.css");
+  const importer = join(root, "consumer.scss");
+  const stringOnly = join(root, "string.css");
+  const dependents = indexStylesheetDependents(
+    new Map([
+      [module, ".button { padding: 1rem; }\n"],
+      [importer, '@use "./Button.module";\n'],
+      [stringOnly, ".x { content: '@import \"./Button.module.css\"'; }\n"],
+    ]),
+  );
+
+  expect(dependents.get(module)).toEqual([importer]);
+});
+
+test("keeps dependency targets conservative when a stylesheet cannot parse", () => {
+  const module = join(root, "Button.module.css");
+  const opaque = join(root, "opaque.scss");
+  const dependents = indexStylesheetDependents(
+    new Map([
+      [module, ".button { padding: 1rem; }\n"],
+      [opaque, ".broken {\n"],
+    ]),
+  );
+
+  expect(dependents.get(module)).toEqual([opaque]);
 });
 
 test("proves scan coverage through literal scopes and automatic bases", () => {

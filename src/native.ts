@@ -1,6 +1,10 @@
 import { createRequire } from "node:module";
 
-import { errorCode } from "./util/shared.ts";
+function errorCode(error: unknown): string | undefined {
+  return error instanceof Error && "code" in error && typeof error.code === "string"
+    ? error.code
+    : undefined;
+}
 
 // Mirrors the generated binding.d.ts (napi build --dts), inlined so type
 // checking does not depend on the addon having been built.
@@ -25,9 +29,16 @@ export interface SourceAnalysis {
   usesCssModule: boolean;
 }
 
+export interface StylesheetAnalysis {
+  references: string[];
+  imports: { href: string; media: string; start: number; end: number }[];
+  unverifiable: boolean;
+}
+
 interface Binding {
   collectMediaConditions: (request: string) => string;
   sourceAnalysis: (path: string, source: string) => string;
+  stylesheetAnalysis: (path: string, source: string) => string;
   collectCssDirectives: (source: string) => string;
   mediaProbeKey: (css: string) => string;
   decodeSourceMap: (sourceMap: string) => string;
@@ -76,11 +87,20 @@ export const {
 } = binding;
 
 const sourceAnalysisCache = new Map<string, { source: string; analysis: SourceAnalysis }>();
+const stylesheetAnalysisCache = new Map<string, { source: string; analysis: StylesheetAnalysis }>();
 
 export function sourceAnalysis(path: string, source: string): SourceAnalysis {
   const cached = sourceAnalysisCache.get(path);
   if (cached?.source === source) return cached.analysis;
   const analysis = JSON.parse(binding.sourceAnalysis(path, source)) as SourceAnalysis;
   sourceAnalysisCache.set(path, { source, analysis });
+  return analysis;
+}
+
+export function stylesheetAnalysis(path: string, source: string): StylesheetAnalysis {
+  const cached = stylesheetAnalysisCache.get(path);
+  if (cached?.source === source) return cached.analysis;
+  const analysis = JSON.parse(binding.stylesheetAnalysis(path, source)) as StylesheetAnalysis;
+  stylesheetAnalysisCache.set(path, { source, analysis });
   return analysis;
 }

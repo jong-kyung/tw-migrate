@@ -16,10 +16,8 @@ import { dirname, extname, join, resolve } from "node:path";
 import { collectCssDirectives, sourceAnalysis } from "../native.ts";
 import type { SourceImportRecord } from "../native.ts";
 import { parseHtmlSource } from "../parser/html.ts";
-import { isWithin, maskCssComments } from "../util/shared.ts";
+import { isWithin } from "../util/shared.ts";
 import type { PreparedSourceFile } from "../types.ts";
-
-const TAILWIND_UTILITIES_IMPORT = /@import\s+["']tailwindcss(?:\/utilities(?:\.css)?)?["']/;
 
 /// True for a specifier whose import actually emits utilities: the full
 /// package or its utilities layer. A sheet importing only
@@ -35,19 +33,17 @@ function emitsUtilities(specifier: string): boolean {
 }
 
 /// A structurally parsed top-level Tailwind import that includes the
-/// utilities layer. An unparseable stylesheet falls back to the masked
-/// regex so a working entry is never dropped from discovery.
+/// utilities layer.
 function hasTailwindImport(source: string): boolean {
   const directives = cssDirectives(source);
-  if (directives !== null) {
-    return directives.some(
+  return (
+    directives?.some(
       (directive) =>
         directive.kind === "import" &&
         directive.specifier !== null &&
         emitsUtilities(directive.specifier),
-    );
-  }
-  return TAILWIND_UTILITIES_IMPORT.test(maskCssComments(source));
+    ) ?? false
+  );
 }
 
 /// Tailwind entries per owning package, from the scanned stylesheet corpus.

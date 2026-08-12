@@ -510,7 +510,7 @@ export async function preparePackageVue({
     for (const path of importedStyles) {
       stylePaths.add(path);
       if (extname(path) !== ".css") continue;
-      for (const imported of cssImports(styleSources.get(path) ?? "")) {
+      for (const imported of cssImports(path, styleSources.get(path) ?? "")) {
         // Conditional imports need variant-aware contexts; retaining them is
         // safer than attaching an unconditional utility.
         if (imported.media) continue;

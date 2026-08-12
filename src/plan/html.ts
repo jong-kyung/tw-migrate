@@ -246,7 +246,7 @@ async function collectHtmlStyleContexts(state: HtmlContextState): Promise<void> 
   });
   if (extname(state.path) !== ".css") return;
 
-  for (const imported of cssImports(source)) {
+  for (const imported of cssImports(state.path, source)) {
     const variants = mediaVariants(imported.media);
     if (variants === undefined) {
       state.warnings.push(

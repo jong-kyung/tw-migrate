@@ -64,6 +64,11 @@ pub fn source_analysis(path: String, source: String) -> napi::Result<String> {
 }
 
 #[napi]
+pub fn stylesheet_analysis(path: String, source: String) -> napi::Result<String> {
+    imports::stylesheet_analysis_json(&path, &source).map_err(napi::Error::from_reason)
+}
+
+#[napi]
 pub fn collect_css_directives(source: String) -> napi::Result<String> {
     imports::collect_css_directives_json(&source).map_err(|error| napi::Error::from_reason(error))
 }

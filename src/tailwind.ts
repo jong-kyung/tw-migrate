@@ -5,18 +5,20 @@ import { pathToFileURL } from "node:url";
 
 import { collectCssDirectives } from "./native.ts";
 import { loadProjectModule } from "./parser/style-compiler.ts";
-import { isProjectInput, maskCssComments, snapshotFile } from "./util/shared.ts";
+import { isProjectInput, snapshotFile } from "./util/shared.ts";
 import type { DesignSystem, LoadedTailwind, StylesheetLoader } from "./types.ts";
 
 export function findTailwindEntries(
   stylePaths: string[],
   styleSources: Map<string, string>,
 ): string[] {
-  return stylePaths.filter((path) => {
-    if (extname(path) !== ".css") return false;
-    const source = maskCssComments(styleSources.get(path) ?? "");
-    return /@import\s+["']tailwindcss(?:\/[^"']*)?["']/.test(source);
-  });
+  return stylePaths.filter(
+    (path) =>
+      extname(path) === ".css" &&
+      importSpecifiers(styleSources.get(path) ?? "").some(
+        (specifier) => specifier === "tailwindcss" || specifier.startsWith("tailwindcss/"),
+      ),
+  );
 }
 
 export function resolveTailwindEntry(
@@ -98,9 +100,7 @@ function extractThemeTokens(css: string): Record<string, string> {
 }
 
 /// Import specifiers of one stylesheet through the structured directive
-/// parser, covering quoted and url() forms at the top level only; an
-/// unparseable stylesheet falls back to the quoted-import regex so a
-/// working graph keeps loading.
+/// parser, covering quoted and url() forms at the top level only.
 function importSpecifiers(css: string): string[] {
   try {
     const parsed: unknown = JSON.parse(collectCssDirectives(css));
@@ -115,9 +115,9 @@ function importSpecifiers(css: string): string[] {
       );
     }
   } catch {
-    // fall through to the regex
+    // An unparseable stylesheet proves no import graph.
   }
-  return [...css.matchAll(/@import\s+["']([^"']+)["']/g)].map((match) => match[1]);
+  return [];
 }
 
 async function extractThemeTokensFromGraph(

@@ -16,10 +16,10 @@ use serde::Serialize;
 
 use crate::{at_rules::parse_css, js_rewrite::source_type_for_path};
 use oxc_css_parser::ast::{
-    AtRulePrelude, ComponentValue, Function, FunctionName, ImportPreludeHref, InterpolableIdent,
-    InterpolableStr, MediaQuery, Statement, UrlValue,
+    AtRulePrelude, ComponentValue, Function, FunctionName, ImportPrelude,
+    ImportPreludeHref, InterpolableIdent, InterpolableStr, MediaQuery, Statement, UrlValue,
 };
-use oxc_css_parser::token;
+use oxc_css_parser::{Syntax, token};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -328,6 +328,208 @@ pub fn source_analysis_json(path: &str, source: &str) -> Result<String, String> 
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StylesheetImport {
+    href: String,
+    media: String,
+    start: usize,
+    end: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StylesheetAnalysis {
+    references: Vec<String>,
+    imports: Vec<StylesheetImport>,
+    unverifiable: bool,
+}
+
+fn stylesheet_syntax(path: &str) -> Result<Syntax, String> {
+    match std::path::Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+    {
+        Some("css") => Ok(Syntax::Css),
+        Some("scss") => Ok(Syntax::Scss),
+        Some("sass") => Ok(Syntax::Sass),
+        Some("less") => Ok(Syntax::Less),
+        _ => Err(format!("Unsupported stylesheet: {path}")),
+    }
+}
+
+fn import_href(href: &ImportPreludeHref<'_>) -> Option<String> {
+    match href {
+        ImportPreludeHref::Str(value) => literal_str(value),
+        ImportPreludeHref::Url(url) => match &url.value {
+            Some(UrlValue::Raw(raw)) => Some(raw.value.to_string()),
+            Some(UrlValue::Str(value)) => literal_str(value),
+            _ => None,
+        },
+        ImportPreludeHref::Function(_) => None,
+    }
+}
+
+fn interpolable_str_end(value: &InterpolableStr<'_>) -> usize {
+    match value {
+        InterpolableStr::Literal(value) => value.span.end,
+        InterpolableStr::SassInterpolated(value) => value.span.end,
+        InterpolableStr::LessInterpolated(value) => value.span.end,
+    }
+}
+
+fn import_href_end(href: &ImportPreludeHref<'_>) -> usize {
+    match href {
+        ImportPreludeHref::Str(value) => interpolable_str_end(value),
+        ImportPreludeHref::Url(value) => value.span.end,
+        ImportPreludeHref::Function(value) => value.span.end,
+    }
+}
+
+fn import_media(source: &str, prelude: &ImportPrelude<'_>) -> String {
+    if prelude.layer.is_some() || prelude.supports.is_some() || prelude.modifiers.is_some() {
+        return source[import_href_end(&prelude.href)..prelude.span.end]
+            .trim()
+            .to_string();
+    }
+    prelude
+        .media
+        .as_ref()
+        .map(|media| source[media.span.start..media.span.end].trim().to_string())
+        .unwrap_or_default()
+}
+
+fn collect_stylesheet_statements(
+    statements: &[Statement<'_>],
+    analysis: &mut StylesheetAnalysis,
+) {
+    for statement in statements {
+        match statement {
+            Statement::AtRule(at_rule) => {
+                match &at_rule.prelude {
+                    Some(AtRulePrelude::Import(prelude)) => match import_href(&prelude.href) {
+                        Some(reference) => analysis.references.push(reference),
+                        None => analysis.unverifiable = true,
+                    },
+                    Some(AtRulePrelude::LessImport(prelude)) => match import_href(&prelude.href) {
+                        Some(reference) => analysis.references.push(reference),
+                        None => analysis.unverifiable = true,
+                    },
+                    Some(AtRulePrelude::SassImport(prelude)) => {
+                        analysis
+                            .references
+                            .extend(prelude.paths.iter().map(|path| path.value.to_string()));
+                    }
+                    Some(AtRulePrelude::SassUse(prelude)) => match literal_str(&prelude.path) {
+                        Some(reference) => analysis.references.push(reference),
+                        None => analysis.unverifiable = true,
+                    },
+                    Some(AtRulePrelude::SassForward(prelude)) => match literal_str(&prelude.path) {
+                        Some(reference) => analysis.references.push(reference),
+                        None => analysis.unverifiable = true,
+                    },
+                    _ => {}
+                }
+                if let Some(block) = &at_rule.block {
+                    collect_stylesheet_statements(&block.statements, analysis);
+                }
+            }
+            Statement::QualifiedRule(rule) => {
+                collect_stylesheet_statements(&rule.block.statements, analysis);
+            }
+            Statement::Declaration(declaration) => {
+                let InterpolableIdent::Literal(name) = &declaration.name else {
+                    continue;
+                };
+                if name.name != "composes" {
+                    continue;
+                }
+                let mut from = false;
+                let mut reference_read = false;
+                for value in &declaration.value {
+                    if from {
+                        match value {
+                            ComponentValue::InterpolableStr(value) => match literal_str(value) {
+                                Some(reference) => {
+                                    analysis.references.push(reference);
+                                    reference_read = true;
+                                }
+                                None => analysis.unverifiable = true,
+                            },
+                            ComponentValue::InterpolableIdent(InterpolableIdent::Literal(ident))
+                                if ident.name == "global" =>
+                            {
+                                reference_read = true;
+                            }
+                            _ => analysis.unverifiable = true,
+                        }
+                        break;
+                    }
+                    if matches!(value, ComponentValue::InterpolableIdent(InterpolableIdent::Literal(ident)) if ident.name == "from")
+                    {
+                        from = true;
+                    }
+                }
+                if from && !reference_read {
+                    analysis.unverifiable = true;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_loading_imports(
+    statements: &[Statement<'_>],
+    source: &str,
+    analysis: &mut StylesheetAnalysis,
+) {
+    let mut imports_allowed = true;
+    for statement in statements {
+        let Statement::AtRule(at_rule) = statement else {
+            imports_allowed = false;
+            continue;
+        };
+        if let Some(AtRulePrelude::Import(prelude)) = &at_rule.prelude {
+            if imports_allowed {
+                if let Some(href) = import_href(&prelude.href) {
+                    let end = at_rule.span.end
+                        + usize::from(source.as_bytes().get(at_rule.span.end) == Some(&b';'));
+                    analysis.imports.push(StylesheetImport {
+                        href,
+                        media: import_media(source, prelude),
+                        start: at_rule.span.start,
+                        end,
+                    });
+                } else {
+                    analysis.unverifiable = true;
+                }
+            }
+        } else if at_rule.block.is_some() {
+            imports_allowed = false;
+        }
+    }
+}
+
+pub fn stylesheet_analysis_json(path: &str, source: &str) -> Result<String, String> {
+    let syntax = stylesheet_syntax(path)?;
+    let allocator = oxc_css_parser::Allocator::default();
+    let parsed = parse_css(&allocator, source, syntax)
+        .map_err(|error| format!("Failed to parse {path}: {error}"))?;
+    let mut analysis = StylesheetAnalysis {
+        references: Vec::new(),
+        imports: Vec::new(),
+        unverifiable: false,
+    };
+    collect_stylesheet_statements(&parsed.statements, &mut analysis);
+    if syntax == Syntax::Css {
+        collect_loading_imports(&parsed.statements, source, &mut analysis);
+    }
+    analysis.references.sort();
+    analysis.references.dedup();
+    serde_json::to_string(&analysis).map_err(|error| error.to_string())
+}
+
+#[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase", rename_all_fields = "camelCase")]
 enum CssDirective {
     /// A top-level `@import`, read from the parser's structured prelude.
@@ -372,15 +574,7 @@ fn import_directive(source_text: &str, at_rule: &oxc_css_parser::ast::AtRule<'_>
             source_unreadable: false,
         };
     };
-    let specifier = match &prelude.href {
-        ImportPreludeHref::Str(value) => literal_str(value),
-        ImportPreludeHref::Url(url) => match &url.value {
-            Some(UrlValue::Raw(raw)) => Some(raw.value.to_string()),
-            Some(UrlValue::Str(value)) => literal_str(value),
-            _ => None,
-        },
-        ImportPreludeHref::Function(_) => None,
-    };
+    let specifier = import_href(&prelude.href);
     let tailwind = specifier
         .as_deref()
         .is_some_and(|spec| spec == "tailwindcss" || spec.starts_with("tailwindcss/"));
@@ -664,6 +858,73 @@ mod tests {
         assert_eq!(parsed["hasDynamicImport"], false);
         assert_eq!(parsed["hasVueFallthroughMacro"], false);
         assert_eq!(parsed["usesCssModule"], false);
+    }
+
+    #[test]
+    fn collects_stylesheet_dependencies_for_every_supported_syntax() {
+        for (path, source, expected) in [
+            (
+                "/p/main.css",
+                "@import \"./base.css\" screen;\n.x { composes: y from \"./x.module.css\"; }\n.global { composes: reset from global; }\n",
+                vec!["./base.css", "./x.module.css"],
+            ),
+            (
+                "/p/main.scss",
+                "@use \"./tokens\";\n@forward \"./shared\";\n@import \"./legacy\";\n.x { composes: y from \"./x.module.css\"; }\n",
+                vec!["./legacy", "./shared", "./tokens", "./x.module.css"],
+            ),
+            (
+                "/p/main.sass",
+                "@use \"./tokens\"\n@forward \"./shared\"\n@import \"./legacy\"\n.x\n  composes: y from \"./x.module.css\"\n",
+                vec!["./legacy", "./shared", "./tokens", "./x.module.css"],
+            ),
+            (
+                "/p/main.less",
+                "@import (reference) \"./tokens.less\";\n.x { composes: y from \"./x.module.css\"; }\n",
+                vec!["./tokens.less", "./x.module.css"],
+            ),
+        ] {
+            let parsed: serde_json::Value = serde_json::from_str(
+                &super::stylesheet_analysis_json(path, source).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(parsed["references"], serde_json::json!(expected), "{path}");
+            assert_eq!(parsed["unverifiable"], false, "{path}");
+        }
+    }
+
+    #[test]
+    fn collects_loading_import_media_and_byte_spans() {
+        let source = "/* 😀 */\n@import url(\"./print.css\") print;\n.rule {}\n@import \"./late.css\";\n";
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json("/p/main.css", source).unwrap(),
+        )
+        .unwrap();
+        let start = source.find("@import").unwrap();
+        let end = source[start..].find(';').unwrap() + start + 1;
+        assert_eq!(
+            parsed["imports"],
+            serde_json::json!([{
+                "href": "./print.css",
+                "media": "print",
+                "start": start,
+                "end": end
+            }])
+        );
+    }
+
+    #[test]
+    fn marks_interpolated_stylesheet_dependencies_unverifiable() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/main.scss",
+                "$name: \"theme\";\n@use \"./#{$name}\";\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["references"], serde_json::json!([]));
+        assert_eq!(parsed["unverifiable"], true);
     }
 
     #[test]
