@@ -156,6 +156,9 @@ function buildVueComponentGraph(
       } else {
         references = [];
         vueReferences = [];
+        // Foreign SFCs require their owning package's Vue compiler. Until
+        // their scripts are analyzed there, they cannot close caller surfaces.
+        hasDynamicImport = true;
       }
     } else {
       try {

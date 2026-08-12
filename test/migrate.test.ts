@@ -1078,6 +1078,46 @@ test("dynamic aliased imports in Vue scripts keep caller fallthrough open", asyn
   );
 });
 
+test("foreign workspace Vue sources keep caller fallthrough open", async () => {
+  const cwd = await fixture();
+  await Promise.all([
+    rm(join(cwd, "Button.module.css")),
+    rm(join(cwd, "Button.tsx")),
+    rm(join(cwd, "globals.css")),
+    writeFile(join(cwd, "package.json"), '{"private":true,"workspaces":["packages/*"]}'),
+    mkdir(join(cwd, "packages", "lib"), { recursive: true }),
+    mkdir(join(cwd, "packages", "app"), { recursive: true }),
+  ]);
+  await Promise.all([
+    writeFile(join(cwd, "packages", "lib", "package.json"), '{"private":true}'),
+    writeFile(join(cwd, "packages", "lib", "globals.css"), '@import "tailwindcss";\n'),
+    writeFile(
+      join(cwd, "packages", "lib", "Child.vue"),
+      '<template>\n  <div class="passed">Child</div>\n</template>\n<style scoped>\n.passed { padding: 13px; }\n</style>\n',
+    ),
+    writeFile(
+      join(cwd, "packages", "lib", "Parent.vue"),
+      '<template>\n  <Child class="passed" />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n',
+    ),
+    writeFile(join(cwd, "packages", "app", "package.json"), '{"private":true}'),
+    writeFile(
+      join(cwd, "packages", "app", "App.vue"),
+      '<template>\n  <main>App</main>\n</template>\n<script setup>\nvoid import("../../lib/Child.vue");\n</script>\n',
+    ),
+  ]);
+  execFileSync("git", ["init", "-q"], { cwd });
+  const report = await migrate({ cwd, workspaces: true, extractMediaQueries: false });
+  assert.ok(report.warnings.some((entry) => entry.code === "open-root-fallthrough"));
+  assert.ok(
+    report.rules.some(
+      (rule) =>
+        rule.file === "packages/lib/Child.vue" &&
+        rule.selector === ".passed" &&
+        rule.status === "retained",
+    ),
+  );
+});
+
 test("does not rewrite symlinked Vue files reached by component proof", async (context) => {
   if (process.platform === "win32") context.skip("symlink creation requires elevated privileges");
   const cwd = await fixture();
