@@ -7,8 +7,8 @@
 use oxc_allocator::Allocator;
 use oxc_ast::AstKind;
 use oxc_ast::ast::{
-    Argument, ArrayExpressionElement, BindingPattern, Expression, IdentifierReference,
-    ImportDeclarationSpecifier, VariableDeclarator,
+    Argument, ArrayExpressionElement, AssignmentTarget, AssignmentTargetProperty, BindingPattern,
+    Expression, IdentifierReference, ImportDeclarationSpecifier, VariableDeclarator,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::Parser;
@@ -282,7 +282,9 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
             // record cannot prove unconditional loading.
             dynamic: decl.with_clause.is_some() || decl.phase.is_some(),
         });
-        if !type_only && decl.phase.is_none() {
+        // An import attribute clause constructs a stylesheet object without
+        // applying it, so it never counts as an applied static import.
+        if !type_only && decl.phase.is_none() && decl.with_clause.is_none() {
             self.analysis
                 .static_imports
                 .push(decl.source.value.to_string());
@@ -377,6 +379,25 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
             self.analysis.uses_css_module = true;
         }
         walk::walk_variable_declarator(self, declarator);
+    }
+
+    fn visit_assignment_expression(&mut self, assignment: &oxc_ast::ast::AssignmentExpression<'a>) {
+        // Assignment destructuring reads `$style` off the instance just like
+        // a declarator pattern does.
+        if let AssignmentTarget::ObjectAssignmentTarget(pattern) = &assignment.left
+            && self.may_be_instance(&assignment.right)
+            && pattern.properties.iter().any(|property| match property {
+                AssignmentTargetProperty::AssignmentTargetPropertyIdentifier(shorthand) => {
+                    shorthand.binding.name == "$style"
+                }
+                AssignmentTargetProperty::AssignmentTargetPropertyProperty(named) => {
+                    named.name.is_specific_static_name("$style")
+                }
+            })
+        {
+            self.analysis.uses_css_module = true;
+        }
+        walk::walk_assignment_expression(self, assignment);
     }
 
     fn visit_call_expression(&mut self, call: &oxc_ast::ast::CallExpression<'a>) {
@@ -633,6 +654,19 @@ mod tests {
     }
 
     #[test]
+    fn excludes_import_attribute_clauses_from_static_imports() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.vue.ts",
+                "import sheet from './card.css' with { type: 'css' };\nimport './applied.css';\nvoid sheet;\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["staticImports"], serde_json::json!(["./applied.css"]));
+    }
+
+    #[test]
     fn rejects_unparseable_sources() {
         assert!(super::source_analysis_json("/p/x.ts", "import from from;").is_err());
     }
@@ -738,21 +772,24 @@ mod tests {
             assert_eq!(parsed["usesCssModule"], true);
         }
 
-        let unrelated: serde_json::Value = serde_json::from_str(
-            &super::source_analysis_json(
-                "/p/Card.vue.js",
-                "const value = {}; const { $style } = value; void $style.card;",
+        for source in [
+            "const value = {}; const { $style } = value; void $style.card;",
+            "const value = {}; let styles; ({ $style: styles } = value); void styles.card;",
+        ] {
+            let unrelated: serde_json::Value = serde_json::from_str(
+                &super::source_analysis_json("/p/Card.vue.js", source).unwrap(),
             )
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(unrelated["usesCssModule"], false);
+            .unwrap();
+            assert_eq!(unrelated["usesCssModule"], false, "{source}");
+        }
     }
 
     #[test]
     fn recognizes_untracked_instance_aliases() {
         for source in [
             "let vm; vm = this; void vm.$style.card;",
+            "let styles; ({ $style: styles } = this); void styles.card;",
+            "export default { mounted() { let s; ({ $style: s } = this); void s.card; } };",
             "export default { mounted() { later(); const vm = this; function later() { void vm.$style.card; } } };",
             "import { getCurrentInstance } from 'vue'; void getCurrentInstance().proxy.$style.card;",
             "import { getCurrentInstance } from 'vue'; const instance = getCurrentInstance(); void instance.proxy.$style.card;",
