@@ -61,6 +61,23 @@ test("keeps dependency targets conservative when a stylesheet cannot parse", () 
   expect(dependents.get(module)).toEqual([opaque]);
 });
 
+test("contains opaque stylesheet dependencies to their owning package", () => {
+  const goodModule = join(root, "good", "Good.module.css");
+  const brokenModule = join(root, "broken", "Broken.module.css");
+  const dependents = indexStylesheetDependents(
+    new Map([
+      [goodModule, ".good { display: grid; }\n"],
+      [brokenModule, ".broken {\n"],
+    ]),
+    new Map([
+      [goodModule, join(root, "good")],
+      [brokenModule, join(root, "broken")],
+    ]),
+  );
+
+  expect(dependents.has(goodModule)).toBe(false);
+});
+
 test("proves scan coverage through literal scopes and automatic bases", () => {
   const prove = (entrySource: string, entryPath = entry) =>
     scanProof({ entry: entryPath, entrySource, packageRoot: child });

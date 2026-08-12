@@ -137,12 +137,16 @@ export function normalizedRelativePath(root: string, path: string): string {
 
 export function indexStylesheetDependents(
   styleSources: Map<string, string>,
+  pathOwners?: Map<string, string | undefined>,
 ): Map<string, string[]> {
   const dependents = new Map<string, string[]>();
-  const possibleTargets = [...styleSources.keys()].filter(
+  const allPossibleTargets = [...styleSources.keys()].filter(
     (path) => isStylesheetModule(path) || isPreprocessorPath(path),
   );
   for (const [path, source] of styleSources) {
+    const possibleTargets = allPossibleTargets.filter(
+      (target) => !pathOwners || pathOwners.get(target) === pathOwners.get(path),
+    );
     let references: string[];
     try {
       const analysis = stylesheetAnalysis(path, source);
