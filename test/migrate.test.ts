@@ -1494,6 +1494,18 @@ test("Options API instance aliases retain the CSS Module", async () => {
   assert.match(await readFile(join(cwd, "Card.vue"), "utf8"), /<style module>/);
 });
 
+test("TypeScript-wrapped Options API instance aliases retain the CSS Module", async () => {
+  const cwd = await fixture();
+  await writeFile(
+    join(cwd, "Card.vue"),
+    '<template>\n  <p :class="$style.card">Card</p>\n  <span>Leaf</span>\n</template>\n<script lang="ts">\nexport default { mounted() { const vm = this as ComponentPublicInstance; void vm.$style.card; } };\n</script>\n<style module>\n.card { padding: 13px; }\n</style>\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Card.vue", write: true });
+  assert.ok(report.warnings.some((entry) => entry.code === "unsupported-css-module-reference"));
+  assert.ok(!report.changedFiles.includes("Card.vue"));
+  assert.match(await readFile(join(cwd, "Card.vue"), "utf8"), /<style module>/);
+});
+
 test("computed Vue namespace CSS Module references retain the module", async () => {
   const cwd = await fixture();
   await writeFile(

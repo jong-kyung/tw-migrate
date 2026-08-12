@@ -135,8 +135,13 @@ impl SourceCollector<'_> {
     }
 
     fn is_this_alias(&self, expression: &Expression<'_>) -> bool {
-        matches!(expression, Expression::ThisExpression(_))
-            || matches!(expression, Expression::Identifier(identifier) if self.symbol(identifier).is_some_and(|symbol| self.this_alias_symbols.contains(&symbol)))
+        match expression.get_inner_expression() {
+            Expression::ThisExpression(_) => true,
+            Expression::Identifier(identifier) => self
+                .symbol(identifier)
+                .is_some_and(|symbol| self.this_alias_symbols.contains(&symbol)),
+            _ => false,
+        }
     }
 
     fn collect_glob_argument(&mut self, argument: &Argument<'_>) -> bool {
@@ -1289,9 +1294,12 @@ mod tests {
             "export default { mounted() { const { $style } = this; void $style.card; } };",
             "export default { mounted() { const vm = this; void vm.$style.card; } };",
             "export default { mounted() { const vm = this; const self = vm; void self['$style'].card; } };",
+            "const vm = this as ComponentPublicInstance; void vm.$style.card;",
+            "const vm = this satisfies ComponentPublicInstance; void vm.$style.card;",
+            "const vm = this!; void vm.$style.card;",
         ] {
             let parsed: serde_json::Value = serde_json::from_str(
-                &super::source_analysis_json("/p/Card.vue.js", source).unwrap(),
+                &super::source_analysis_json("/p/Card.vue.ts", source).unwrap(),
             )
             .unwrap();
             assert_eq!(parsed["usesCssModule"], true);
