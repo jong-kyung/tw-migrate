@@ -8,7 +8,8 @@ use std::collections::BTreeMap;
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    Argument, ArrayExpressionElement, Expression, IdentifierReference, ImportDeclarationSpecifier,
+    Argument, ArrayExpressionElement, BindingPattern, Expression, IdentifierReference,
+    ImportDeclarationSpecifier, VariableDeclarator,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::Parser;
@@ -266,6 +267,19 @@ impl<'a> Visit<'a> for SourceCollector<'_> {
             });
         }
         walk::walk_ts_import_equals_declaration(self, decl);
+    }
+
+    fn visit_variable_declarator(&mut self, declarator: &VariableDeclarator<'a>) {
+        if matches!(declarator.init.as_ref(), Some(Expression::ThisExpression(_)))
+            && let BindingPattern::ObjectPattern(pattern) = &declarator.id
+            && pattern
+                .properties
+                .iter()
+                .any(|property| property.key.is_specific_static_name("$style"))
+        {
+            self.analysis.uses_css_module = true;
+        }
+        walk::walk_variable_declarator(self, declarator);
     }
 
     fn visit_call_expression(&mut self, call: &oxc_ast::ast::CallExpression<'a>) {
@@ -1145,6 +1159,30 @@ mod tests {
         assert_eq!(parsed["vueGlobUnverifiable"], false);
         assert_eq!(parsed["hasVueFallthroughMacro"], true);
         assert_eq!(parsed["usesCssModule"], true);
+    }
+
+    #[test]
+    fn recognizes_destructured_options_api_css_module_references() {
+        for source in [
+            "export default { mounted() { const { $style: styles } = this; void styles.card; } };",
+            "export default { mounted() { const { $style } = this; void $style.card; } };",
+        ] {
+            let parsed: serde_json::Value = serde_json::from_str(
+                &super::source_analysis_json("/p/Card.vue.js", source).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(parsed["usesCssModule"], true);
+        }
+
+        let unrelated: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.vue.js",
+                "const value = {}; const { $style } = value; void $style.card;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(unrelated["usesCssModule"], false);
     }
 
     #[test]
