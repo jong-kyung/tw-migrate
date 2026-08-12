@@ -357,15 +357,26 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
             && self
                 .symbol(namespace)
                 .is_some_and(|symbol| self.vue_namespace_symbols.contains(&symbol))
-            && let BindingPattern::ObjectPattern(pattern) = &declarator.id
         {
-            for property in &pattern.properties {
-                if property.key.is_specific_static_name("useCssModule")
-                    && let BindingPattern::BindingIdentifier(identifier) = &property.value
-                    && let Some(symbol) = identifier.symbol_id.get()
-                {
-                    self.use_css_module_symbols.push(symbol);
+            match &declarator.id {
+                BindingPattern::ObjectPattern(pattern) => {
+                    for property in &pattern.properties {
+                        if property.key.is_specific_static_name("useCssModule")
+                            && let BindingPattern::BindingIdentifier(identifier) = &property.value
+                            && let Some(symbol) = identifier.symbol_id.get()
+                        {
+                            self.use_css_module_symbols.push(symbol);
+                        }
+                    }
                 }
+                // A plain alias carries the namespace identity to the new
+                // binding, so member helpers keep resolving through it.
+                BindingPattern::BindingIdentifier(identifier) => {
+                    if let Some(symbol) = identifier.symbol_id.get() {
+                        self.vue_namespace_symbols.push(symbol);
+                    }
+                }
+                _ => {}
             }
         }
         if let Some(init) = &declarator.init
@@ -427,7 +438,13 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
                 self.analysis.uses_css_module = true;
             }
         } else if let Expression::StaticMemberExpression(member) = &call.callee {
-            if member.property.name == "glob"
+            if member.property.name == "context"
+                && matches!(&member.object, Expression::Identifier(object) if object.name == "require")
+            {
+                // webpack's require.context selects modules at runtime, so
+                // the caller surface stays open like any dynamic loader.
+                self.analysis.has_dynamic_import = true;
+            } else if member.property.name == "glob"
                 && matches!(&member.object, Expression::ImportMeta(_))
             {
                 if call
@@ -547,10 +564,6 @@ pub fn source_analysis_json(path: &str, source: &str) -> Result<String, String> 
             }
         }
     }
-    let scoping = semantic.semantic.scoping();
-    let defines_root_use_css_module = scoping
-        .get_binding(scoping.root_scope_id(), "useCssModule".into())
-        .is_some_and(|symbol| !use_css_module_symbols.contains(&symbol));
     let mut collector = SourceCollector {
         semantic: &semantic.semantic,
         use_css_module_symbols,
@@ -565,10 +578,16 @@ pub fn source_analysis_json(path: &str, source: &str) -> Result<String, String> 
             has_vue_fallthrough_macro: false,
             uses_css_module: false,
             has_unbound_use_css_module: false,
-            defines_root_use_css_module,
+            defines_root_use_css_module: false,
         },
     };
     collector.visit_program(&parsed.program);
+    // Classified after the visit so helpers destructured from a Vue
+    // namespace count as the Vue API rather than a local shadow.
+    let scoping = semantic.semantic.scoping();
+    collector.analysis.defines_root_use_css_module = scoping
+        .get_binding(scoping.root_scope_id(), "useCssModule".into())
+        .is_some_and(|symbol| !collector.use_css_module_symbols.contains(&symbol));
     serde_json::to_string(&collector.analysis).map_err(|error| error.to_string())
 }
 
@@ -673,16 +692,17 @@ mod tests {
 
     #[test]
     fn marks_nonliteral_requires_dynamic() {
-        let parsed: serde_json::Value = serde_json::from_str(
-            &super::source_analysis_json(
-                "/p/registry.js",
-                "const name = 'Card'; require(`./${name}.vue`);",
+        for source in [
+            "const name = 'Card'; require(`./${name}.vue`);",
+            "require.context('./components', true, /\\.vue$/);",
+        ] {
+            let parsed: serde_json::Value = serde_json::from_str(
+                &super::source_analysis_json("/p/registry.js", source).unwrap(),
             )
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(parsed["imports"], serde_json::json!([]));
-        assert_eq!(parsed["hasDynamicImport"], true);
+            .unwrap();
+            assert_eq!(parsed["imports"], serde_json::json!([]), "{source}");
+            assert_eq!(parsed["hasDynamicImport"], true, "{source}");
+        }
     }
 
     #[test]
@@ -745,6 +765,18 @@ mod tests {
         assert_eq!(shadowed["definesRootUseCssModule"], true);
         assert_eq!(shadowed["hasUnboundUseCssModule"], false);
 
+        // A helper destructured from the Vue namespace is the Vue API, not
+        // a local shadow, even when nothing in the script calls it.
+        let destructured: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.vue.js",
+                "import * as Vue from 'vue'; const { useCssModule } = Vue;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(destructured["definesRootUseCssModule"], false);
+
         let unbound: serde_json::Value = serde_json::from_str(
             &super::source_analysis_json("/p/Card.vue.js", "const styles = useCssModule();")
                 .unwrap(),
@@ -806,6 +838,7 @@ mod tests {
     fn recognizes_computed_vue_namespace_css_module_references() {
         for source in [
             "import * as Vue from 'vue'; Vue['useCssModule']();",
+            "import * as Vue from 'vue'; const V = Vue; V.useCssModule();",
             "import * as Vue from 'vue'; const { useCssModule } = Vue; useCssModule();",
             "import * as Vue from 'vue'; const { useCssModule: css } = Vue; css();",
         ] {
