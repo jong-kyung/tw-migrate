@@ -216,6 +216,38 @@ impl<'a> SourceCollector<'_, 'a> {
         }
     }
 
+    /// True when the symbol is a Vue namespace: an import binding, an
+    /// assignment-propagated alias, or an unmutated const alias chain
+    /// resolved through symbol declarations so declaration order and
+    /// closure hoisting never hide the identity.
+    fn is_namespace_symbol(&self, symbol: SymbolId, depth: u8) -> bool {
+        if self.vue_namespace_symbols.contains(&symbol) {
+            return true;
+        }
+        if depth == 0 || self.semantic.scoping().symbol_is_mutated(symbol) {
+            return false;
+        }
+        match self.semantic.symbol_declaration(symbol).kind() {
+            AstKind::VariableDeclarator(declarator) => {
+                match declarator.init.as_ref().map(|init| init.get_inner_expression()) {
+                    Some(Expression::Identifier(identifier)) => self
+                        .symbol(identifier)
+                        .is_some_and(|inner| self.is_namespace_symbol(inner, depth - 1)),
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    fn is_vue_namespace_object(&self, expression: &Expression<'_>) -> bool {
+        matches!(
+            expression.get_inner_expression(),
+            Expression::Identifier(identifier)
+                if self.symbol(identifier).is_some_and(|symbol| self.is_namespace_symbol(symbol, 8))
+        )
+    }
+
     /// A computed key that is provably the string `$style`: an inline
     /// literal, or an identifier whose only binding is an unmutated string
     /// literal initializer.
@@ -391,34 +423,22 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
     }
 
     fn visit_variable_declarator(&mut self, declarator: &VariableDeclarator<'a>) {
-        if let Some(Expression::Identifier(namespace)) =
-            declarator.init.as_ref().map(|init| init.get_inner_expression())
-            && self
-                .symbol(namespace)
-                .is_some_and(|symbol| self.vue_namespace_symbols.contains(&symbol))
+        // Const alias chains resolve on demand through is_namespace_symbol,
+        // so only helper destructures need collection here.
+        if let Some(init) = &declarator.init
+            && self.is_vue_namespace_object(init)
+            && let BindingPattern::ObjectPattern(pattern) = &declarator.id
         {
-            match &declarator.id {
-                BindingPattern::ObjectPattern(pattern) => {
-                    for property in &pattern.properties {
-                        if property.key.is_specific_static_name("useCssModule")
-                            && let BindingPattern::BindingIdentifier(identifier) = &property.value
-                            && let Some(symbol) = identifier.symbol_id.get()
-                        {
-                            self.use_css_module_symbols.push(symbol);
-                            self.analysis
-                                .use_css_module_locals
-                                .push(identifier.name.to_string());
-                        }
-                    }
+            for property in &pattern.properties {
+                if property.key.is_specific_static_name("useCssModule")
+                    && let BindingPattern::BindingIdentifier(identifier) = &property.value
+                    && let Some(symbol) = identifier.symbol_id.get()
+                {
+                    self.use_css_module_symbols.push(symbol);
+                    self.analysis
+                        .use_css_module_locals
+                        .push(identifier.name.to_string());
                 }
-                // A plain alias carries the namespace identity to the new
-                // binding, so member helpers keep resolving through it.
-                BindingPattern::BindingIdentifier(identifier) => {
-                    if let Some(symbol) = identifier.symbol_id.get() {
-                        self.vue_namespace_symbols.push(symbol);
-                    }
-                }
-                _ => {}
             }
         }
         if let Some(init) = &declarator.init
@@ -438,10 +458,7 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
         // Assigning a namespace after declaration carries its identity to
         // the target, matching the declarator alias path.
         if let AssignmentTarget::AssignmentTargetIdentifier(target) = &assignment.left
-            && let Expression::Identifier(namespace) = assignment.right.get_inner_expression()
-            && self
-                .symbol(namespace)
-                .is_some_and(|symbol| self.vue_namespace_symbols.contains(&symbol))
+            && self.is_vue_namespace_object(&assignment.right)
             && let Some(symbol) = self.symbol(target)
         {
             self.vue_namespace_symbols.push(symbol);
@@ -509,10 +526,7 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
                     self.analysis.vue_glob_unverifiable = true;
                 }
             } else if member.property.name == "useCssModule"
-                && let Expression::Identifier(object) = &member.object
-                && self
-                    .symbol(object)
-                    .is_some_and(|symbol| self.vue_namespace_symbols.contains(&symbol))
+                && self.is_vue_namespace_object(&member.object)
             {
                 self.analysis.uses_css_module = true;
             }
@@ -552,12 +566,7 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
         if member.property.name == "$style" && self.may_be_instance(&member.object) {
             self.analysis.uses_css_module = true;
         }
-        if member.property.name == "useCssModule"
-            && let Expression::Identifier(object) = &member.object
-            && self
-                .symbol(object)
-                .is_some_and(|symbol| self.vue_namespace_symbols.contains(&symbol))
-        {
+        if member.property.name == "useCssModule" && self.is_vue_namespace_object(&member.object) {
             self.analysis.uses_css_module = true;
         }
         walk::walk_static_member_expression(self, member);
@@ -571,10 +580,7 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
             self.analysis.uses_css_module = true;
         }
         if matches!(&member.expression, Expression::StringLiteral(literal) if literal.value == "useCssModule")
-            && let Expression::Identifier(object) = &member.object
-            && self
-                .symbol(object)
-                .is_some_and(|symbol| self.vue_namespace_symbols.contains(&symbol))
+            && self.is_vue_namespace_object(&member.object)
         {
             self.analysis.uses_css_module = true;
         }
@@ -937,6 +943,8 @@ mod tests {
             "import * as Vue from 'vue'; const V = Vue; V.useCssModule();",
             "import * as Vue from 'vue'; const V = Vue as typeof Vue; V.useCssModule();",
             "import * as Vue from 'vue'; let V; V = Vue; V.useCssModule();",
+            "import * as Vue from 'vue'; function read() { return V.useCssModule(); } const V = Vue; read();",
+            "import * as Vue from 'vue'; const V = Vue; const W = V; W.useCssModule();",
             "import * as Vue from 'vue'; const { useCssModule } = Vue; useCssModule();",
             "import * as Vue from 'vue'; const { useCssModule: css } = Vue; css();",
         ] {
