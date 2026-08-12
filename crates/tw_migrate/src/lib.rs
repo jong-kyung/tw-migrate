@@ -1,13 +1,15 @@
 mod animations;
 mod arbitrary;
 mod at_rules;
+mod css_directives;
 mod css_plan;
 mod html_rewrite;
 mod js_rewrite;
 mod jsx_graph;
-mod imports;
 mod media;
 mod planner;
+mod source_analysis;
+mod stylesheet_analysis;
 mod theme;
 mod utilities;
 
@@ -55,22 +57,22 @@ pub fn validate_css(source: String) -> napi::Result<()> {
 
 #[napi]
 pub fn expression_analysis(path: String, source: String) -> napi::Result<String> {
-    imports::expression_analysis_json(&path, &source).map_err(napi::Error::from_reason)
+    source_analysis::expression_analysis_json(&path, &source).map_err(napi::Error::from_reason)
 }
 
 #[napi]
 pub fn source_analysis(path: String, source: String) -> napi::Result<String> {
-    imports::source_analysis_json(&path, &source).map_err(napi::Error::from_reason)
+    source_analysis::source_analysis_json(&path, &source).map_err(napi::Error::from_reason)
 }
 
 #[napi]
 pub fn stylesheet_analysis(path: String, source: String) -> napi::Result<String> {
-    imports::stylesheet_analysis_json(&path, &source).map_err(napi::Error::from_reason)
+    stylesheet_analysis::stylesheet_analysis_json(&path, &source).map_err(napi::Error::from_reason)
 }
 
 #[napi]
 pub fn collect_css_directives(source: String) -> napi::Result<String> {
-    imports::collect_css_directives_json(&source).map_err(|error| napi::Error::from_reason(error))
+    css_directives::collect_css_directives_json(&source).map_err(|error| napi::Error::from_reason(error))
 }
 
 #[napi]
