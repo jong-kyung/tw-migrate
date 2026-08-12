@@ -26,7 +26,7 @@ The Rust byte-span edit engine remains in place. `magic-string` will not be adde
 1. Generating JavaScript source maps.
 2. Replacing the Rust edit planner or changing the public `migrate()` API.
 3. Moving the package graph, Vue component graph, or migration orchestration into Rust.
-4. Replacing target-project Sass, Less, or Vue compilation with parser output. Parsing discovers structure; project-local compilers still define authored preprocessing behavior.
+4. Replacing target-project Sass, Less, or Vue compilation with parser output. Parsing discovers structure, but project-local compilers still define authored preprocessing behavior.
 5. Removing source inspection needed to translate parser spans into byte-exact edit positions when an upstream parser does not expose the inner span.
 6. Broadening the supported JavaScript, stylesheet, HTML, or Vue syntax beyond what the owning parser and current migration safety policy can prove.
 
@@ -48,7 +48,7 @@ These checks create false positives. A comment containing `import(` opens the Vu
 
 The project-local Vue compiler provides SFC descriptors and template locations, but the current analysis locates some block boundaries and scoped-selector escapes from raw text. parse5 provides element and whole-attribute locations but does not expose every inner value boundary needed by the byte-exact edit contract.
 
-The implementation should consume structural locations first. It may retain a small source-position helper where the parser omits an inner span. Such helpers locate bytes inside parser-proven syntax; they must not decide whether arbitrary source text forms valid syntax.
+The implementation should consume structural locations first. It may retain a small source-position helper where the parser omits an inner span. Such helpers locate bytes inside parser-proven syntax, so they must not decide whether arbitrary source text forms valid syntax.
 
 ## Design
 
