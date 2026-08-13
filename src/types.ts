@@ -136,10 +136,6 @@ export interface PlannerRequest {
    * disables keyframe and global at-rule movement and returns no entry
    * file. Omitted means writable. */
   entryWritable?: boolean;
-  /** False for members reusing an ancestor-shared entry: actively applied
-   * global at-rules stay in their modules while renamed keyframes may
-   * still move. Omitted means allowed. */
-  globalAtRuleMoves?: boolean;
   files: PlannedFile[];
 }
 

@@ -98,7 +98,6 @@ try {
 
 export const {
   collectMediaConditions,
-  collectCssDirectives,
   mediaProbeKey,
   decodeSourceMap,
   planBatchMigration,
@@ -113,6 +112,15 @@ function decode<T>(label: string, json: string, valid: (value: unknown) => value
   const value: unknown = JSON.parse(json);
   if (!valid(value)) throw new Error(`Invalid native ${label} result`);
   return value;
+}
+
+export function cssDirectives(source: string): unknown[] | null {
+  try {
+    const value: unknown = JSON.parse(binding.collectCssDirectives(source));
+    return Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 function sourceImport(value: unknown): value is SourceImportRecord {

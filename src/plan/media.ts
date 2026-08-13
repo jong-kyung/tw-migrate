@@ -14,20 +14,15 @@ const GENERATED_NAMESPACE = "twm-media";
 
 export interface CollectedMediaComponent {
   key: string;
-  whole: boolean;
   readableName: string | null;
   digest: string;
   builtin: string | null;
   breakpoint: string | null;
-  cssPath: string;
-  order: number;
 }
 
 export interface AuthoredMediaVariant {
   name: string;
-  definition: string;
   mediaQueryKey: string | null;
-  path: string;
 }
 
 export interface MediaCollection {
@@ -53,9 +48,6 @@ export interface ResolvedMediaName {
   /// adopted identical definition, or a generated definition this migration
   /// emits.
   kind: "builtin" | "breakpoint" | "adopted" | "generated";
-  whole: boolean;
-  cssPath: string;
-  order: number;
 }
 
 export interface MediaNameResolution {
@@ -117,13 +109,7 @@ export function resolveMediaNames(
   for (const component of components) {
     const resolved = (name: string, kind: ResolvedMediaName["kind"]): void => {
       claimed.add(name);
-      names.set(component.key, {
-        name,
-        kind,
-        whole: component.whole,
-        cssPath: component.cssPath,
-        order: component.order,
-      });
+      names.set(component.key, { name, kind });
     };
 
     if (component.builtin !== null && probes.expansionMatches(component.builtin, component.key)) {

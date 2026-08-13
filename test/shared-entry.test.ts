@@ -180,7 +180,7 @@ test("proves consumers statically reachable from a loading source", () => {
   const proofs = prove({ packageSources: [loader, consumer] });
 
   expect(proofs).not.toBe(null);
-  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(true);
+  expect(proofs?.provenStyle([consumer])).toBe(true);
 });
 
 test("rejects a package that never loads the entry", () => {
@@ -216,7 +216,7 @@ test("a bare package deep import of a child source exposes its closure", () => {
     packageJson: { name: "@acme/app", private: true },
   });
 
-  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
+  expect(proofs?.provenStyle([consumer])).toBe(false);
 });
 
 test("a foreign deep import of a child source exposes its closure", () => {
@@ -229,7 +229,7 @@ test("a foreign deep import of a child source exposes its closure", () => {
   );
   const proofs = prove({ packageSources: [loader, consumer, sibling] });
 
-  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
+  expect(proofs?.provenStyle([consumer])).toBe(false);
 });
 
 test("an entry-loading foreign importer exposes nothing", () => {
@@ -241,7 +241,7 @@ test("an entry-loading foreign importer exposes nothing", () => {
   );
   const proofs = prove({ packageSources: [loader, consumer, rootMain] });
 
-  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(true);
+  expect(proofs?.provenStyle([consumer])).toBe(true);
 });
 
 test("keeps consumers outside child ownership unproven", () => {
@@ -262,8 +262,8 @@ test("keeps consumers outside child ownership unproven", () => {
   );
   const proofs = prove({ packageSources: [loaderWithBridge, bridge, consumer, foreign] });
 
-  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer, foreign])).toBe(false);
-  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(true);
+  expect(proofs?.provenStyle([consumer, foreign])).toBe(false);
+  expect(proofs?.provenStyle([consumer])).toBe(true);
 });
 
 test("a type-only entry import is not a loader", () => {
@@ -324,7 +324,7 @@ test("a prepared vue loader carries records parsed with its script language", ()
   };
   const proofs = prove({ packageSources: [vueLoader, consumer] });
 
-  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(true);
+  expect(proofs?.provenStyle([consumer])).toBe(true);
 });
 
 test("source-phase imports do not prove shared entry loading", () => {
@@ -340,7 +340,7 @@ test("emitted javascript specifiers expose their typescript sources", () => {
   const index = file(join(child, "index.ts"), "export { Button } from './Button.js';\n");
   const proofs = prove({ packageSources: [loader, consumer, index] });
 
-  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
+  expect(proofs?.provenStyle([consumer])).toBe(false);
 });
 
 test("an unresolved script import in the exposed closure exposes everything", () => {
@@ -350,7 +350,7 @@ test("an unresolved script import in the exposed closure exposes everything", ()
   );
   const proofs = prove({ packageSources: [loader, consumer, index] });
 
-  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
+  expect(proofs?.provenStyle([consumer])).toBe(false);
 });
 
 test("unquoted url imports join the proof graph", () => {
@@ -384,8 +384,8 @@ test("a conventional index entry exposes its import closure", () => {
   // Without export metadata the conventional index remains externally
   // loadable, so consumers behind it are exposed; a package with no index
   // exposes nothing by convention.
-  expect(exposedByIndex?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
-  expect(noIndex?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(true);
+  expect(exposedByIndex?.provenStyle([consumer])).toBe(false);
+  expect(noIndex?.provenStyle([consumer])).toBe(true);
 });
 
 test("directive-shaped text inside css strings proves nothing", () => {
@@ -409,18 +409,10 @@ test("type-only imports create no reachability edges", () => {
     "import '../../globals.css';\nimport { type Button } from './Button.tsx';\n",
   );
 
-  expect(
-    prove({ packageSources: [typeLoader, consumer] })?.provenStyle(
-      join(child, "Button.module.css"),
-      [consumer],
-    ),
-  ).toBe(false);
-  expect(
-    prove({ packageSources: [inlineTypeLoader, consumer] })?.provenStyle(
-      join(child, "Button.module.css"),
-      [consumer],
-    ),
-  ).toBe(false);
+  expect(prove({ packageSources: [typeLoader, consumer] })?.provenStyle([consumer])).toBe(false);
+  expect(prove({ packageSources: [inlineTypeLoader, consumer] })?.provenStyle([consumer])).toBe(
+    false,
+  );
 });
 
 test("commented imports create no reachability edges", () => {
@@ -430,7 +422,7 @@ test("commented imports create no reachability edges", () => {
   );
   const proofs = prove({ packageSources: [loaderWithoutEdge, consumer] });
 
-  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
+  expect(proofs?.provenStyle([consumer])).toBe(false);
 });
 
 test("keeps a consumer outside every proven flow retained", () => {
@@ -440,7 +432,7 @@ test("keeps a consumer outside every proven flow retained", () => {
   );
   const proofs = prove({ packageSources: [loader, consumer, stray] });
 
-  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer, stray])).toBe(false);
+  expect(proofs?.provenStyle([consumer, stray])).toBe(false);
 });
 
 test("treats exported consumers as unproven flows", () => {
@@ -452,7 +444,7 @@ test("treats exported consumers as unproven flows", () => {
   // The consumer is reachable from the loading source, but the same chain
   // is exposed through the package entry point, so an external application
   // can render it without this entry's CSS.
-  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
+  expect(proofs?.provenStyle([consumer])).toBe(false);
 });
 
 test("an unresolved declared entry point exposes every consumer", () => {
@@ -461,7 +453,7 @@ test("an unresolved declared entry point exposes every consumer", () => {
     packageJson: { main: "./dist/index.js" },
   });
 
-  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
+  expect(proofs?.provenStyle([consumer])).toBe(false);
 });
 
 test("a publishable package without exports exposes every consumer", () => {
@@ -473,8 +465,8 @@ test("a publishable package without exports exposes every consumer", () => {
 
   // Deep imports reach any subpath without an encapsulating exports map,
   // while the exports map confines exposure to its targets.
-  expect(open?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
-  expect(encapsulated?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
+  expect(open?.provenStyle([consumer])).toBe(false);
+  expect(encapsulated?.provenStyle([consumer])).toBe(false);
 });
 
 test("a css module-script import is not a loader", () => {
@@ -523,7 +515,7 @@ test("a browser entry point exposes its import closure", () => {
     packageJson: { private: true, browser: "./main.tsx" },
   });
 
-  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
+  expect(proofs?.provenStyle([consumer])).toBe(false);
 });
 
 test("wildcard exports expose every consumer", () => {
@@ -532,7 +524,7 @@ test("wildcard exports expose every consumer", () => {
     packageJson: { exports: { "./*": "./*" } },
   });
 
-  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
+  expect(proofs?.provenStyle([consumer])).toBe(false);
 });
 
 test("automatic scan coverage requires consumers to pass ignore rules", () => {
@@ -546,8 +538,8 @@ test("automatic scan coverage requires consumers to pass ignore rules", () => {
     ignoredPaths: new Set([consumer.path]),
   });
 
-  expect(literal?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(true);
-  expect(automatic?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
+  expect(literal?.provenStyle([consumer])).toBe(true);
+  expect(automatic?.provenStyle([consumer])).toBe(false);
 });
 
 test("an html consumer linking the entry proves itself", () => {
@@ -559,7 +551,7 @@ test("an html consumer linking the entry proves itself", () => {
   );
   const proofs = prove({ packageSources: [page] });
 
-  expect(proofs?.provenStyle(join(child, "styles.css"), [page])).toBe(true);
+  expect(proofs?.provenStyle([page])).toBe(true);
 });
 
 test("commented-out html links are not loaders", () => {
@@ -592,7 +584,7 @@ test("an unresolved package alias in the exposed closure exposes everything", ()
   );
   const proofs = prove({ packageSources: [loader, consumer, index] });
 
-  expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(false);
+  expect(proofs?.provenStyle([consumer])).toBe(false);
 });
 
 test("an unresolvable bare css import leaves the scan proof unproven", () => {

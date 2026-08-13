@@ -30,7 +30,7 @@ import {
   findTailwindEntries,
   invalidCandidates,
   loadTailwind,
-  resolveTailwindEntry,
+  selectTailwindEntry,
 } from "./tailwind.ts";
 import { importsStylesheet, proveSharedEntry, tailwindEntryCatalog } from "./plan/entry.ts";
 import type { SharedEntryProofs } from "./plan/entry.ts";
@@ -523,12 +523,9 @@ async function preparePackage(
   if (sharedProofs && tailwindPath !== undefined) {
     tailwindEntries = [];
   } else {
+    tailwindEntries = ownEntries;
     try {
-      ({ path: tailwindPath, entries: tailwindEntries } = resolveTailwindEntry(
-        ownedStyles,
-        styleSources,
-        configuredEntry,
-      ));
+      tailwindPath = selectTailwindEntry(ownEntries, configuredEntry);
     } catch (error) {
       return recover(error);
     }
@@ -573,7 +570,6 @@ async function preparePackage(
   const provenTargets = sharedProofs
     ? targets.filter((path) => {
         const proven = sharedProofs.provenStyle(
-          path,
           packageSources.filter(
             (file) =>
               importsStylesheet(file, path) ||
@@ -590,7 +586,6 @@ async function preparePackage(
   const provenVueStylesheets = sharedProofs
     ? preparedVue.stylesheets.filter((stylesheet) => {
         const proven = sharedProofs.provenStyle(
-          stylesheet.cssPath,
           packageSources.filter((file) => file.path === stylesheet.cssPath),
         );
         if (!proven && !proofWarnings.some((warning) => warning.file === stylesheet.cssPath)) {

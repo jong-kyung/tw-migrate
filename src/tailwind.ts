@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { collectCssDirectives, stylesheetAnalysis } from "./native.ts";
+import { cssDirectives, stylesheetAnalysis } from "./native.ts";
 import { loadProjectModule } from "./parser/style-compiler.ts";
 import { isProjectInput, snapshotFile } from "./util/shared.ts";
 import type { DesignSystem, LoadedTailwind, StylesheetLoader } from "./types.ts";
@@ -21,18 +21,13 @@ export function findTailwindEntries(
   );
 }
 
-export function resolveTailwindEntry(
-  stylePaths: string[],
-  styleSources: Map<string, string>,
-  configuredPath?: string,
-): { path: string; entries: string[] } {
-  const entries = findTailwindEntries(stylePaths, styleSources);
-  if (configuredPath) return { path: configuredPath, entries };
+export function selectTailwindEntry(entries: string[], configuredPath?: string): string {
+  if (configuredPath) return configuredPath;
   if (entries.length === 0)
     throw new Error("No Tailwind v4 CSS entry was found. Pass --tailwind-css.");
   if (entries.length > 1)
     throw new Error("Multiple Tailwind CSS entries were found. Pass --tailwind-css.");
-  return { path: entries[0], entries };
+  return entries[0];
 }
 
 export async function loadTailwind(
@@ -99,22 +94,16 @@ function extractThemeTokens(key: string, css: string): Record<string, string> {
 /// Import specifiers of one stylesheet through the structured directive
 /// parser, covering quoted and url() forms at the top level only.
 function importSpecifiers(css: string): string[] {
-  try {
-    const parsed: unknown = JSON.parse(collectCssDirectives(css));
-    if (Array.isArray(parsed)) {
-      return parsed.flatMap((directive) =>
-        directive !== null &&
-        typeof directive === "object" &&
-        directive.kind === "import" &&
-        typeof directive.specifier === "string"
-          ? [directive.specifier]
-          : [],
-      );
-    }
-  } catch {
-    // An unparseable stylesheet proves no import graph.
-  }
-  return [];
+  return (cssDirectives(css) ?? []).flatMap((directive) =>
+    directive !== null &&
+    typeof directive === "object" &&
+    "kind" in directive &&
+    directive.kind === "import" &&
+    "specifier" in directive &&
+    typeof directive.specifier === "string"
+      ? [directive.specifier]
+      : [],
+  );
 }
 
 async function extractThemeTokensFromGraph(
