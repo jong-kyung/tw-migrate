@@ -49,6 +49,9 @@ struct ExpressionAnalysis {
     /// Identifier reference names, for matching script-provided helper
     /// aliases the expression may call.
     references: Vec<String>,
+    /// Nonempty leading quasis of template literals with expressions, for
+    /// dynamic class spelling reservations.
+    template_prefixes: Vec<String>,
 }
 
 /// Template expressions carry no bindings of their own, so any `$style` or
@@ -58,6 +61,7 @@ struct ExpressionCollector {
     uses_css_module: bool,
     references_use_css_module: bool,
     references: Vec<String>,
+    template_prefixes: Vec<String>,
 }
 
 impl ExpressionCollector {
@@ -72,6 +76,23 @@ impl ExpressionCollector {
 }
 
 impl<'a> Visit<'a> for ExpressionCollector {
+    fn visit_template_literal(&mut self, template: &oxc_ast::ast::TemplateLiteral<'a>) {
+        if !template.expressions.is_empty()
+            && let Some(prefix) = template
+                .quasis
+                .first()
+                .and_then(|quasi| quasi.value.cooked.as_ref())
+            && !prefix.is_empty()
+            && !self
+                .template_prefixes
+                .iter()
+                .any(|existing| existing == prefix.as_str())
+        {
+            self.template_prefixes.push(prefix.to_string());
+        }
+        walk::walk_template_literal(self, template);
+    }
+
     fn visit_identifier_reference(&mut self, identifier: &IdentifierReference<'a>) {
         self.record(&identifier.name);
         if !self.references.iter().any(|name| name == identifier.name.as_str()) {
@@ -122,6 +143,7 @@ pub fn expression_analysis_json(path: &str, source: &str) -> Result<String, Stri
         uses_css_module: false,
         references_use_css_module: false,
         references: Vec::new(),
+        template_prefixes: Vec::new(),
     };
     collector.visit_expression(&expression);
     // The proven `$style.member` form is rewritten rather than retained, so
@@ -132,6 +154,7 @@ pub fn expression_analysis_json(path: &str, source: &str) -> Result<String, Stri
         uses_css_module: collector.uses_css_module,
         references_use_css_module: collector.references_use_css_module,
         references: collector.references,
+        template_prefixes: collector.template_prefixes,
     })
     .map_err(|error| error.to_string())
 }

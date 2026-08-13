@@ -761,15 +761,42 @@ async function planPreparedGroup(
       continue;
     }
     // Statically constrained dynamic class construction reserves the
-    // spellings its runtime values can complete.
+    // spellings its runtime values can complete, and a stylesheet loaded
+    // through a source import outside the discovered snapshot (a package
+    // or ignored sheet) can define any selector, so it turns the group
+    // opaque.
+    const opaqueStylesheetImports = (records: { specifier: string; typeOnly: boolean }[]) => {
+      for (const record of records) {
+        if (record.typeOnly || !isStylesheetPath(record.specifier.split(/[?#]/, 1)[0])) continue;
+        const resolved = record.specifier.startsWith(".")
+          ? resolve(dirname(file.path), record.specifier)
+          : undefined;
+        if (resolved === undefined || !context.styleSources.has(resolved)) {
+          reservations.unbounded = true;
+        }
+      }
+    };
+    if (extname(file.path) === ".vue") {
+      // Prepared SFCs carry their template and script prefixes; a Vue file
+      // this run never analyzed can hold dynamic classes it cannot see.
+      if (file.templatePrefixes === undefined) {
+        reservations.unbounded = true;
+        continue;
+      }
+      for (const prefix of file.templatePrefixes) reservations.prefixes.add(prefix);
+      opaqueStylesheetImports(file.sourceImports ?? []);
+      continue;
+    }
     if (
       ![".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts"].includes(extname(file.path))
     )
       continue;
     try {
-      for (const prefix of sourceAnalysis(file.path, file.source).templatePrefixes) {
+      const analysis = sourceAnalysis(file.path, file.source);
+      for (const prefix of analysis.templatePrefixes) {
         reservations.prefixes.add(prefix);
       }
+      opaqueStylesheetImports(analysis.imports);
     } catch {
       // An unparseable source cannot constrain anything; its dynamic sites
       // already carry the planner's dynamic-class warnings.

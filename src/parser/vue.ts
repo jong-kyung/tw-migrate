@@ -216,6 +216,9 @@ export type VueAnalysis =
       scriptVueReferences: string[];
       scriptVueGlobPatterns: string[];
       scriptVueGlobUnverifiable: boolean;
+      /// Static dynamic-class prefixes from template expressions and
+      /// script blocks, for canonical spelling reservations.
+      templatePrefixes: string[];
       /// True when a retained unsupported block keeps style content outside
       /// the analyzable block arrays, hiding possible global registrations.
       hasOpaqueStyleBlocks: boolean;
@@ -251,6 +254,9 @@ interface TemplateState {
   /// Identifier names referenced from template expressions, matched after
   /// script analysis against helper aliases the script provides.
   expressionReferences: Set<string>;
+  /// Static prefixes of dynamic class construction in template
+  /// expressions, for canonical spelling reservations.
+  templatePrefixes: Set<string>;
   /// Synthetic path for template expression parsing, carrying the SFC's
   /// script language so TypeScript assertions parse in TypeScript SFCs.
   expressionPath: string;
@@ -490,6 +496,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     moduleClosureBroken: false,
     referencesUseCssModule: false,
     expressionReferences: new Set(),
+    templatePrefixes: new Set(),
     expressionPath: scriptLang === "ts" || scriptLang === "tsx" ? "Component.ts" : "Component.js",
   };
   visitTemplateNode(source, template.ast, state);
@@ -518,6 +525,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
   let scriptHasDynamicImport = false;
   const scriptVueReferences: string[] = [];
   const scriptVueGlobPatterns: string[] = [];
+  const scriptTemplatePrefixes: string[] = [];
   let scriptVueGlobUnverifiable = false;
   const styleImports = [descriptor.script, descriptor.scriptSetup].flatMap((script) => {
     if (!script) return [];
@@ -535,6 +543,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
         ...analysis.imports.filter((record) => !record.typeOnly).map((record) => record.specifier),
       );
       scriptVueGlobPatterns.push(...analysis.vueGlobPatterns);
+      scriptTemplatePrefixes.push(...analysis.templatePrefixes);
       if (analysis.vueGlobUnverifiable) scriptVueGlobUnverifiable = true;
       return analysis.staticImports;
     } catch {
@@ -650,6 +659,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     scriptVueReferences,
     scriptVueGlobPatterns,
     scriptVueGlobUnverifiable,
+    templatePrefixes: [...new Set([...state.templatePrefixes, ...scriptTemplatePrefixes])],
     hasOpaqueStyleBlocks: opaqueStyleBlocks,
     styleBlockImports: styleBlockImports.map((entry) => ({
       ...entry,
@@ -743,11 +753,15 @@ function visitTemplateNode(source: string, node: TemplateNode, state: TemplateSt
       }
       if (expression?.referencesUseCssModule) state.referencesUseCssModule = true;
       for (const name of expression?.references ?? []) state.expressionReferences.add(name);
+      for (const prefix of expression?.templatePrefixes ?? []) state.templatePrefixes.add(prefix);
       if (prop.arg && !prop.arg.isStatic && prop.arg.content) {
         const argExpression = templateExpression(state.expressionPath, prop.arg.content);
         state.moduleClosureBroken ||= argExpression?.usesCssModule ?? true;
         state.referencesUseCssModule ||= argExpression?.referencesUseCssModule ?? false;
         for (const name of argExpression?.references ?? []) state.expressionReferences.add(name);
+        for (const prefix of argExpression?.templatePrefixes ?? []) {
+          state.templatePrefixes.add(prefix);
+        }
       }
       // Injected markup carries no scope attribute, so scoped proofs are
       // unaffected -- but it can use any class an unscoped rule targets.
@@ -764,6 +778,7 @@ function visitTemplateNode(source: string, node: TemplateNode, state: TemplateSt
     state.moduleClosureBroken ||= interpolation?.usesCssModule ?? true;
     state.referencesUseCssModule ||= interpolation?.referencesUseCssModule ?? false;
     for (const name of interpolation?.references ?? []) state.expressionReferences.add(name);
+    for (const prefix of interpolation?.templatePrefixes ?? []) state.templatePrefixes.add(prefix);
   }
   for (const child of node.children ?? []) visitTemplateNode(source, child, state);
 }
@@ -799,6 +814,7 @@ function templateHandler(source: string): ExpressionAnalysis | undefined {
       // reference is a potential Vue API call the script may not shadow.
       referencesUseCssModule: analysis.hasUnboundUseCssModule,
       references: analysis.unboundReferences,
+      templatePrefixes: analysis.templatePrefixes,
     };
   } catch {
     return undefined;

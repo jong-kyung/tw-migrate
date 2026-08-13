@@ -311,6 +311,25 @@ test("canonicalizes literal utilities to the target design system's names", asyn
   assert.match(await readFile(join(cwd, "Button.tsx"), "utf8"), /max-w-full mr-auto p-\[13px\]/);
 });
 
+test("Vue template class prefixes reserve canonical spellings", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(
+    join(cwd, "Card.vue"),
+    "<template>\n  <div :data-x=\"`mr-${side}`\">Card</div>\n</template>\n<script setup>\nconst side = 'auto';\n</script>\n",
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("undiscovered stylesheet imports keep group spellings arbitrary", async () => {
+  const cwd = await fixture({
+    css: ".button { margin-right: auto; }\n",
+    tsx: "import styles from './Button.module.css';\nimport 'legacy-package/styles.css';\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+  });
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
 test("authored selectors reserve canonical spellings", async () => {
   const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
   await writeFile(join(cwd, "legacy.css"), ".mr-auto { color: red; }\n");

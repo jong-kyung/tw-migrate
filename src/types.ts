@@ -84,6 +84,8 @@ export interface PreparedSourceFile extends SourceFile {
   htmlScriptText?: string;
   sourceImports?: SourceImportRecord[];
   sourceImportsUnverifiable?: boolean;
+  /** Static dynamic-class prefixes for canonical spelling reservations. */
+  templatePrefixes?: string[];
 }
 
 export interface PlannedFile extends PreparedSourceFile {

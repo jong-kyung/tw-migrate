@@ -810,6 +810,7 @@ export async function preparePackageVue({
         : {}),
       sourceImports: analysis.scriptImports,
       sourceImportsUnverifiable: analysis.scriptImportsUnverifiable,
+      templatePrefixes: analysis.templatePrefixes,
     });
   }
   return {
