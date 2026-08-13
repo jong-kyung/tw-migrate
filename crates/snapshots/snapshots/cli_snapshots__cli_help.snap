@@ -20,14 +20,14 @@ workspace delta:
 
 --- step: version ---
 status: 0
-stdout: "tw-migrate 0.4.0\n"
+stdout: "tw-migrate 0.5.0\n"
 stderr: ""
 workspace delta:
   unchanged
 
 --- step: short_version ---
 status: 0
-stdout: "tw-migrate 0.4.0\n"
+stdout: "tw-migrate 0.5.0\n"
 stderr: ""
 workspace delta:
   unchanged
