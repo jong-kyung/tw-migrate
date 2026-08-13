@@ -100,6 +100,21 @@ test("stylesheet references calibrate reservation boundedness", () => {
   ).toBe(true);
 });
 
+test("entry-graph directives calibrate reservation boundedness", () => {
+  const bounded = (entry: string) =>
+    spellingReservations(new Map(), [["/app/globals.css.graph.css", entry]]).unbounded === false;
+  // Plugin and legacy config modules can emit selectors this scan never
+  // sees, and a `@source not` prelude can exclude a canonical spelling
+  // from generation.
+  expect(bounded('@import "tailwindcss";\n')).toBe(true);
+  expect(bounded('@import "tailwindcss";\n@plugin "./plugin.js";\n')).toBe(false);
+  expect(bounded('@import "tailwindcss";\n@config "./tailwind.config.js";\n')).toBe(false);
+  expect(bounded('@import "tailwindcss";\n@source not inline("mr-auto");\n')).toBe(false);
+  expect(bounded('@import "tailwindcss";\n@source not "./legacy";\n')).toBe(false);
+  // An additive inline safelist only generates extra utilities.
+  expect(bounded('@import "tailwindcss";\n@source inline("mr-auto");\n')).toBe(true);
+});
+
 test("alias acceptance rejects theme-backed and reserved spellings", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tw-canonicalize-"));
   await writeFile(join(dir, "globals.css"), '@import "tailwindcss";\n');

@@ -440,6 +440,26 @@ test("scanner-ignored sources stay reserved without workspaces mode", async () =
   assert.deepEqual(report.candidates, ["mr-[auto]"]);
 });
 
+test("entries excluding candidates keep group spellings arbitrary", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(
+    join(cwd, "globals.css"),
+    '@import "tailwindcss";\n@source not inline("mr-auto");\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("entries loading plugins keep group spellings arbitrary", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await Promise.all([
+    writeFile(join(cwd, "noop-plugin.js"), "module.exports = () => {};\n"),
+    writeFile(join(cwd, "globals.css"), '@import "tailwindcss";\n@plugin "./noop-plugin.js";\n'),
+  ]);
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
 test("opaque page style sources keep group spellings arbitrary", async () => {
   const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
   await writeFile(

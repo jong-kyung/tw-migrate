@@ -6,7 +6,7 @@
 
 import { dirname } from "node:path";
 
-import { compiledShape, stylesheetAnalysis } from "../native.ts";
+import { compiledShape, cssDirectives, stylesheetAnalysis } from "../native.ts";
 import { stylesheetReferenceTargets } from "../util/shared.ts";
 import type { DesignSystem } from "../types.ts";
 
@@ -74,12 +74,20 @@ export function spellingReservations(
 ): SpellingReservations {
   const names = new Set<string>();
   let unbounded = false;
-  const scan = (path: string, source: string, resolveReferences: boolean) => {
+  const scan = (path: string, source: string, entryGraph: boolean) => {
     try {
       const analysis = stylesheetAnalysis(path, source);
       for (const name of analysis.classNames) names.add(name);
       if (analysis.classReservationsUnbounded) unbounded = true;
-      if (!resolveReferences) return;
+      if (entryGraph) {
+        // A plugin or legacy config module can emit any selector into the
+        // built output without it appearing in scanned CSS, and a
+        // `@source not` exclusion can keep Tailwind from generating a
+        // canonical spelling the migrated source would then rely on.
+        if (entryDirectiveHazard(source)) unbounded = true;
+        // The loader already resolved the entry graph's imports.
+        return;
+      }
       // An interpolated reference can load a sheet this scan never sees.
       if (analysis.unverifiable) unbounded = true;
       for (const reference of analysis.references) {
@@ -98,9 +106,35 @@ export function spellingReservations(
       unbounded = true;
     }
   };
-  for (const [path, source] of styleSources) scan(path, source, true);
-  for (const [path, source] of resolvedExtras) scan(path, source, false);
+  for (const [path, source] of styleSources) scan(path, source, false);
+  for (const [path, source] of resolvedExtras) scan(path, source, true);
   return { names, prefixes: new Set(), unbounded };
+}
+
+/// True when an entry-graph sheet declares a directive whose effect on the
+/// built output this scan cannot see: `@plugin` and `@config` run
+/// JavaScript that may emit arbitrary selectors, and a `@source not`
+/// prelude (or one that cannot be read) excludes sources or candidates
+/// from generation.
+function entryDirectiveHazard(source: string): boolean {
+  const directives = cssDirectives(source);
+  if (directives === null) return true;
+  return directives.some((directive) => {
+    if (directive === null || typeof directive !== "object" || !("kind" in directive)) {
+      return false;
+    }
+    if (directive.kind === "source") {
+      return (
+        ("not" in directive && directive.not === true) ||
+        ("unreadable" in directive && directive.unreadable === true)
+      );
+    }
+    return (
+      directive.kind === "other" &&
+      "name" in directive &&
+      (directive.name === "plugin" || directive.name === "config")
+    );
+  });
 }
 
 export function reservedSpelling(reservations: SpellingReservations, spelling: string): boolean {
