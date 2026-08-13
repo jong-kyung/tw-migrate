@@ -356,6 +356,11 @@ struct PlanRequest {
     /// keyframes may still move.
     #[serde(default = "default_entry_writable")]
     global_at_rule_moves: bool,
+    /// Caller-accepted canonical spellings keyed by complete planner
+    /// candidate. Applied after prefixing so every rewrite path renders the
+    /// canonical name; empty on the first planning pass.
+    #[serde(default)]
+    candidate_aliases: HashMap<String, String>,
     files: Vec<SourceFile>,
 }
 
@@ -381,6 +386,8 @@ struct BatchPlanRequest {
     entry_writable: bool,
     #[serde(default = "default_entry_writable")]
     global_at_rule_moves: bool,
+    #[serde(default)]
+    candidate_aliases: HashMap<String, String>,
     files: Vec<SourceFile>,
 }
 
@@ -558,6 +565,11 @@ struct PlanResponse {
     deleted_files: Vec<String>,
     unlinked_files: Vec<String>,
     candidates: Vec<String>,
+    /// Every candidate a rule produced, collected before quote-fit and
+    /// source-edit checks so the orchestration layer can canonicalize
+    /// spellings whose alias may make a rejected rewrite fit on the next
+    /// pass. Over-inclusive by design; internal orchestration data only.
+    candidate_probes: Vec<String>,
     converted_rules: usize,
     retained_rules: usize,
     rules: Vec<RuleReport>,
@@ -708,6 +720,7 @@ pub fn plan_json(request: &str) -> Result<String, String> {
         .ok_or_else(|| "Plan request must be an object".to_string())?;
     let mut batch = serde_json::Map::new();
     for field in [
+        "candidateAliases",
         "entryWritable",
         "files",
         "globalAtRuleMoves",
@@ -1090,6 +1103,32 @@ fn prefix_rule_candidates(rules: &mut [RulePlan], prefix: &str) {
     }
 }
 
+/// Rewrite planner candidates through the caller-accepted canonical alias
+/// map. Aliases name complete candidates, so they apply after prefixing.
+/// Source-property metadata transfers with the spelling and merges when
+/// aliases deduplicate candidates, keeping conflict detection authoritative
+/// without inferring properties from the canonical name.
+fn apply_candidate_aliases(rules: &mut [RulePlan], aliases: &HashMap<String, String>) {
+    if aliases.is_empty() {
+        return;
+    }
+    for rule in rules {
+        let mut seen = HashSet::new();
+        rule.candidates = rule
+            .candidates
+            .drain(..)
+            .map(|candidate| aliases.get(&candidate).cloned().unwrap_or(candidate))
+            .filter(|candidate| seen.insert(candidate.clone()))
+            .collect();
+        let mut properties: HashMap<String, BTreeSet<String>> = HashMap::new();
+        for (candidate, set) in std::mem::take(&mut rule.candidate_properties) {
+            let candidate = aliases.get(&candidate).cloned().unwrap_or(candidate);
+            properties.entry(candidate).or_default().extend(set);
+        }
+        rule.candidate_properties = properties;
+    }
+}
+
 struct BatchMatch {
     stylesheet: usize,
     candidate: String,
@@ -1333,6 +1372,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
     let mut deleted = HashSet::new();
     let mut unlinked = HashSet::new();
     let mut candidates = BTreeSet::new();
+    let mut candidate_probes = BTreeSet::new();
     let mut converted_rules = 0;
     let mut retained_rules = 0;
     let mut rules = Vec::new();
@@ -1399,6 +1439,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
         }
         unlinked.extend(response.unlinked_files);
         candidates.extend(response.candidates);
+        candidate_probes.extend(response.candidate_probes);
         converted_rules += response.converted_rules;
         retained_rules += response.retained_rules;
         rules.extend(response.rules.into_iter().map(|mut rule| {
@@ -1432,6 +1473,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
         deleted_files,
         unlinked_files,
         candidates: candidates.into_iter().collect(),
+        candidate_probes: candidate_probes.into_iter().collect(),
         converted_rules,
         retained_rules,
         rules,
@@ -1455,6 +1497,7 @@ fn batch_stylesheet_request(
         media_names: batch.media_names.clone(),
         entry_writable: batch.entry_writable,
         global_at_rule_moves: batch.global_at_rule_moves,
+        candidate_aliases: batch.candidate_aliases.clone(),
         files,
     }
 }
@@ -1638,6 +1681,7 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
     {
         prefix_rule_candidates(&mut parsed.rules, prefix);
     }
+    apply_candidate_aliases(&mut parsed.rules, &request.candidate_aliases);
     Ok((is_module, parsed, vue_masked))
 }
 
@@ -2001,6 +2045,10 @@ fn plan_request(
         vue_masked,
     ) = parse_request_rules(&request)?;
     let vue_mode = vue_masked.is_some();
+    let candidate_probes = rules
+        .iter()
+        .flat_map(|rule| rule.candidates.iter().cloned())
+        .collect::<BTreeSet<_>>();
     let vue_retention = request
         .sheet
         .vue_retention
@@ -2464,6 +2512,7 @@ fn plan_request(
             Vec::new()
         },
         candidates: candidates.into_iter().collect(),
+        candidate_probes: candidate_probes.into_iter().collect(),
         converted_rules,
         retained_rules,
         rules: rule_reports,
@@ -5353,6 +5402,90 @@ mod tests {
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["retainedRules"], 1);
         assert_eq!(response["files"], serde_json::json!([]));
+        // The probe still surfaces the candidate so canonicalization can
+        // discover an alias that fits the attribute on the next pass.
+        let probes = response["candidateProbes"].as_array().unwrap();
+        assert_eq!(probes.len(), 1);
+        assert!(
+            probes[0].as_str().unwrap().starts_with("[font-family:"),
+            "{probes:?}"
+        );
+    }
+
+    #[test]
+    fn applies_candidate_aliases_to_rewrites_and_probes() {
+        let source = "<template>\n  <p :class=\"$style.card\">A</p>\n</template>\n<style module>\n.card { font-family: \"My Font\", sans-serif; }\n</style>\n";
+        let mut request = vue_module_request(source, &[("p", "card")]);
+        request["candidateAliases"] = serde_json::json!({
+            "[font-family:\"My_Font\",_sans-serif]": "font-my-font",
+        });
+        let response = plan_batch(request);
+        // The canonical spelling carries no quote, so the rewrite that the
+        // arbitrary candidate could not make now fits the attribute.
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(response["candidates"], serde_json::json!(["font-my-font"]));
+        assert_eq!(response["candidateProbes"], serde_json::json!(["font-my-font"]));
+        assert!(
+            response["files"][0]["source"]
+                .as_str()
+                .unwrap()
+                .contains("font-my-font")
+        );
+    }
+
+    #[test]
+    fn aliased_candidates_keep_their_source_properties_for_conflicts() {
+        let request = serde_json::json!({
+            "stylesheets": [{
+                "cssPath": "/project/Button.module.css",
+                "cssSource": "@media (width <= 700px) { .button { margin: 4px; } }\n.button { margin: 8px; }\n",
+            }],
+            "mediaNames": { "(width <= 700px)": "width-lte-700px" },
+            "candidateAliases": { "m-[8px]": "m-2" },
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response = plan_batch(request);
+
+        // The alias renames the base candidate, but its transferred margin
+        // properties still collide with the earlier-authored media rule, so
+        // the ordering-sensitive gate keeps retaining the pair.
+        assert_eq!(response["convertedRules"], 0);
+        assert_eq!(response["retainedRules"], 2);
+        assert!(
+            response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| warning["code"] == "batch-stylesheet-conflict")
+        );
+    }
+
+    #[test]
+    fn merges_properties_when_aliases_deduplicate_candidates() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Button.module.css",
+            "cssSource": ".button { margin-right: auto; margin-left: auto; }\n",
+            "candidateAliases": { "mr-[auto]": "mx-auto", "ml-[auto]": "mx-auto" },
+            "files": [{
+                "path": "/project/Button.tsx",
+                "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
+            }]
+        });
+
+        let response = plan(request);
+
+        assert_eq!(response["convertedRules"], 1);
+        assert_eq!(response["candidates"], serde_json::json!(["mx-auto"]));
+        assert!(
+            response["files"][0]["source"]
+                .as_str()
+                .unwrap()
+                .contains("\"mx-auto\"")
+        );
     }
 
     fn vue_batch_request(
