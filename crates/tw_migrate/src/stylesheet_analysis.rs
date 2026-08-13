@@ -228,7 +228,13 @@ fn collect_compound_selector_classes(
                 }
             }
             SimpleSelector::Attribute(attribute) => {
-                if literal_ident(&attribute.name.name) != Some("class") {
+                let Some(name) = literal_ident(&attribute.name.name) else {
+                    // An interpolated attribute name can resolve to
+                    // `class`, so the match set cannot be bounded.
+                    analysis.class_reservations_unbounded = true;
+                    continue;
+                };
+                if name != "class" {
                     continue;
                 }
                 let value = attribute.value.as_ref().and_then(|value| match value {
@@ -1024,6 +1030,19 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(
             &super::stylesheet_analysis_json("/p/legacy.css", "[class*=\"auto\"] { color: red; }\n")
                 .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["classReservationsUnbounded"], true);
+    }
+
+    #[test]
+    fn marks_unbounded_interpolated_attribute_names() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/legacy.scss",
+                "$attr: class;\n[#{$attr}~=\"mr-auto\"] { color: red; }\n[data-kind=\"x\"] { color: blue; }\n",
+            )
+            .unwrap(),
         )
         .unwrap();
         assert_eq!(parsed["classReservationsUnbounded"], true);

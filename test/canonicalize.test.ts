@@ -123,6 +123,10 @@ test("entry-graph directives calibrate reservation boundedness", () => {
   expect(bounded('@import "tailwindcss";\n@source not "./legacy";\n')).toBe(false);
   // An additive inline safelist only generates extra utilities.
   expect(bounded('@import "tailwindcss";\n@source inline("mr-auto");\n')).toBe(true);
+  // A source(...) import modifier disables or restricts automatic
+  // scanning, so generation no longer follows the migrated sources.
+  expect(bounded('@import "tailwindcss" source(none);\n')).toBe(false);
+  expect(bounded('@import "tailwindcss" source("./apps");\n')).toBe(false);
 });
 
 test("alias acceptance rejects theme-backed and reserved spellings", async () => {

@@ -123,6 +123,15 @@ function entryDirectiveHazard(source: string): boolean {
     if (directive === null || typeof directive !== "object" || !("kind" in directive)) {
       return false;
     }
+    // A source(...) import modifier disables or restricts automatic
+    // scanning, so a canonical spelling may never reach generation even
+    // though the arbitrary form was safelisted.
+    if (directive.kind === "import") {
+      return (
+        ("source" in directive && directive.source !== null) ||
+        ("sourceUnreadable" in directive && directive.sourceUnreadable === true)
+      );
+    }
     if (directive.kind === "source") {
       return (
         ("not" in directive && directive.not === true) ||

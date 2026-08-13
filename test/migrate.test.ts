@@ -446,6 +446,13 @@ test("entries excluding candidates keep group spellings arbitrary", async () => 
   assert.deepEqual(report.candidates, ["mr-[auto]"]);
 });
 
+test("entries disabling automatic scanning keep group spellings arbitrary", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(join(cwd, "globals.css"), '@import "tailwindcss" source(none);\n');
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
 test("entries loading plugins keep group spellings arbitrary", async () => {
   const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
   await Promise.all([
