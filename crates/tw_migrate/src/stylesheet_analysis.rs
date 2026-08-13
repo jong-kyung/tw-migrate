@@ -204,6 +204,7 @@ fn collect_compound_scope_escapes(
 
 fn collect_compound_selector_classes(
     compound: &CompoundSelector<'_>,
+    parent_classes: &[String],
     analysis: &mut StylesheetAnalysis,
 ) {
     for simple in &compound.children {
@@ -212,6 +213,20 @@ fn collect_compound_selector_classes(
                 Some(name) => analysis.class_names.push(name.to_string()),
                 None => analysis.class_reservations_unbounded = true,
             },
+            // A suffixed parent selector compiles each parent class with
+            // the suffix appended, so `.mr- { &auto {} }` reserves
+            // `mr-auto`. A suffix with no class parents (or one the parser
+            // cannot read) stays unbounded.
+            SimpleSelector::Nesting(nesting) if nesting.suffix.is_some() => {
+                match nesting.suffix.as_ref().and_then(static_ident_text) {
+                    Some(suffix) if !parent_classes.is_empty() => {
+                        for parent in parent_classes {
+                            analysis.class_names.push(format!("{parent}{suffix}"));
+                        }
+                    }
+                    _ => analysis.class_reservations_unbounded = true,
+                }
+            }
             SimpleSelector::Attribute(attribute) => {
                 if literal_ident(&attribute.name.name) != Some("class") {
                     continue;
@@ -248,7 +263,7 @@ fn collect_compound_selector_classes(
             }
             SimpleSelector::PseudoClass(pseudo) => {
                 if let Some(arg) = &pseudo.arg {
-                    collect_pseudo_arg_classes(&arg.kind, analysis);
+                    collect_pseudo_arg_classes(&arg.kind, parent_classes, analysis);
                 }
             }
             SimpleSelector::PseudoElement(pseudo) => {
@@ -256,12 +271,16 @@ fn collect_compound_selector_classes(
                     match &arg.kind {
                         oxc_css_parser::ast::PseudoElementSelectorArgKind::CompoundSelector(
                             compound,
-                        ) => collect_compound_selector_classes(compound, analysis),
+                        ) => collect_compound_selector_classes(compound, parent_classes, analysis),
                         oxc_css_parser::ast::PseudoElementSelectorArgKind::CompoundSelectorList(
                             list,
                         ) => {
                             for selector in &list.selectors {
-                                collect_compound_selector_classes(selector, analysis);
+                                collect_compound_selector_classes(
+                                    selector,
+                                    parent_classes,
+                                    analysis,
+                                );
                             }
                         }
                         _ => {}
@@ -275,28 +294,29 @@ fn collect_compound_selector_classes(
 
 fn collect_pseudo_arg_classes(
     kind: &PseudoClassSelectorArgKind<'_>,
+    parent_classes: &[String],
     analysis: &mut StylesheetAnalysis,
 ) {
     match kind {
         PseudoClassSelectorArgKind::CompoundSelectorList(list) => {
             for selector in &list.selectors {
-                collect_compound_selector_classes(selector, analysis);
+                collect_compound_selector_classes(selector, parent_classes, analysis);
             }
         }
         PseudoClassSelectorArgKind::RelativeSelectorList(list) => {
             for selector in &list.selectors {
-                collect_selector_classes(&selector.complex_selector, analysis);
+                collect_selector_classes(&selector.complex_selector, parent_classes, analysis);
             }
         }
         PseudoClassSelectorArgKind::SelectorList(list) => {
             for selector in &list.selectors {
-                collect_selector_classes(selector, analysis);
+                collect_selector_classes(selector, parent_classes, analysis);
             }
         }
         PseudoClassSelectorArgKind::Nth(nth) => {
             if let Some(list) = nth.matcher.as_ref().and_then(|matcher| matcher.selector.as_ref()) {
                 for selector in &list.selectors {
-                    collect_selector_classes(selector, analysis);
+                    collect_selector_classes(selector, parent_classes, analysis);
                 }
             }
         }
@@ -306,13 +326,49 @@ fn collect_pseudo_arg_classes(
 
 fn collect_selector_classes(
     selector: &oxc_css_parser::ast::ComplexSelector<'_>,
+    parent_classes: &[String],
     analysis: &mut StylesheetAnalysis,
 ) {
     for child in &selector.children {
         if let ComplexSelectorChild::CompoundSelector(compound) = child {
-            collect_compound_selector_classes(compound, analysis);
+            collect_compound_selector_classes(compound, parent_classes, analysis);
         }
     }
+}
+
+/// Literal class names of one selector list, resolved against the current
+/// parents so chained suffix nesting keeps compounding.
+fn selector_class_names(
+    selectors: &oxc_css_parser::ast::SelectorList<'_>,
+    parent_classes: &[String],
+) -> Vec<String> {
+    let mut names = Vec::new();
+    for selector in &selectors.selectors {
+        for child in &selector.children {
+            if let ComplexSelectorChild::CompoundSelector(compound) = child {
+                for simple in &compound.children {
+                    match simple {
+                        SimpleSelector::Class(class) => {
+                            if let Some(name) = literal_ident(&class.name) {
+                                names.push(name.to_string());
+                            }
+                        }
+                        SimpleSelector::Nesting(nesting) if nesting.suffix.is_some() => {
+                            if let Some(suffix) =
+                                nesting.suffix.as_ref().and_then(static_ident_text)
+                            {
+                                for parent in parent_classes {
+                                    names.push(format!("{parent}{suffix}"));
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    names
 }
 
 fn collect_scope_escapes(
@@ -374,6 +430,27 @@ fn declaration_value(source: &str, declaration: &oxc_css_parser::ast::Declaratio
     };
     let last = declaration.value.last().expect("checked");
     source[first.span().start..last.span().end].trim().to_string()
+}
+
+/// The static text of an ident, covering the plain literal form and a
+/// Sass-interpolated ident whose elements are all static (the parser's
+/// representation of a plain nesting suffix such as `&auto`).
+fn static_ident_text(value: &InterpolableIdent<'_>) -> Option<String> {
+    match value {
+        InterpolableIdent::Literal(value) => Some(value.name.to_string()),
+        InterpolableIdent::SassInterpolated(value) => value
+            .elements
+            .iter()
+            .map(|element| match element {
+                oxc_css_parser::ast::SassInterpolatedIdentElement::Static(part) => {
+                    Some(part.value.to_string())
+                }
+                oxc_css_parser::ast::SassInterpolatedIdentElement::Expression(_) => None,
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(|parts| parts.join("")),
+        _ => None,
+    }
 }
 
 fn literal_ident<'a>(value: &'a InterpolableIdent<'a>) -> Option<&'a str> {
@@ -487,6 +564,7 @@ fn collect_at_rule_metadata(
 fn collect_stylesheet_statements(
     statements: &[Statement<'_>],
     source: &str,
+    parent_classes: &[String],
     analysis: &mut StylesheetAnalysis,
 ) -> bool {
     let mut has_scope_escape = false;
@@ -510,7 +588,7 @@ fn collect_stylesheet_statements(
                         };
                         for list in [start, end].into_iter().flatten() {
                             for selector in &list.selectors {
-                                collect_selector_classes(selector, analysis);
+                                collect_selector_classes(selector, parent_classes, analysis);
                             }
                         }
                     }
@@ -538,20 +616,29 @@ fn collect_stylesheet_statements(
                     _ => {}
                 }
                 if let Some(block) = &at_rule.block {
-                    has_scope_escape |=
-                        collect_stylesheet_statements(&block.statements, source, analysis);
+                    has_scope_escape |= collect_stylesheet_statements(
+                        &block.statements,
+                        source,
+                        parent_classes,
+                        analysis,
+                    );
                 }
             }
             Statement::QualifiedRule(rule) => {
                 let mut direct = false;
                 for selector in &rule.selector.selectors {
                     direct |= collect_scope_escapes(selector, source, analysis);
-                    collect_selector_classes(selector, analysis);
+                    collect_selector_classes(selector, parent_classes, analysis);
                     if selector_is_unverifiable(selector) {
                         analysis.selectors_unverifiable = true;
                     }
                 }
-                let nested = collect_stylesheet_statements(&rule.block.statements, source, analysis);
+                let nested = collect_stylesheet_statements(
+                    &rule.block.statements,
+                    source,
+                    &selector_class_names(&rule.selector, parent_classes),
+                    analysis,
+                );
                 if nested {
                     // Reconstructing mixed declaration and nested-rule scope is
                     // outside this collector; retain conservatively.
@@ -659,7 +746,7 @@ pub fn stylesheet_analysis_json(path: &str, source: &str) -> Result<String, Stri
         class_names: Vec::new(),
         class_reservations_unbounded: false,
     };
-    collect_stylesheet_statements(&parsed.statements, source, &mut analysis);
+    collect_stylesheet_statements(&parsed.statements, source, &[], &mut analysis);
     collect_at_rule_metadata(&parsed.statements, source, syntax, &mut analysis);
     if syntax == Syntax::Css {
         collect_loading_imports(&parsed.statements, source, &mut analysis);
@@ -913,6 +1000,22 @@ mod tests {
             parsed["classNames"],
             serde_json::json!(["legacy", "mr-auto", "p-4", "stack"])
         );
+        assert_eq!(parsed["classReservationsUnbounded"], false);
+    }
+
+    #[test]
+    fn resolves_suffixed_nesting_selectors_against_parents() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/legacy.scss",
+                ".mr- { &auto { color: red; } }\n.btn { &-primary { color: blue; } }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let names = parsed["classNames"].as_array().unwrap();
+        assert!(names.contains(&serde_json::json!("mr-auto")), "{parsed}");
+        assert!(names.contains(&serde_json::json!("btn-primary")), "{names:?}");
         assert_eq!(parsed["classReservationsUnbounded"], false);
     }
 

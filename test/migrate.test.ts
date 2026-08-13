@@ -330,6 +330,16 @@ test("undiscovered stylesheet imports keep group spellings arbitrary", async () 
   assert.deepEqual(report.candidates, ["mr-[auto]"]);
 });
 
+test("inline HTML script prefixes reserve canonical spellings", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(
+    join(cwd, "index.html"),
+    "<script>document.body.className = `mr-${'auto'}`;</script><div class=\"card\"></div>\n",
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
 test("authored selectors reserve canonical spellings", async () => {
   const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
   await writeFile(join(cwd, "legacy.css"), ".mr-auto { color: red; }\n");

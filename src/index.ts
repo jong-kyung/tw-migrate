@@ -732,6 +732,17 @@ async function planPreparedGroup(
   const workspaceEntries = new Set([...context.entryCatalog.values()].flat());
   for (const file of groupFiles.values()) {
     if (reservations.unbounded) break;
+    const opaqueStylesheetImports = (records: { specifier: string; typeOnly: boolean }[]) => {
+      for (const record of records) {
+        if (record.typeOnly || !isStylesheetPath(record.specifier.split(/[?#]/, 1)[0])) continue;
+        const resolved = record.specifier.startsWith(".")
+          ? resolve(dirname(file.path), record.specifier)
+          : undefined;
+        if (resolved === undefined || !context.styleSources.has(resolved)) {
+          reservations.unbounded = true;
+        }
+      }
+    };
     if (extname(file.path) === ".html") {
       try {
         const parsed = parseHtmlSource(file.path, file.source);
@@ -755,6 +766,20 @@ async function planPreparedGroup(
             reservations.unbounded = true;
           }
         }
+        // The planner already treats inline scripts conservatively for
+        // module retention; spelling reservations follow the same rule.
+        // An analyzable script contributes its constrained prefixes and
+        // stylesheet imports, and an unanalyzable one turns the group
+        // opaque.
+        if (parsed.scriptText.trim() !== "") {
+          try {
+            const script = sourceAnalysis(`${file.path}.inline.js`, parsed.scriptText);
+            for (const prefix of script.templatePrefixes) reservations.prefixes.add(prefix);
+            opaqueStylesheetImports(script.imports);
+          } catch {
+            reservations.unbounded = true;
+          }
+        }
       } catch {
         reservations.unbounded = true;
       }
@@ -765,17 +790,6 @@ async function planPreparedGroup(
     // through a source import outside the discovered snapshot (a package
     // or ignored sheet) can define any selector, so it turns the group
     // opaque.
-    const opaqueStylesheetImports = (records: { specifier: string; typeOnly: boolean }[]) => {
-      for (const record of records) {
-        if (record.typeOnly || !isStylesheetPath(record.specifier.split(/[?#]/, 1)[0])) continue;
-        const resolved = record.specifier.startsWith(".")
-          ? resolve(dirname(file.path), record.specifier)
-          : undefined;
-        if (resolved === undefined || !context.styleSources.has(resolved)) {
-          reservations.unbounded = true;
-        }
-      }
-    };
     if (extname(file.path) === ".vue") {
       // Prepared SFCs carry their template and script prefixes; a Vue file
       // this run never analyzed can hold dynamic classes it cannot see.

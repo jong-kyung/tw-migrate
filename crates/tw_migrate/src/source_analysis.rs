@@ -54,6 +54,32 @@ struct ExpressionAnalysis {
     template_prefixes: Vec<String>,
 }
 
+/// The class token each interpolation continues: the trailing
+/// whitespace-delimited token of every quasi that precedes an expression,
+/// because `` `base mr-${side}` `` constrains the dynamic class to the
+/// `mr-` prefix while `base` stays a static token. A quasi ending in
+/// whitespace leaves its expression unconstrained and reserves nothing.
+fn collect_template_prefixes(
+    template: &oxc_ast::ast::TemplateLiteral<'_>,
+    prefixes: &mut Vec<String>,
+) {
+    if template.expressions.is_empty() {
+        return;
+    }
+    for quasi in template.quasis.iter().take(template.expressions.len()) {
+        let Some(cooked) = quasi.value.cooked.as_ref() else {
+            continue;
+        };
+        let token = cooked
+            .rsplit(|character: char| character.is_whitespace())
+            .next()
+            .unwrap_or("");
+        if !token.is_empty() && !prefixes.iter().any(|existing| existing == token) {
+            prefixes.push(token.to_string());
+        }
+    }
+}
+
 /// Template expressions carry no bindings of their own, so any `$style` or
 /// `useCssModule` reference is a potential CSS Module access; the caller
 /// decides whether a script-provided binding shadows the Vue API.
@@ -77,19 +103,7 @@ impl ExpressionCollector {
 
 impl<'a> Visit<'a> for ExpressionCollector {
     fn visit_template_literal(&mut self, template: &oxc_ast::ast::TemplateLiteral<'a>) {
-        if !template.expressions.is_empty()
-            && let Some(prefix) = template
-                .quasis
-                .first()
-                .and_then(|quasi| quasi.value.cooked.as_ref())
-            && !prefix.is_empty()
-            && !self
-                .template_prefixes
-                .iter()
-                .any(|existing| existing == prefix.as_str())
-        {
-            self.template_prefixes.push(prefix.to_string());
-        }
+        collect_template_prefixes(template, &mut self.template_prefixes);
         walk::walk_template_literal(self, template);
     }
 
@@ -562,20 +576,7 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
     }
 
     fn visit_template_literal(&mut self, template: &oxc_ast::ast::TemplateLiteral<'a>) {
-        if !template.expressions.is_empty()
-            && let Some(prefix) = template
-                .quasis
-                .first()
-                .and_then(|quasi| quasi.value.cooked.as_ref())
-            && !prefix.is_empty()
-            && !self
-                .analysis
-                .template_prefixes
-                .iter()
-                .any(|existing| existing == prefix.as_str())
-        {
-            self.analysis.template_prefixes.push(prefix.to_string());
-        }
+        collect_template_prefixes(template, &mut self.analysis.template_prefixes);
         walk::walk_template_literal(self, template);
     }
 
@@ -904,12 +905,14 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(
             &super::source_analysis_json(
                 "/p/Card.tsx",
-                "const cls = `mr-${side}`; const whole = `${value}`; const fixed = `static`;",
+                "const cls = `mr-${side}`; const combined = `base p-${size} pt-${top}`; const open = `loose ${value}`; const fixed = `static`;",
             )
             .unwrap(),
         )
         .unwrap();
-        assert_eq!(parsed["templatePrefixes"], serde_json::json!(["mr-"]));
+        // Trailing tokens of pre-expression quasis constrain the dynamic
+        // class; static tokens and whitespace-terminated quasis do not.
+        assert_eq!(parsed["templatePrefixes"], serde_json::json!(["mr-", "p-", "pt-"]));
     }
 
     #[test]
