@@ -11,14 +11,13 @@
 // migrates.
 
 import { createRequire } from "node:module";
-import { dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 
-import { collectCssDirectives, collectSourceImports } from "../native.ts";
+import { collectCssDirectives, sourceAnalysis } from "../native.ts";
+import type { SourceImportRecord } from "../native.ts";
 import { parseHtmlSource } from "../parser/html.ts";
-import { isWithin, maskCssComments } from "../util/shared.ts";
+import { isWithin } from "../util/shared.ts";
 import type { PreparedSourceFile } from "../types.ts";
-
-const TAILWIND_UTILITIES_IMPORT = /@import\s+["']tailwindcss(?:\/utilities(?:\.css)?)?["']/;
 
 /// True for a specifier whose import actually emits utilities: the full
 /// package or its utilities layer. A sheet importing only
@@ -34,19 +33,17 @@ function emitsUtilities(specifier: string): boolean {
 }
 
 /// A structurally parsed top-level Tailwind import that includes the
-/// utilities layer. An unparseable stylesheet falls back to the masked
-/// regex so a working entry is never dropped from discovery.
+/// utilities layer.
 function hasTailwindImport(source: string): boolean {
   const directives = cssDirectives(source);
-  if (directives !== null) {
-    return directives.some(
+  return (
+    directives?.some(
       (directive) =>
         directive.kind === "import" &&
         directive.specifier !== null &&
         emitsUtilities(directive.specifier),
-    );
-  }
-  return TAILWIND_UTILITIES_IMPORT.test(maskCssComments(source));
+    ) ?? false
+  );
 }
 
 /// Tailwind entries per owning package, from the scanned stylesheet corpus.
@@ -215,67 +212,34 @@ export function scanProof(options: {
   return isWithin(dirname(options.entry), options.packageRoot) ? "automatic" : null;
 }
 
-interface SourceImportRecord {
-  specifier: string;
-  typeOnly: boolean;
-  dynamic: boolean;
-}
-
-const importRecordCache = new Map<string, { source: string; records: SourceImportRecord[] }>();
+const OPAQUE_SOURCE_IMPORT: SourceImportRecord = {
+  specifier: "#unverifiable-source",
+  typeOnly: false,
+  dynamic: true,
+};
 
 /// Parsed module records of one source file through the native oxc parser.
-/// Vue SFC scripts are extracted first; a file that does not parse has no
-/// provable imports, which only makes proofs fail conservatively. Records
-/// are memoized by path and content because every package's proofs scan
-/// the workspace corpus.
-function sourceImports(file: { path: string; source: string }): SourceImportRecord[] {
-  const cached = importRecordCache.get(file.path);
-  if (cached !== undefined && cached.source === file.source) return cached.records;
+/// Vue records come from the project-local SFC compiler path, which extracts
+/// each script block before Oxc analysis. An unreadable source contributes an
+/// unresolved alias so exposure proofs fail conservatively.
+function sourceImports(file: {
+  path: string;
+  source: string;
+  sourceImports?: SourceImportRecord[];
+  sourceImportsUnverifiable?: boolean;
+}): SourceImportRecord[] {
   const extension = extname(file.path);
   if (extension === ".html") return [];
-  const sources =
-    extension === ".vue"
-      ? [
-          // A commented-out script block never executes, so it must not
-          // contribute loader or reachability records.
-          ...file.source
-            .replace(/<!--[\s\S]*?-->/g, "")
-            .matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi),
-        ].map((match) => {
-          // Parse each block with its declared language so JSX blocks are
-          // not rejected by the TypeScript grammar.
-          const lang = match[1].match(/\blang\s*=\s*["']?(\w+)/)?.[1]?.toLowerCase();
-          const scriptExtension =
-            lang === "tsx" || lang === "jsx" || lang === "js" ? `.${lang}` : ".ts";
-          return { source: match[2], path: `${file.path}${scriptExtension}` };
-        })
-      : [{ source: file.source, path: file.path }];
-  const records: SourceImportRecord[] = [];
-  for (const script of sources) {
-    try {
-      const parsed: unknown = JSON.parse(collectSourceImports(script.source, script.path));
-      if (!Array.isArray(parsed)) continue;
-      for (const record of parsed) {
-        if (
-          record !== null &&
-          typeof record === "object" &&
-          typeof record.specifier === "string" &&
-          typeof record.typeOnly === "boolean" &&
-          typeof record.dynamic === "boolean"
-        ) {
-          records.push({
-            specifier: record.specifier,
-            typeOnly: record.typeOnly,
-            dynamic: record.dynamic,
-          });
-        }
-      }
-    } catch {
-      // Unparseable sources prove nothing.
-    }
+  if (extension === ".vue") {
+    return file.sourceImports && !file.sourceImportsUnverifiable
+      ? file.sourceImports
+      : [OPAQUE_SOURCE_IMPORT];
   }
-  importRecordCache.set(file.path, { source: file.source, records });
-  return records;
+  try {
+    return sourceAnalysis(file.path, file.source).imports;
+  } catch {
+    return [OPAQUE_SOURCE_IMPORT];
+  }
 }
 
 const RESOLVABLE_EXTENSIONS = [
@@ -520,6 +484,7 @@ export function proveSharedEntry(options: SharedEntryProofOptions): SharedEntryP
     return undefined;
   };
   const inboundSeeds: string[] = [];
+  let foreignUnverifiable = false;
   for (const file of options.packageSources) {
     if (options.owned(file.path) || extname(file.path) === ".html") continue;
     // A foreign file that itself unconditionally loads the shared entry
@@ -527,21 +492,29 @@ export function proveSharedEntry(options: SharedEntryProofOptions): SharedEntryP
     // where the root application imports the entry and the child's
     // components exposes nothing. Deeper foreign chains stay conservative.
     if (importsEntry(file, options.entry)) continue;
-    for (const record of sourceImports(file)) {
+    const records = sourceImports(file);
+    // An unreadable foreign source can deep-import any child file without
+    // contributing seeds this loop could see, so the whole exposure
+    // surface turns conservative instead of silently dropping its edges.
+    if (records.includes(OPAQUE_SOURCE_IMPORT)) {
+      foreignUnverifiable = true;
+      continue;
+    }
+    for (const record of records) {
       if (record.typeOnly) continue;
       const resolved = resolveInbound(dirname(file.path), record.specifier);
       if (resolved !== undefined) inboundSeeds.push(resolved);
     }
   }
-  const exposed = exposedFiles(
-    options.packageRoot,
-    options.packageJson,
-    ownedSources,
-    inboundSeeds,
-  );
+  const exposed = foreignUnverifiable
+    ? "all"
+    : exposedFiles(options.packageRoot, options.packageJson, ownedSources, inboundSeeds);
 
   const provenConsumer = (consumer: PreparedSourceFile): boolean =>
     options.owned(consumer.path) &&
+    // An unparseable consumer matched through filename evidence can veto a
+    // proof but never satisfies one: its real imports are unknowable.
+    !sourceImports(consumer).includes(OPAQUE_SOURCE_IMPORT) &&
     reachable.has(consumer.path) &&
     (exposed === "all" ? false : !exposed.has(consumer.path)) &&
     (scan === "literal" || !options.ignoredPaths.has(consumer.path));
@@ -588,9 +561,10 @@ export function importsStylesheet(
 ): boolean {
   return sourceImports(file).some(
     (record) =>
-      !record.typeOnly &&
-      record.specifier.startsWith(".") &&
-      resolve(dirname(file.path), record.specifier) === stylePath,
+      (record === OPAQUE_SOURCE_IMPORT && file.source.includes(basename(stylePath))) ||
+      (!record.typeOnly &&
+        record.specifier.startsWith(".") &&
+        resolve(dirname(file.path), record.specifier) === stylePath),
   );
 }
 

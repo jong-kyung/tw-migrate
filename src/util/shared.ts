@@ -1,9 +1,9 @@
 import { lstat, readFile } from "node:fs/promises";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 
-import { utf8OffsetMap } from "../parser/html.ts";
+import { errorCode, stylesheetAnalysis } from "../native.ts";
 import { MISSING_STYLE_COMPILER_MESSAGES, isPreprocessorPath } from "../parser/style-compiler.ts";
-import type { CssImport, MigrationFailure, SourceFile } from "../types.ts";
+import type { CssImport, MigrationFailure } from "../types.ts";
 
 export const SOURCE_EXTENSIONS = new Set([
   ".html",
@@ -29,11 +29,9 @@ export const IGNORED_DIRECTORIES = new Set([".git", ".next", "build", "dist", "n
 
 export const RECOVERABLE_INPUT_ERROR = "TW_MIGRATE_RECOVERABLE_INPUT:";
 
-export function errorCode(error: unknown): string | undefined {
-  return error instanceof Error && "code" in error && typeof error.code === "string"
-    ? error.code
-    : undefined;
-}
+// The single errorCode implementation lives in native.ts, below this
+// module in the import graph, so both layers share one definition.
+export { errorCode };
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -54,14 +52,6 @@ export function stylesheetSyntax(path: string): string | undefined {
 export function isStylesheetModule(path: string): boolean {
   const syntax = stylesheetSyntax(path);
   return syntax !== undefined && path.endsWith(`.module.${syntax}`);
-}
-
-export function sourceReferencesStyle(file: SourceFile, stylePath: string): boolean {
-  let importPath = normalizedRelativePath(dirname(file.path), stylePath);
-  if (!importPath.startsWith(".")) importPath = `./${importPath}`;
-  return [`'${importPath}'`, `"${importPath}"`, `\`${importPath}\``].some((literal) =>
-    file.source.includes(literal),
-  );
 }
 
 export function isProjectInput(workspaceRoot: string, path: string): boolean {
@@ -143,31 +133,35 @@ export function normalizedRelativePath(root: string, path: string): string {
   return relative(root, path).split(sep).join("/");
 }
 
-export function maskCssComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\r\n]/g, " "));
-}
-
 export function indexStylesheetDependents(
   styleSources: Map<string, string>,
 ): Map<string, string[]> {
   const dependents = new Map<string, string[]>();
-  for (const [path, rawSource] of styleSources) {
-    const source = maskCssComments(rawSource);
-    const references = [
-      ...[...source.matchAll(/composes\s*:[^;{}]*?\bfrom\s+["']([^"']+)["']/g)].map(
-        (match) => match[1],
-      ),
-      ...[...source.matchAll(/@(?:use|forward)\s+["']([^"']+)["']/g)].map((match) => match[1]),
-      ...[...source.matchAll(/@import\s+(?:\([^)]*\)\s*)?(?:([^;{}]+);|([^;{}\r\n]+))/g)].flatMap(
-        (statement) =>
-          [...(statement[1] ?? statement[2]).matchAll(/["']([^"']+)["']/g)].map(
-            (match) => match[1],
-          ),
-      ),
-      ...[...source.matchAll(/@import\s+url\(\s*([^"'()\s]+)\s*\)/g)].map((match) => match[1]),
-    ];
+  const allPossibleTargets = [...styleSources.keys()].filter(
+    (path) => isStylesheetModule(path) || isPreprocessorPath(path),
+  );
+  for (const [path, source] of styleSources) {
+    let references: string[];
+    try {
+      const analysis = stylesheetAnalysis(path, source);
+      references = analysis.references;
+      if (analysis.unverifiable) {
+        // An interpolated or otherwise unreadable reference can resolve
+        // into any workspace package, so scoping the fallback narrower
+        // than the corpus would drop real cross-package edges.
+        references = [...references, ...allPossibleTargets];
+      }
+    } catch {
+      // A stylesheet the parser rejects proves nothing about where its
+      // references point, including across package boundaries, so every
+      // candidate target in the workspace conservatively gains the edge.
+      references = allPossibleTargets;
+    }
     for (const reference of new Set(references)) {
-      for (const target of stylesheetReferenceTargets(path, reference, styleSources)) {
+      const targets = styleSources.has(reference)
+        ? [reference]
+        : stylesheetReferenceTargets(path, reference, styleSources);
+      for (const target of targets) {
         if (target === path || (!isStylesheetModule(target) && !isPreprocessorPath(target)))
           continue;
         const paths = dependents.get(target) ?? [];
@@ -209,79 +203,6 @@ export function stylesheetReferenceTargets(
   return candidates.filter((path) => styleSources.has(path));
 }
 
-export function cssImports(source: string): CssImport[] {
-  const imports: CssImport[] = [];
-  const masked = maskCssComments(source);
-  let depth = 0;
-  let quote;
-  // Browsers ignore @import once any block rule has appeared, so imports
-  // after the first top-level `{` never load and must not be traversed.
-  let importsAllowed = true;
-  for (let index = 0; index < masked.length; index += 1) {
-    const character = masked[index];
-    if (quote) {
-      if (character === "\\") index += 1;
-      else if (character === quote) quote = undefined;
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      quote = character;
-      continue;
-    }
-    if (character === "{") {
-      depth += 1;
-      importsAllowed = false;
-      continue;
-    }
-    if (character === "}") {
-      depth = Math.max(0, depth - 1);
-      continue;
-    }
-    if (
-      !importsAllowed ||
-      depth !== 0 ||
-      masked.slice(index, index + 7).toLowerCase() !== "@import" ||
-      /[-\w]/.test(masked[index + 7] ?? "")
-    )
-      continue;
-
-    let end = index + 7;
-    let importQuote;
-    let parentheses = 0;
-    for (; end < masked.length; end += 1) {
-      const next = masked[end];
-      if (importQuote) {
-        if (next === "\\") end += 1;
-        else if (next === importQuote) importQuote = undefined;
-      } else if (next === '"' || next === "'") importQuote = next;
-      else if (next === "(") parentheses += 1;
-      else if (next === ")") parentheses = Math.max(0, parentheses - 1);
-      else if (next === ";" && parentheses === 0) break;
-    }
-    if (end >= masked.length) continue;
-    const statement = masked.slice(index, end + 1);
-    const match =
-      /^@import\s+(?:url\(\s*)?(?:["']([^"']+)["']|([^"'()\s;]+))\s*\)?\s*([^;]*);$/i.exec(
-        statement,
-      );
-    if (match)
-      imports.push({
-        href: match[1] ?? match[2],
-        media: match[3].trim(),
-        start: index,
-        end: end + 1,
-      });
-    index = end;
-  }
-  // Offsets are collected as string indices and converted together, so the
-  // source prefix is scanned once rather than twice per import.
-  const offsets = utf8OffsetMap(
-    source,
-    imports.flatMap((imported) => [imported.start, imported.end]),
-  );
-  return imports.map((imported) => ({
-    ...imported,
-    start: offsets.get(imported.start) ?? imported.start,
-    end: offsets.get(imported.end) ?? imported.end,
-  }));
+export function cssImports(path: string, source: string): CssImport[] {
+  return stylesheetAnalysis(path, source).imports;
 }

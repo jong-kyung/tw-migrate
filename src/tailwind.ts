@@ -3,20 +3,22 @@ import { createRequire } from "node:module";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { collectCssDirectives } from "./native.ts";
+import { collectCssDirectives, stylesheetAnalysis } from "./native.ts";
 import { loadProjectModule } from "./parser/style-compiler.ts";
-import { isProjectInput, maskCssComments, snapshotFile } from "./util/shared.ts";
+import { isProjectInput, snapshotFile } from "./util/shared.ts";
 import type { DesignSystem, LoadedTailwind, StylesheetLoader } from "./types.ts";
 
 export function findTailwindEntries(
   stylePaths: string[],
   styleSources: Map<string, string>,
 ): string[] {
-  return stylePaths.filter((path) => {
-    if (extname(path) !== ".css") return false;
-    const source = maskCssComments(styleSources.get(path) ?? "");
-    return /@import\s+["']tailwindcss(?:\/[^"']*)?["']/.test(source);
-  });
+  return stylePaths.filter(
+    (path) =>
+      extname(path) === ".css" &&
+      importSpecifiers(styleSources.get(path) ?? "").some(
+        (specifier) => specifier === "tailwindcss" || specifier.startsWith("tailwindcss/"),
+      ),
+  );
 }
 
 export function resolveTailwindEntry(
@@ -78,8 +80,8 @@ export async function loadTailwind(
   const defaultTheme = await readFile(join(dirname(packagePath), "theme.css"), "utf8");
   const graphSources: { path: string; source: string }[] = [];
   const themeTokens = {
-    ...extractThemeTokens(defaultTheme),
-    ...(await extractThemeTokensFromGraph(css, base, loadStylesheet, graphSources)),
+    ...extractThemeTokens("tailwind-default.theme.css", defaultTheme),
+    ...(await extractThemeTokensFromGraph(tailwindCss, css, base, loadStylesheet, graphSources)),
   };
   graphSources.push({ path: tailwindCss, source: css });
   const designSystem = await loadDesignSystem(css, { base, loadModule, loadStylesheet });
@@ -88,19 +90,14 @@ export async function loadTailwind(
   return { designSystem, css, path: tailwindCss, themeTokens, graphSources, loadWith };
 }
 
-function extractThemeTokens(css: string): Record<string, string> {
-  const tokens: Record<string, string> = {};
-  for (const block of css.matchAll(/@theme[^{]*\{([^}]*)\}/gs)) {
-    for (const match of block[1].matchAll(/--([\w-]+):\s*([^;{}]+);/g))
-      tokens[match[1]] = match[2].trim();
-  }
-  return tokens;
+/// Theme keys carry the loaded stylesheet's identity so the native cache
+/// deduplicates repeated extraction instead of thrashing one shared slot.
+function extractThemeTokens(key: string, css: string): Record<string, string> {
+  return stylesheetAnalysis(key, css).themeTokens;
 }
 
 /// Import specifiers of one stylesheet through the structured directive
-/// parser, covering quoted and url() forms at the top level only; an
-/// unparseable stylesheet falls back to the quoted-import regex so a
-/// working graph keeps loading.
+/// parser, covering quoted and url() forms at the top level only.
 function importSpecifiers(css: string): string[] {
   try {
     const parsed: unknown = JSON.parse(collectCssDirectives(css));
@@ -115,12 +112,13 @@ function importSpecifiers(css: string): string[] {
       );
     }
   } catch {
-    // fall through to the regex
+    // An unparseable stylesheet proves no import graph.
   }
-  return [...css.matchAll(/@import\s+["']([^"']+)["']/g)].map((match) => match[1]);
+  return [];
 }
 
 async function extractThemeTokensFromGraph(
+  identity: string,
   css: string,
   base: string,
   loadStylesheet: StylesheetLoader,
@@ -135,11 +133,12 @@ async function extractThemeTokensFromGraph(
     const loaded = await loadStylesheet(spec, base);
     // Tailwind's own stylesheets define no custom variants worth parsing.
     if (spec !== "tailwindcss" && !spec.startsWith("tailwindcss/")) {
-      graphSources.push({ path: `${base}\0${spec}`, source: loaded.content });
+      graphSources.push({ path: key, source: loaded.content });
     }
     Object.assign(
       tokens,
       await extractThemeTokensFromGraph(
+        key,
         loaded.content,
         loaded.base,
         loadStylesheet,
@@ -148,7 +147,7 @@ async function extractThemeTokensFromGraph(
       ),
     );
   }
-  return Object.assign(tokens, extractThemeTokens(css));
+  return Object.assign(tokens, extractThemeTokens(`${identity}.theme.css`, css));
 }
 
 export function invalidCandidates(system: DesignSystem, candidates: string[]): string[] {

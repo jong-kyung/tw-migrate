@@ -5,7 +5,7 @@ import { unifiedDiff } from "./util/diff.ts";
 import { collectFiles, resolveScope, scannerIgnoredPaths } from "./discovery.ts";
 import { parseHtmlSource } from "./parser/html.ts";
 import { preparePackageHtml } from "./plan/html.ts";
-import { planBatchMigration, validateCss } from "./native.ts";
+import { planBatchMigration, stylesheetAnalysis, validateCss } from "./native.ts";
 import {
   indexStylesheetDependents,
   isIntegrityError,
@@ -15,14 +15,12 @@ import {
   isStylesheetModule,
   isStylesheetPath,
   isWithin,
-  maskCssComments,
   normalizedRelativePath,
   packageFailure,
   recordSnapshot,
   rejectSymlinkTarget,
   snapshotFile,
   snapshotLoadedSource,
-  sourceReferencesStyle,
   stylesheetSyntax,
   SOURCE_EXTENSIONS,
 } from "./util/shared.ts";
@@ -164,7 +162,15 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
         // solely as a potential stylesheet consumer, and HTML entities can
         // encode any part of a linked filename, so retain ignored HTML
         // containing a link for parse5 to classify safely.
-        const mayReferenceModule = extname(path) !== ".html" || /<link\b/i.test(source);
+        const mayReferenceModule =
+          extname(path) !== ".html" ||
+          (() => {
+            try {
+              return parseHtmlSource(path, source).links.length > 0;
+            } catch {
+              return /<link\b/i.test(source);
+            }
+          })();
         if (!scope.targetable.has(path) && !mayReferenceModule) return undefined;
         return { path, source: recordSnapshot(snapshots, path, source) };
       }),
@@ -543,7 +549,8 @@ async function preparePackage(
             !preparedHtml.generatedPaths.has(path) &&
             (!isPreprocessorPath(path) ||
               preparedHtml.stylePaths.has(path) ||
-              packageSources.some((file) => sourceReferencesStyle(file, path))),
+              preparedVue.stylePaths.has(path) ||
+              packageSources.some((file) => importsStylesheet(file, path))),
         );
   if (targets.length === 0 && preparedVue.stylesheets.length === 0) {
     return vueWarningsOnlyResult(preparedVue);
@@ -870,6 +877,7 @@ async function planPreparedGroup(
     // collisions gate.
     const baseIdentities = new Set(
       atRuleIdentities(
+        `${entry.path}.group-base.css`,
         [entry.css, ...entry.graphSources.map((graphSource) => graphSource.source)].join("\n"),
       ),
     );
@@ -883,18 +891,21 @@ async function planPreparedGroup(
       (stylesheet.vueBlocks === undefined || stylesheet.vueBlocks.length === 0);
     for (const sheet of sheets) {
       if (movable(sheet)) continue;
-      for (const identity of atRuleIdentities(
-        sheet.stylesheet.analysisSource ?? sheet.stylesheet.cssSource,
-      )) {
+      for (const identity of stylesheetAtRuleIdentities(sheet.stylesheet)) {
         baseIdentities.add(identity);
       }
     }
     const sheetIdentities = sheets.map((sheet) =>
-      movable(sheet)
-        ? new Set(atRuleIdentities(sheet.stylesheet.analysisSource ?? sheet.stylesheet.cssSource))
-        : new Set<string>(),
+      movable(sheet) ? new Set(stylesheetAtRuleIdentities(sheet.stylesheet)) : new Set<string>(),
     );
-    const movesDisabled = new Set<number>();
+    const opaqueVueRegistrations = sheets.some(
+      ({ stylesheet }) => stylesheet.vueAtRuleIdentities === null,
+    );
+    const movesDisabled = new Set<number>(
+      opaqueVueRegistrations
+        ? sheets.flatMap((sheet, index) => (movable(sheet) ? [index] : []))
+        : [],
+    );
     for (const [index, identities] of sheetIdentities.entries()) {
       for (const identity of identities) {
         if (baseIdentities.has(identity)) movesDisabled.add(index);
@@ -1155,32 +1166,29 @@ async function entryUnsafe(
 /// keyframes are renamed to unique migration names and never collide;
 /// `@font-face` has no prelude and is identified by its font-family
 /// descriptor.
-function atRuleIdentities(css: string): string[] {
-  const identities: string[] = [];
-  for (const match of maskCssComments(css).matchAll(
-    /@(color-profile|counter-style|font-feature-values|font-palette-values|page|position-try|property|view-transition)\b([^{;]*)\{|@(font-face)\b[^{]*\{([^}]*)/g,
-  )) {
-    if (match[3] !== undefined) {
-      const family = match[4].match(/font-family\s*:\s*([^;}]+)/);
-      // Family names compare case-insensitively and quoted or unquoted
-      // spellings are equivalent.
-      const normalized = family
-        ? family[1]
-            .trim()
-            .replace(/^["']|["']$/g, "")
-            .replace(/\s+/g, " ")
-            .toLowerCase()
-        : "";
-      identities.push(`font-face ${normalized}`);
-    } else if (match[1] === "page") {
-      // Page selectors such as `:left` overlap the bare rule, so every
-      // moved @page shares one conservative identity.
-      identities.push("page");
-    } else {
-      identities.push(`${match[1]} ${match[2].trim()}`);
-    }
+function atRuleIdentities(key: string, css: string): string[] {
+  return css.trim() === "" ? [] : stylesheetAnalysis(key, css).globalAtRuleIdentities;
+}
+
+/// Analysis keys carry each sheet's real identity so the native cache can
+/// serve repeated scans, including across finalization replans; a shared
+/// synthetic key would thrash the one cache slot on every distinct sheet.
+function stylesheetAtRuleIdentities(stylesheet: StylesheetEntry): string[] {
+  if (stylesheet.vueAtRuleIdentities) return stylesheet.vueAtRuleIdentities;
+  if (stylesheet.vueBlocks) {
+    return stylesheet.vueBlocks.flatMap((block, index) =>
+      atRuleIdentities(
+        `${stylesheet.cssPath}.${index}.at-rules.${block.analysisSource ? "css" : block.syntax}`,
+        block.analysisSource ?? block.content,
+      ),
+    );
   }
-  return identities;
+  return stylesheet.analysisSource === undefined
+    ? atRuleIdentities(
+        `${stylesheet.cssPath}.at-rules.${stylesheet.syntax ?? "css"}`,
+        stylesheet.cssSource,
+      )
+    : atRuleIdentities(`${stylesheet.cssPath}.at-rules.css`, stylesheet.analysisSource);
 }
 
 // The per-member planning tail: HTML link removal, planned-source

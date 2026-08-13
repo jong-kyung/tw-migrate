@@ -4,13 +4,16 @@ import { join } from "node:path";
 
 import { classInsertionOffset, offsetLookup, utf8OffsetMap } from "./html.ts";
 import { loadProjectModule } from "./style-compiler.ts";
-import { staticImportBindings, staticImports, staticStringExpression } from "../native.ts";
-import type { StaticImportBinding } from "../native.ts";
+import { expressionAnalysis, sourceAnalysis, stylesheetAnalysis } from "../native.ts";
+import type {
+  ExpressionAnalysis,
+  SourceAnalysis,
+  SourceImportRecord,
+  StaticImportBinding,
+} from "../native.ts";
 import type { MigrationWarning } from "../types.ts";
 import type { SourceMapping } from "./style-compiler.ts";
 
-const ESCAPE_SELECTOR = /(?:::v-|:)(?:deep|global|slotted)\(([^)]*)\)/g;
-const ESCAPE_RESIDUE = /(?:>>>|\/deep\/|::v-deep|:deep|::v-slotted|:slotted|::v-global|:global)/;
 const SUPPORTED_STYLE_ATTRIBUTES = new Set(["lang", "module", "scoped", "src"]);
 const SUPPORTED_STYLE_LANGUAGES = new Set<string | undefined>([
   undefined,
@@ -136,6 +139,7 @@ export interface VueStyleBlock {
   contentEnd: number;
   syntax: string;
   content: string;
+  shadowSource?: string;
   // Populated by the migration orchestrator when preprocessor block content
   // is compiled for planner analysis.
   analysisSource?: string;
@@ -206,7 +210,15 @@ export type VueAnalysis =
       rootFragment: boolean;
       scriptText: string;
       scriptStyleImports: string[];
+      scriptImports: SourceImportRecord[];
       scriptImportsUnverifiable: boolean;
+      scriptHasDynamicImport: boolean;
+      scriptVueReferences: string[];
+      scriptVueGlobPatterns: string[];
+      scriptVueGlobUnverifiable: boolean;
+      /// True when a retained unsupported block keeps style content outside
+      /// the analyzable block arrays, hiding possible global registrations.
+      hasOpaqueStyleBlocks: boolean;
       styleBlockImports: VueStyleImport[];
       componentImports: StaticImportBinding[];
       fallthroughUnverifiable: boolean;
@@ -234,7 +246,14 @@ interface TemplateState {
   dynamic: boolean;
   vHtml: boolean;
   hasSlot: boolean;
-  expressionTexts: string[];
+  moduleClosureBroken: boolean;
+  referencesUseCssModule: boolean;
+  /// Identifier names referenced from template expressions, matched after
+  /// script analysis against helper aliases the script provides.
+  expressionReferences: Set<string>;
+  /// Synthetic path for template expression parsing, carrying the SFC's
+  /// script language so TypeScript assertions parse in TypeScript SFCs.
+  expressionPath: string;
 }
 
 // Resolve the target project's own Vue 3 compiler. Vue 2 resolves but is
@@ -336,6 +355,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
   const shadowPreprocessorTexts: string[] = [];
   const unscopedShadowPreprocessorTexts: string[] = [];
   let escapeUnverifiable = false;
+  let opaqueStyleBlocks = false;
   let moduleSiblingUnsupported = false;
   for (const style of descriptor.styles) {
     const start = style.loc.start.offset;
@@ -353,6 +373,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
       );
       if (usesDefaultModuleBinding) moduleSiblingUnsupported = true;
       escapeUnverifiable = true;
+      opaqueStyleBlocks = true;
       continue;
     }
     if (style.src !== undefined) {
@@ -360,6 +381,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
         warn("unsupported-sfc-block", start, end, "A <style module src> block is not supported.");
         if (usesDefaultModuleBinding) moduleSiblingUnsupported = true;
         escapeUnverifiable = true;
+        opaqueStyleBlocks = true;
       } else {
         styleBlockImports.push({ reference: style.src, start, end });
       }
@@ -373,6 +395,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
       // the module shadow channel (type selectors stay global).
       warn("unsupported-sfc-block", start, end, "Named <style module> blocks are not supported.");
       shadowModuleCssTexts.push(style.content);
+      opaqueStyleBlocks = true;
       continue;
     }
     if (!SUPPORTED_STYLE_LANGUAGES.has(style.lang)) {
@@ -387,13 +410,24 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
         `The <style lang="${style.lang}"> language is not supported.`,
       );
       shadowPreprocessorTexts.push(style.content);
+      opaqueStyleBlocks = true;
+      try {
+        if (stylesheetAnalysis(`${path}.css`, style.content).selectorsUnverifiable) {
+          escapeUnverifiable = true;
+        }
+      } catch {
+        escapeUnverifiable = true;
+      }
       continue;
     }
+    // Vue exposes content bounds but not the outer tag bounds. Limit the
+    // lookup to the compiler-proven block boundary so it only locates bytes.
     const outerStart = source.lastIndexOf("<style", start);
     const closing = source.slice(end).match(/^<\/style\s*>/)?.[0];
     if (outerStart < 0 || !closing) {
       warn("unsupported-sfc-block", start, end, "The style block tags could not be located.");
       escapeUnverifiable = true;
+      opaqueStyleBlocks = true;
       continue;
     }
     const block: VueStyleBlock = {
@@ -416,32 +450,47 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
       unscopedBlocks.push(block);
       if (style.lang && style.lang !== "css") {
         unscopedShadowPreprocessorTexts.push(style.content);
+        try {
+          if (stylesheetAnalysis(`${path}.${style.lang}`, style.content).selectorsUnverifiable) {
+            escapeUnverifiable = true;
+          }
+        } catch {
+          escapeUnverifiable = true;
+        }
       } else {
         unscopedShadowCssTexts.push(style.content);
       }
       continue;
     }
     // Scope-escape selectors (`:deep`, `:global`, `:slotted`) reach elements
-    // outside this SFC even from a scoped block, so their inner selectors
-    // must join the cascade-shadow corpus. Nested or paren-less escape forms
-    // cannot be extracted textually and make the corpus unverifiable.
-    for (const [, inner] of style.content.matchAll(ESCAPE_SELECTOR)) {
-      shadowCssTexts.push(`${inner} {}`);
-      if (inner.includes("(")) escapeUnverifiable = true;
-    }
-    if (ESCAPE_RESIDUE.test(style.content.replace(ESCAPE_SELECTOR, " "))) {
+    // outside this SFC even from a scoped block, so parser-proven inner
+    // selectors join the cascade-shadow corpus.
+    try {
+      const escapes = stylesheetAnalysis(`${path}.${style.lang ?? "css"}`, style.content);
+      shadowCssTexts.push(...escapes.scopeEscapes);
+      if (escapes.scopeEscapes.length > 0) {
+        block.shadowSource = escapes.scopeShadowCss.join("\n") || "/* scope escapes extracted */";
+      }
+      if (escapes.scopeEscapesUnverifiable || escapes.selectorsUnverifiable) {
+        escapeUnverifiable = true;
+      }
+    } catch {
       escapeUnverifiable = true;
     }
     blocks.push(block);
   }
 
+  const scriptLang = descriptor.scriptSetup?.lang ?? descriptor.script?.lang;
   const state: TemplateState = {
     elements: [],
     components: [],
     dynamic: false,
     vHtml: false,
     hasSlot: false,
-    expressionTexts: [],
+    moduleClosureBroken: false,
+    referencesUseCssModule: false,
+    expressionReferences: new Set(),
+    expressionPath: scriptLang === "ts" || scriptLang === "tsx" ? "Component.ts" : "Component.js",
   };
   visitTemplateNode(source, template.ast, state);
   const alwaysRenderedRoots = template.ast.children.filter(
@@ -459,14 +508,17 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
   const scriptText = [descriptor.script?.content, descriptor.scriptSetup?.content]
     .filter(Boolean)
     .join("\n");
-  const fallthroughUnverifiable =
-    Boolean(descriptor.script) ||
-    descriptor.scriptSetup?.src !== undefined ||
-    /\b(?:defineOptions|defineProps|inheritAttrs)\b/.test(descriptor.scriptSetup?.content ?? "");
   // A script whose imports cannot be read (external src, unsupported
   // language, parse failure) may still load global CSS invisible to the
   // shadow corpus, so its presence alone opens that surface.
   let scriptImportsUnverifiable = false;
+  const scriptImports: SourceImportRecord[] = [];
+  let setupAnalysis: SourceAnalysis | undefined;
+  let scriptUsesCssModule = false;
+  let scriptHasDynamicImport = false;
+  const scriptVueReferences: string[] = [];
+  const scriptVueGlobPatterns: string[] = [];
+  let scriptVueGlobUnverifiable = false;
   const styleImports = [descriptor.script, descriptor.scriptSetup].flatMap((script) => {
     if (!script) return [];
     if (script.src || !SUPPORTED_SCRIPT_LANGUAGES.has(script.lang)) {
@@ -474,28 +526,28 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
       return [];
     }
     try {
-      return staticImports(`${path}.${script.lang ?? "js"}`, script.content);
+      const analysis = sourceAnalysis(`${path}.${script.lang ?? "js"}`, script.content);
+      if (script === descriptor.scriptSetup) setupAnalysis = analysis;
+      if (analysis.usesCssModule || analysis.hasUnboundUseCssModule) scriptUsesCssModule = true;
+      if (analysis.hasDynamicImport) scriptHasDynamicImport = true;
+      scriptImports.push(...analysis.imports);
+      scriptVueReferences.push(
+        ...analysis.imports.filter((record) => !record.typeOnly).map((record) => record.specifier),
+      );
+      scriptVueGlobPatterns.push(...analysis.vueGlobPatterns);
+      if (analysis.vueGlobUnverifiable) scriptVueGlobUnverifiable = true;
+      return analysis.staticImports;
     } catch {
       scriptImportsUnverifiable = true;
       return [];
     }
   });
-
-  let componentImports: StaticImportBinding[] = [];
-  if (
-    descriptor.scriptSetup &&
-    !descriptor.scriptSetup.src &&
-    SUPPORTED_SCRIPT_LANGUAGES.has(descriptor.scriptSetup.lang)
-  ) {
-    try {
-      componentImports = staticImportBindings(
-        `${path}.${descriptor.scriptSetup.lang ?? "js"}`,
-        descriptor.scriptSetup.content,
-      );
-    } catch {
-      componentImports = [];
-    }
-  }
+  const fallthroughUnverifiable =
+    Boolean(descriptor.script) ||
+    descriptor.scriptSetup?.src !== undefined ||
+    (Boolean(descriptor.scriptSetup) && !setupAnalysis) ||
+    setupAnalysis?.hasVueFallthroughMacro === true;
+  const componentImports: StaticImportBinding[] = setupAnalysis?.defaultImports ?? [];
 
   const offsets = utf8OffsetMap(source, [
     ...warnings.flatMap((warning) => [warning.start, warning.end]),
@@ -552,7 +604,17 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
       moduleSiblingUnsupported ||
       // An unreadable script could reference `$style` invisibly.
       scriptImportsUnverifiable ||
-      /\$style|useCssModule/.test([...state.expressionTexts, scriptText].join("\n")),
+      scriptUsesCssModule ||
+      state.moduleClosureBroken ||
+      // A template reference to `useCssModule` resolves to the Vue API
+      // unless the setup script provides a local binding with that name;
+      // Options API scripts never expose root constants to the template.
+      (state.referencesUseCssModule && setupAnalysis?.definesRootUseCssModule !== true) ||
+      // A template call through a script-provided helper alias, such as
+      // `import { useCssModule as css } from "vue"`, is a Vue API call.
+      (setupAnalysis?.useCssModuleLocals ?? []).some((name) =>
+        state.expressionReferences.has(name),
+      ),
     htmlElements: state.elements.map(toByteSite),
     componentSites: state.components.map(toByteSite),
     // Slot and template roots are element nodes without a template site, so
@@ -582,7 +644,13 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     // style-block `@import`s follow CSS semantics (bare = relative). They
     // must resolve differently, so they stay separate.
     scriptStyleImports: [...new Set(styleImports)],
+    scriptImports,
     scriptImportsUnverifiable,
+    scriptHasDynamicImport,
+    scriptVueReferences,
+    scriptVueGlobPatterns,
+    scriptVueGlobUnverifiable,
+    hasOpaqueStyleBlocks: opaqueStyleBlocks,
     styleBlockImports: styleBlockImports.map((entry) => ({
       ...entry,
       start: offset(entry.start),
@@ -636,26 +704,29 @@ function visitTemplateNode(source: string, node: TemplateNode, state: TemplateSt
     let moduleBinding: VueModuleBinding | undefined;
     for (const prop of node.props ?? []) {
       if (prop.type !== PROP_DIRECTIVE) continue;
+      const expression = prop.exp?.content
+        ? prop.name === "on"
+          ? templateHandler(prop.exp.content)
+          : templateExpression(state.expressionPath, prop.exp.content)
+        : undefined;
+      if (prop.exp?.content && !expression) state.moduleClosureBroken = true;
       let provenModuleExpression = false;
       if (prop.name === "bind") {
         if (!prop.arg || !prop.arg.isStatic) {
           classOpaque = true;
         } else if (prop.arg.content === "class") {
-          const member =
-            node.tagType === TAG_ELEMENT && prop.exp
-              ? /^\s*\$style\s*\.\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*$/.exec(prop.exp.content)
-              : undefined;
+          const member = node.tagType === TAG_ELEMENT ? expression?.vueModuleMember : undefined;
           if (member && !moduleBinding) {
             // A proven `$style` member yields a hashed class that literal
             // and scoped analysis never see, so it is not an opaque surface.
             moduleBinding = {
-              name: member[1],
+              name: member,
               start: attributeRemovalStart(source, node, prop),
               end: prop.loc.end.offset,
             };
             provenModuleExpression = true;
           } else {
-            const value = staticClassBinding(prop);
+            const value = expression?.staticString ?? undefined;
             if (value === undefined) classOpaque = true;
             else bindingClasses.push(...value.split(/[\t\n\f\r ]+/).filter(Boolean));
           }
@@ -667,11 +738,16 @@ function visitTemplateNode(source: string, node: TemplateNode, state: TemplateSt
       // escaping the proven form anywhere retains the module. A dynamic
       // directive argument (`v-bind:[expr]`, `v-on:[expr]`) evaluates its
       // expression at render time, so it joins the scan too.
-      if (!provenModuleExpression && prop.exp?.content) {
-        state.expressionTexts.push(prop.exp.content);
+      if (!provenModuleExpression && expression?.usesCssModule) {
+        state.moduleClosureBroken = true;
       }
+      if (expression?.referencesUseCssModule) state.referencesUseCssModule = true;
+      for (const name of expression?.references ?? []) state.expressionReferences.add(name);
       if (prop.arg && !prop.arg.isStatic && prop.arg.content) {
-        state.expressionTexts.push(prop.arg.content);
+        const argExpression = templateExpression(state.expressionPath, prop.arg.content);
+        state.moduleClosureBroken ||= argExpression?.usesCssModule ?? true;
+        state.referencesUseCssModule ||= argExpression?.referencesUseCssModule ?? false;
+        for (const name of argExpression?.references ?? []) state.expressionReferences.add(name);
       }
       // Injected markup carries no scope attribute, so scoped proofs are
       // unaffected -- but it can use any class an unscoped rule targets.
@@ -684,7 +760,10 @@ function visitTemplateNode(source: string, node: TemplateNode, state: TemplateSt
     else if (node.tagType === TAG_ELEMENT) state.elements.push(element);
   }
   if (node.type === NODE_INTERPOLATION && node.content?.content) {
-    state.expressionTexts.push(node.content.content);
+    const interpolation = templateExpression(state.expressionPath, node.content.content);
+    state.moduleClosureBroken ||= interpolation?.usesCssModule ?? true;
+    state.referencesUseCssModule ||= interpolation?.referencesUseCssModule ?? false;
+    for (const name of interpolation?.references ?? []) state.expressionReferences.add(name);
   }
   for (const child of node.children ?? []) visitTemplateNode(source, child, state);
 }
@@ -698,10 +777,29 @@ function attributeRemovalStart(source: string, node: TemplateNode, prop: Templat
   return /[\r\n]/.test(source.slice(start, attributeStart)) ? attributeStart : start;
 }
 
-function staticClassBinding(prop: TemplateProp): string | undefined {
-  if (!prop.exp) return undefined;
+function templateExpression(path: string, source: string): ExpressionAnalysis | undefined {
   try {
-    return staticStringExpression("Component.js", prop.exp.content) ?? undefined;
+    return expressionAnalysis(path, source);
+  } catch {
+    return undefined;
+  }
+}
+
+function templateHandler(source: string): ExpressionAnalysis | undefined {
+  try {
+    const analysis = sourceAnalysis(
+      "Component.handler.ts",
+      `async function handler($event) { ${source} }`,
+    );
+    return {
+      staticString: null,
+      vueModuleMember: null,
+      usesCssModule: analysis.usesCssModule,
+      // Handler sources carry no bindings of their own, so an unbound
+      // reference is a potential Vue API call the script may not shadow.
+      referencesUseCssModule: analysis.hasUnboundUseCssModule,
+      references: analysis.unboundReferences,
+    };
   } catch {
     return undefined;
   }

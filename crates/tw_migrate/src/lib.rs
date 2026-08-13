@@ -1,13 +1,15 @@
 mod animations;
 mod arbitrary;
 mod at_rules;
+mod css_directives;
 mod css_plan;
 mod html_rewrite;
 mod js_rewrite;
 mod jsx_graph;
-mod imports;
 mod media;
 mod planner;
+mod source_analysis;
+mod stylesheet_analysis;
 mod theme;
 mod utilities;
 
@@ -54,32 +56,23 @@ pub fn validate_css(source: String) -> napi::Result<()> {
 }
 
 #[napi]
-pub fn static_imports(path: String, source: String) -> napi::Result<Vec<String>> {
-    js_rewrite::static_imports(&path, &source).map_err(napi::Error::from_reason)
+pub fn expression_analysis(path: String, source: String) -> napi::Result<String> {
+    source_analysis::expression_analysis_json(&path, &source).map_err(napi::Error::from_reason)
 }
 
 #[napi]
-pub fn static_string_expression(path: String, source: String) -> napi::Result<Option<String>> {
-    js_rewrite::static_string_expression(&path, &source).map_err(napi::Error::from_reason)
+pub fn source_analysis(path: String, source: String) -> napi::Result<String> {
+    source_analysis::source_analysis_json(&path, &source).map_err(napi::Error::from_reason)
 }
 
 #[napi]
-pub fn static_import_bindings(
-    path: String,
-    source: String,
-) -> napi::Result<Vec<js_rewrite::StaticImportBinding>> {
-    js_rewrite::static_import_bindings(&path, &source).map_err(napi::Error::from_reason)
-}
-
-#[napi]
-pub fn collect_source_imports(source: String, path: String) -> napi::Result<String> {
-    imports::collect_source_imports_json(&source, &path)
-        .map_err(|error| napi::Error::from_reason(error))
+pub fn stylesheet_analysis(path: String, source: String) -> napi::Result<String> {
+    stylesheet_analysis::stylesheet_analysis_json(&path, &source).map_err(napi::Error::from_reason)
 }
 
 #[napi]
 pub fn collect_css_directives(source: String) -> napi::Result<String> {
-    imports::collect_css_directives_json(&source).map_err(|error| napi::Error::from_reason(error))
+    css_directives::collect_css_directives_json(&source).map_err(|error| napi::Error::from_reason(error))
 }
 
 #[napi]
@@ -117,50 +110,6 @@ pub fn plan_batch_migration(request: String) -> napi::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn extracts_only_static_runtime_imports() {
-        let imports = crate::js_rewrite::static_imports(
-            "Component.ts",
-            "import type { Props } from './types';\nimport { type Card } from './types.css';\nimport './card.css';\nimport styles from './card.module.css';\nimport('./lazy.css');\n",
-        )
-        .unwrap();
-        assert_eq!(imports, ["./card.css", "./card.module.css"]);
-    }
-
-    #[test]
-    fn extracts_only_direct_static_string_expressions() {
-        assert_eq!(
-            crate::js_rewrite::static_string_expression("Component.js", "'card'").unwrap(),
-            Some("card".to_string())
-        );
-        assert_eq!(
-            crate::js_rewrite::static_string_expression("Component.js", "`card`").unwrap(),
-            Some("card".to_string())
-        );
-        for expression in ["['card']", "active ? 'card' : 'other'", "`card-${size}`"] {
-            assert_eq!(
-                crate::js_rewrite::static_string_expression("Component.js", expression).unwrap(),
-                None
-            );
-        }
-    }
-
-    #[test]
-    fn extracts_default_import_bindings() {
-        let imports = crate::js_rewrite::static_import_bindings(
-            "Component.ts",
-            "import Child from './Child.vue';\nimport { Named, type Props } from './Named.vue';\n",
-        )
-        .unwrap();
-        assert_eq!(
-            imports
-                .into_iter()
-                .map(|import| (import.source, import.local))
-                .collect::<Vec<_>>(),
-            [("./Child.vue".to_string(), "Child".to_string())]
-        );
-    }
-
     #[test]
     fn decodes_source_map_mappings() {
         let decoded = super::decode_source_map_json(

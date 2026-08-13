@@ -1,7 +1,8 @@
 import { dirname, extname, join, resolve } from "node:path";
 
-import { staticImports, validateCss } from "../native.ts";
-import { compileStyleEntry, isPreprocessorPath } from "../parser/style-compiler.ts";
+import { sourceAnalysis, stylesheetAnalysis, validateCss } from "../native.ts";
+import { parseHtmlSource } from "../parser/html.ts";
+import { compileStyleEntry } from "../parser/style-compiler.ts";
 import type { StyleCompilers } from "../parser/style-compiler.ts";
 import { analyzeVueSource, loadProjectVueCompiler } from "../parser/vue.ts";
 import {
@@ -59,21 +60,15 @@ function vueReferenceTarget(
   return [target, `${target}.vue`, join(target, "index.vue")].find((path) => vuePaths.has(path));
 }
 
-function vueLiteralTargets(file: SourceFile, vuePaths: Set<string>): Set<string> {
+function vueGlobTargets(importer: string, patterns: string[], vuePaths: Set<string>): Set<string> {
   return new Set(
-    [...file.source.matchAll(/(["'`])([^"'`\r\n]+)\1/g)].flatMap((match) => {
-      // A local glob can match `.vue` files without spelling the extension
-      // (`import.meta.glob("./components/*")`), so any glob-bearing local
-      // pattern conservatively opens every caller surface.
-      if (
-        /[?*[\]{}]/.test(match[2]) &&
-        (match[2].includes("vue") || isLocalVueReference(match[2]))
-      ) {
-        return [...vuePaths];
+    patterns.flatMap((pattern) => {
+      if (/[?*[\]{}]/.test(pattern)) {
+        return pattern.includes("vue") || isLocalVueReference(pattern) ? [...vuePaths] : [];
       }
-      const target = vueReferenceTarget(file.path, match[2], vuePaths);
+      const target = vueReferenceTarget(importer, pattern, vuePaths);
       if (target) return [target];
-      return match[2].includes(".vue") ? [...vuePaths] : [];
+      return pattern.includes(".vue") ? [...vuePaths] : [];
     }),
   );
 }
@@ -143,26 +138,57 @@ function buildVueComponentGraph(
   }
 
   for (const file of sourceFiles) {
+    // HTML documents cannot import components through JavaScript syntax,
+    // and script-driven loading sits outside the proof scope, so a page
+    // never opens caller surfaces; without this skip the analysis failure
+    // on the .html extension would read as a dynamic import.
+    if (extname(file.path) === ".html") continue;
     let references: string[];
+    let vueReferences: string[];
     let blockReferences: string[] = [];
+    let hasDynamicImport = false;
+    let vueGlobPatterns: string[] = [];
+    let vueGlobUnverifiable = false;
     if (extname(file.path) === ".vue") {
       const fileAnalysis = analyses.get(file.path);
       if (fileAnalysis && !fileAnalysis.retained) {
         references = fileAnalysis.scriptStyleImports;
+        vueReferences = fileAnalysis.scriptVueReferences;
         blockReferences = fileAnalysis.styleBlockImports.map((entry) => entry.reference);
+        // An unreadable script (external src, unsupported language, parse
+        // failure) can load components invisibly, so its caller surface
+        // stays open like any dynamic loader.
+        hasDynamicImport =
+          fileAnalysis.scriptHasDynamicImport || fileAnalysis.scriptImportsUnverifiable;
+        vueGlobPatterns = fileAnalysis.scriptVueGlobPatterns;
+        vueGlobUnverifiable = fileAnalysis.scriptVueGlobUnverifiable;
       } else {
         references = [];
+        vueReferences = [];
+        // Foreign SFCs require their owning package's Vue compiler. Until
+        // their scripts are analyzed there, they cannot close caller surfaces.
+        hasDynamicImport = true;
       }
     } else {
       try {
-        references = staticImports(file.path, file.source);
+        const analysis = sourceAnalysis(file.path, file.source);
+        references = analysis.staticImports;
+        vueReferences = analysis.imports
+          .filter((record) => !record.typeOnly)
+          .map((record) => record.specifier);
+        hasDynamicImport = analysis.hasDynamicImport;
+        vueGlobPatterns = analysis.vueGlobPatterns;
+        vueGlobUnverifiable = analysis.vueGlobUnverifiable;
       } catch {
         references = [];
+        vueReferences = [];
+        hasDynamicImport = true;
       }
     }
     if (
-      /\bimport\s*\(/.test(file.source) ||
-      references.some(
+      hasDynamicImport ||
+      vueGlobUnverifiable ||
+      vueReferences.some(
         (reference) =>
           !stylesheetReference.test(reference) &&
           isLocalVueReference(reference) &&
@@ -189,7 +215,7 @@ function buildVueComponentGraph(
       unresolvedStyleImport = true;
     }
     const imported = new Set(
-      references.flatMap((reference) => {
+      vueReferences.flatMap((reference) => {
         const target = vueReferenceTarget(file.path, reference, vuePaths);
         return target ? [target] : [];
       }),
@@ -199,7 +225,7 @@ function buildVueComponentGraph(
         callerOpen.add(target);
       }
     }
-    for (const target of vueLiteralTargets(file, vuePaths)) {
+    for (const target of vueGlobTargets(file.path, vueGlobPatterns, vuePaths)) {
       if (!imported.has(target)) callerOpen.add(target);
     }
   }
@@ -269,6 +295,9 @@ export async function preparePackageVue({
     compiler: undefined,
   };
   // An explicit non-vue stylesheet selection plans only that stylesheet.
+  // Shared-entry proofs never run in this mode because styleFile rejects
+  // workspaces, so skipping Vue analysis loses nothing and avoids loading
+  // the project's Vue compiler for an unrelated migration.
   if (explicitStyle && extname(explicitStyle) !== ".vue") return none;
   // Ignore filtering scopes what gets migrated, never what gets scanned: a
   // gitignored SFC's retained style blocks still shadow scoped deletions.
@@ -374,13 +403,17 @@ export async function preparePackageVue({
   // (interpolation or `&`-concatenation in preprocessor text, inline HTML
   // style blocks, unanalyzable SFCs, unextractable escapes) marks the whole
   // corpus unverifiable and retains every closed deletion.
-  const generatesSelectors = (text: string): boolean => /#\{|@\{|&[\w-]/.test(text);
   const vueShadowCss: ShadowCssEntry[] = [];
   const vueShadowModuleCss: string[] = [];
   let vueShadowUnverifiable = vueGraph.unresolvedStyleImport;
   for (const [path, source] of styleSources) {
     if (pathOwners.get(path) !== packageRoot) continue;
-    if (isPreprocessorPath(path) && generatesSelectors(source)) {
+    try {
+      if (stylesheetAnalysis(path, source).selectorsUnverifiable) {
+        vueShadowUnverifiable = true;
+        continue;
+      }
+    } catch {
       vueShadowUnverifiable = true;
       continue;
     }
@@ -390,32 +423,28 @@ export async function preparePackageVue({
     else vueShadowCss.push({ path, source });
   }
   for (const file of sourceFiles) {
-    if (
-      extname(file.path) === ".html" &&
-      pathOwners.get(file.path) === packageRoot &&
-      /<style/i.test(file.source)
-    ) {
-      vueShadowUnverifiable = true;
+    if (extname(file.path) === ".html" && pathOwners.get(file.path) === packageRoot) {
+      try {
+        if (parseHtmlSource(file.path, file.source).hasStyle) vueShadowUnverifiable = true;
+      } catch {
+        vueShadowUnverifiable = true;
+      }
     }
   }
   for (const file of ownedVue) {
     const analysis = analysisOf(file.path);
     if (analysis.retained) {
-      if (/<style/i.test(file.source)) vueShadowUnverifiable = true;
+      if (analysis.styleRanges.length > 0) vueShadowUnverifiable = true;
       continue;
     }
     if (analysis.escapeUnverifiable || analysis.scriptImportsUnverifiable) {
       vueShadowUnverifiable = true;
     }
     for (const text of analysis.shadowPreprocessorTexts) {
-      if (generatesSelectors(text)) vueShadowUnverifiable = true;
-      else vueShadowCss.push({ path: file.path, source: text });
+      vueShadowCss.push({ path: file.path, source: text });
     }
     for (const text of analysis.unscopedShadowPreprocessorTexts) {
-      if (generatesSelectors(text)) vueShadowUnverifiable = true;
-      else {
-        vueShadowCss.push({ path: file.path, source: text, migratingUnscoped: true });
-      }
+      vueShadowCss.push({ path: file.path, source: text, migratingUnscoped: true });
     }
     vueShadowCss.push(
       ...analysis.shadowCssTexts.map((source) => ({ path: file.path, source })),
@@ -426,7 +455,7 @@ export async function preparePackageVue({
       })),
       ...analysis.blocks.map((block) => ({
         path: file.path,
-        source: block.analysisSource ?? block.content,
+        source: block.shadowSource ?? block.analysisSource ?? block.content,
         scoped: true,
       })),
     );
@@ -504,7 +533,7 @@ export async function preparePackageVue({
     for (const path of importedStyles) {
       stylePaths.add(path);
       if (extname(path) !== ".css") continue;
-      for (const imported of cssImports(styleSources.get(path) ?? "")) {
+      for (const imported of cssImports(path, styleSources.get(path) ?? "")) {
         // Conditional imports need variant-aware contexts; retaining them is
         // safer than attaching an unconditional utility.
         if (imported.media) continue;
@@ -683,6 +712,30 @@ export async function preparePackageVue({
     }
     // Module blocks were already compiled alongside the scoped blocks for
     // the shadow corpus; recompiling here would double the preprocessor work.
+    const allStyleBlocks = [
+      ...analysis.blocks,
+      ...analysis.moduleBlocks,
+      ...analysis.unscopedBlocks,
+    ];
+    let vueAtRuleIdentities: string[] | null;
+    if (analysis.hasOpaqueStyleBlocks) {
+      // A retained unsupported block can hold registrations none of the
+      // analyzable arrays see, so the whole SFC surface turns opaque.
+      vueAtRuleIdentities = null;
+    } else
+      try {
+        const registrations = allStyleBlocks.map((block) =>
+          stylesheetAnalysis(
+            `${file.path}.${block.analysisSource ? "css" : block.syntax}`,
+            block.analysisSource ?? block.content,
+          ),
+        );
+        vueAtRuleIdentities = registrations.some((entry) => entry.globalAtRulesUnverifiable)
+          ? null
+          : registrations.flatMap((entry) => entry.globalAtRuleIdentities);
+      } catch {
+        vueAtRuleIdentities = null;
+      }
     const vueBlocks = migrateUnscoped ? analysis.unscopedBlocks : analysis.blocks;
     if (vueBlocks.length === 0 && !migrateModule) continue;
     const vueRetention = migrateUnscoped ? undefined : retention;
@@ -713,6 +766,7 @@ export async function preparePackageVue({
         vueShadowCss: shadowCss,
         vueShadowModuleCss,
         vueShadowUnverifiable,
+        vueAtRuleIdentities,
       });
     }
     if (vueBlocks.length > 0) {
@@ -728,6 +782,7 @@ export async function preparePackageVue({
         vueShadowCss: vueRetention ? undefined : shadowCss,
         vueShadowModuleCss: vueRetention ? undefined : vueShadowModuleCss,
         vueShadowUnverifiable: vueRetention ? undefined : vueShadowUnverifiable,
+        vueAtRuleIdentities,
       });
     }
   }
@@ -737,19 +792,24 @@ export async function preparePackageVue({
     if (analysis.retained) continue;
     const elements = elementsByFile.get(file.path) ?? [];
     const contextPaths = [...new Set(elements.flatMap((element) => element.cssPaths))];
-    if (contextPaths.length === 0) continue;
-    await rejectSymlinkTarget(file.path, packageRoot);
+    if (contextPaths.length > 0) await rejectSymlinkTarget(file.path, packageRoot);
     files.set(file.path, {
       ...file,
-      htmlElements: elements,
-      htmlStylesheets: contextPaths.map((cssPath) => ({
-        cssPath,
-        variants: [],
-        direct: cssPath === file.path,
-        analyzable: true,
-      })),
-      htmlReferencesSafe: !analysis.dynamic,
-      htmlScriptText: analysis.scriptText,
+      ...(contextPaths.length > 0
+        ? {
+            htmlElements: elements,
+            htmlStylesheets: contextPaths.map((cssPath) => ({
+              cssPath,
+              variants: [],
+              direct: cssPath === file.path,
+              analyzable: true,
+            })),
+            htmlReferencesSafe: !analysis.dynamic,
+            htmlScriptText: analysis.scriptText,
+          }
+        : {}),
+      sourceImports: analysis.scriptImports,
+      sourceImportsUnverifiable: analysis.scriptImportsUnverifiable,
     });
   }
   return {

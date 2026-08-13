@@ -10,8 +10,8 @@ import {
   isStylesheetPath,
   isWithin,
   snapshotFile,
-  sourceReferencesStyle,
 } from "../util/shared.ts";
+import { importsStylesheet } from "./entry.ts";
 import type {
   HtmlContext,
   MigrationWarning,
@@ -246,7 +246,7 @@ async function collectHtmlStyleContexts(state: HtmlContextState): Promise<void> 
   });
   if (extname(state.path) !== ".css") return;
 
-  for (const imported of cssImports(source)) {
+  for (const imported of cssImports(state.path, source)) {
     const variants = mediaVariants(imported.media);
     if (variants === undefined) {
       state.warnings.push(
@@ -307,7 +307,7 @@ function addInferredPreprocessorContext(state: HtmlContextState): boolean {
   if (
     state.styleSources.has(state.path) &&
     state.sourceFiles.some(
-      (file) => extname(file.path) !== ".html" && sourceReferencesStyle(file, state.path),
+      (file) => extname(file.path) !== ".html" && importsStylesheet(file, state.path),
     )
   ) {
     return false;

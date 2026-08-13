@@ -2,7 +2,14 @@ import { expect, test } from "vite-plus/test";
 
 import { join, resolve, sep } from "node:path";
 
-import { proveSharedEntry, scanProof, tailwindEntryCatalog } from "../src/plan/entry.ts";
+import { sourceAnalysis } from "../src/native.ts";
+import {
+  importsStylesheet,
+  proveSharedEntry,
+  scanProof,
+  tailwindEntryCatalog,
+} from "../src/plan/entry.ts";
+import { indexStylesheetDependents } from "../src/util/shared.ts";
 import type { PreparedSourceFile } from "../src/types.ts";
 
 // Platform-resolved so separators and drive letters match what the proof
@@ -14,7 +21,7 @@ const entry = join(root, "globals.css");
 test("catalogs Tailwind entries by owning package", () => {
   const styleSources = new Map([
     [entry, '@import "tailwindcss";\n'],
-    [join(root, "plain.css"), ".a { color: red; }\n"],
+    [join(root, "plain.css"), ".a { content: '@import \"tailwindcss\"'; }\n"],
     [join(child, "own.css"), '@import "tailwindcss" prefix(tw);\n'],
   ]);
   const owners = new Map<string, string | undefined>([
@@ -29,6 +36,64 @@ test("catalogs Tailwind entries by owning package", () => {
       [child, [join(child, "own.css")]],
     ]),
   );
+});
+
+test("indexes parser-proven stylesheet dependencies", () => {
+  const module = join(root, "Button.module.css");
+  const importer = join(root, "consumer.scss");
+  const stringOnly = join(root, "string.css");
+  const dependents = indexStylesheetDependents(
+    new Map([
+      [module, ".button { padding: 1rem; }\n"],
+      [importer, '@use "./Button.module";\n'],
+      [stringOnly, ".x { content: '@import \"./Button.module.css\"'; }\n"],
+    ]),
+  );
+
+  expect(dependents.get(module)).toEqual([importer]);
+});
+
+test("keeps dependency targets conservative when a stylesheet cannot parse", () => {
+  const module = join(root, "Button.module.css");
+  const opaque = join(root, "opaque.scss");
+  const dependents = indexStylesheetDependents(
+    new Map([
+      [module, ".button { padding: 1rem; }\n"],
+      [opaque, ".broken {\n"],
+    ]),
+  );
+
+  expect(dependents.get(module)).toEqual([opaque]);
+});
+
+test("keeps filename evidence from an opaque stylesheet consumer", () => {
+  const stylePath = join(child, "theme.scss");
+  expect(
+    importsStylesheet(
+      file(join(child, "broken.ts"), "import './theme.scss';\nconst = ;\n"),
+      stylePath,
+    ),
+  ).toBe(true);
+});
+
+test("unreadable stylesheets keep cross-package dependency targets conservative", () => {
+  const goodModule = join(root, "good", "Good.module.css");
+  const brokenModule = join(root, "broken", "Broken.module.scss");
+  const interpolated = join(root, "broken", "theme.scss");
+  const dependents = indexStylesheetDependents(
+    new Map([
+      [goodModule, ".good { display: grid; }\n"],
+      [brokenModule, ".broken {\n"],
+      [interpolated, '$name: "x";\n@use "./#{$name}";\n'],
+    ]),
+  );
+
+  // A parse failure and an interpolated reference both hide targets that
+  // may cross package boundaries, so every workspace candidate gains the
+  // edge from either kind of unreadable sheet.
+  expect(dependents.get(goodModule)).toEqual([brokenModule, interpolated]);
+  expect(dependents.get(brokenModule)).toEqual([interpolated]);
+  expect(dependents.get(interpolated)).toEqual([brokenModule]);
 });
 
 test("proves scan coverage through literal scopes and automatic bases", () => {
@@ -247,14 +312,28 @@ test("wildcard positive scopes prove no literal coverage", () => {
   ).toBe(null);
 });
 
-test("a vue loader parses with its declared script language", () => {
-  const vueLoader = file(
-    join(child, "App.vue"),
-    "<script setup lang=\"tsx\">\nimport '../../globals.css';\nimport { Button } from './Button.tsx';\nconst render = () => <Button />;\n</script>\n<template><div /></template>\n",
-  );
+test("a prepared vue loader carries records parsed with its script language", () => {
+  const script =
+    "import '../../globals.css';\nimport { Button } from './Button.tsx';\nconst render = () => <Button />;\n";
+  const vueLoader = {
+    ...file(
+      join(child, "App.vue"),
+      `<script setup lang="tsx">\n${script}</script>\n<template><div /></template>\n`,
+    ),
+    sourceImports: sourceAnalysis("App.vue.tsx", script).imports,
+  };
   const proofs = prove({ packageSources: [vueLoader, consumer] });
 
   expect(proofs?.provenStyle(join(child, "Button.module.css"), [consumer])).toBe(true);
+});
+
+test("source-phase imports do not prove shared entry loading", () => {
+  const sourceLoader = file(
+    join(child, "loader.js"),
+    "import source sheet from '../../globals.css';\nvoid sheet;\n",
+  );
+
+  expect(prove({ packageSources: [sourceLoader, consumer] })).toBe(null);
 });
 
 test("emitted javascript specifiers expose their typescript sources", () => {

@@ -54,12 +54,17 @@ interface ParsedHtml {
   elements: HtmlElementAttributes[];
   dynamicAttributes: HtmlSpan[];
   scriptText: string;
+  hasStyle: boolean;
 }
 
 export function parseHtmlSource(path: string, source: string): ParsedHtml {
   const errors: { code: string }[] = [];
   const document = parse(source, {
     sourceCodeLocationInfo: true,
+    // Without scripting, `<noscript>` content parses as real elements, so
+    // stylesheet links and style tags inside it keep defeating deletion
+    // proofs the way the browser's no-JS fallback rendering would.
+    scriptingEnabled: false,
     onParseError(error) {
       if (error.code !== "missing-doctype") errors.push(error);
     },
@@ -73,12 +78,14 @@ export function parseHtmlSource(path: string, source: string): ParsedHtml {
   const elements: HtmlElementAttributes[] = [];
   const dynamicAttributes: HtmlSpan[] = [];
   const scriptTexts: string[] = [];
+  let hasStyle = false;
   // The value span of a quoted attribute starts right after its quote, so the
   // preceding character distinguishes quoted from unquoted values.
   const unquoted = (attribute: HtmlAttribute): boolean =>
     source[attribute.start - 1] !== '"' && source[attribute.start - 1] !== "'";
 
   function visit(node: HtmlNode): void {
+    if (node.tagName === "style") hasStyle = true;
     if (node.tagName === "script") {
       for (const child of node.childNodes ?? []) {
         if (child.nodeName === "#text" && child.value) scriptTexts.push(child.value);
@@ -163,6 +170,7 @@ export function parseHtmlSource(path: string, source: string): ParsedHtml {
   return {
     ...toByteOffsets(source, { links, bases, elements, dynamicAttributes }),
     scriptText: scriptTexts.join("\n"),
+    hasStyle,
   };
 }
 
@@ -193,8 +201,8 @@ export function offsetLookup(offsets: Map<number, number>): (index: number) => n
 
 function toByteOffsets(
   source: string,
-  parsed: Omit<ParsedHtml, "scriptText">,
-): Omit<ParsedHtml, "scriptText"> {
+  parsed: Omit<ParsedHtml, "scriptText" | "hasStyle">,
+): Omit<ParsedHtml, "scriptText" | "hasStyle"> {
   const offsets = utf8OffsetMap(source, [
     ...parsed.links.flatMap((link) => [link.start, link.end, link.tagStart, link.tagEnd]),
     ...parsed.bases.flatMap((base) => [base.start, base.end]),
