@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const TAILWIND_VERSION: &str = "4.3.3";
 const SASS_VERSION: &str = "1.101.3";
 const LESS_VERSION: &str = "4.7.0";
+// Less returns a null source map without this optional runtime dependency.
 const SOURCE_MAP_VERSION: &str = "0.6.1";
 const VUE_VERSION: &str = "3.5.40";
 
@@ -70,10 +71,6 @@ pub fn run_case_with(
     if case.steps.is_empty() {
         return Err(format!("fixture {case_name} has no steps"));
     }
-    if !fixture.join("package.json").is_file() {
-        return Err(format!("fixture {case_name} must contain package.json"));
-    }
-
     let workspace_parent = if case.isolated {
         suite
             .install_root
@@ -93,6 +90,11 @@ pub fn run_case_with(
         copy_tree(&fixture, &workspace)?;
         fs::remove_file(workspace.join("case.toml"))
             .map_err(|error| format!("remove copied case metadata: {error}"))?;
+        let package_json = workspace.join("package.json");
+        if !package_json.is_file() {
+            fs::write(&package_json, "{\"private\":true}\n")
+                .map_err(|error| format!("write default fixture package.json: {error}"))?;
+        }
         let context = CaseContext {
             workspace: &workspace,
             install_root: &suite.install_root,
