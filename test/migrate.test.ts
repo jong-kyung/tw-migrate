@@ -410,6 +410,36 @@ test("constrained dynamic class templates reserve canonical spellings", async ()
   assert.deepEqual(report.candidates, ["mr-[auto]"]);
 });
 
+test("constrained dynamic class concatenations reserve canonical spellings", async () => {
+  const cwd = await fixture({
+    css: ".button { margin-right: auto; }\n",
+    tsx: "import styles from './Button.module.css';\nexport const Button = ({ side }) => <button className={styles.button} data-x={'mr-' + side}>B</button>;\n",
+  });
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("documents with a base element keep group spellings arbitrary", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(
+    join(cwd, "index.html"),
+    '<base href="https://cdn.example/"><link rel="stylesheet" href="./Button.module.css"><div class="card"></div>\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("scanner-ignored sources stay reserved without workspaces mode", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await Promise.all([
+    writeFile(join(cwd, ".gitignore"), "Ignored.tsx\n"),
+    writeFile(join(cwd, "Ignored.tsx"), 'export const Note = () => <i className="mr-auto" />;\n'),
+  ]);
+  execFileSync("git", ["init", "-q"], { cwd });
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
 test("opaque page style sources keep group spellings arbitrary", async () => {
   const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
   await writeFile(

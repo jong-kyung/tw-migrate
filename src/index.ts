@@ -200,12 +200,13 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
     styleDependents: indexStylesheetDependents(styleSources),
     vueStyleRanges,
     entryCatalog: tailwindEntryCatalog(styleSources, scope.pathOwners),
-    ignoredPaths: options.workspaces
-      ? await scannerIgnoredPaths(
-          workspaceRoot,
-          sourceFiles.map((file) => file.path),
-        )
-      : new Set(),
+    // Discovery keeps Git-ignored consumers for deletion safety, but the
+    // Tailwind scanner skips them in every mode, so ignore detection must
+    // not depend on --workspaces.
+    ignoredPaths: await scannerIgnoredPaths(
+      workspaceRoot,
+      sourceFiles.map((file) => file.path),
+    ),
   };
   const failures: MigrationFailure[] = [];
   const plans: Plan[] = [];
@@ -726,10 +727,9 @@ async function planPreparedGroup(
       (graphSource) => [`${graphSource.path}.graph.css`, graphSource.source] as const,
     ),
     new Set(
-      entry.graphSources.flatMap((graphSource) => {
-        const separator = graphSource.path.indexOf("\0");
-        return separator >= 0 ? [graphSource.path.slice(separator + 1)] : [];
-      }),
+      entry.graphSources.flatMap((graphSource) =>
+        graphSource.path.includes("\0") ? [graphSource.path] : [],
+      ),
     ),
   );
   const groupFiles = new Map(
@@ -760,6 +760,10 @@ async function planPreparedGroup(
       try {
         const parsed = parseHtmlSource(file.path, file.source);
         if (parsed.hasStyle) reservations.unbounded = true;
+        // A <base> element changes what every relative link loads, so a
+        // local file matching the raw href proves nothing about the sheet
+        // the browser fetches.
+        if (parsed.bases.length > 0) reservations.unbounded = true;
         for (const link of parsed.links) {
           const href = link.href.split(/[?#]/, 1)[0];
           if (!href || /^[a-z][a-z0-9+.-]*:|^\/\//i.test(href)) {

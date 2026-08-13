@@ -10,6 +10,7 @@ use oxc_ast::ast::{
     Argument, ArrayExpressionElement, AssignmentTarget, AssignmentTargetProperty, BindingPattern,
     Expression, IdentifierReference, ImportDeclarationSpecifier, VariableDeclarator,
 };
+use oxc_syntax::operator::BinaryOperator;
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::Parser;
 use oxc_semantic::{Semantic, SemanticBuilder};
@@ -80,6 +81,36 @@ fn collect_template_prefixes(
     }
 }
 
+/// A string concatenation such as `'mr-' + side` constrains the produced
+/// class the same way a template quasi does: the trailing
+/// whitespace-delimited token of the static text before a dynamic part is
+/// a prefix the runtime value could complete.
+fn collect_concat_prefixes(
+    expression: &oxc_ast::ast::BinaryExpression<'_>,
+    prefixes: &mut Vec<String>,
+) {
+    if expression.operator != BinaryOperator::Addition {
+        return;
+    }
+    let Some(text) = trailing_static_string(&expression.left) else {
+        return;
+    };
+    let token = text.rsplit(|character: char| character.is_whitespace()).next().unwrap_or("");
+    if !token.is_empty() && !prefixes.iter().any(|existing| existing == token) {
+        prefixes.push(token.to_string());
+    }
+}
+
+fn trailing_static_string<'e>(expression: &'e Expression<'_>) -> Option<&'e str> {
+    match expression {
+        Expression::StringLiteral(literal) => Some(literal.value.as_str()),
+        Expression::BinaryExpression(binary) if binary.operator == BinaryOperator::Addition => {
+            trailing_static_string(&binary.right)
+        }
+        _ => None,
+    }
+}
+
 /// Template expressions carry no bindings of their own, so any `$style` or
 /// `useCssModule` reference is a potential CSS Module access; the caller
 /// decides whether a script-provided binding shadows the Vue API.
@@ -105,6 +136,11 @@ impl<'a> Visit<'a> for ExpressionCollector {
     fn visit_template_literal(&mut self, template: &oxc_ast::ast::TemplateLiteral<'a>) {
         collect_template_prefixes(template, &mut self.template_prefixes);
         walk::walk_template_literal(self, template);
+    }
+
+    fn visit_binary_expression(&mut self, expression: &oxc_ast::ast::BinaryExpression<'a>) {
+        collect_concat_prefixes(expression, &mut self.template_prefixes);
+        walk::walk_binary_expression(self, expression);
     }
 
     fn visit_identifier_reference(&mut self, identifier: &IdentifierReference<'a>) {
@@ -580,6 +616,11 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
         walk::walk_template_literal(self, template);
     }
 
+    fn visit_binary_expression(&mut self, expression: &oxc_ast::ast::BinaryExpression<'a>) {
+        collect_concat_prefixes(expression, &mut self.analysis.template_prefixes);
+        walk::walk_binary_expression(self, expression);
+    }
+
     fn visit_identifier_reference(&mut self, identifier: &IdentifierReference<'a>) {
         if identifier.name == "$style" && self.is_unbound(identifier) {
             self.analysis.uses_css_module = true;
@@ -913,6 +954,21 @@ mod tests {
         // Trailing tokens of pre-expression quasis constrain the dynamic
         // class; static tokens and whitespace-terminated quasis do not.
         assert_eq!(parsed["templatePrefixes"], serde_json::json!(["mr-", "p-", "pt-"]));
+    }
+
+    #[test]
+    fn collects_constrained_concat_prefixes() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.tsx",
+                "const cls = 'mr-' + side; const chained = base + 'pt-' + top; const loose = 'open ' + value; const numeric = count + 1;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        // The trailing static token before a dynamic part constrains the
+        // class; whitespace-terminated and non-string additions do not.
+        assert_eq!(parsed["templatePrefixes"], serde_json::json!(["mr-", "pt-"]));
     }
 
     #[test]

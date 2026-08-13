@@ -80,15 +80,24 @@ test("stylesheet references calibrate reservation boundedness", () => {
     spellingReservations(sources([["/app/main.css", '@import "legacy-package/theme.css";\n']]), [])
       .unbounded,
   ).toBe(true);
-  // A specifier the Tailwind loader already resolved into the extras is
-  // covered by the extras' own selector scan.
+  // An import the Tailwind loader already resolved into the extras is
+  // covered by the extras' own selector scan, but only from the importer
+  // location the loader resolved it for.
+  const resolved = new Set(["/app\0some-kit/styles.css"]);
   expect(
     spellingReservations(
       sources([["/app/globals.css", '@import "some-kit/styles.css";\n']]),
       [["/app\0some-kit/styles.css.graph.css", ".kit { color: red; }\n"]],
-      new Set(["some-kit/styles.css"]),
+      resolved,
     ),
   ).toEqual({ names: new Set(["kit"]), prefixes: new Set(), unbounded: false });
+  expect(
+    spellingReservations(
+      sources([["/app/nested/pkg/legacy.css", '@import "some-kit/styles.css";\n']]),
+      [["/app\0some-kit/styles.css.graph.css", ".kit { color: red; }\n"]],
+      resolved,
+    ).unbounded,
+  ).toBe(true);
 });
 
 test("alias acceptance rejects theme-backed and reserved spellings", async () => {

@@ -4,6 +4,8 @@
 // design-system instance because provisional entries (generated media
 // variants, proposed font tokens) change the answer.
 
+import { dirname } from "node:path";
+
 import { compiledShape, stylesheetAnalysis } from "../native.ts";
 import { stylesheetReferenceTargets } from "../util/shared.ts";
 import type { DesignSystem } from "../types.ts";
@@ -64,9 +66,11 @@ export function spellingReservations(
   /// already resolved by the Tailwind loader, so only their selectors
   /// participate; unresolved references never fire for them.
   resolvedExtras: Iterable<readonly [string, string]>,
-  /// Import specifiers the Tailwind loader already resolved into the
-  /// extras, so the entry's own package imports do not read as opaque.
-  resolvedSpecifiers: Set<string> = new Set(),
+  /// `importerDirectory\0specifier` keys the Tailwind loader already
+  /// resolved into the extras, so the entry graph's own package imports do
+  /// not read as opaque. Keys carry the importer because the same
+  /// specifier text can resolve differently from another location.
+  resolvedImports: Set<string> = new Set(),
 ): SpellingReservations {
   const names = new Set<string>();
   let unbounded = false;
@@ -81,7 +85,8 @@ export function spellingReservations(
       for (const reference of analysis.references) {
         // The Tailwind package emits utilities, never authored selectors.
         if (reference === "tailwindcss" || reference.startsWith("tailwindcss/")) continue;
-        if (resolvedSpecifiers.has(reference) || styleSources.has(reference)) continue;
+        if (resolvedImports.has(`${dirname(path)}\0${reference}`) || styleSources.has(reference))
+          continue;
         // A reference outside the snapshot loads selectors this scan
         // cannot see: a package or remote import, or a sheet discovery
         // never captured.
