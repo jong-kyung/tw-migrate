@@ -720,18 +720,31 @@ async function planPreparedGroup(
   // an opaque style source (a remote or unresolved stylesheet link, or an
   // inline style block) can contain any selector, so such a group keeps
   // its arbitrary spellings entirely.
-  const reservations = spellingReservations([
-    ...context.styleSources,
-    ...entry.graphSources.map(
+  const reservations = spellingReservations(
+    context.styleSources,
+    entry.graphSources.map(
       (graphSource) => [`${graphSource.path}.graph.css`, graphSource.source] as const,
     ),
-  ]);
+    new Set(
+      entry.graphSources.flatMap((graphSource) => {
+        const separator = graphSource.path.indexOf("\0");
+        return separator >= 0 ? [graphSource.path.slice(separator + 1)] : [];
+      }),
+    ),
+  );
   const groupFiles = new Map(
     active.flatMap((member) => member.files.map((file) => [file.path, file] as const)),
   );
   const workspaceEntries = new Set([...context.entryCatalog.values()].flat());
   for (const file of groupFiles.values()) {
     if (reservations.unbounded) break;
+    // Tailwind's automatic scanner never generated utilities for a
+    // scanner-ignored source, so a canonical name may newly style its
+    // static classes; the group keeps arbitrary spellings.
+    if (context.ignoredPaths.has(file.path)) {
+      reservations.unbounded = true;
+      break;
+    }
     const opaqueStylesheetImports = (records: { specifier: string; typeOnly: boolean }[]) => {
       for (const record of records) {
         if (record.typeOnly || !isStylesheetPath(record.specifier.split(/[?#]/, 1)[0])) continue;
@@ -792,8 +805,9 @@ async function planPreparedGroup(
     // opaque.
     if (extname(file.path) === ".vue") {
       // Prepared SFCs carry their template and script prefixes; a Vue file
-      // this run never analyzed can hold dynamic classes it cannot see.
-      if (file.templatePrefixes === undefined) {
+      // this run never analyzed, or one whose script cannot be read, can
+      // hold dynamic classes or stylesheet loads it cannot see.
+      if (file.templatePrefixes === undefined || file.sourceImportsUnverifiable === true) {
         reservations.unbounded = true;
         continue;
       }

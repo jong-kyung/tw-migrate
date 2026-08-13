@@ -340,6 +340,37 @@ test("inline HTML script prefixes reserve canonical spellings", async () => {
   assert.deepEqual(report.candidates, ["mr-[auto]"]);
 });
 
+test("unresolved stylesheet imports inside retained sheets keep spellings arbitrary", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(
+    join(cwd, "legacy.css"),
+    '@import "legacy-package/theme.css";\n.legacy { color: red; }\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("opaque Vue scripts keep group spellings arbitrary", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(
+    join(cwd, "Card.vue"),
+    '<template>\n  <div class="card">Card</div>\n</template>\n<script lang="coffee">\nload "./legacy.css"\n</script>\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("scanner-ignored sources keep group spellings arbitrary", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await Promise.all([
+    writeFile(join(cwd, ".gitignore"), "Ignored.tsx\n.tmp\n"),
+    writeFile(join(cwd, "Ignored.tsx"), 'export const Note = () => <i className="mr-auto" />;\n'),
+  ]);
+  execFileSync("git", ["init", "-q"], { cwd });
+  const report = await migrate({ cwd, workspaces: true });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
 test("authored selectors reserve canonical spellings", async () => {
   const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
   await writeFile(join(cwd, "legacy.css"), ".mr-auto { color: red; }\n");

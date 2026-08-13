@@ -5,6 +5,7 @@
 // variants, proposed font tokens) change the answer.
 
 import { compiledShape, stylesheetAnalysis } from "../native.ts";
+import { stylesheetReferenceTargets } from "../util/shared.ts";
 import type { DesignSystem } from "../types.ts";
 
 const caches = new WeakMap<DesignSystem, Map<string, string | null>>();
@@ -58,19 +59,42 @@ export interface SpellingReservations {
 /// `.mr-auto` would silently activate on a migrated element unless its
 /// spelling is reserved here.
 export function spellingReservations(
-  stylesheets: Iterable<readonly [string, string]>,
+  styleSources: Map<string, string>,
+  /// Entry-graph sheets under synthetic keys. Their import graph was
+  /// already resolved by the Tailwind loader, so only their selectors
+  /// participate; unresolved references never fire for them.
+  resolvedExtras: Iterable<readonly [string, string]>,
+  /// Import specifiers the Tailwind loader already resolved into the
+  /// extras, so the entry's own package imports do not read as opaque.
+  resolvedSpecifiers: Set<string> = new Set(),
 ): SpellingReservations {
   const names = new Set<string>();
   let unbounded = false;
-  for (const [path, source] of stylesheets) {
+  const scan = (path: string, source: string, resolveReferences: boolean) => {
     try {
       const analysis = stylesheetAnalysis(path, source);
       for (const name of analysis.classNames) names.add(name);
       if (analysis.classReservationsUnbounded) unbounded = true;
+      if (!resolveReferences) return;
+      // An interpolated reference can load a sheet this scan never sees.
+      if (analysis.unverifiable) unbounded = true;
+      for (const reference of analysis.references) {
+        // The Tailwind package emits utilities, never authored selectors.
+        if (reference === "tailwindcss" || reference.startsWith("tailwindcss/")) continue;
+        if (resolvedSpecifiers.has(reference) || styleSources.has(reference)) continue;
+        // A reference outside the snapshot loads selectors this scan
+        // cannot see: a package or remote import, or a sheet discovery
+        // never captured.
+        if (stylesheetReferenceTargets(path, reference, styleSources).length === 0) {
+          unbounded = true;
+        }
+      }
     } catch {
       unbounded = true;
     }
-  }
+  };
+  for (const [path, source] of styleSources) scan(path, source, true);
+  for (const [path, source] of resolvedExtras) scan(path, source, false);
   return { names, prefixes: new Set(), unbounded };
 }
 

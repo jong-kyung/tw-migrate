@@ -6,7 +6,11 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { acceptedCandidateAliases, canonicalCandidate } from "../src/plan/canonicalize.ts";
+import {
+  acceptedCandidateAliases,
+  canonicalCandidate,
+  spellingReservations,
+} from "../src/plan/canonicalize.ts";
 import { loadTailwind } from "../src/tailwind.ts";
 import type { DesignSystem } from "../src/types.ts";
 
@@ -53,6 +57,38 @@ test("a missing canonicalization capability preserves the original candidate", a
     candidatesToCss: (candidates) => loaded.candidatesToCss(candidates),
   };
   expect(canonicalCandidate(limited, "mr-[auto]")).toBe(null);
+});
+
+test("stylesheet references calibrate reservation boundedness", () => {
+  const sources = (entries: [string, string][]) => new Map(entries);
+  // A relative import resolving into the snapshot stays bounded.
+  expect(
+    spellingReservations(
+      sources([
+        ["/app/main.css", '@import "./theme.css";\n.card { color: red; }\n'],
+        ["/app/theme.css", ".hero { color: blue; }\n"],
+      ]),
+      [],
+    ),
+  ).toEqual({ names: new Set(["card", "hero"]), prefixes: new Set(), unbounded: false });
+  // The Tailwind package emits utilities, never authored selectors.
+  expect(
+    spellingReservations(sources([["/app/globals.css", '@import "tailwindcss";\n']]), []).unbounded,
+  ).toBe(false);
+  // A package or otherwise unresolved import loads unseen selectors.
+  expect(
+    spellingReservations(sources([["/app/main.css", '@import "legacy-package/theme.css";\n']]), [])
+      .unbounded,
+  ).toBe(true);
+  // A specifier the Tailwind loader already resolved into the extras is
+  // covered by the extras' own selector scan.
+  expect(
+    spellingReservations(
+      sources([["/app/globals.css", '@import "some-kit/styles.css";\n']]),
+      [["/app\0some-kit/styles.css.graph.css", ".kit { color: red; }\n"]],
+      new Set(["some-kit/styles.css"]),
+    ),
+  ).toEqual({ names: new Set(["kit"]), prefixes: new Set(), unbounded: false });
 });
 
 test("alias acceptance rejects theme-backed and reserved spellings", async () => {
