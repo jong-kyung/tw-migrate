@@ -1113,26 +1113,43 @@ fn prefix_rule_candidates(rules: &mut [RulePlan], prefix: &str) {
 }
 
 /// Rewrite planner candidates through the caller-accepted canonical alias
-/// map. Aliases name complete candidates, so they apply after prefixing.
+/// map, keyed by the same rule-level spellings candidateProbes emits.
 /// Source-property metadata transfers with the spelling and merges when
 /// aliases deduplicate candidates, keeping conflict detection authoritative
-/// without inferring properties from the canonical name.
-fn apply_candidate_aliases(rules: &mut [RulePlan], aliases: &HashMap<String, String>) {
+/// without inferring properties from the canonical name. A candidate that
+/// references a migrated keyframe keeps its spelling: keyframe movement
+/// selects definitions by scanning final candidates for the migrated name,
+/// so renaming the spelling would strand the moved definition.
+fn apply_candidate_aliases(
+    rules: &mut [RulePlan],
+    aliases: &HashMap<String, String>,
+    keyframes: &[crate::animations::KeyframePlan],
+) {
     if aliases.is_empty() {
         return;
     }
+    let references_keyframe = |candidate: &str| {
+        keyframes
+            .iter()
+            .any(|keyframe| candidate.contains(&keyframe.migrated_name))
+    };
     for rule in rules {
+        let resolve = |candidate: String| {
+            if references_keyframe(&candidate) {
+                return candidate;
+            }
+            aliases.get(&candidate).cloned().unwrap_or(candidate)
+        };
         let mut seen = HashSet::new();
         rule.candidates = rule
             .candidates
             .drain(..)
-            .map(|candidate| aliases.get(&candidate).cloned().unwrap_or(candidate))
+            .map(resolve)
             .filter(|candidate| seen.insert(candidate.clone()))
             .collect();
         let mut properties: HashMap<String, BTreeSet<String>> = HashMap::new();
         for (candidate, set) in std::mem::take(&mut rule.candidate_properties) {
-            let candidate = aliases.get(&candidate).cloned().unwrap_or(candidate);
-            properties.entry(candidate).or_default().extend(set);
+            properties.entry(resolve(candidate)).or_default().extend(set);
         }
         rule.candidate_properties = properties;
     }
@@ -1711,7 +1728,7 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
     {
         prefix_rule_candidates(&mut parsed.rules, prefix);
     }
-    apply_candidate_aliases(&mut parsed.rules, &request.candidate_aliases);
+    apply_candidate_aliases(&mut parsed.rules, &request.candidate_aliases, &parsed.keyframes);
     Ok((is_module, parsed, vue_masked))
 }
 
@@ -4024,6 +4041,70 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|warning| warning["code"] == "module-utilities-conflict")
+        );
+    }
+
+    #[test]
+    fn identical_member_candidates_do_not_conflict() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".a { padding: 8px; }\n.b { padding: 8px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={`${styles.a} ${styles.b}`} />;\n"
+            }]
+        });
+
+        let response = plan(request);
+
+        // Both members share one spelling, so one emitted class serves the
+        // site without a conflict.
+        assert_eq!(response["convertedRules"], 2, "{response}");
+        assert!(
+            !response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| warning["code"] == "module-utilities-conflict")
+        );
+    }
+
+    #[test]
+    fn keyframe_referencing_candidates_keep_their_spelling_under_aliases() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": "@keyframes fade { from { opacity: 0; } to { opacity: 1; } }\n.spin { animation: fade 1s; }\n.bad:hover span { color: blue; }\n",
+            "tailwindPath": "/project/globals.css",
+            "tailwindSource": "@import \"tailwindcss\";\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.spin} />;\n"
+            }]
+        });
+
+        let baseline = plan(request.clone());
+        let animation_candidate = baseline["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|candidate| candidate.as_str().unwrap().to_string())
+            .find(|candidate| candidate.starts_with("[animation:"))
+            .unwrap_or_else(|| panic!("animation candidate in {baseline}"));
+
+        let mut aliased = request;
+        aliased["candidateAliases"] =
+            serde_json::json!({ animation_candidate.clone(): "animate-spin" });
+        let response = plan(aliased);
+
+        // The alias would strip the migrated keyframe name that keyframe
+        // movement scans for, so the candidate keeps its spelling.
+        assert!(
+            response["candidates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|candidate| candidate == &serde_json::json!(animation_candidate)),
+            "{response}"
         );
     }
 

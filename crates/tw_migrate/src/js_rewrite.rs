@@ -596,6 +596,11 @@ impl UsageCollector<'_> {
     }
 
     fn candidates_conflict(&self, left: &str, right: &str) -> bool {
+        // Identical spellings emit one effective class, matching the
+        // heuristic's equality exit.
+        if left == right {
+            return false;
+        }
         if let (Some(left_properties), Some(right_properties)) = (
             self.candidate_properties.get(left),
             self.candidate_properties.get(right),
