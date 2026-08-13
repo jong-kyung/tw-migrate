@@ -91,7 +91,7 @@ TypeScript first builds a provisional design system that contains every generate
 
 TypeScript calls `canonicalizeCandidates([candidate])` once per distinct probe against that provisional design system. Calling the method separately preserves a direct input-to-output mapping because the method may deduplicate a batch.
 
-The orchestration layer accepts an alias only when Tailwind returns exactly one different candidate and the compiled candidate is runtime-stable. It keeps the original candidate when Tailwind returns zero results, more than one result, or the unchanged input. Existing candidate compilation validation remains authoritative after replanning.
+The orchestration layer accepts an alias only when Tailwind returns exactly one different candidate, the compiled candidate is runtime-stable, and its complete normalized declaration set equals the original candidate's set. The comparison ignores selectors and formatting, resolves static theme variables, and requires identical properties, normalized values, and importance. This applies to every alias because a named utility may add companion declarations such as `line-height`. TypeScript keeps the original candidate when Tailwind returns zero results, more than one result, the unchanged input, or a declaration-set difference. Existing candidate compilation validation remains authoritative after replanning.
 
 A direct literal declaration is runtime-stable. A declaration backed by a theme custom property is runtime-stable only when the property resolves to the original value and the complete source snapshot contains no possible authored override outside Tailwind theme definitions. The reservation scan covers parsed stylesheet and inline-style declarations, planned arbitrary custom-property utilities, and source references that may write the property dynamically. An unparseable or dynamic write mentioning the property is an override reservation. An opaque dynamic write whose property name cannot be bounded reserves every theme-backed alias in that entry group.
 
@@ -128,7 +128,7 @@ TypeScript loads the entry augmented with both generated media definitions and p
 
 Unquoted CSS generic family keywords do not create tokens. The initial list follows the CSS Fonts specification and includes `serif`, `sans-serif`, `monospace`, `cursive`, `fantasy`, `system-ui`, `ui-serif`, `ui-sans-serif`, `ui-monospace`, `ui-rounded`, `math`, `fangsong`, and `emoji`. A quoted spelling such as `"serif"` is a family name rather than the `serif` generic keyword and remains eligible for registration. Named fonts such as Arial also remain explicit families because operating-system availability cannot be determined statically.
 
-The CSS-wide keywords `initial`, `inherit`, `unset`, `revert`, and `revert-layer` never create font tokens. Tailwind may canonicalize their arbitrary property spelling, but the resulting utility must preserve the keyword directly instead of routing it through `var(--font-*)`.
+The CSS-wide keywords `initial`, `inherit`, `unset`, `revert`, and `revert-layer` never create font tokens. Tailwind may canonicalize `initial`, `inherit`, `unset`, and `revert` only when the resulting utility preserves the keyword directly instead of routing it through `var(--font-*)`. A rule containing `revert-layer` stays retained unless the planner proves that the authored declaration and generated utility have the same cascade-layer context. The initial implementation makes no such proof and retains every `revert-layer` rule.
 
 A value based on `var()`, `env()`, interpolation, or another runtime-dependent construct keeps its arbitrary candidate or remains retained under existing safety rules.
 
@@ -170,17 +170,17 @@ The full variable is `--font-{name}`, and the emitted utility is `font-{name}`.
 Token allocation is deterministic across a package-entry group:
 
 1. Reuse the lexicographically first existing `font-*` candidate only when Tailwind canonicalizes to it, its complete normalized declaration set matches the arbitrary candidate, and its backing custom properties have no authored override reservation.
-2. Reserve names whose complete prefixed candidate spelling already appears in the entry's effective Tailwind scan corpus, including discovered source files, entry-graph sources, and inline `@source` candidates. This prevents a new token from activating an inert semantic or custom-CSS class at unrelated sites.
-3. Reserve names whose `--font-{name}` property appears in an ordinary declaration, a planned arbitrary custom-property utility, or a possible dynamic property write anywhere in the complete source snapshot.
+2. Parse every candidate in the entry's effective Tailwind scan corpus, including discovered source files, entry-graph sources, and inline `@source` candidates. Strip variants, modifiers, and importance, then reserve the name when the underlying utility is `font-{name}`. This prevents a new token from activating an inert spelling such as `tw:hover:font-open-sans` at an unrelated site. A candidate that cannot be parsed is checked conservatively as raw source rather than treated as available.
+3. Reserve names whose `--font-{name}` property is declared, read, or possibly written anywhere in the complete CSS, inline-style, and JavaScript source snapshot. This includes `var(--font-{name})`, planned arbitrary custom-property utilities, and dynamic property APIs. A reference whose property name cannot be bounded reserves every generated font token in the entry group.
 4. Consider the base generated name only when no reservation owns it and its prefixed `font-{name}` candidate does not already compile in the pre-font provisional design system.
 5. If a reservation, token, or existing Tailwind utility owns the base spelling, try `-2`, `-3`, and later numeric suffixes with the same collision checks.
 6. Try at most 100 spellings, including the base name. Exhaustion emits `font-theme-registration-failed` and retains the owning rules.
 7. After provisional registration, require Tailwind to canonicalize the arbitrary font candidate to the allocated candidate exactly, require declaration-set equivalence, and verify that no reserved custom property backs the candidate. Semantic rejection terminates allocation immediately because another suffix cannot change the candidate's behavior.
 8. Reuse the assigned name for repeated occurrences of the same normalized stack.
 
-The utility collision check prevents a generated token from changing an existing candidate's meaning. For example, the default design system already owns `font-bold` as a font-weight utility, so a family named `Bold` starts at `font-bold-2` instead of registering `--font-bold` and replacing the meaning of existing `font-bold` sites. The source reservations likewise prevent `font-open-sans` from being activated when that class or `--font-open-sans` already has an unrelated project meaning.
+The utility collision check prevents a generated token from changing an existing candidate's meaning. For example, the default design system already owns `font-bold` as a font-weight utility, so a family named `Bold` starts at `font-bold-2` instead of registering `--font-bold` and replacing the meaning of existing `font-bold` sites. The source reservations likewise prevent `font-open-sans`, a variant-wrapped occurrence, or `var(--font-open-sans, serif)` from changing behavior when the token is introduced.
 
-The comparison preserves the authored family order and fallback list. `"Open Sans", sans-serif` and `"Open Sans", Arial, sans-serif` require different tokens. Declaration-set comparison ignores selectors and formatting, resolves generated static `--font-*` references, and requires the same properties, normalized values, and importance. It rejects every additional effective declaration.
+The comparison preserves the authored family order and fallback list. `"Open Sans", sans-serif` and `"Open Sans", Arial, sans-serif` require different tokens. The general alias comparison already rejects every additional effective declaration; font allocation applies the same check again after provisional registration.
 
 ## Unwritable Entries
 
@@ -213,15 +213,15 @@ TypeScript reloads the complete augmented entry in memory before accepting any e
 2. Tailwind's own `canonicalizeCandidates()` selects the spelling. `tw-migrate` does not maintain a parallel built-in utility table for this step.
 3. Complete candidates that use generated media variants must be canonicalized against a design system containing those provisional definitions.
 4. Every final candidate must pass `candidatesToCss()` against the final augmented design system.
-5. Existing and generated font aliases must have the same complete normalized declaration set as their arbitrary candidate. Companion declarations are differences, not harmless additions.
+5. Every alias must have the same complete normalized declaration set as its original candidate. Companion declarations are differences, not harmless additions.
 6. A theme-backed alias must retain its arbitrary form when an authored or possible dynamic override can change any custom property it dereferences.
-7. A generated font token must compile to the exact normalized family stack before its alias is used, and it must not replace the meaning of a candidate, class spelling, or custom property already present in the source snapshot or pre-font design system.
+7. A generated font token must compile to the exact normalized family stack before its alias is used, and it must not replace the meaning of an underlying utility spelling or custom-property declaration, read, or write already present in the source snapshot or pre-font design system.
 8. Canonical spelling and source-property metadata must remain paired inside the native planner so conflict detection does not infer an alias's property from an ambiguous class prefix.
 9. Candidate aliases must be applied during planning, before source edits are rendered.
 10. Replanning must start from the immutable snapshot.
 11. An unused generated token must not remain in the Tailwind entry.
 12. Font token allocation must terminate after a bounded number of ownership collisions or the first semantic rejection.
-13. CSS-wide font-family keywords must remain direct values rather than generated token values.
+13. CSS-wide font-family keywords must not become generated token values, and `revert-layer` rules must remain retained without a same-layer proof.
 14. A second migration run must produce no diff.
 15. Dry-run must perform the same planning and validation without writing.
 16. A missing canonicalization capability may preserve the original valid arbitrary candidate, but it must not guess a named candidate.
@@ -295,6 +295,7 @@ The implementation should add a benchmark fixture with repeated declarations to 
 - canonicalize a spacing value such as `p-[1rem]` to the target theme's named utility when `--spacing` has no authored override;
 - preserve `p-[1rem]` when an authored or possible dynamic `--spacing` override exists;
 - preserve `p-[13px]` when no named utility exists;
+- reject any canonical alias, such as a text-size utility, whose compiled declaration set adds a companion property;
 - preserve prefixes, variants, arbitrary variants, and important modifiers;
 - canonicalize a candidate that uses a generated media variant against its provisional definition;
 - keep the original candidate when canonicalization returns no single changed result;
@@ -326,10 +327,11 @@ The implementation should add a benchmark fixture with repeated declarations to 
 - deduplicate the same stack across stylesheets sharing one entry;
 - allocate distinct names for distinct stacks with the same first family;
 - skip token generation for unquoted generic-only, CSS-wide, and runtime-dependent values;
-- preserve `initial`, `inherit`, `unset`, `revert`, and `revert-layer` as direct arbitrary font values;
+- preserve `initial`, `inherit`, `unset`, and `revert` as direct arbitrary font values;
+- retain every `revert-layer` rule while no same-layer equivalence proof exists;
 - register a quoted family name such as `"serif"` even though its spelling matches a generic keyword;
-- suffix a font token when its candidate spelling already appears inertly in the effective scan corpus;
-- suffix a font token when its custom property name appears in an ordinary declaration, planned arbitrary property, or possible dynamic write;
+- suffix a font token when its underlying utility appears inertly in the effective scan corpus with variants, modifiers, importance, or a Tailwind prefix;
+- suffix a font token when its custom property name appears in an ordinary declaration, planned arbitrary property, CSS or JavaScript read, or possible dynamic write;
 - retain the rule when the entry is unwritable;
 - prune a generated token when selector or source safety retains every owning rule;
 - convert a quoted font family at a double-quoted HTML site after the named alias removes the quote;
@@ -343,8 +345,8 @@ Update the quoted-value fixtures that currently assert `[font-family:...]`. Add 
 
 1. Add candidate probes and alias application to the native planner with focused Rust tests.
 2. Extend the Tailwind bridge type and add per-candidate canonicalization with Node tests.
-3. Add runtime custom-property reservations and the bounded canonicalization replan to package-entry group planning.
-4. Add structured font probes, scan-corpus reservations, token allocation, and provisional entry augmentation.
+3. Add complete declaration-set comparison, runtime custom-property reservations, and the bounded canonicalization replan to package-entry group planning.
+4. Add structured font probes, parsed underlying-utility and custom-property-reference reservations, token allocation, and provisional entry augmentation.
 5. Add unwritable-entry retention and font diagnostics.
 6. Update public API tests and packaged CLI snapshots.
 7. Run focused Rust and Node suites, then `vp check`, `vp run test`, and `vp run test:snapshots`.
@@ -353,11 +355,11 @@ Update the quoted-value fixtures that currently assert `[font-family:...]`. Add 
 
 1. `margin-right: auto` emits `mr-auto` when the target Tailwind installation canonicalizes it.
 2. `max-width: 100%` emits `max-w-full`.
-3. Exact theme values use the target project's named utility only when authored custom-property overrides cannot change its runtime value.
-4. Values without a runtime-stable named utility keep an exact arbitrary utility.
+3. Exact theme values use the target project's named utility only when authored custom-property overrides cannot change its runtime value and the complete compiled declaration sets match.
+4. Values without a runtime-stable, declaration-equivalent named utility keep an exact arbitrary utility.
 5. An explicit custom font stack emits a generated `font-*` utility only when Tailwind canonicalizes the original arbitrary candidate to that utility and compiles it.
 6. Existing font tokens are reused only when their complete compiled declarations are equivalent and their backing properties cannot be overridden by authored CSS.
-7. Existing utility spellings, inert scanned classes, and ordinary custom properties remain unchanged while naming collisions resolve deterministically within a bounded search.
+7. Existing underlying utility spellings and custom-property declarations, reads, and writes remain unchanged while naming collisions resolve deterministically within a bounded search.
 8. Canonical font-family aliases retain their source-property identity through every conflict check without TypeScript reconstructing that metadata.
 9. Canonicalization sees generated media variants and does not retain arbitrary inner values solely because their definitions are provisional.
 10. Quoted family names remain distinct from unquoted generic and CSS-wide keywords.
