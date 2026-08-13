@@ -116,7 +116,7 @@ function external(overrides: Fixture = {}): Fixture {
 }
 
 function manifest(...projects: unknown[]) {
-  return { projects };
+  return { matrixProbes: controlled().probes, projects };
 }
 
 async function tempRoot(t: {
@@ -136,6 +136,19 @@ async function readEcosystemWorkflow() {
     await readFile(new URL("../.github/workflows/ecosystem.yml", import.meta.url), "utf8")
   ).replaceAll("\r\n", "\n");
 }
+
+test("expands the shared matrix probes before returning the manifest", () => {
+  const project = controlled();
+  const probes = project.probes;
+  delete project.probes;
+
+  assert.deepEqual(validateManifest({ matrixProbes: probes, projects: [project] }).projects[0], {
+    ...project,
+    probes,
+  });
+  assert.throws(() => validateManifest({ matrixProbes: {}, projects: [project] }));
+  assert.doesNotThrow(() => validateManifest({ projects: [controlled()] }));
+});
 
 test("admits the complete controlled runtime and stylesheet matrix", async () => {
   const loaded = await loadManifest();

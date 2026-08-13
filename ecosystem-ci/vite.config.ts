@@ -17,7 +17,6 @@ export default defineConfig({
         name: project.id,
         include: ["ecosystem-ci/tests/ecosystem.browser.ts"],
         testTimeout: outerTimeoutMs(project),
-        hookTimeout: outerTimeoutMs(project),
         provide: { ecosystemProject: project },
         browser: {
           enabled: true,
