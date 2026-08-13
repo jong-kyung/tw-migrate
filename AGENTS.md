@@ -146,16 +146,16 @@ Write is the default. Use `--dry-run` while iterating unless a task explicitly r
 
 Choose checks by change type:
 
-| Change type                       | Useful validation                                                     |
-| --------------------------------- | --------------------------------------------------------------------- |
-| Docs or agent guidance            | `git diff --check -- <files>` and verify referenced paths/commands    |
-| Rust planner behavior             | `cargo test` or a focused `cargo test <filter>`                       |
-| JavaScript API/orchestration      | `vp run build:debug` followed by `node --test` or a focused Node test |
-| CLI output or filesystem behavior | `vp run test:snapshots` or a focused packaged snapshot case           |
-| Packaging/native loading          | `vp run build && vp run artifacts`                                    |
-| Full local validation             | `vp check && vp run test && vp run test:snapshots`                    |
+| Change type                       | Useful validation                                                  |
+| --------------------------------- | ------------------------------------------------------------------ |
+| Docs or agent guidance            | `git diff --check -- <files>` and verify referenced paths/commands |
+| Rust planner behavior             | `cargo test` or a focused `cargo test <filter>`                    |
+| JavaScript API/orchestration      | `vp run build:debug` followed by `vp test` or `vp test <file>`     |
+| CLI output or filesystem behavior | `vp run test:snapshots` or a focused packaged snapshot case        |
+| Packaging/native loading          | `vp run build && vp run artifacts`                                 |
+| Full local validation             | `vp check && vp run test && vp run test:snapshots`                 |
 
-`vp run test` runs the default Rust package, builds the debug addon, and runs the retained Node tests. `vp check` covers formatting, linting, and type checking.
+`vp run test` runs the default Rust package, builds the debug addon, and runs the Vite+ tests. `vp check` covers formatting, linting, and type checking.
 
 ## Packaged CLI Snapshots
 
@@ -214,7 +214,7 @@ The workspace `default-members` excludes `crates/snapshots`, so plain `cargo tes
 
 ## Common Pitfalls
 
-- Running `node --test` before building the debug addon.
+- Running `vp test` before building the debug addon.
 - Passing `--help` through `vp node <script>`; `vp` consumes it and prints its own help. Other arguments pass through, so run `node <script> --help` when you want the script's usage.
 - Treating compiled preprocessor offsets as authored-file offsets without source-map validation.
 - Adding broad output normalization that hides product-visible differences such as escaped Tailwind candidates.
