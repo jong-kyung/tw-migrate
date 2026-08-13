@@ -4,7 +4,7 @@ import { __unstable__loadDesignSystem as loadDesignSystem } from "tailwindcss";
 
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import {
   acceptedCandidateAliases,
@@ -60,41 +60,51 @@ test("a missing canonicalization capability preserves the original candidate", a
 });
 
 test("stylesheet references calibrate reservation boundedness", () => {
+  // Platform-native absolute paths, because reference resolution runs
+  // through node:path and drive-letter normalization on Windows would
+  // never match a hard-coded POSIX key.
+  const app = resolve("/app");
   const sources = (entries: [string, string][]) => new Map(entries);
   // A relative import resolving into the snapshot stays bounded.
   expect(
     spellingReservations(
       sources([
-        ["/app/main.css", '@import "./theme.css";\n.card { color: red; }\n'],
-        ["/app/theme.css", ".hero { color: blue; }\n"],
+        [join(app, "main.css"), '@import "./theme.css";\n.card { color: red; }\n'],
+        [join(app, "theme.css"), ".hero { color: blue; }\n"],
       ]),
       [],
     ),
   ).toEqual({ names: new Set(["card", "hero"]), prefixes: new Set(), unbounded: false });
   // The Tailwind package emits utilities, never authored selectors.
   expect(
-    spellingReservations(sources([["/app/globals.css", '@import "tailwindcss";\n']]), []).unbounded,
+    spellingReservations(sources([[join(app, "globals.css"), '@import "tailwindcss";\n']]), [])
+      .unbounded,
   ).toBe(false);
   // A package or otherwise unresolved import loads unseen selectors.
   expect(
-    spellingReservations(sources([["/app/main.css", '@import "legacy-package/theme.css";\n']]), [])
-      .unbounded,
+    spellingReservations(
+      sources([[join(app, "main.css"), '@import "legacy-package/theme.css";\n']]),
+      [],
+    ).unbounded,
   ).toBe(true);
   // An import the Tailwind loader already resolved into the extras is
   // covered by the extras' own selector scan, but only from the importer
   // location the loader resolved it for.
-  const resolved = new Set(["/app\0some-kit/styles.css"]);
+  const resolved = new Set([`${app}\0some-kit/styles.css`]);
+  const extras: [string, string][] = [
+    [`${app}\0some-kit/styles.css.graph.css`, ".kit { color: red; }\n"],
+  ];
   expect(
     spellingReservations(
-      sources([["/app/globals.css", '@import "some-kit/styles.css";\n']]),
-      [["/app\0some-kit/styles.css.graph.css", ".kit { color: red; }\n"]],
+      sources([[join(app, "globals.css"), '@import "some-kit/styles.css";\n']]),
+      extras,
       resolved,
     ),
   ).toEqual({ names: new Set(["kit"]), prefixes: new Set(), unbounded: false });
   expect(
     spellingReservations(
-      sources([["/app/nested/pkg/legacy.css", '@import "some-kit/styles.css";\n']]),
-      [["/app\0some-kit/styles.css.graph.css", ".kit { color: red; }\n"]],
+      sources([[join(app, "nested", "pkg", "legacy.css"), '@import "some-kit/styles.css";\n']]),
+      extras,
       resolved,
     ).unbounded,
   ).toBe(true);

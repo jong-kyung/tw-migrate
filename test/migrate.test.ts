@@ -14,13 +14,18 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
-import { onTestFinished, test } from "vite-plus/test";
+import { onTestFinished, test, vi } from "vite-plus/test";
 
 import { __unstable__loadDesignSystem as loadDesignSystem } from "tailwindcss";
 
 import { migrate } from "../src/index.ts";
 import { compileSassEntry, loadProjectSass, sourceMappings } from "../src/parser/style-compiler.ts";
 import { writeChanges } from "../src/util/write.ts";
+
+// Full migrations replan with candidate canonicalization, whose first
+// design-system lookup builds Tailwind's utility index; slower CI runners
+// exceed the 5s default by a wide margin.
+vi.setConfig({ testTimeout: 60000 });
 
 const initialCss = ".button { padding: 13px; }\n";
 const initialTsx =
@@ -87,13 +92,8 @@ test("returns structured migration report fields", async () => {
   ]);
 });
 
-// Six full migrations share one budget, and each pays the design system's
-// one-time canonicalization warm-up.
-test(
-  "reports warning line and column while converting independent rules",
-  { timeout: 20000 },
-  async () => {
-    const template = `import styles from './Button.module.css';
+test("reports warning line and column while converting independent rules", async () => {
+  const template = `import styles from './Button.module.css';
 export const Button = ({ active }) => (
   <>
     <button aria-label="저장 😀" className={
@@ -104,30 +104,26 @@ export const Button = ({ active }) => (
 );
 `;
 
-    for (const [lineEnding, expected] of [
-      ["\r\n", [4, 42, 6, 6]],
-      ["\r", [4, 42, 6, 6]],
-      ["\u2028", [4, 42, 6, 6]],
-      ["\u2029", [4, 42, 6, 6]],
-      ["\r\u2028", [7, 42, 11, 6]],
-      ["\r\u2029", [7, 42, 11, 6]],
-    ] as const) {
-      const cwd = await fixture({
-        css: ".blocked { color: red; }\n.button { padding: 13px; }\n",
-        tsx: template.replaceAll("\n", lineEnding),
-      });
-      const report = await migrate({ cwd });
-      const warning = report.warnings.find((entry) => entry.code === "dynamic-class-name")!;
+  for (const [lineEnding, expected] of [
+    ["\r\n", [4, 42, 6, 6]],
+    ["\r", [4, 42, 6, 6]],
+    ["\u2028", [4, 42, 6, 6]],
+    ["\u2029", [4, 42, 6, 6]],
+    ["\r\u2028", [7, 42, 11, 6]],
+    ["\r\u2029", [7, 42, 11, 6]],
+  ] as const) {
+    const cwd = await fixture({
+      css: ".blocked { color: red; }\n.button { padding: 13px; }\n",
+      tsx: template.replaceAll("\n", lineEnding),
+    });
+    const report = await migrate({ cwd });
+    const warning = report.warnings.find((entry) => entry.code === "dynamic-class-name")!;
 
-      assert.equal(report.convertedRules, 1);
-      assert.equal(report.retainedRules, 1);
-      assert.deepEqual(
-        [warning.line, warning.column, warning.endLine, warning.endColumn],
-        expected,
-      );
-    }
-  },
-);
+    assert.equal(report.convertedRules, 1);
+    assert.equal(report.retainedRules, 1);
+    assert.deepEqual([warning.line, warning.column, warning.endLine, warning.endColumn], expected);
+  }
+});
 
 test("counts CSS form feeds in warning locations", async () => {
   const cwd = await fixture({
@@ -622,7 +618,7 @@ test("migrates static Vue class bindings on hosts and component calls", async ()
   assert.doesNotMatch(output, /<style/);
 });
 
-test("keeps non-static Vue class bindings opaque", { timeout: 20000 }, async () => {
+test("keeps non-static Vue class bindings opaque", async () => {
   for (const binding of [
     "{ card: active }",
     "['card']",
