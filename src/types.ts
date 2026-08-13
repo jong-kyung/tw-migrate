@@ -220,6 +220,9 @@ export interface ShadowCssEntry {
 export interface DesignSystem {
   theme: { prefix: string | null };
   candidatesToCss: (candidates: string[]) => (string | null)[];
+  /** Tailwind v4's unstable canonical-spelling lookup; feature-detected
+   * because older v4 builds do not expose it. */
+  canonicalizeCandidates?: (candidates: string[]) => string[];
 }
 
 export interface LoadedTailwind {
