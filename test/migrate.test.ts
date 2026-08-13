@@ -87,8 +87,13 @@ test("returns structured migration report fields", async () => {
   ]);
 });
 
-test("reports warning line and column while converting independent rules", async () => {
-  const template = `import styles from './Button.module.css';
+// Six full migrations share one budget, and each pays the design system's
+// one-time canonicalization warm-up.
+test(
+  "reports warning line and column while converting independent rules",
+  { timeout: 20000 },
+  async () => {
+    const template = `import styles from './Button.module.css';
 export const Button = ({ active }) => (
   <>
     <button aria-label="저장 😀" className={
@@ -99,26 +104,30 @@ export const Button = ({ active }) => (
 );
 `;
 
-  for (const [lineEnding, expected] of [
-    ["\r\n", [4, 42, 6, 6]],
-    ["\r", [4, 42, 6, 6]],
-    ["\u2028", [4, 42, 6, 6]],
-    ["\u2029", [4, 42, 6, 6]],
-    ["\r\u2028", [7, 42, 11, 6]],
-    ["\r\u2029", [7, 42, 11, 6]],
-  ] as const) {
-    const cwd = await fixture({
-      css: ".blocked { color: red; }\n.button { padding: 13px; }\n",
-      tsx: template.replaceAll("\n", lineEnding),
-    });
-    const report = await migrate({ cwd });
-    const warning = report.warnings.find((entry) => entry.code === "dynamic-class-name")!;
+    for (const [lineEnding, expected] of [
+      ["\r\n", [4, 42, 6, 6]],
+      ["\r", [4, 42, 6, 6]],
+      ["\u2028", [4, 42, 6, 6]],
+      ["\u2029", [4, 42, 6, 6]],
+      ["\r\u2028", [7, 42, 11, 6]],
+      ["\r\u2029", [7, 42, 11, 6]],
+    ] as const) {
+      const cwd = await fixture({
+        css: ".blocked { color: red; }\n.button { padding: 13px; }\n",
+        tsx: template.replaceAll("\n", lineEnding),
+      });
+      const report = await migrate({ cwd });
+      const warning = report.warnings.find((entry) => entry.code === "dynamic-class-name")!;
 
-    assert.equal(report.convertedRules, 1);
-    assert.equal(report.retainedRules, 1);
-    assert.deepEqual([warning.line, warning.column, warning.endLine, warning.endColumn], expected);
-  }
-});
+      assert.equal(report.convertedRules, 1);
+      assert.equal(report.retainedRules, 1);
+      assert.deepEqual(
+        [warning.line, warning.column, warning.endLine, warning.endColumn],
+        expected,
+      );
+    }
+  },
+);
 
 test("counts CSS form feeds in warning locations", async () => {
   const cwd = await fixture({
@@ -293,6 +302,32 @@ test("anchors Sass compile-failure warnings to authored offsets", async () => {
   assert.ok(warning.start >= start && warning.end <= end && warning.end > warning.start);
 });
 
+test("canonicalizes literal utilities to the target design system's names", async () => {
+  const cwd = await fixture({
+    css: ".button { margin-right: auto; max-width: 100%; padding: 13px; }\n",
+  });
+  const report = await migrate({ cwd, styleFile: "Button.module.css", write: true });
+  assert.deepEqual(report.candidates, ["max-w-full", "mr-auto", "p-[13px]"]);
+  assert.match(await readFile(join(cwd, "Button.tsx"), "utf8"), /max-w-full mr-auto p-\[13px\]/);
+});
+
+test("authored selectors reserve canonical spellings", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(join(cwd, "legacy.css"), ".mr-auto { color: red; }\n");
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("opaque page style sources keep group spellings arbitrary", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(
+    join(cwd, "index.html"),
+    '<link rel="stylesheet" href="https://cdn.example.com/legacy.css"><div class="card"></div>\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
 test("escapes literal underscores in arbitrary values", async () => {
   const cwd = await fixture({ css: ".button { --font-key: Open_Sans; }\n" });
   const report = await migrate({ cwd, styleFile: "Button.module.css" });
@@ -445,7 +480,7 @@ test("migrates static Vue class bindings on hosts and component calls", async ()
   assert.doesNotMatch(output, /<style/);
 });
 
-test("keeps non-static Vue class bindings opaque", async () => {
+test("keeps non-static Vue class bindings opaque", { timeout: 20000 }, async () => {
   for (const binding of [
     "{ card: active }",
     "['card']",

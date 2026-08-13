@@ -42,6 +42,11 @@ export interface SourceAnalysis {
   unboundReferences: string[];
 }
 
+export interface CompiledShape {
+  declarations: { property: string; important: boolean }[];
+  referencedProperties: string[];
+}
+
 export interface StylesheetAnalysis {
   references: string[];
   imports: { href: string; media: string; start: number; end: number }[];
@@ -53,12 +58,15 @@ export interface StylesheetAnalysis {
   themeTokens: Record<string, string>;
   globalAtRuleIdentities: string[];
   globalAtRulesUnverifiable: boolean;
+  classNames: string[];
+  classReservationsUnbounded: boolean;
 }
 
 interface Binding {
   collectMediaConditions: (request: string) => string;
   sourceAnalysis: (path: string, source: string) => string;
   stylesheetAnalysis: (path: string, source: string) => string;
+  compiledShape: (css: string) => string;
   collectCssDirectives: (source: string) => string;
   mediaProbeKey: (css: string) => string;
   decodeSourceMap: (sourceMap: string) => string;
@@ -203,6 +211,22 @@ export function sourceAnalysis(path: string, source: string): SourceAnalysis {
   return analysis;
 }
 
+export function compiledShape(css: string): CompiledShape {
+  return decode(
+    "compiled shape",
+    binding.compiledShape(css),
+    (value): value is CompiledShape =>
+      object(value) &&
+      Array.isArray(value.declarations) &&
+      value.declarations.every(
+        (item) =>
+          object(item) && typeof item.property === "string" && typeof item.important === "boolean",
+      ) &&
+      Array.isArray(value.referencedProperties) &&
+      value.referencedProperties.every((item) => typeof item === "string"),
+  );
+}
+
 export function stylesheetAnalysis(path: string, source: string): StylesheetAnalysis {
   const cached = stylesheetAnalysisCache.get(path);
   if (cached?.source === source) return cached.analysis;
@@ -233,7 +257,10 @@ export function stylesheetAnalysis(path: string, source: string): StylesheetAnal
       Object.values(value.themeTokens).every((item) => typeof item === "string") &&
       Array.isArray(value.globalAtRuleIdentities) &&
       value.globalAtRuleIdentities.every((item) => typeof item === "string") &&
-      typeof value.globalAtRulesUnverifiable === "boolean",
+      typeof value.globalAtRulesUnverifiable === "boolean" &&
+      Array.isArray(value.classNames) &&
+      value.classNames.every((item) => typeof item === "string") &&
+      typeof value.classReservationsUnbounded === "boolean",
   );
   stylesheetAnalysisCache.set(path, { source, analysis });
   bound(stylesheetAnalysisCache);

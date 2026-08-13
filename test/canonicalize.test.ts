@@ -2,7 +2,12 @@ import { expect, test } from "vite-plus/test";
 
 import { __unstable__loadDesignSystem as loadDesignSystem } from "tailwindcss";
 
-import { canonicalCandidate } from "../src/plan/canonicalize.ts";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { acceptedCandidateAliases, canonicalCandidate } from "../src/plan/canonicalize.ts";
+import { loadTailwind } from "../src/tailwind.ts";
 import type { DesignSystem } from "../src/types.ts";
 
 async function system(css = "@tailwind utilities;"): Promise<DesignSystem> {
@@ -48,4 +53,36 @@ test("a missing canonicalization capability preserves the original candidate", a
     candidatesToCss: (candidates) => loaded.candidatesToCss(candidates),
   };
   expect(canonicalCandidate(limited, "mr-[auto]")).toBe(null);
+});
+
+test("alias acceptance rejects theme-backed and reserved spellings", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tw-canonicalize-"));
+  await writeFile(join(dir, "globals.css"), '@import "tailwindcss";\n');
+  // The repository itself is the target project: Tailwind v4 resolves from
+  // its node_modules exactly like a migrated project's own installation.
+  const entry = await loadTailwind(process.cwd(), join(dir, "globals.css"), new Map(), dir);
+  const open = { names: new Set<string>(), unbounded: false };
+
+  // p-4 dereferences --spacing, which literal-only runtime stability
+  // rejects until the reservation scan lands with font registration.
+  expect(acceptedCandidateAliases(entry.designSystem, ["p-[1rem]", "mr-[auto]"], open)).toEqual({
+    "mr-[auto]": "mr-auto",
+  });
+  // text-sm carries a companion line-height declaration, so its shape
+  // differs from the bare font-size source rule.
+  expect(acceptedCandidateAliases(entry.designSystem, ["text-[0.875rem]"], open)).toEqual({});
+  // An authored selector owns the canonical spelling.
+  expect(
+    acceptedCandidateAliases(entry.designSystem, ["mr-[auto]"], {
+      names: new Set(["mr-auto"]),
+      unbounded: false,
+    }),
+  ).toEqual({});
+  // An unbounded reservation rejects every alias.
+  expect(
+    acceptedCandidateAliases(entry.designSystem, ["mr-[auto]"], {
+      names: new Set<string>(),
+      unbounded: true,
+    }),
+  ).toEqual({});
 });

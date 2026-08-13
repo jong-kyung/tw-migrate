@@ -150,6 +150,9 @@ export interface Plan {
   deletedFiles: string[];
   unlinkedFiles: string[];
   candidates: string[];
+  /** Internal orchestration data: candidates collected before quote-fit
+   * checks, canonicalized between planning passes; never reported. */
+  candidateProbes?: string[];
   rules: PlanRule[];
   warnings: MigrationWarning[];
   convertedRules: number;

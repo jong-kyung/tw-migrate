@@ -32,6 +32,7 @@ import {
   loadTailwind,
   selectTailwindEntry,
 } from "./tailwind.ts";
+import { acceptedCandidateAliases, spellingReservations } from "./plan/canonicalize.ts";
 import { importsStylesheet, proveSharedEntry, tailwindEntryCatalog } from "./plan/entry.ts";
 import type { SharedEntryProofs } from "./plan/entry.ts";
 import {
@@ -714,6 +715,29 @@ async function planPreparedGroup(
     return leftPath < rightPath ? -1 : leftPath > rightPath ? 1 : 0;
   });
   const entry = active[0].tailwind;
+  // Canonical spellings are reserved against every authored selector, and a
+  // consumer page keeping an opaque style source (a remote stylesheet link
+  // or an inline style block) can contain any selector, so such a group
+  // keeps its arbitrary spellings entirely.
+  const reservations = spellingReservations(context.styleSources);
+  const groupFiles = new Map(
+    active.flatMap((member) => member.files.map((file) => [file.path, file] as const)),
+  );
+  for (const file of groupFiles.values()) {
+    if (reservations.unbounded) break;
+    if (extname(file.path) !== ".html") continue;
+    try {
+      const parsed = parseHtmlSource(file.path, file.source);
+      if (
+        parsed.hasStyle ||
+        parsed.links.some((link) => /^[a-z][a-z0-9+.-]*:|^\/\//i.test(link.href))
+      ) {
+        reservations.unbounded = true;
+      }
+    } catch {
+      reservations.unbounded = true;
+    }
+  }
   const recoverGroup = (error: unknown, fatal = false): PlanResult[] => {
     if (!options.force || fatal) throw error;
     // Group-level failures affect every package depending on the shared
@@ -859,6 +883,8 @@ async function planPreparedGroup(
   };
   let augmented = entry.css;
   const blocked: BlockedRules = new Map();
+  let candidateAliases: Record<string, string> | undefined;
+  let canonicalized = false;
 
   // The whole group plans as one native batch, so cross-member conflicts
   // on shared consumers go through the same analysis as conflicts inside
@@ -971,6 +997,7 @@ async function planPreparedGroup(
         utilityPrefix: entry.designSystem.theme.prefix,
         themeTokens: entry.themeTokens,
         ...(names ? { mediaNames: names } : {}),
+        ...(candidateAliases ? { candidateAliases } : {}),
         ...(groupWritable ? {} : { entryWritable: false }),
         files,
       };
@@ -1046,6 +1073,22 @@ async function planPreparedGroup(
           throw new Error(`Tailwind did not generate CSS for candidate: ${failing[0]}`);
         }
         continue planning;
+      }
+      // One bounded canonicalization replan: the provisional system above
+      // already contains every generated media definition, so complete
+      // probes canonicalize with their variants, and accepted aliases are
+      // rendered by the planner on the next pass.
+      if (!canonicalized) {
+        canonicalized = true;
+        const aliases = acceptedCandidateAliases(
+          replanSystem,
+          plan.candidateProbes ?? [],
+          reservations,
+        );
+        if (Object.keys(aliases).length > 0) {
+          candidateAliases = aliases;
+          continue planning;
+        }
       }
       break;
     }

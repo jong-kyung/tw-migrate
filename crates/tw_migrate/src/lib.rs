@@ -71,6 +71,11 @@ pub fn stylesheet_analysis(path: String, source: String) -> napi::Result<String>
 }
 
 #[napi]
+pub fn compiled_shape(css: String) -> napi::Result<String> {
+    stylesheet_analysis::compiled_shape_json(&css).map_err(napi::Error::from_reason)
+}
+
+#[napi]
 pub fn collect_css_directives(source: String) -> napi::Result<String> {
     css_directives::collect_css_directives_json(&source).map_err(|error| napi::Error::from_reason(error))
 }
