@@ -379,15 +379,28 @@ function validateProject(value: unknown, index: number): void {
 }
 
 export function validateManifest(value: unknown): Manifest {
-  const manifest = exactKeys(value, ["projects"], ["projects"], "manifest");
+  const manifest = exactKeys(value, ["matrixProbes", "projects"], ["projects"], "manifest");
+  if (manifest.matrixProbes !== undefined) {
+    validateProbes(manifest.matrixProbes, "manifest.matrixProbes", true);
+  }
   if (!Array.isArray(manifest.projects) || manifest.projects.length === 0) {
     throw new Error("manifest.projects must be a non-empty array");
   }
 
+  const projects = manifest.projects.map((project, index) => {
+    const record = object(project, `projects[${index}]`);
+    return manifest.matrixProbes !== undefined &&
+      record.kind === "controlled" &&
+      !("fixture" in record) &&
+      !("probes" in record)
+      ? { ...record, probes: manifest.matrixProbes }
+      : project;
+  });
   const ids = new Set<string>();
   const cells = new Set<string>();
-  manifest.projects.forEach((project: Project, index: number) => {
-    validateProject(project, index);
+  projects.forEach((value, index) => {
+    validateProject(value, index);
+    const project = value as Project;
     if (ids.has(project.id)) throw new Error(`duplicate project id ${JSON.stringify(project.id)}`);
     ids.add(project.id);
     if (project.kind === "controlled") {
@@ -397,16 +410,18 @@ export function validateManifest(value: unknown): Manifest {
       cells.add(cell);
     }
   });
-  const projects = manifest.projects as Project[];
-  for (const project of projects.filter((entry) => entry.kind === "smoke")) {
-    if (!projects.some(({ id, kind }) => id === project.fixture && kind === "controlled")) {
+  const validatedProjects = projects as Project[];
+  for (const project of validatedProjects.filter((entry) => entry.kind === "smoke")) {
+    if (
+      !validatedProjects.some(({ id, kind }) => id === project.fixture && kind === "controlled")
+    ) {
       throw new Error(
         `smoke fixture ${JSON.stringify(project.fixture)} must reference a controlled case`,
       );
     }
   }
   // Every field the manifest types promise has now been checked.
-  return { projects } as Manifest;
+  return { projects: validatedProjects };
 }
 
 export async function loadManifest(): Promise<Manifest> {

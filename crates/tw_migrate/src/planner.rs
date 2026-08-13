@@ -2718,6 +2718,14 @@ mod tests {
         css_properties_conflict, declaration_to_candidate, tailwind_utilities_conflict,
     };
 
+    fn plan(request: serde_json::Value) -> serde_json::Value {
+        serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap()
+    }
+
+    fn plan_batch(request: serde_json::Value) -> serde_json::Value {
+        serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap()
+    }
+
     #[test]
     fn parses_indented_sass_with_explicit_module_metadata() {
         let request = serde_json::json!({
@@ -2731,8 +2739,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["candidates"], serde_json::json!(["p-[13px]"]));
         assert_eq!(response["convertedRules"], 1);
@@ -2755,8 +2762,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["candidates"], serde_json::json!([]));
         assert_eq!(response["convertedRules"], 0);
@@ -2781,8 +2787,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["candidates"], serde_json::json!(["p-[13px]"]));
         assert_eq!(response["convertedRules"], 0);
@@ -2805,8 +2810,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert!(
             response["warnings"]
@@ -2828,8 +2832,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["files"], serde_json::json!([]));
         let codes = response["warnings"]
@@ -2852,8 +2855,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         let codes = response["warnings"]
             .as_array()
@@ -2875,8 +2877,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["files"][0]["source"],
@@ -2896,8 +2897,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["files"][0]["source"],
@@ -2916,8 +2916,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["files"][0]["source"],
@@ -2943,8 +2942,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["files"][0]["source"],
@@ -2970,8 +2968,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["files"][0]["source"],
@@ -2997,8 +2994,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["retainedRules"], 1);
@@ -3024,8 +3020,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["files"][0]["source"],
@@ -3044,8 +3039,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["files"][0]["source"],
@@ -3071,8 +3065,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         // A local binding named `undefined` can hold a runtime class value,
         // so only the unbound global counts as a warning-free no-op leaf.
@@ -3100,8 +3093,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         // `styles.missing` has no rule, so nothing retains the stylesheet,
         // but deleting it would leave the source importing a missing file.
@@ -3136,8 +3128,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 1);
         assert_eq!(response["deletedFiles"], serde_json::json!([]));
@@ -3171,8 +3162,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         // The module pass keeps foreign members silent so another module's
         // binding never draws a spurious warning from this stylesheet's plan;
@@ -3210,8 +3200,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["files"][0]["source"],
@@ -3237,8 +3226,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["files"][0]["source"],
@@ -3264,8 +3252,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["files"], serde_json::json!([]));
     }
@@ -3281,8 +3268,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 2);
         assert_eq!(
@@ -3306,8 +3292,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 2);
         assert_eq!(
@@ -3334,8 +3319,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 1);
         assert_eq!(response["retainedRules"], 1);
@@ -3370,8 +3354,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 1);
         assert_eq!(
@@ -3402,8 +3385,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 1);
         assert_eq!(
@@ -3438,8 +3420,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["convertedRules"], 1);
         assert_eq!(response["retainedRules"], 1);
@@ -3468,8 +3449,7 @@ mod tests {
                 "source": migrated
             }]
         });
-        let second: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&second.to_string()).unwrap()).unwrap();
+        let second = plan_batch(second);
         assert_eq!(second["files"], serde_json::json!([]));
     }
 
@@ -3484,8 +3464,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["files"], serde_json::json!([]));
         assert_eq!(response["deletedFiles"], serde_json::json!([]));
@@ -3502,8 +3481,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["warnings"]
@@ -3531,8 +3509,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["files"][0]["source"],
@@ -3551,8 +3528,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["files"], serde_json::json!([]));
     }
@@ -3568,8 +3544,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["files"], serde_json::json!([]));
         assert_eq!(response["convertedRules"], 0);
@@ -3587,8 +3562,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
         let source = response["files"]
             .as_array()
             .unwrap()
@@ -3616,8 +3590,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["candidates"],
@@ -3636,8 +3609,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["candidates"],
@@ -3656,8 +3628,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["candidates"], serde_json::json!(["text-[blue]"]));
         assert_eq!(response["convertedRules"], 1);
@@ -3825,8 +3796,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["candidates"],
@@ -3848,8 +3818,7 @@ mod tests {
             ]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["candidates"],
@@ -3874,8 +3843,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["candidates"],
@@ -3895,8 +3863,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["candidates"],
@@ -3917,8 +3884,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["deletedFiles"], serde_json::json!([]));
@@ -3945,8 +3911,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["deletedFiles"], serde_json::json!([]));
@@ -3971,8 +3936,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
         let source = response["files"]
             .as_array()
             .unwrap()
@@ -4001,8 +3965,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["deletedFiles"], serde_json::json!([]));
@@ -4029,8 +3992,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["deletedFiles"], serde_json::json!([]));
@@ -4050,8 +4012,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["deletedFiles"], serde_json::json!([]));
@@ -4075,8 +4036,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["retainedRules"], 2);
@@ -4102,8 +4062,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["candidates"], serde_json::json!(["md:p-[13px]"]));
         assert_eq!(
@@ -4127,8 +4086,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["candidates"],
@@ -4152,8 +4110,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["candidates"],
@@ -4174,8 +4131,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["candidates"],
@@ -4200,8 +4156,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["candidates"],
@@ -4222,8 +4177,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         // The media rule follows the base rule, matching Tailwind's output
         // order, so both migrate.
@@ -4246,8 +4200,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         // The authored base rule wins whenever the media condition matches,
         // but Tailwind would emit the media variant after the base utility
@@ -4278,8 +4231,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         // Both conditions match at 600px and the emitted variant order is
         // unproven, so the pair is retained.
@@ -4302,8 +4254,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         // The width intervals are disjoint, so no ordering can change the
         // rendered result and both rules migrate.
@@ -4322,8 +4273,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         // An explicitly empty map still means extraction ran; the fallback
         // arbitrary variants overlap with an unproven order and retain.
@@ -4346,8 +4296,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         // The mapped compound stacks its component names; the 900px key is
         // absent from the map (a resolver fallback), so it keeps the
@@ -4379,8 +4328,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         // The map is the entry group's verified resolution: a redefined
         // dark and a shadowed breakpoint resolve to generated component
@@ -4413,8 +4361,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["candidates"],
@@ -4444,8 +4391,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["candidates"],
@@ -4468,8 +4414,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["candidates"],
@@ -4489,8 +4434,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["candidates"],
@@ -4515,8 +4459,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["candidates"],
@@ -4539,8 +4482,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 0);
         let warnings = response["warnings"].as_array().unwrap();
@@ -4563,8 +4505,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["candidates"],
@@ -4590,8 +4531,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
         let tailwind = response["files"]
             .as_array()
             .unwrap()
@@ -4626,8 +4566,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 1);
         assert_eq!(response["deletedFiles"], serde_json::json!([]));
@@ -4653,8 +4592,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
         let tailwind = response["files"]
             .as_array()
             .unwrap()
@@ -4684,8 +4622,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["candidates"],
@@ -4709,8 +4646,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["deletedFiles"], serde_json::json!([]));
@@ -4733,8 +4669,7 @@ mod tests {
                 "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
             }]
         });
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["deletedFiles"], serde_json::json!([]));
         response["warnings"]
@@ -4779,8 +4714,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["candidates"],
@@ -4803,8 +4737,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["retainedRules"], 2);
@@ -4829,8 +4762,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["candidates"],
@@ -4849,8 +4781,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["candidates"],
@@ -4871,8 +4802,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["candidates"], serde_json::json!(["p-card"]));
     }
@@ -4888,8 +4818,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["candidates"],
@@ -4909,8 +4838,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["files"][0]["source"],
@@ -4930,8 +4858,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(
             response["files"][0]["source"],
@@ -4960,8 +4887,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 1);
         assert_eq!(
@@ -4982,8 +4908,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["retainedRules"], 1);
@@ -5006,8 +4931,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
         let source = response["files"][0]["source"].as_str().unwrap();
 
         assert_eq!(response["convertedRules"], 1);
@@ -5026,8 +4950,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 0);
         assert!(
@@ -5052,8 +4975,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["deletedFiles"], serde_json::json!([]));
@@ -5088,8 +5010,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["retainedRules"], 2);
@@ -5119,8 +5040,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["deletedFiles"], serde_json::json!([]));
@@ -5147,8 +5067,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 1);
         assert_eq!(
@@ -5170,8 +5089,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
         let candidate = response["candidates"][0].as_str().unwrap();
         let name = candidate
             .strip_prefix("[animation:")
@@ -5212,8 +5130,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert!(
             !response["files"]
@@ -5241,8 +5158,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
         let source = response["files"]
             .as_array()
             .unwrap()
@@ -5313,8 +5229,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["deletedFiles"], serde_json::json!([]));
@@ -5338,8 +5253,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["candidates"], serde_json::json!(["p-[13px]"]));
         assert_eq!(response["convertedRules"], 1);
@@ -5405,8 +5319,7 @@ mod tests {
     fn vue_module_bindings_rewrite_and_delete_the_emptied_block() {
         let source = "<template>\n  <p :class=\"$style.card\">A</p>\n</template>\n<style module>\n.card { padding: 13px; }\n</style>\n";
         let request = vue_module_request(source, &[("p", "card")]);
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
         assert_eq!(response["convertedRules"], 1);
         assert_eq!(
             response["files"][0]["source"],
@@ -5420,15 +5333,13 @@ mod tests {
         // A corpus `.card` cannot match the hashed runtime class.
         let mut hashed = vue_module_request(source, &[("p", "card")]);
         hashed["stylesheets"][0]["vueShadowCss"] = serde_json::json!([".card { padding: 20px; }"]);
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&hashed.to_string()).unwrap()).unwrap();
+        let response = plan_batch(hashed);
         assert_eq!(response["convertedRules"], 1);
 
         // A corpus type selector still reaches the binding's element.
         let mut typed = vue_module_request(source, &[("p", "card")]);
         typed["stylesheets"][0]["vueShadowCss"] = serde_json::json!(["p { padding: 20px; }"]);
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&typed.to_string()).unwrap()).unwrap();
+        let response = plan_batch(typed);
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["warnings"][0]["code"], "shadowed-scoped-rule");
     }
@@ -5437,8 +5348,7 @@ mod tests {
     fn vue_module_rewrites_withhold_quote_bearing_candidates() {
         let source = "<template>\n  <p :class=\"$style.card\">A</p>\n</template>\n<style module>\n.card { font-family: \"My Font\", sans-serif; }\n</style>\n";
         let request = vue_module_request(source, &[("p", "card")]);
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
         // The double-quoted rewritten attribute cannot hold the candidate.
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["retainedRules"], 1);
@@ -5501,8 +5411,7 @@ mod tests {
         let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n";
         let request = vue_batch_request(source, true, None);
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["candidates"], serde_json::json!(["p-[13px]"]));
         assert_eq!(response["convertedRules"], 1);
@@ -5524,8 +5433,7 @@ mod tests {
         request["stylesheets"][0]["vueShadowCss"] =
             serde_json::json!(["div.card { padding: 20px; } .cardio { top: 0; }"]);
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["retainedRules"], 1);
@@ -5537,8 +5445,7 @@ mod tests {
         // A different class like `.cardio` must not shadow `.card`.
         let mut clear = vue_batch_request(source, true, None);
         clear["stylesheets"][0]["vueShadowCss"] = serde_json::json!([".cardio { top: 0; }"]);
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&clear.to_string()).unwrap()).unwrap();
+        let response = plan_batch(clear);
         assert_eq!(response["convertedRules"], 1);
     }
 
@@ -5581,8 +5488,7 @@ mod tests {
             }],
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["warnings"][0]["code"], "shadowed-scoped-rule");
@@ -5634,8 +5540,7 @@ mod tests {
             }],
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         // `.legacy` retains on `!important`; deleting `.card` would expose
         // it on the shared element, so `.card` retains as shadowed while the
@@ -5690,8 +5595,7 @@ mod tests {
             }],
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["retainedRules"], 2);
@@ -5710,8 +5614,7 @@ mod tests {
         let source = "<template>\n  <div class=\"ancestor\"><p class=\"card\">A</p></div>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n.ancestor > * { padding: 20px !important; }\n.card { padding: 13px; }\n</style>\n";
         let request = vue_batch_request(source, true, None);
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["retainedRules"], 2);
@@ -5729,8 +5632,7 @@ mod tests {
         let source = "<template>\n  <div class=\"ancestor\"><p class=\"card\">A</p></div>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n@supports (content: \"x\") { .ancestor > * { padding: 20px; } }\n.card { padding: 13px; }\n</style>\n";
         let request = vue_batch_request(source, true, None);
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["convertedRules"], 0);
         assert!(
@@ -5749,15 +5651,13 @@ mod tests {
         let mut localized = vue_batch_request(source, true, None);
         localized["stylesheets"][0]["vueShadowModuleCss"] =
             serde_json::json!([".card { padding: 20px; }"]);
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&localized.to_string()).unwrap()).unwrap();
+        let response = plan_batch(localized);
         assert_eq!(response["convertedRules"], 1);
 
         // A bare type selector in a module stays global and shadows the site.
         let mut typed = vue_batch_request(source, true, None);
         typed["stylesheets"][0]["vueShadowModuleCss"] = serde_json::json!(["p { padding: 20px; }"]);
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&typed.to_string()).unwrap()).unwrap();
+        let response = plan_batch(typed);
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["warnings"][0]["code"], "shadowed-scoped-rule");
     }
@@ -5766,8 +5666,7 @@ mod tests {
     fn vue_retained_keyframes_do_not_shadow_sibling_rules() {
         let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n@keyframes spin { from { opacity: 0; } to { opacity: 1; } }\n.card { padding: 13px; }\n</style>\n";
         let request = vue_batch_request(source, true, None);
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
         assert_eq!(response["convertedRules"], 1);
         assert_eq!(response["retainedRules"], 1);
     }
@@ -5776,8 +5675,7 @@ mod tests {
     fn vue_retained_definition_at_rules_do_not_shadow_sibling_rules() {
         let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n@property --accent { syntax: \"<color>\"; inherits: false; initial-value: red; }\n.card { padding: 13px; }\n</style>\n";
         let request = vue_batch_request(source, true, None);
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
         assert_eq!(response["convertedRules"], 1);
         assert_eq!(response["retainedRules"], 1);
     }
@@ -5789,16 +5687,14 @@ mod tests {
         let mut unrelated = vue_batch_request(source, true, None);
         unrelated["stylesheets"][0]["vueShadowModuleCss"] =
             serde_json::json!([":global(.unrelated) { padding: 20px; }"]);
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&unrelated.to_string()).unwrap()).unwrap();
+        let response = plan_batch(unrelated);
         assert_eq!(response["convertedRules"], 1);
 
         // A matching `:global` escape shadows precisely.
         let mut matching = vue_batch_request(source, true, None);
         matching["stylesheets"][0]["vueShadowModuleCss"] =
             serde_json::json!([":global(.card) { padding: 20px; }"]);
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&matching.to_string()).unwrap()).unwrap();
+        let response = plan_batch(matching);
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["warnings"][0]["code"], "shadowed-scoped-rule");
 
@@ -5808,8 +5704,7 @@ mod tests {
         let mut selector_mode = vue_batch_request(source, true, None);
         selector_mode["stylesheets"][0]["vueShadowModuleCss"] =
             serde_json::json!([":global .card { padding: 20px; }"]);
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&selector_mode.to_string()).unwrap()).unwrap();
+        let response = plan_batch(selector_mode);
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["warnings"][0]["code"], "shadowed-scoped-rule");
     }
@@ -5818,8 +5713,7 @@ mod tests {
     fn vue_v_bind_declarations_are_never_converted() {
         let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n.card { color: v-bind(theme); }\n</style>\n";
         let request = vue_batch_request(source, true, None);
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["retainedRules"], 1);
         assert_eq!(response["warnings"][0]["code"], "unsupported-value");
@@ -5831,23 +5725,20 @@ mod tests {
         // A type selector for another tag cannot match the `p` sites.
         let mut clear = vue_batch_request(source, true, None);
         clear["stylesheets"][0]["vueShadowCss"] = serde_json::json!(["article { padding: 20px; }"]);
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&clear.to_string()).unwrap()).unwrap();
+        let response = plan_batch(clear);
         assert_eq!(response["convertedRules"], 1);
 
         // A `p` type selector reaches the rule's site, so the rule retains.
         let mut shadowed = vue_batch_request(source, true, None);
         shadowed["stylesheets"][0]["vueShadowCss"] = serde_json::json!(["p { padding: 20px; }"]);
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&shadowed.to_string()).unwrap()).unwrap();
+        let response = plan_batch(shadowed);
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["warnings"][0]["code"], "shadowed-scoped-rule");
 
         // An unparseable piece is unverifiable and retains everything.
         let mut opaque = vue_batch_request(source, true, None);
         opaque["stylesheets"][0]["vueShadowCss"] = serde_json::json!(["$name: card;"]);
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&opaque.to_string()).unwrap()).unwrap();
+        let response = plan_batch(opaque);
         assert_eq!(response["convertedRules"], 0);
     }
 
@@ -5857,8 +5748,7 @@ mod tests {
         let mut request = vue_batch_request(source, true, None);
         request["stylesheets"][0]["vueShadowUnverifiable"] = serde_json::json!(true);
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["retainedRules"], 1);
@@ -5870,8 +5760,7 @@ mod tests {
         let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n@media print {\n}\n.card { padding: 13px; }\n</style>\n";
         let request = vue_batch_request(source, true, None);
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["convertedRules"], 1);
         let migrated = response["files"][0]["source"].as_str().unwrap();
@@ -5885,8 +5774,7 @@ mod tests {
         let source = "<template>\n  <p class=\"card\">A</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n";
         let request = vue_batch_request(source, false, Some("open-root-fallthrough"));
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["retainedRules"], 1);
@@ -5923,8 +5811,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["convertedRules"], 1);
         assert_eq!(
@@ -5950,8 +5837,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["convertedRules"], 0);
         assert_eq!(response["deletedFiles"], serde_json::json!([]));
@@ -5986,8 +5872,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
         let source = response["files"]
             .as_array()
             .unwrap()
@@ -6027,8 +5912,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
         let source = response["files"]
             .as_array()
             .unwrap()
@@ -6063,8 +5947,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["convertedRules"], 1);
         assert_eq!(response["retainedRules"], 1);
@@ -6125,8 +6008,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         // The blocked rule's candidates never apply, so they must not create
         // a batch-stylesheet-conflict; the healthy sibling converts and the
@@ -6161,8 +6043,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["files"], serde_json::json!([]));
         assert_eq!(response["deletedFiles"], serde_json::json!([]));
@@ -6205,8 +6086,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["convertedRules"], 2);
         assert_eq!(
@@ -6245,8 +6125,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["files"], serde_json::json!([]));
         assert_eq!(response["deletedFiles"], serde_json::json!([]));
@@ -6282,8 +6161,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
         let source = response["files"]
             .as_array()
             .unwrap()
@@ -6320,8 +6198,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert!(
             response["warnings"]
@@ -6344,8 +6221,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 1);
         assert_eq!(response["retainedRules"], 1);
@@ -6378,8 +6254,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
         let warnings = response["warnings"]
             .as_array()
             .unwrap()
@@ -6414,8 +6289,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
         let source = response["files"][0]["source"].as_str().unwrap();
 
         assert_eq!(
@@ -6491,8 +6365,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["files"], serde_json::json!([]));
         assert_eq!(response["convertedRules"], 0);
@@ -6527,8 +6400,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["files"], serde_json::json!([]));
         assert_eq!(response["convertedRules"], 0);
@@ -6554,8 +6426,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["files"], serde_json::json!([]));
         assert_eq!(response["convertedRules"], 0);
@@ -6598,8 +6469,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["files"], serde_json::json!([]));
         assert_eq!(response["convertedRules"], 0);
@@ -6634,8 +6504,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
         let app = response["files"]
             .as_array()
             .unwrap()
@@ -6678,8 +6547,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
         let app = response["files"]
             .as_array()
             .unwrap()
@@ -6730,8 +6598,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
         let app = response["files"]
             .as_array()
             .unwrap()
@@ -6779,8 +6646,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["files"], serde_json::json!([]));
         assert_eq!(response["convertedRules"], 0);
@@ -6829,8 +6695,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
         let messages = response["warnings"]
             .as_array()
             .unwrap()
@@ -6876,8 +6741,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
         let messages = response["warnings"]
             .as_array()
             .unwrap()
@@ -6927,8 +6791,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
         let message = response["warnings"]
             .as_array()
             .unwrap()
@@ -6967,8 +6830,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
         let tailwind = response["files"]
             .as_array()
             .unwrap()
@@ -6995,8 +6857,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["files"], serde_json::json!([]));
         assert_eq!(response["deletedFiles"], serde_json::json!([]));
@@ -7035,8 +6896,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["files"], serde_json::json!([]));
         assert_eq!(response["deletedFiles"], serde_json::json!([]));
@@ -7057,8 +6917,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["files"], serde_json::json!([]));
         assert_eq!(response["retainedRules"], 1);
@@ -7077,8 +6936,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["files"], serde_json::json!([]));
         assert_eq!(response["convertedRules"], 0);
@@ -7098,8 +6956,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["files"], serde_json::json!([]));
         assert_eq!(response["retainedRules"], 1);
@@ -7127,8 +6984,7 @@ mod tests {
             ]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["files"], serde_json::json!([]));
         assert_eq!(response["deletedFiles"], serde_json::json!([]));
@@ -7149,8 +7005,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 2);
         assert_eq!(response["retainedRules"], 0);
@@ -7181,8 +7036,7 @@ mod tests {
             ]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 2);
         assert_eq!(
@@ -7212,8 +7066,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 2);
         assert_eq!(
@@ -7237,8 +7090,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["convertedRules"], 3);
         assert_eq!(response["retainedRules"], 0);
@@ -7263,8 +7115,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["files"], serde_json::json!([]));
         assert_eq!(response["convertedRules"], 0);
@@ -7292,8 +7143,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["convertedRules"], 3);
         assert_eq!(response["retainedRules"], 0);
@@ -7320,8 +7170,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["convertedRules"], 1);
         assert_eq!(response["retainedRules"], 2);
@@ -7381,8 +7230,7 @@ mod tests {
             ]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_batch_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan_batch(request);
 
         assert_eq!(response["deletedFiles"], serde_json::json!([]));
         assert_eq!(response["convertedRules"], 0);
@@ -7407,8 +7255,7 @@ mod tests {
             }]
         });
 
-        let response: serde_json::Value =
-            serde_json::from_str(&plan_json(&request.to_string()).unwrap()).unwrap();
+        let response = plan(request);
 
         assert_eq!(response["retainedRules"], 1);
         assert_eq!(

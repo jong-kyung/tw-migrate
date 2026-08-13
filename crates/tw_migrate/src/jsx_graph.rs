@@ -60,17 +60,6 @@ const R_BOUNDARY: &str = "dynamic-content-boundary";
 const R_ANCESTRY: &str = "unproven-ancestry";
 const R_NO_USAGES: &str = "no-usages";
 
-#[cfg(test)]
-pub(crate) fn prove_in_world(
-    files: &[(&str, &str)],
-    css_path: &str,
-    ancestor: &SelectorKey,
-    relation: Relation,
-    target: &SelectorKey,
-) -> ProofOutcome {
-    prove_prepared(&prepare(files, css_path), ancestor, relation, target)
-}
-
 /// The extracted-and-linked world for one (files, css_path) pair: the
 /// query-invariant part of a proof, reusable across many queries.
 pub(crate) struct PreparedWorld {
@@ -1656,7 +1645,12 @@ mod tests {
         ancestor: &str,
         target: &str,
     ) -> ProofOutcome {
-        prove_in_world(files, CSS, &class(ancestor), relation, &class(target))
+        prove_prepared(
+            &prepare(files, CSS),
+            &class(ancestor),
+            relation,
+            &class(target),
+        )
     }
 
     #[test]

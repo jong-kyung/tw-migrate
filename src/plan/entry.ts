@@ -13,7 +13,7 @@
 import { createRequire } from "node:module";
 import { basename, dirname, extname, join, resolve } from "node:path";
 
-import { collectCssDirectives, sourceAnalysis } from "../native.ts";
+import { cssDirectives as decodeCssDirectives, sourceAnalysis } from "../native.ts";
 import type { SourceImportRecord } from "../native.ts";
 import { parseHtmlSource } from "../parser/html.ts";
 import { isWithin } from "../util/shared.ts";
@@ -83,16 +83,15 @@ type CssDirective =
 /// counts, and import targets and source modifiers arrive structurally
 /// instead of through text matching.
 function cssDirectives(source: string): CssDirective[] | null {
-  try {
-    const parsed: unknown = JSON.parse(collectCssDirectives(source));
-    if (!Array.isArray(parsed)) return null;
-    return parsed.filter(
+  return (
+    decodeCssDirectives(source)?.filter(
       (directive): directive is CssDirective =>
-        directive !== null && typeof directive === "object" && typeof directive.kind === "string",
-    );
-  } catch {
-    return null;
-  }
+        directive !== null &&
+        typeof directive === "object" &&
+        "kind" in directive &&
+        typeof directive.kind === "string",
+    ) ?? null
+  );
 }
 
 /// The entry's static import graph over the scanned stylesheet corpus:
@@ -435,7 +434,7 @@ export interface SharedEntryProofs {
   provenConsumer: (consumer: PreparedSourceFile) => boolean;
   /// Stylesheets proven for every consumer keep migrating; a stylesheet
   /// with any unproven consumer flow is retained.
-  provenStyle: (stylePath: string, consumers: PreparedSourceFile[]) => boolean;
+  provenStyle: (consumers: PreparedSourceFile[]) => boolean;
 }
 
 /// Prove the dual shared-entry relationship for one candidate ancestor
@@ -523,7 +522,7 @@ export function proveSharedEntry(options: SharedEntryProofOptions): SharedEntryP
     // A stylesheet with no consumer at all has no proven flow either: its
     // movable at-rules would otherwise activate in the shared entry for
     // CSS nothing provably loads.
-    provenStyle: (stylePath, consumers) => consumers.length > 0 && consumers.every(provenConsumer),
+    provenStyle: (consumers) => consumers.length > 0 && consumers.every(provenConsumer),
   };
 }
 

@@ -1,4 +1,153 @@
 {
+  "matrixProbes": {
+    "base": {
+      "route": "/",
+      "viewport": {
+        "width": 1280,
+        "height": 720
+      },
+      "readiness": {
+        "selector": {
+          "type": "role",
+          "value": "button",
+          "name": "Toggle details"
+        },
+        "cardinality": 1
+      },
+      "selector": {
+        "type": "data",
+        "value": "card"
+      },
+      "cardinality": 1,
+      "identity": ["card"]
+    },
+    "hover": {
+      "route": "/",
+      "viewport": {
+        "width": 1280,
+        "height": 720
+      },
+      "readiness": {
+        "selector": {
+          "type": "role",
+          "value": "button",
+          "name": "Toggle details"
+        },
+        "cardinality": 1
+      },
+      "action": {
+        "type": "hover",
+        "selector": {
+          "type": "data",
+          "value": "card"
+        }
+      },
+      "selector": {
+        "type": "data",
+        "value": "card"
+      },
+      "cardinality": 1,
+      "identity": ["card"]
+    },
+    "focus": {
+      "route": "/",
+      "viewport": {
+        "width": 1280,
+        "height": 720
+      },
+      "readiness": {
+        "selector": {
+          "type": "role",
+          "value": "button",
+          "name": "Toggle details"
+        },
+        "cardinality": 1
+      },
+      "action": {
+        "type": "focus",
+        "selector": {
+          "type": "role",
+          "value": "button",
+          "name": "Toggle details"
+        }
+      },
+      "selector": {
+        "type": "role",
+        "value": "button",
+        "name": "Toggle details"
+      },
+      "cardinality": 1,
+      "identity": ["action"]
+    },
+    "focus-visible": {
+      "route": "/",
+      "viewport": {
+        "width": 1280,
+        "height": 720
+      },
+      "readiness": {
+        "selector": {
+          "type": "role",
+          "value": "button",
+          "name": "Toggle details"
+        },
+        "cardinality": 1
+      },
+      "action": {
+        "type": "press",
+        "key": "Tab"
+      },
+      "selector": {
+        "type": "role",
+        "value": "button",
+        "name": "Toggle details"
+      },
+      "cardinality": 1,
+      "identity": ["action"]
+    },
+    "responsive-below": {
+      "route": "/",
+      "viewport": {
+        "width": 375,
+        "height": 667
+      },
+      "readiness": {
+        "selector": {
+          "type": "role",
+          "value": "button",
+          "name": "Toggle details"
+        },
+        "cardinality": 1
+      },
+      "selector": {
+        "type": "data",
+        "value": "responsive-layout"
+      },
+      "cardinality": 1,
+      "identity": ["responsive"]
+    },
+    "responsive-above": {
+      "route": "/",
+      "viewport": {
+        "width": 1280,
+        "height": 720
+      },
+      "readiness": {
+        "selector": {
+          "type": "role",
+          "value": "button",
+          "name": "Toggle details"
+        },
+        "cardinality": 1
+      },
+      "selector": {
+        "type": "data",
+        "value": "responsive-layout"
+      },
+      "cardinality": 1,
+      "identity": ["responsive"]
+    }
+  },
   "projects": [
     {
       "id": "react-vite-css",
@@ -9,155 +158,6 @@
         "path": "src/App.module.css",
         "before": ".card",
         "after": "p-[13px]"
-      },
-      "probes": {
-        "base": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "card"
-          },
-          "cardinality": 1,
-          "identity": ["card"]
-        },
-        "hover": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "hover",
-            "selector": {
-              "type": "data",
-              "value": "card"
-            }
-          },
-          "selector": {
-            "type": "data",
-            "value": "card"
-          },
-          "cardinality": 1,
-          "identity": ["card"]
-        },
-        "focus": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "focus",
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            }
-          },
-          "selector": {
-            "type": "role",
-            "value": "button",
-            "name": "Toggle details"
-          },
-          "cardinality": 1,
-          "identity": ["action"]
-        },
-        "focus-visible": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "press",
-            "key": "Tab"
-          },
-          "selector": {
-            "type": "role",
-            "value": "button",
-            "name": "Toggle details"
-          },
-          "cardinality": 1,
-          "identity": ["action"]
-        },
-        "responsive-below": {
-          "route": "/",
-          "viewport": {
-            "width": 375,
-            "height": 667
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "responsive-layout"
-          },
-          "cardinality": 1,
-          "identity": ["responsive"]
-        },
-        "responsive-above": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "responsive-layout"
-          },
-          "cardinality": 1,
-          "identity": ["responsive"]
-        }
       }
     },
     {
@@ -169,155 +169,6 @@
         "path": "src/App.module.scss",
         "before": ".card",
         "after": "p-[13px]"
-      },
-      "probes": {
-        "base": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "card"
-          },
-          "cardinality": 1,
-          "identity": ["card"]
-        },
-        "hover": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "hover",
-            "selector": {
-              "type": "data",
-              "value": "card"
-            }
-          },
-          "selector": {
-            "type": "data",
-            "value": "card"
-          },
-          "cardinality": 1,
-          "identity": ["card"]
-        },
-        "focus": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "focus",
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            }
-          },
-          "selector": {
-            "type": "role",
-            "value": "button",
-            "name": "Toggle details"
-          },
-          "cardinality": 1,
-          "identity": ["action"]
-        },
-        "focus-visible": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "press",
-            "key": "Tab"
-          },
-          "selector": {
-            "type": "role",
-            "value": "button",
-            "name": "Toggle details"
-          },
-          "cardinality": 1,
-          "identity": ["action"]
-        },
-        "responsive-below": {
-          "route": "/",
-          "viewport": {
-            "width": 375,
-            "height": 667
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "responsive-layout"
-          },
-          "cardinality": 1,
-          "identity": ["responsive"]
-        },
-        "responsive-above": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "responsive-layout"
-          },
-          "cardinality": 1,
-          "identity": ["responsive"]
-        }
       }
     },
     {
@@ -329,155 +180,6 @@
         "path": "src/App.module.sass",
         "before": ".card",
         "after": "p-[13px]"
-      },
-      "probes": {
-        "base": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "card"
-          },
-          "cardinality": 1,
-          "identity": ["card"]
-        },
-        "hover": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "hover",
-            "selector": {
-              "type": "data",
-              "value": "card"
-            }
-          },
-          "selector": {
-            "type": "data",
-            "value": "card"
-          },
-          "cardinality": 1,
-          "identity": ["card"]
-        },
-        "focus": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "focus",
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            }
-          },
-          "selector": {
-            "type": "role",
-            "value": "button",
-            "name": "Toggle details"
-          },
-          "cardinality": 1,
-          "identity": ["action"]
-        },
-        "focus-visible": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "press",
-            "key": "Tab"
-          },
-          "selector": {
-            "type": "role",
-            "value": "button",
-            "name": "Toggle details"
-          },
-          "cardinality": 1,
-          "identity": ["action"]
-        },
-        "responsive-below": {
-          "route": "/",
-          "viewport": {
-            "width": 375,
-            "height": 667
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "responsive-layout"
-          },
-          "cardinality": 1,
-          "identity": ["responsive"]
-        },
-        "responsive-above": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "responsive-layout"
-          },
-          "cardinality": 1,
-          "identity": ["responsive"]
-        }
       }
     },
     {
@@ -489,155 +191,6 @@
         "path": "src/App.module.less",
         "before": ".card",
         "after": "p-[13px]"
-      },
-      "probes": {
-        "base": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "card"
-          },
-          "cardinality": 1,
-          "identity": ["card"]
-        },
-        "hover": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "hover",
-            "selector": {
-              "type": "data",
-              "value": "card"
-            }
-          },
-          "selector": {
-            "type": "data",
-            "value": "card"
-          },
-          "cardinality": 1,
-          "identity": ["card"]
-        },
-        "focus": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "focus",
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            }
-          },
-          "selector": {
-            "type": "role",
-            "value": "button",
-            "name": "Toggle details"
-          },
-          "cardinality": 1,
-          "identity": ["action"]
-        },
-        "focus-visible": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "press",
-            "key": "Tab"
-          },
-          "selector": {
-            "type": "role",
-            "value": "button",
-            "name": "Toggle details"
-          },
-          "cardinality": 1,
-          "identity": ["action"]
-        },
-        "responsive-below": {
-          "route": "/",
-          "viewport": {
-            "width": 375,
-            "height": 667
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "responsive-layout"
-          },
-          "cardinality": 1,
-          "identity": ["responsive"]
-        },
-        "responsive-above": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "responsive-layout"
-          },
-          "cardinality": 1,
-          "identity": ["responsive"]
-        }
       }
     },
     {
@@ -649,155 +202,6 @@
         "path": "app/page.module.css",
         "before": ".card",
         "after": "p-[13px]"
-      },
-      "probes": {
-        "base": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "card"
-          },
-          "cardinality": 1,
-          "identity": ["card"]
-        },
-        "hover": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "hover",
-            "selector": {
-              "type": "data",
-              "value": "card"
-            }
-          },
-          "selector": {
-            "type": "data",
-            "value": "card"
-          },
-          "cardinality": 1,
-          "identity": ["card"]
-        },
-        "focus": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "focus",
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            }
-          },
-          "selector": {
-            "type": "role",
-            "value": "button",
-            "name": "Toggle details"
-          },
-          "cardinality": 1,
-          "identity": ["action"]
-        },
-        "focus-visible": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "press",
-            "key": "Tab"
-          },
-          "selector": {
-            "type": "role",
-            "value": "button",
-            "name": "Toggle details"
-          },
-          "cardinality": 1,
-          "identity": ["action"]
-        },
-        "responsive-below": {
-          "route": "/",
-          "viewport": {
-            "width": 375,
-            "height": 667
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "responsive-layout"
-          },
-          "cardinality": 1,
-          "identity": ["responsive"]
-        },
-        "responsive-above": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "responsive-layout"
-          },
-          "cardinality": 1,
-          "identity": ["responsive"]
-        }
       }
     },
     {
@@ -809,155 +213,6 @@
         "path": "app/page.module.scss",
         "before": ".card",
         "after": "p-[13px]"
-      },
-      "probes": {
-        "base": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "card"
-          },
-          "cardinality": 1,
-          "identity": ["card"]
-        },
-        "hover": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "hover",
-            "selector": {
-              "type": "data",
-              "value": "card"
-            }
-          },
-          "selector": {
-            "type": "data",
-            "value": "card"
-          },
-          "cardinality": 1,
-          "identity": ["card"]
-        },
-        "focus": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "focus",
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            }
-          },
-          "selector": {
-            "type": "role",
-            "value": "button",
-            "name": "Toggle details"
-          },
-          "cardinality": 1,
-          "identity": ["action"]
-        },
-        "focus-visible": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "press",
-            "key": "Tab"
-          },
-          "selector": {
-            "type": "role",
-            "value": "button",
-            "name": "Toggle details"
-          },
-          "cardinality": 1,
-          "identity": ["action"]
-        },
-        "responsive-below": {
-          "route": "/",
-          "viewport": {
-            "width": 375,
-            "height": 667
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "responsive-layout"
-          },
-          "cardinality": 1,
-          "identity": ["responsive"]
-        },
-        "responsive-above": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "responsive-layout"
-          },
-          "cardinality": 1,
-          "identity": ["responsive"]
-        }
       }
     },
     {
@@ -969,155 +224,6 @@
         "path": "app/page.module.sass",
         "before": ".card",
         "after": "p-[13px]"
-      },
-      "probes": {
-        "base": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "card"
-          },
-          "cardinality": 1,
-          "identity": ["card"]
-        },
-        "hover": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "hover",
-            "selector": {
-              "type": "data",
-              "value": "card"
-            }
-          },
-          "selector": {
-            "type": "data",
-            "value": "card"
-          },
-          "cardinality": 1,
-          "identity": ["card"]
-        },
-        "focus": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "focus",
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            }
-          },
-          "selector": {
-            "type": "role",
-            "value": "button",
-            "name": "Toggle details"
-          },
-          "cardinality": 1,
-          "identity": ["action"]
-        },
-        "focus-visible": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "press",
-            "key": "Tab"
-          },
-          "selector": {
-            "type": "role",
-            "value": "button",
-            "name": "Toggle details"
-          },
-          "cardinality": 1,
-          "identity": ["action"]
-        },
-        "responsive-below": {
-          "route": "/",
-          "viewport": {
-            "width": 375,
-            "height": 667
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "responsive-layout"
-          },
-          "cardinality": 1,
-          "identity": ["responsive"]
-        },
-        "responsive-above": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "responsive-layout"
-          },
-          "cardinality": 1,
-          "identity": ["responsive"]
-        }
       }
     },
     {
@@ -1129,155 +235,6 @@
         "path": "pages/index.module.less",
         "before": ".card",
         "after": "p-[13px]"
-      },
-      "probes": {
-        "base": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "card"
-          },
-          "cardinality": 1,
-          "identity": ["card"]
-        },
-        "hover": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "hover",
-            "selector": {
-              "type": "data",
-              "value": "card"
-            }
-          },
-          "selector": {
-            "type": "data",
-            "value": "card"
-          },
-          "cardinality": 1,
-          "identity": ["card"]
-        },
-        "focus": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "focus",
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            }
-          },
-          "selector": {
-            "type": "role",
-            "value": "button",
-            "name": "Toggle details"
-          },
-          "cardinality": 1,
-          "identity": ["action"]
-        },
-        "focus-visible": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "press",
-            "key": "Tab"
-          },
-          "selector": {
-            "type": "role",
-            "value": "button",
-            "name": "Toggle details"
-          },
-          "cardinality": 1,
-          "identity": ["action"]
-        },
-        "responsive-below": {
-          "route": "/",
-          "viewport": {
-            "width": 375,
-            "height": 667
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "responsive-layout"
-          },
-          "cardinality": 1,
-          "identity": ["responsive"]
-        },
-        "responsive-above": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "responsive-layout"
-          },
-          "cardinality": 1,
-          "identity": ["responsive"]
-        }
       }
     },
     {
@@ -1289,155 +246,6 @@
         "path": "src/style.css",
         "before": ".card",
         "after": "p-[13px]"
-      },
-      "probes": {
-        "base": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "card"
-          },
-          "cardinality": 1,
-          "identity": ["card"]
-        },
-        "hover": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "hover",
-            "selector": {
-              "type": "data",
-              "value": "card"
-            }
-          },
-          "selector": {
-            "type": "data",
-            "value": "card"
-          },
-          "cardinality": 1,
-          "identity": ["card"]
-        },
-        "focus": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "focus",
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            }
-          },
-          "selector": {
-            "type": "role",
-            "value": "button",
-            "name": "Toggle details"
-          },
-          "cardinality": 1,
-          "identity": ["action"]
-        },
-        "focus-visible": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "press",
-            "key": "Tab"
-          },
-          "selector": {
-            "type": "role",
-            "value": "button",
-            "name": "Toggle details"
-          },
-          "cardinality": 1,
-          "identity": ["action"]
-        },
-        "responsive-below": {
-          "route": "/",
-          "viewport": {
-            "width": 375,
-            "height": 667
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "responsive-layout"
-          },
-          "cardinality": 1,
-          "identity": ["responsive"]
-        },
-        "responsive-above": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "responsive-layout"
-          },
-          "cardinality": 1,
-          "identity": ["responsive"]
-        }
       }
     },
     {
@@ -1449,155 +257,6 @@
         "path": "src/style.scss",
         "before": ".card",
         "after": "p-[13px]"
-      },
-      "probes": {
-        "base": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "card"
-          },
-          "cardinality": 1,
-          "identity": ["card"]
-        },
-        "hover": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "hover",
-            "selector": {
-              "type": "data",
-              "value": "card"
-            }
-          },
-          "selector": {
-            "type": "data",
-            "value": "card"
-          },
-          "cardinality": 1,
-          "identity": ["card"]
-        },
-        "focus": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "focus",
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            }
-          },
-          "selector": {
-            "type": "role",
-            "value": "button",
-            "name": "Toggle details"
-          },
-          "cardinality": 1,
-          "identity": ["action"]
-        },
-        "focus-visible": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "press",
-            "key": "Tab"
-          },
-          "selector": {
-            "type": "role",
-            "value": "button",
-            "name": "Toggle details"
-          },
-          "cardinality": 1,
-          "identity": ["action"]
-        },
-        "responsive-below": {
-          "route": "/",
-          "viewport": {
-            "width": 375,
-            "height": 667
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "responsive-layout"
-          },
-          "cardinality": 1,
-          "identity": ["responsive"]
-        },
-        "responsive-above": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "responsive-layout"
-          },
-          "cardinality": 1,
-          "identity": ["responsive"]
-        }
       }
     },
     {
@@ -1609,155 +268,6 @@
         "path": "src/style.sass",
         "before": ".card",
         "after": "p-[13px]"
-      },
-      "probes": {
-        "base": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "card"
-          },
-          "cardinality": 1,
-          "identity": ["card"]
-        },
-        "hover": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "hover",
-            "selector": {
-              "type": "data",
-              "value": "card"
-            }
-          },
-          "selector": {
-            "type": "data",
-            "value": "card"
-          },
-          "cardinality": 1,
-          "identity": ["card"]
-        },
-        "focus": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "focus",
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            }
-          },
-          "selector": {
-            "type": "role",
-            "value": "button",
-            "name": "Toggle details"
-          },
-          "cardinality": 1,
-          "identity": ["action"]
-        },
-        "focus-visible": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "press",
-            "key": "Tab"
-          },
-          "selector": {
-            "type": "role",
-            "value": "button",
-            "name": "Toggle details"
-          },
-          "cardinality": 1,
-          "identity": ["action"]
-        },
-        "responsive-below": {
-          "route": "/",
-          "viewport": {
-            "width": 375,
-            "height": 667
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "responsive-layout"
-          },
-          "cardinality": 1,
-          "identity": ["responsive"]
-        },
-        "responsive-above": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "responsive-layout"
-          },
-          "cardinality": 1,
-          "identity": ["responsive"]
-        }
       }
     },
     {
@@ -1769,155 +279,6 @@
         "path": "src/style.less",
         "before": ".card",
         "after": "p-[13px]"
-      },
-      "probes": {
-        "base": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "card"
-          },
-          "cardinality": 1,
-          "identity": ["card"]
-        },
-        "hover": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "hover",
-            "selector": {
-              "type": "data",
-              "value": "card"
-            }
-          },
-          "selector": {
-            "type": "data",
-            "value": "card"
-          },
-          "cardinality": 1,
-          "identity": ["card"]
-        },
-        "focus": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "focus",
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            }
-          },
-          "selector": {
-            "type": "role",
-            "value": "button",
-            "name": "Toggle details"
-          },
-          "cardinality": 1,
-          "identity": ["action"]
-        },
-        "focus-visible": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "action": {
-            "type": "press",
-            "key": "Tab"
-          },
-          "selector": {
-            "type": "role",
-            "value": "button",
-            "name": "Toggle details"
-          },
-          "cardinality": 1,
-          "identity": ["action"]
-        },
-        "responsive-below": {
-          "route": "/",
-          "viewport": {
-            "width": 375,
-            "height": 667
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "responsive-layout"
-          },
-          "cardinality": 1,
-          "identity": ["responsive"]
-        },
-        "responsive-above": {
-          "route": "/",
-          "viewport": {
-            "width": 1280,
-            "height": 720
-          },
-          "readiness": {
-            "selector": {
-              "type": "role",
-              "value": "button",
-              "name": "Toggle details"
-            },
-            "cardinality": 1
-          },
-          "selector": {
-            "type": "data",
-            "value": "responsive-layout"
-          },
-          "cardinality": 1,
-          "identity": ["responsive"]
-        }
       }
     },
     {

@@ -96,9 +96,7 @@ test("identical existing definitions are adopted regardless of authorship", () =
   });
   const identical: AuthoredMediaVariant = {
     name: "width-lte-768px",
-    definition: "@custom-variant width-lte-768px { @media (width <= 768px) { @slot; } }",
     mediaQueryKey: "(width <= 768px)",
-    path: "app.css",
   };
   const proving: MediaProbes = {
     resolves: (name) => name === "width-lte-768px",
@@ -169,9 +167,7 @@ test("owned names fall to the digest and owned digests fall back", () => {
 
   const digestOwner: AuthoredMediaVariant = {
     name: `twm-media-${component.digest}`,
-    definition: "@custom-variant x { &:hover { @slot; } }",
     mediaQueryKey: null,
-    path: "app.css",
   };
   const collided = resolveMediaNames(
     [
@@ -196,9 +192,7 @@ test("verified identical definitions bypass usage reservations", () => {
   });
   const identical: AuthoredMediaVariant = {
     name: "width-lte-768px",
-    definition: "@custom-variant width-lte-768px { @media (width <= 768px) { @slot; } }",
     mediaQueryKey: "(width <= 768px)",
-    path: "app.css",
   };
   const proving: MediaProbes = {
     resolves: (name) => name === "width-lte-768px",
@@ -253,25 +247,21 @@ test("cross-package components share one deduplicated resolution", () => {
   assert.equal(resolution.names.size, 1);
   const entry = resolution.names.get("(width <= 768px)");
   assert.ok(entry);
-  assert.equal(entry.cssPath, "a/card.css");
-
   const again = resolveMediaNames([first, second], remTokens, neverProbes);
   assert.deepEqual([...resolution.names.keys()], [...again.names.keys()]);
 });
 
 test("distinct keys never share a name even with colliding digests", () => {
   const shared = {
-    whole: false,
     readableName: "width-gte-env",
     digest: "00000000deadbeef",
     builtin: null,
     breakpoint: null,
-    cssPath: "card.css",
   };
   const components = [
-    { ...shared, key: "(width >= env(A))", order: 1 },
-    { ...shared, key: "(width >= env(B))", order: 2 },
-    { ...shared, key: "(width >= env(C))", order: 3 },
+    { ...shared, key: "(width >= env(A))" },
+    { ...shared, key: "(width >= env(B))" },
+    { ...shared, key: "(width >= env(C))" },
   ];
   const resolution = resolveMediaNames([collection({ components })], {}, neverProbes);
   const names = [...resolution.names.values()].map((entry) => entry.name);
