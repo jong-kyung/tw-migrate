@@ -38,6 +38,7 @@ export interface SourceAnalysis {
   usesCssModule: boolean;
   hasUnboundUseCssModule: boolean;
   definesRootUseCssModule: boolean;
+  templatePrefixes: string[];
   useCssModuleLocals: string[];
   unboundReferences: string[];
 }
@@ -153,6 +154,8 @@ function sourceAnalysisResult(value: unknown): value is SourceAnalysis {
     ) &&
     Array.isArray(value.vueGlobPatterns) &&
     value.vueGlobPatterns.every((item) => typeof item === "string") &&
+    Array.isArray(value.templatePrefixes) &&
+    value.templatePrefixes.every((item) => typeof item === "string") &&
     Array.isArray(value.useCssModuleLocals) &&
     value.useCssModuleLocals.every((item) => typeof item === "string") &&
     Array.isArray(value.unboundReferences) &&

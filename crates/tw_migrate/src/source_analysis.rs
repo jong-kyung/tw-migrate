@@ -153,6 +153,10 @@ struct SourceAnalysis {
     /// A root-scope binding named `useCssModule` that is not the Vue
     /// import; template references resolve to it instead of the Vue API.
     defines_root_use_css_module: bool,
+    /// Nonempty leading quasis of template literals with expressions, so
+    /// spelling reservations can match statically constrained dynamic
+    /// class construction such as `mr-${value}`.
+    template_prefixes: Vec<String>,
     /// Local names bound to the Vue `useCssModule` helper, including
     /// import aliases and namespace destructures, so template analysis can
     /// recognize calls through them.
@@ -534,6 +538,24 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
         walk::walk_call_expression(self, call);
     }
 
+    fn visit_template_literal(&mut self, template: &oxc_ast::ast::TemplateLiteral<'a>) {
+        if !template.expressions.is_empty()
+            && let Some(prefix) = template
+                .quasis
+                .first()
+                .and_then(|quasi| quasi.value.cooked.as_ref())
+            && !prefix.is_empty()
+            && !self
+                .analysis
+                .template_prefixes
+                .iter()
+                .any(|existing| existing == prefix.as_str())
+        {
+            self.analysis.template_prefixes.push(prefix.to_string());
+        }
+        walk::walk_template_literal(self, template);
+    }
+
     fn visit_identifier_reference(&mut self, identifier: &IdentifierReference<'a>) {
         if identifier.name == "$style" && self.is_unbound(identifier) {
             self.analysis.uses_css_module = true;
@@ -651,6 +673,7 @@ pub fn source_analysis_json(path: &str, source: &str) -> Result<String, String> 
             uses_css_module: false,
             has_unbound_use_css_module: false,
             defines_root_use_css_module: false,
+            template_prefixes: Vec::new(),
             use_css_module_locals: use_css_module_locals.clone(),
             unbound_references: Vec::new(),
         },
@@ -851,6 +874,19 @@ mod tests {
         .unwrap();
         assert_eq!(parsed["useCssModuleLocals"], serde_json::json!(["css", "helper"]));
         assert_eq!(parsed["unboundReferences"], serde_json::json!(["first", "second"]));
+    }
+
+    #[test]
+    fn collects_constrained_template_prefixes() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.tsx",
+                "const cls = `mr-${side}`; const whole = `${value}`; const fixed = `static`;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["templatePrefixes"], serde_json::json!(["mr-"]));
     }
 
     #[test]

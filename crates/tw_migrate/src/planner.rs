@@ -4187,6 +4187,65 @@ mod tests {
     }
 
     #[test]
+    fn canonical_aliases_apply_to_global_html_rules() {
+        let source = "<link rel=\"stylesheet\" href=\"./legacy.css\"><div class=\"card\"></div><main id=\"hero\">Text</main>\n";
+        let class_start = source.find("class=\"card\"").unwrap() + "class=\"".len();
+        let id_start = source.find("id=\"hero\"").unwrap() + "id=\"".len();
+        let request = serde_json::json!({
+            "stylesheets": [{
+                "cssPath": "/project/legacy.css",
+                "cssSource": ".card { padding: 13px; }\n#hero { height: 100vh; }\n",
+            }],
+            "candidateAliases": { "h-[100vh]": "h-screen" },
+            "files": [{
+                "path": "/project/index.html",
+                "source": source,
+                "htmlElements": [
+                    {
+                        "tag": "div",
+                        "classAttribute": {
+                            "value": "card",
+                            "start": class_start,
+                            "end": class_start + "card".len(),
+                            "writable": true,
+                        },
+                    },
+                    {
+                        "tag": "main",
+                        "classAttribute": {
+                            "value": "",
+                            "start": source.find(">Text").unwrap(),
+                            "end": source.find(">Text").unwrap(),
+                            "writable": true,
+                            "synthetic": true,
+                        },
+                        "idAttribute": {
+                            "value": "hero",
+                            "start": id_start,
+                            "end": id_start + "hero".len(),
+                            "writable": true,
+                        },
+                    },
+                ],
+                "htmlStylesheets": [{
+                    "cssPath": "/project/legacy.css",
+                    "variants": [],
+                    "direct": true,
+                    "analyzable": true,
+                }],
+                "htmlReferencesSafe": true,
+            }],
+        });
+
+        let response = plan_batch(request);
+
+        assert!(
+            response["files"][0]["source"].as_str().unwrap().contains("h-screen"),
+            "{response}"
+        );
+    }
+
+    #[test]
     fn canonical_aliases_apply_inside_html_context_variants() {
         let source = "<link rel=\"stylesheet\" href=\"./print.css\" media=\"print\"><div class=\"card\"></div>\n";
         let value_start = source.find("class=\"card\"").unwrap() + "class=\"".len();

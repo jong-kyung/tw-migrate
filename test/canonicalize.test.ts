@@ -61,7 +61,7 @@ test("alias acceptance rejects theme-backed and reserved spellings", async () =>
   // The repository itself is the target project: Tailwind v4 resolves from
   // its node_modules exactly like a migrated project's own installation.
   const entry = await loadTailwind(process.cwd(), join(dir, "globals.css"), new Map(), dir);
-  const open = { names: new Set<string>(), unbounded: false };
+  const open = { names: new Set<string>(), prefixes: new Set<string>(), unbounded: false };
 
   // p-4 dereferences --spacing, which literal-only runtime stability
   // rejects until the reservation scan lands with font registration.
@@ -75,6 +75,7 @@ test("alias acceptance rejects theme-backed and reserved spellings", async () =>
   expect(
     acceptedCandidateAliases(entry.designSystem, ["mr-[auto]"], {
       names: new Set(["mr-auto"]),
+      prefixes: new Set<string>(),
       unbounded: false,
     }),
   ).toEqual({});
@@ -82,7 +83,32 @@ test("alias acceptance rejects theme-backed and reserved spellings", async () =>
   expect(
     acceptedCandidateAliases(entry.designSystem, ["mr-[auto]"], {
       names: new Set<string>(),
+      prefixes: new Set<string>(),
       unbounded: true,
     }),
   ).toEqual({});
+});
+
+test("constrained dynamic class prefixes and variant brackets calibrate acceptance", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tw-canonicalize-"));
+  await writeFile(join(dir, "globals.css"), '@import "tailwindcss";\n');
+  const entry = await loadTailwind(process.cwd(), join(dir, "globals.css"), new Map(), dir);
+
+  // A template such as `mr-${value}` can complete to the canonical name.
+  expect(
+    acceptedCandidateAliases(entry.designSystem, ["mr-[auto]"], {
+      names: new Set<string>(),
+      prefixes: new Set(["mr-"]),
+      unbounded: false,
+    }),
+  ).toEqual({});
+  // Brackets inside a preserved arbitrary variant do not reject the named
+  // utility segment.
+  expect(
+    acceptedCandidateAliases(entry.designSystem, ["[@media_(min-width:48rem)]:mr-[auto]"], {
+      names: new Set<string>(),
+      prefixes: new Set<string>(),
+      unbounded: false,
+    }),
+  ).toEqual({ "[@media_(min-width:48rem)]:mr-[auto]": "[@media_(min-width:48rem)]:mr-auto" });
 });

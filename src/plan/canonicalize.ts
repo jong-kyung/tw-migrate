@@ -42,20 +42,27 @@ export function canonicalCandidate(system: DesignSystem, candidate: string): str
 export interface SpellingReservations {
   /// Authored class spellings collected from every stylesheet snapshot.
   names: Set<string>;
+  /// Nonempty static prefixes of dynamic class construction in source
+  /// files; a canonical spelling the runtime value could complete is
+  /// reserved.
+  prefixes: Set<string>;
   /// True when any snapshot's class match set cannot be bounded (an
   /// unparseable sheet, an interpolated class, or an attribute matcher
   /// beyond word equality); every alias is then rejected.
   unbounded: boolean;
 }
 
-/// Authored-selector reservations over the complete stylesheet snapshot.
-/// Migration stylesheets never join the Tailwind scan corpus, so a retained
-/// legacy rule such as `.mr-auto` would silently activate on a migrated
-/// element unless its spelling is reserved here.
-export function spellingReservations(styleSources: Map<string, string>): SpellingReservations {
+/// Authored-selector reservations over the complete stylesheet snapshot,
+/// including the entry's loaded import graph. Migration stylesheets never
+/// join the Tailwind scan corpus, so a retained legacy rule such as
+/// `.mr-auto` would silently activate on a migrated element unless its
+/// spelling is reserved here.
+export function spellingReservations(
+  stylesheets: Iterable<readonly [string, string]>,
+): SpellingReservations {
   const names = new Set<string>();
   let unbounded = false;
-  for (const [path, source] of styleSources) {
+  for (const [path, source] of stylesheets) {
     try {
       const analysis = stylesheetAnalysis(path, source);
       for (const name of analysis.classNames) names.add(name);
@@ -64,7 +71,30 @@ export function spellingReservations(styleSources: Map<string, string>): Spellin
       unbounded = true;
     }
   }
-  return { names, unbounded };
+  return { names, prefixes: new Set(), unbounded };
+}
+
+export function reservedSpelling(reservations: SpellingReservations, spelling: string): boolean {
+  if (reservations.names.has(spelling)) return true;
+  for (const prefix of reservations.prefixes) {
+    if (spelling.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
+/// The utility segment of one complete candidate: everything after the
+/// last top-level variant separator, bracket-aware so arbitrary variants
+/// keep their inner colons.
+function utilitySegment(candidate: string): string {
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < candidate.length; index += 1) {
+    const character = candidate[index];
+    if (character === "[" || character === "(") depth += 1;
+    else if (character === "]" || character === ")") depth -= 1;
+    else if (character === ":" && depth === 0) start = index + 1;
+  }
+  return candidate.slice(start);
 }
 
 function sameShape(
@@ -96,10 +126,14 @@ export function acceptedCandidateAliases(
   if (reservations.unbounded) return aliases;
   for (const probe of new Set(probes)) {
     const canonical = canonicalCandidate(system, probe);
-    // Only a fully named spelling is an idiom improvement; respelling one
-    // arbitrary form as another churns byte-exact values (quoting and
-    // whitespace) without gaining a name.
-    if (canonical === null || canonical.includes("[") || reservations.names.has(canonical)) {
+    // Only a fully named utility is an idiom improvement; respelling one
+    // arbitrary form as another churns byte-exact values without gaining a
+    // name, while brackets inside a preserved variant chain stay welcome.
+    if (
+      canonical === null ||
+      utilitySegment(canonical).includes("[") ||
+      reservedSpelling(reservations, canonical)
+    ) {
       continue;
     }
     const [compiledProbe, compiledCanonical] = system.candidatesToCss([probe, canonical]);

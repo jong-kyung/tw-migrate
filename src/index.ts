@@ -1,11 +1,11 @@
 import { lstat, readFile } from "node:fs/promises";
-import { basename, extname, join } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 
 import { unifiedDiff } from "./util/diff.ts";
 import { collectFiles, resolveScope, scannerIgnoredPaths } from "./discovery.ts";
 import { parseHtmlSource } from "./parser/html.ts";
 import { preparePackageHtml } from "./plan/html.ts";
-import { planBatchMigration, stylesheetAnalysis, validateCss } from "./native.ts";
+import { planBatchMigration, sourceAnalysis, stylesheetAnalysis, validateCss } from "./native.ts";
 import {
   indexStylesheetDependents,
   isIntegrityError,
@@ -715,27 +715,64 @@ async function planPreparedGroup(
     return leftPath < rightPath ? -1 : leftPath > rightPath ? 1 : 0;
   });
   const entry = active[0].tailwind;
-  // Canonical spellings are reserved against every authored selector, and a
-  // consumer page keeping an opaque style source (a remote stylesheet link
-  // or an inline style block) can contain any selector, so such a group
-  // keeps its arbitrary spellings entirely.
-  const reservations = spellingReservations(context.styleSources);
+  // Canonical spellings are reserved against every authored selector,
+  // including the entry's loaded import graph, and a consumer page keeping
+  // an opaque style source (a remote or unresolved stylesheet link, or an
+  // inline style block) can contain any selector, so such a group keeps
+  // its arbitrary spellings entirely.
+  const reservations = spellingReservations([
+    ...context.styleSources,
+    ...entry.graphSources.map(
+      (graphSource) => [`${graphSource.path}.graph.css`, graphSource.source] as const,
+    ),
+  ]);
   const groupFiles = new Map(
     active.flatMap((member) => member.files.map((file) => [file.path, file] as const)),
   );
+  const workspaceEntries = new Set([...context.entryCatalog.values()].flat());
   for (const file of groupFiles.values()) {
     if (reservations.unbounded) break;
-    if (extname(file.path) !== ".html") continue;
-    try {
-      const parsed = parseHtmlSource(file.path, file.source);
-      if (
-        parsed.hasStyle ||
-        parsed.links.some((link) => /^[a-z][a-z0-9+.-]*:|^\/\//i.test(link.href))
-      ) {
+    if (extname(file.path) === ".html") {
+      try {
+        const parsed = parseHtmlSource(file.path, file.source);
+        if (parsed.hasStyle) reservations.unbounded = true;
+        for (const link of parsed.links) {
+          const href = link.href.split(/[?#]/, 1)[0];
+          if (!href || /^[a-z][a-z0-9+.-]*:|^\/\//i.test(href)) {
+            reservations.unbounded = true;
+            continue;
+          }
+          const resolved = resolve(dirname(file.path), href);
+          // An unresolved local link loads a stylesheet the snapshot never
+          // parsed, and a link to another package's Tailwind entry
+          // co-loads a design system this group cannot validate against;
+          // full cross-entry compile validation lands with font
+          // registration.
+          if (
+            !context.styleSources.has(resolved) ||
+            (workspaceEntries.has(resolved) && resolved !== entry.path)
+          ) {
+            reservations.unbounded = true;
+          }
+        }
+      } catch {
         reservations.unbounded = true;
       }
+      continue;
+    }
+    // Statically constrained dynamic class construction reserves the
+    // spellings its runtime values can complete.
+    if (
+      ![".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts"].includes(extname(file.path))
+    )
+      continue;
+    try {
+      for (const prefix of sourceAnalysis(file.path, file.source).templatePrefixes) {
+        reservations.prefixes.add(prefix);
+      }
     } catch {
-      reservations.unbounded = true;
+      // An unparseable source cannot constrain anything; its dynamic sites
+      // already carry the planner's dynamic-class warnings.
     }
   }
   const recoverGroup = (error: unknown, fatal = false): PlanResult[] => {

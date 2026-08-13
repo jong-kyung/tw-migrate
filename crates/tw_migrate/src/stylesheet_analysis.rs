@@ -223,6 +223,7 @@ fn collect_compound_selector_classes(
                     AttributeSelectorValue::Str(value) => literal_str(value),
                     _ => None,
                 });
+                let case_insensitive = attribute.modifier.is_some();
                 match (attribute.matcher.as_ref().map(|matcher| &matcher.kind), value) {
                     // `[class]` alone matches presence, not a spelling.
                     (None, _) => {}
@@ -232,9 +233,16 @@ fn collect_compound_selector_classes(
                             | AttributeSelectorMatcherKind::MatchWord,
                         ),
                         Some(value),
-                    ) => analysis
-                        .class_names
-                        .extend(value.split_whitespace().map(str::to_string)),
+                    ) => analysis.class_names.extend(value.split_whitespace().map(|word| {
+                        // Canonical spellings are lowercase, so an
+                        // ASCII-case-insensitive matcher reserves through
+                        // its lowercase form.
+                        if case_insensitive {
+                            word.to_ascii_lowercase()
+                        } else {
+                            word.to_string()
+                        }
+                    })),
                     _ => analysis.class_reservations_unbounded = true,
                 }
             }
@@ -486,6 +494,26 @@ fn collect_stylesheet_statements(
         match statement {
             Statement::AtRule(at_rule) => {
                 match &at_rule.prelude {
+                    // `@scope` roots and limits match live elements, so
+                    // their selectors reserve spellings like rule selectors.
+                    Some(AtRulePrelude::Scope(prelude)) => {
+                        let (start, end) = match prelude.as_ref() {
+                            oxc_css_parser::ast::ScopePrelude::StartOnly(start) => {
+                                (start.selector.as_ref(), None)
+                            }
+                            oxc_css_parser::ast::ScopePrelude::EndOnly(end) => {
+                                (None, end.selector.as_ref())
+                            }
+                            oxc_css_parser::ast::ScopePrelude::Both(both) => {
+                                (both.start.selector.as_ref(), both.end.selector.as_ref())
+                            }
+                        };
+                        for list in [start, end].into_iter().flatten() {
+                            for selector in &list.selectors {
+                                collect_selector_classes(selector, analysis);
+                            }
+                        }
+                    }
                     Some(AtRulePrelude::Import(prelude)) => match import_href(&prelude.href) {
                         Some(reference) => analysis.references.push(reference),
                         None => analysis.unverifiable = true,
@@ -867,6 +895,23 @@ mod tests {
         assert_eq!(
             parsed["classNames"],
             serde_json::json!(["card", "font-open-sans", "mr-auto", "p-4", "pill", "stack", "wide"])
+        );
+        assert_eq!(parsed["classReservationsUnbounded"], false);
+    }
+
+    #[test]
+    fn reserves_case_insensitive_and_scope_prelude_classes() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/legacy.css",
+                "[class~=\"MR-AUTO\" i] { color: red; }\n@scope (.p-4) to (.stack) { .legacy { color: blue; } }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            parsed["classNames"],
+            serde_json::json!(["legacy", "mr-auto", "p-4", "stack"])
         );
         assert_eq!(parsed["classReservationsUnbounded"], false);
     }
