@@ -931,15 +931,22 @@ impl<'a> MediaVariantContext<'a> {
         if left_media == right_media || left_residual != right_residual {
             return false;
         }
-        let conflicting = tailwind_utilities_conflict(
-            &format!("probe:{}", tailwind_utility_parts(&left.candidate).1),
-            &format!("probe:{}", tailwind_utility_parts(&right.candidate).1),
-        ) || left.properties.iter().any(|left_property| {
-            right
-                .properties
-                .iter()
-                .any(|right_property| css_properties_conflict(left_property, right_property))
-        });
+        // Transferred source properties are authoritative when both sides
+        // carry them; the spelling heuristic only covers metadata-free
+        // candidates so a canonical alias cannot be misclassified by its
+        // class prefix.
+        let string_fallback = left.properties.is_empty() || right.properties.is_empty();
+        let conflicting = (string_fallback
+            && tailwind_utilities_conflict(
+                &format!("probe:{}", tailwind_utility_parts(&left.candidate).1),
+                &format!("probe:{}", tailwind_utility_parts(&right.candidate).1),
+            ))
+            || left.properties.iter().any(|left_property| {
+                right
+                    .properties
+                    .iter()
+                    .any(|right_property| css_properties_conflict(left_property, right_property))
+            });
         if !conflicting {
             return false;
         }
@@ -1142,6 +1149,7 @@ fn plan_consumer_file(
     css_path: &str,
     is_module: bool,
     candidates: &HashMap<SelectorKey, Vec<String>>,
+    candidate_properties: &HashMap<String, BTreeSet<String>>,
     preserved_module_classes: &BTreeSet<String>,
     module_rule_classes: Option<&BTreeSet<String>>,
     utility_prefix: Option<&str>,
@@ -1174,7 +1182,14 @@ fn plan_consumer_file(
         {
             return Ok(plan_html_file(file, css_path, candidates, utility_prefix));
         }
-        return plan_batch_source_file(file, css_path, false, candidates, preserved_module_classes);
+        return plan_batch_source_file(
+            file,
+            css_path,
+            false,
+            candidates,
+            candidate_properties,
+            preserved_module_classes,
+        );
     }
     if stylesheet_is_vue || file_is_vue {
         if file_is_vue && file.has_analyzable_context(css_path) {
@@ -1196,6 +1211,7 @@ fn plan_consumer_file(
         css_path,
         is_module,
         candidates,
+        candidate_properties,
         preserved_module_classes,
     )
 }
@@ -1235,6 +1251,13 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
     for (index, stylesheet) in request.stylesheets.iter().enumerate() {
         let plan_request = batch_stylesheet_request(&request, stylesheet, snapshot_files);
         let maps = candidate_map_for_request(&plan_request, &externally_blocked[index])?;
+        let map_properties = candidate_property_union(
+            maps.origins
+                .iter()
+                .flat_map(|((_, candidate), origins)| {
+                    origins.iter().map(move |origin| (candidate, &origin.properties))
+                }),
+        );
         snapshot_files = plan_request.files;
         for file in request.files.iter().filter(|file| file.writable) {
             let result = plan_consumer_file(
@@ -1244,6 +1267,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
                     .is_module
                     .unwrap_or_else(|| is_stylesheet_module(&stylesheet.css_path)),
                 &maps.candidates,
+                &map_properties,
                 &BTreeSet::new(),
                 // The conflict pass must keep collecting matches; the main
                 // pass applies the unresolved-member retention itself.
@@ -1278,7 +1302,8 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
         for (left_index, left) in matches.iter().enumerate() {
             for right in &matches[left_index + 1..] {
                 if (left.stylesheet != right.stylesheet
-                    && (tailwind_utilities_conflict(&left.candidate, &right.candidate)
+                    && (((left.properties.is_empty() || right.properties.is_empty())
+                        && tailwind_utilities_conflict(&left.candidate, &right.candidate))
                         || (tailwind_variants_match(&left.candidate, &right.candidate)
                             && left.properties.iter().any(|left_property| {
                                 right.properties.iter().any(|right_property| {
@@ -1943,6 +1968,21 @@ fn is_ident_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-'
 }
 
+/// Union of transferred source properties per candidate spelling, for the
+/// conflict gates that outlive individual rules.
+fn candidate_property_union<'a>(
+    entries: impl Iterator<Item = (&'a String, &'a BTreeSet<String>)>,
+) -> HashMap<String, BTreeSet<String>> {
+    let mut union: HashMap<String, BTreeSet<String>> = HashMap::new();
+    for (candidate, properties) in entries {
+        union
+            .entry(candidate.clone())
+            .or_default()
+            .extend(properties.iter().cloned());
+    }
+    union
+}
+
 fn dedup_candidate_map(candidate_map: &mut HashMap<SelectorKey, Vec<String>>) {
     for candidates in candidate_map.values_mut() {
         candidates.sort();
@@ -2045,10 +2085,6 @@ fn plan_request(
         vue_masked,
     ) = parse_request_rules(&request)?;
     let vue_mode = vue_masked.is_some();
-    let candidate_probes = rules
-        .iter()
-        .flat_map(|rule| rule.candidates.iter().cloned())
-        .collect::<BTreeSet<_>>();
     let vue_retention = request
         .sheet
         .vue_retention
@@ -2112,6 +2148,15 @@ fn plan_request(
         );
     }
 
+    // Canonicalization probes: candidates of rules that still rewrite
+    // consumers, collected after retention stamping but before quote-fit
+    // and source-edit checks. Hard-retained rules never reach a rewrite
+    // site, so their spellings must not influence alias or name choices.
+    let candidate_probes = rules
+        .iter()
+        .filter(|rule| rule.warning.is_none() || is_batch_retained(rule.warning))
+        .flat_map(|rule| rule.candidates.iter().cloned())
+        .collect::<BTreeSet<_>>();
     let preserved_module_classes = rules
         .iter()
         .filter(|rule| is_module && is_batch_retained(rule.warning))
@@ -2164,12 +2209,15 @@ fn plan_request(
             .flat_map(|rule| rule.related_classes.iter().cloned())
             .collect::<BTreeSet<_>>()
     });
+    let request_properties =
+        candidate_property_union(rules.iter().flat_map(|rule| rule.candidate_properties.iter()));
     for file in &request.files {
         let mut result = plan_consumer_file(
             file,
             &request.sheet.css_path,
             is_module,
             &candidate_map,
+            &request_properties,
             &preserved_module_classes,
             module_rule_classes.as_ref(),
             request.utility_prefix.as_deref(),
@@ -3971,6 +4019,78 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|warning| warning["code"] == "module-utilities-conflict")
+        );
+    }
+
+    #[test]
+    fn aliased_member_spellings_conflict_by_properties_not_prefix() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".title { font-family: \"My Font\", sans-serif; }\n.strong { font-weight: 700; }\n",
+            "candidateAliases": { "[font-family:\"My_Font\",_sans-serif]": "font-my-font" },
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={`${styles.title} ${styles.strong}`} />;\n"
+            }]
+        });
+
+        let response = plan(request);
+
+        // `font-my-font` carries its transferred font-family property, so
+        // pairing it with the font-weight member never reads as a conflict
+        // through the `font-` spelling prefix.
+        assert_eq!(response["convertedRules"], 2);
+        assert!(
+            response["files"][0]["source"]
+                .as_str()
+                .unwrap()
+                .contains("font-my-font font-[700]")
+        );
+    }
+
+    #[test]
+    fn canonical_aliases_apply_inside_html_context_variants() {
+        let source = "<link rel=\"stylesheet\" href=\"./print.css\" media=\"print\"><div class=\"card\"></div>\n";
+        let value_start = source.find("class=\"card\"").unwrap() + "class=\"".len();
+        let request = serde_json::json!({
+            "stylesheets": [{
+                "cssPath": "/project/print.css",
+                "cssSource": ".card { margin-right: auto; }\n",
+            }],
+            "candidateAliases": { "mr-[auto]": "mr-auto" },
+            "files": [{
+                "path": "/project/index.html",
+                "source": source,
+                "htmlElements": [{
+                    "tag": "div",
+                    "classAttribute": {
+                        "value": "card",
+                        "start": value_start,
+                        "end": value_start + "card".len(),
+                        "writable": true,
+                    },
+                }],
+                "htmlStylesheets": [{
+                    "cssPath": "/project/print.css",
+                    "variants": ["twm-media-print"],
+                    "direct": true,
+                    "analyzable": true,
+                }],
+                "htmlReferencesSafe": true,
+            }],
+        });
+
+        let response = plan_batch(request);
+
+        // Rule-level aliases resolve before contextual variants wrap the
+        // candidate, so the conditional context renders the canonical
+        // spelling inside its generated variant.
+        assert!(
+            response["files"][0]["source"]
+                .as_str()
+                .unwrap()
+                .contains("twm-media-print:mr-auto"),
+            "{response}"
         );
     }
 
@@ -6467,6 +6587,7 @@ mod tests {
             "/project/A.module.css",
             true,
             &candidates,
+            &HashMap::new(),
             &preserved,
         )
         .unwrap();
