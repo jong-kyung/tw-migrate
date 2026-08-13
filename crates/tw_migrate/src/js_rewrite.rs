@@ -22,7 +22,10 @@ use oxc_syntax::symbol::SymbolId;
 use crate::{
     css_plan::SelectorKey,
     planner::{Edit, SourceFile, Warning, original_offset},
-    utilities::{css_properties_conflict, tailwind_utilities_conflict, utility_conflict},
+    utilities::{
+        css_properties_conflict, tailwind_utilities_conflict, tailwind_variants_match,
+        utility_conflict,
+    },
 };
 
 pub(crate) struct CandidateMatch {
@@ -599,11 +602,15 @@ impl UsageCollector<'_> {
         ) && !left_properties.is_empty()
             && !right_properties.is_empty()
         {
-            return left_properties.iter().any(|left_property| {
-                right_properties
-                    .iter()
-                    .any(|right_property| css_properties_conflict(left_property, right_property))
-            });
+            // Utilities under different variant chains occupy different
+            // slots and never compete, matching the spelling heuristic's
+            // variant gate.
+            return tailwind_variants_match(left, right)
+                && left_properties.iter().any(|left_property| {
+                    right_properties
+                        .iter()
+                        .any(|right_property| css_properties_conflict(left_property, right_property))
+                });
         }
         tailwind_utilities_conflict(left, right)
     }

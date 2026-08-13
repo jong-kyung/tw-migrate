@@ -356,9 +356,11 @@ struct PlanRequest {
     /// keyframes may still move.
     #[serde(default = "default_entry_writable")]
     global_at_rule_moves: bool,
-    /// Caller-accepted canonical spellings keyed by complete planner
-    /// candidate. Applied after prefixing so every rewrite path renders the
-    /// canonical name; empty on the first planning pass.
+    /// Caller-accepted canonical spellings keyed by the planner's
+    /// rule-level candidate, the same form candidateProbes emits. Applied
+    /// after prefixing and before HTML context variants wrap the spelling,
+    /// so conditional contexts render the canonical name inside their
+    /// generated variants; empty on the first planning pass.
     #[serde(default)]
     candidate_aliases: HashMap<String, String>,
     files: Vec<SourceFile>,
@@ -1304,7 +1306,10 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
                 if (left.stylesheet != right.stylesheet
                     && (((left.properties.is_empty() || right.properties.is_empty())
                         && tailwind_utilities_conflict(&left.candidate, &right.candidate))
-                        || (tailwind_variants_match(&left.candidate, &right.candidate)
+                        // Identical spellings emit one class and never
+                        // compete, matching the heuristic's equality exit.
+                        || (left.candidate != right.candidate
+                            && tailwind_variants_match(&left.candidate, &right.candidate)
                             && left.properties.iter().any(|left_property| {
                                 right.properties.iter().any(|right_property| {
                                     css_properties_conflict(left_property, right_property)
@@ -4019,6 +4024,58 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|warning| warning["code"] == "module-utilities-conflict")
+        );
+    }
+
+    #[test]
+    fn variant_separated_members_with_shared_properties_do_not_conflict() {
+        let request = serde_json::json!({
+            "cssPath": "/project/Card.module.css",
+            "cssSource": ".a:hover { color: red; }\n.b:focus { color: blue; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={`${styles.a} ${styles.b}`} />;\n"
+            }]
+        });
+
+        let response = plan(request);
+
+        // hover: and focus: occupy different variant slots, so the shared
+        // color property never reads as a same-site conflict.
+        assert_eq!(response["convertedRules"], 2, "{response}");
+        assert!(
+            !response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| warning["code"] == "module-utilities-conflict")
+        );
+    }
+
+    #[test]
+    fn identical_candidates_across_stylesheets_do_not_conflict() {
+        let request = serde_json::json!({
+            "stylesheets": [
+                { "cssPath": "/project/A.module.css", "cssSource": ".a { padding: 8px; }\n" },
+                { "cssPath": "/project/B.module.css", "cssSource": ".b { padding: 8px; }\n" },
+            ],
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": "import a from './A.module.css';\nimport b from './B.module.css';\nexport const Card = () => <div className={`${a.a} ${b.b}`} />;\n"
+            }]
+        });
+
+        let response = plan_batch(request);
+
+        // Both rules produce the same spelling; one emitted class serves
+        // both, so nothing is retained as a cross-stylesheet conflict.
+        assert!(
+            !response["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| warning["code"] == "batch-stylesheet-conflict"),
+            "{response}"
         );
     }
 
