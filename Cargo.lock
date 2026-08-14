@@ -1011,17 +1011,10 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
- "oxc-css-parser",
- "oxc_allocator",
- "oxc_ast",
- "oxc_ast_visit",
- "oxc_parser",
- "oxc_semantic",
- "oxc_sourcemap",
- "oxc_span",
- "oxc_syntax",
- "serde",
- "serde_json",
+ "tw_migrate_css",
+ "tw_migrate_error",
+ "tw_migrate_planner",
+ "tw_migrate_source",
 ]
 
 [[package]]
@@ -1032,6 +1025,50 @@ dependencies = [
  "serde",
  "serde_json",
  "toml",
+]
+
+[[package]]
+name = "tw_migrate_css"
+version = "0.0.0"
+dependencies = [
+ "oxc-css-parser",
+ "serde",
+ "serde_json",
+ "tw_migrate_error",
+]
+
+[[package]]
+name = "tw_migrate_error"
+version = "0.0.0"
+
+[[package]]
+name = "tw_migrate_planner"
+version = "0.0.0"
+dependencies = [
+ "oxc-css-parser",
+ "oxc_sourcemap",
+ "serde",
+ "serde_json",
+ "tw_migrate_css",
+ "tw_migrate_error",
+ "tw_migrate_source",
+]
+
+[[package]]
+name = "tw_migrate_source"
+version = "0.0.0"
+dependencies = [
+ "oxc_allocator",
+ "oxc_ast",
+ "oxc_ast_visit",
+ "oxc_parser",
+ "oxc_semantic",
+ "oxc_span",
+ "oxc_syntax",
+ "serde",
+ "serde_json",
+ "tw_migrate_css",
+ "tw_migrate_error",
 ]
 
 [[package]]

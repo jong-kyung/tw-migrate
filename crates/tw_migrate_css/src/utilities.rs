@@ -3,12 +3,12 @@ use std::collections::HashMap;
 use crate::{arbitrary::encode_value, theme::exact_theme_token};
 
 #[derive(Default)]
-pub(crate) struct SpacingValues {
+pub struct SpacingValues {
     values: [Option<String>; 4],
 }
 
 impl SpacingValues {
-    pub(crate) fn apply(
+    pub fn apply(
         &mut self,
         property: &str,
         family: &str,
@@ -39,7 +39,7 @@ impl SpacingValues {
 
     /// Returns `None` when a stored value cannot be represented as a
     /// Tailwind arbitrary value.
-    pub(crate) fn candidates(
+    pub fn candidates(
         &self,
         family_prefix: &str,
         side_prefixes: [&str; 4],
@@ -66,17 +66,12 @@ impl SpacingValues {
 }
 
 #[derive(Default)]
-pub(crate) struct OverflowValues {
+pub struct OverflowValues {
     axes: [Option<String>; 2],
 }
 
 impl OverflowValues {
-    pub(crate) fn apply(
-        &mut self,
-        property: &str,
-        value: &str,
-        components: &[&str],
-    ) -> Result<bool, ()> {
+    pub fn apply(&mut self, property: &str, value: &str, components: &[&str]) -> Result<bool, ()> {
         match property {
             "overflow" => {
                 // The shorthand sets overflow-x then overflow-y.
@@ -96,7 +91,7 @@ impl OverflowValues {
 
     /// Returns `None` when a stored value cannot be represented as a
     /// Tailwind arbitrary value.
-    pub(crate) fn candidates(&self) -> Option<Vec<String>> {
+    pub fn candidates(&self) -> Option<Vec<String>> {
         if let [Some(x), Some(y)] = &self.axes
             && x == y
         {
@@ -118,7 +113,7 @@ fn overflow_candidate(property: &str, value: &str) -> Option<String> {
     }
 }
 
-pub(crate) fn declaration_to_candidate(
+pub fn declaration_to_candidate(
     property: &str,
     value: &str,
     theme_tokens: &HashMap<String, String>,
@@ -267,10 +262,7 @@ fn arbitrary_property(property: &str, value: &str) -> Result<String, &'static st
 
 /// The first (generated, existing) pair where a generated utility conflicts
 /// with a class already present at the rewrite site.
-pub(crate) fn utility_conflict(
-    generated: &[String],
-    existing: &[&str],
-) -> Option<(String, String)> {
+pub fn utility_conflict(generated: &[String], existing: &[&str]) -> Option<(String, String)> {
     generated.iter().find_map(|candidate| {
         existing
             .iter()
@@ -279,7 +271,7 @@ pub(crate) fn utility_conflict(
     })
 }
 
-pub(crate) fn tailwind_utilities_conflict(generated: &str, existing: &str) -> bool {
+pub fn tailwind_utilities_conflict(generated: &str, existing: &str) -> bool {
     if generated == existing {
         return false;
     }
@@ -305,13 +297,13 @@ pub(crate) fn tailwind_utilities_conflict(generated: &str, existing: &str) -> bo
     )
 }
 
-pub(crate) fn tailwind_variants_match(left: &str, right: &str) -> bool {
+pub fn tailwind_variants_match(left: &str, right: &str) -> bool {
     tailwind_utility_parts(left).0 == tailwind_utility_parts(right).0
 }
 
 /// Split a variant chain into its segments, bracket-aware so arbitrary
 /// variants keep their inner colons.
-pub(crate) fn variant_segments(variants: &str) -> Vec<&str> {
+pub fn variant_segments(variants: &str) -> Vec<&str> {
     if variants.is_empty() {
         return Vec::new();
     }
@@ -333,7 +325,7 @@ pub(crate) fn variant_segments(variants: &str) -> Vec<&str> {
     segments
 }
 
-pub(crate) fn css_properties_conflict(left: &str, right: &str) -> bool {
+pub fn css_properties_conflict(left: &str, right: &str) -> bool {
     if left == right {
         return true;
     }
@@ -551,7 +543,7 @@ fn themed_candidate(
     }
 }
 
-pub(crate) fn tailwind_utility_parts(class: &str) -> (&str, &str) {
+pub fn tailwind_utility_parts(class: &str) -> (&str, &str) {
     let mut depth = 0usize;
     let mut separator = None;
     for (index, character) in class.char_indices() {

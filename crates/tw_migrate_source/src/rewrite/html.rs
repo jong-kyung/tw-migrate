@@ -1,15 +1,13 @@
 use std::collections::{BTreeSet, HashMap};
 
+use tw_migrate_css::{SelectorKey, utility_conflict};
+
 use crate::{
-    css_plan::SelectorKey,
-    js_rewrite::{CandidateMatch, SourcePlan},
-    planner::{
-        Edit, HtmlAttribute, SourceFile, Warning, element_classes, element_has_context, element_ids,
-    },
-    utilities::utility_conflict,
+    CandidateMatch, Edit, HtmlAttribute, SourceFile, SourcePlan, Warning, element_classes,
+    element_has_context, element_ids,
 };
 
-pub(crate) fn plan_html_file(
+pub fn plan_html_file(
     file: &SourceFile,
     css_path: &str,
     candidates: &HashMap<SelectorKey, Vec<String>>,
@@ -137,7 +135,7 @@ fn collect_candidates(
     key: SelectorKey,
     attribute: &HtmlAttribute,
     quote: Option<u8>,
-    contexts: &[&crate::planner::HtmlStylesheet],
+    contexts: &[&crate::HtmlStylesheet],
     candidates: &HashMap<SelectorKey, Vec<String>>,
     utility_prefix: Option<&str>,
     additions: &mut Vec<String>,
@@ -201,7 +199,7 @@ fn merge_class_attribute(attribute: &HtmlAttribute, additions: &[String]) -> Opt
 /// The first (generated, existing) utility conflict on a record whose
 /// classes cannot be edited but still receive fallthrough utilities.
 fn readonly_conflict(
-    element: &crate::planner::HtmlElement,
+    element: &crate::HtmlElement,
     candidates: &HashMap<SelectorKey, Vec<String>>,
 ) -> Option<(String, String)> {
     let classes = element_classes(element);
@@ -240,7 +238,7 @@ fn attribute_quote(source: &str, attribute: &HtmlAttribute) -> Option<u8> {
 /// are rewritten to static classes so fully-referenced module rules can be
 /// deleted. Literal class sites belong to the scoped and unscoped entries
 /// and are ignored here.
-pub(crate) fn plan_vue_module_file(
+pub fn plan_vue_module_file(
     file: &SourceFile,
     css_path: &str,
     candidates: &HashMap<SelectorKey, Vec<String>>,
@@ -437,7 +435,7 @@ fn push_utility_conflict(
 /// An effective child-root shadow record mirrors a binding that is counted
 /// on its own element; it exists only so cascade checks can see the caller's
 /// merged classes, marked by its read-only class attribute.
-fn is_shadow_only(element: &crate::planner::HtmlElement) -> bool {
+fn is_shadow_only(element: &crate::HtmlElement) -> bool {
     element
         .class_attribute
         .as_ref()
@@ -446,11 +444,7 @@ fn is_shadow_only(element: &crate::planner::HtmlElement) -> bool {
 
 /// Rebase an arbitrary span through the prior sequential edit rounds; `None`
 /// when an earlier entry edited inside it.
-pub(crate) fn rebase_span(
-    start: usize,
-    end: usize,
-    prior_edits: &[Vec<Edit>],
-) -> Option<(usize, usize)> {
+pub fn rebase_span(start: usize, end: usize, prior_edits: &[Vec<Edit>]) -> Option<(usize, usize)> {
     let mut span = (start, end);
     for edits in prior_edits {
         let (start, end, exact) = shift_span(span.0, span.1, edits)?;
@@ -462,7 +456,7 @@ pub(crate) fn rebase_span(
     Some(span)
 }
 
-pub(crate) fn candidates_fit_attribute(
+pub fn candidates_fit_attribute(
     source: &str,
     attribute: &HtmlAttribute,
     candidates: &[String],
@@ -649,7 +643,7 @@ fn contextual_candidate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::planner::{HtmlElement, HtmlStylesheet};
+    use crate::{HtmlElement, HtmlStylesheet};
 
     fn quoted_fixture(source: &str, value_start: usize, value: &str) -> SourceFile {
         SourceFile {

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-pub(crate) fn exact_theme_token(
+pub fn exact_theme_token(
     namespace: &str,
     value: &str,
     theme_tokens: &HashMap<String, String>,
@@ -34,7 +34,7 @@ pub(crate) fn exact_theme_token(
     None
 }
 
-pub(crate) fn parse_dimension(value: &str) -> Option<(f64, &str)> {
+pub fn parse_dimension(value: &str) -> Option<(f64, &str)> {
     let split = value
         .char_indices()
         .find(|(_, character)| !character.is_ascii_digit() && !matches!(character, '.' | '-'))

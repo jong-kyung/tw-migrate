@@ -1,7 +1,13 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-default-members = ["crates/tw_migrate"]
+default-members = [
+  "crates/tw_migrate",
+  "crates/tw_migrate_error",
+  "crates/tw_migrate_css",
+  "crates/tw_migrate_source",
+  "crates/tw_migrate_planner",
+]
 
 [workspace.package]
 edition = "2024"
@@ -25,3 +31,7 @@ oxc_syntax = "0.143.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 toml = "1.1.4"
+tw_migrate_error = { path = "crates/tw_migrate_error" }
+tw_migrate_css = { path = "crates/tw_migrate_css" }
+tw_migrate_source = { path = "crates/tw_migrate_source" }
+tw_migrate_planner = { path = "crates/tw_migrate_planner" }

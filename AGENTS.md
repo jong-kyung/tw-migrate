@@ -12,7 +12,7 @@ Use this file to find the owning layer and choose focused validation. Prefer the
 
 - **TypeScript / Node ESM**: CLI parsing, project and workspace discovery, preprocessors, HTML analysis, packaging, transactional writes, and the public `migrate()` API.
 - **Rust 2024**: CSS parsing, utility generation, selector and JSX relationship analysis, rewrite planning, and source-map decoding.
-- **NAPI-RS**: exposes the Rust planner to `src/native.ts` and the JavaScript orchestration layer.
+- **NAPI-RS**: exposes the thin Rust adapter in `crates/tw_migrate` to `src/native.ts`, and the adapter dispatches to the capability crates.
 - **pnpm workspaces**: manages the root package and platform-specific native packages under `npm/*`.
 - **Insta**: stores packaged CLI snapshots under `crates/snapshots/snapshots/`.
 
@@ -40,19 +40,28 @@ tw-migrate/
 │   │   ├── style-compiler.ts  # Project-local Sass/Less loading and source maps
 │   │   └── vue.ts             # Project-local Vue compiler loading and SFC lowering
 │   └── native.ts              # Native addon resolution and NAPI exports
-├── crates/tw_migrate/         # Rust planner and NAPI addon
-│   └── src/
-│       ├── planner.rs         # Single/batch planning entrypoints
-│       ├── css_plan.rs        # CSS rule planning
-│       ├── js_rewrite.rs      # JS/TS rewrite planning
-│       ├── jsx_graph.rs       # JSX relationship proofs
-│       ├── html_rewrite.rs    # HTML rewrite planning
-│       ├── utilities.rs       # CSS-to-Tailwind utility mapping
-│       ├── arbitrary.rs       # Arbitrary value encoding
-│       ├── at_rules.rs        # Conditional at-rule handling
-│       ├── animations.rs      # Animation/keyframe migration
-│       └── theme.rs           # Tailwind theme matching
-├── crates/snapshots/          # Packaged CLI E2E runner, fixtures, and snapshots
+├── crates/
+│   ├── tw_migrate/            # NAPI annotations, error conversion, and capability dispatch
+│   ├── tw_migrate_error/      # Typed migration failures and recoverability
+│   ├── tw_migrate_css/        # CSS parsing, rule planning, utilities, media, and analysis
+│   │   └── src/
+│   │       ├── plan/          # Rule, selector, relationship, and shadow planning
+│   │       ├── media/         # Media parsing, collection, and generated names
+│   │       ├── utilities.rs   # CSS-to-Tailwind utility mapping and conflicts
+│   │       ├── at_rules.rs    # Conditional and global at-rule handling
+│   │       └── animations.rs  # Animation and keyframe migration
+│   ├── tw_migrate_source/     # JS, JSX, HTML, and Vue-consumer analysis and rewriting
+│   │   └── src/
+│   │       ├── analysis/      # Source analysis used directly by NAPI
+│   │       ├── jsx/           # JSX collection, linking, and relationship proof
+│   │       └── rewrite/       # JavaScript and HTML consumer rewriting
+│   ├── tw_migrate_planner/    # Batch orchestration, source maps, Vue finishing, and validation
+│   │   └── src/
+│   │       ├── batch.rs       # Batch planning entrypoint and conflict ordering
+│   │       ├── stylesheet.rs  # Per-stylesheet planning coordination
+│   │       ├── source_map.rs  # Source-map decoding and authored-span mapping
+│   │       └── vue.rs         # Vue style-block masking, rebasing, and finishing
+│   └── snapshots/             # Packaged CLI E2E runner, fixtures, and snapshots
 ├── ecosystem-ci/              # Browser E2E harness (TypeScript, run by Vitest)
 │   ├── run.ts                 # Manifest validation and case selection CLI
 │   ├── lifecycle.ts           # Per-case install, server, capture, and migration phases
@@ -74,8 +83,8 @@ tw-migrate/
 1. `src/bin.ts` parses CLI arguments and calls `migrate()`.
 2. `src/index.ts` orchestrates discovery (`src/discovery.ts`), source snapshots, preprocessor compilation, and planner request preparation (`src/plan/html.ts`, `src/plan/vue.ts`, `src/tailwind.ts`).
 3. `src/parser/style-compiler.ts` loads Sass or Less from the target project, not from `tw-migrate` itself.
-4. `src/native.ts` loads the local addon or the installed platform package and invokes the Rust planner.
-5. Rust analyzes CSS and source relationships, returning planned edits, candidates, warnings, and retained rules.
+4. `src/native.ts` loads the local addon or the installed platform package and invokes the NAPI adapter in `crates/tw_migrate`.
+5. The adapter dispatches CSS operations to `tw_migrate_css`, source operations to `tw_migrate_source`, and batch planning and source-map decoding to `tw_migrate_planner`. Rust returns planned edits, candidates, warnings, and retained rules.
 6. `src/index.ts` verifies source integrity, renders the diff (`src/util/diff.ts`), and applies transactional writes (`src/util/write.ts`) unless `--dry-run` is passed.
 
 ## Where to Start
@@ -85,12 +94,14 @@ tw-migrate/
 - **Force handling and plan orchestration**: `src/index.ts`.
 - **Transactional writes and snapshot verification**: `src/util/write.ts`.
 - **Public API shape**: the exported types and top-level exports in `src/index.ts` (published as generated `dist/index.d.ts`).
-- **Sass, SCSS, Less, or source maps**: `src/parser/style-compiler.ts` and `crates/tw_migrate/src/lib.rs`.
-- **HTML links, attributes, entities, or byte offsets**: `src/parser/html.ts` and `crates/tw_migrate/src/html_rewrite.rs`.
-- **Vue SFC blocks, template class sites, or scoped retention**: `src/parser/vue.ts` and the Vue paths in `crates/tw_migrate/src/planner.rs`.
-- **CSS parsing and migration decisions**: `crates/tw_migrate/src/planner.rs` and `css_plan.rs`.
-- **JSX usage and selector relationships**: `js_rewrite.rs` and `jsx_graph.rs`.
-- **Utility generation and value encoding**: `utilities.rs`, `arbitrary.rs`, `theme.rs`, `at_rules.rs`, and `animations.rs`.
+- **NAPI exports and native error conversion**: `src/native.ts` and `crates/tw_migrate/src/lib.rs`.
+- **Sass, SCSS, Less, or source maps**: `src/parser/style-compiler.ts`, `crates/tw_migrate_planner/src/stylesheet.rs`, and `crates/tw_migrate_planner/src/source_map.rs`.
+- **HTML links, attributes, entities, or byte offsets**: `src/parser/html.ts`, `src/plan/html.ts`, and `crates/tw_migrate_source/src/rewrite/html.rs`.
+- **Vue SFC blocks, template class sites, or scoped retention**: `src/parser/vue.ts`, `src/plan/vue.ts`, `crates/tw_migrate_source/src/rewrite/html.rs`, and `crates/tw_migrate_planner/src/vue.rs`.
+- **CSS parsing and migration decisions**: `crates/tw_migrate_css/src/plan/` and `crates/tw_migrate_planner/src/stylesheet.rs`.
+- **JSX usage and selector relationships**: `crates/tw_migrate_source/src/rewrite/js/` and `crates/tw_migrate_source/src/jsx/`.
+- **Utility generation and value encoding**: `crates/tw_migrate_css/src/utilities.rs`, `crates/tw_migrate_css/src/arbitrary.rs`, `crates/tw_migrate_css/src/theme.rs`, `crates/tw_migrate_css/src/at_rules.rs`, and `crates/tw_migrate_css/src/animations.rs`.
+- **Typed Rust errors and recoverability**: `crates/tw_migrate_error/src/lib.rs`.
 - **Supported behavior and remaining scope**: `README.md` and `rfcs/`.
 - **CLI-observable regressions**: `crates/snapshots/README.md` and `crates/snapshots/fixtures/`.
 
@@ -100,10 +111,10 @@ tw-migrate/
 
 Use the repository-pinned tool versions when possible:
 
-- **Node.js 22.18.0** from `.node-version`; the repository targets `>=22.18.0` so Node runs the `.ts` harness sources directly through type stripping.
+- **Node.js 22.23.2** from `.node-version`; the repository targets `>=22.23.2` so Node runs the `.ts` harness sources directly through type stripping.
 - **Vite+ (`vp`)** as the toolchain entrypoint; it resolves and downloads the pinned package manager itself.
-- **pnpm 11.15.1** from the `packageManager` field in `package.json`; `vp` runs it, and the `pnpm` shim stays available for scripts that call it directly.
-- **Rust 1.95.0 or newer**; CI builds with 1.95.0 and the workspace declares `rust-version = "1.95"`.
+- **pnpm 11.20.0** from the `packageManager` field in `package.json`; `vp` runs it, and the `pnpm` shim stays available for scripts that call it directly.
+- **Rust 1.97.1** from `rust-toolchain.toml`; CI uses the same version, while the workspace minimum remains `rust-version = "1.95"`.
 - **Git and npm**; runtime discovery uses Git and the packaged snapshot runner calls `npm pack` and `npm install` directly.
 - **Platform native build tools** required by Rust and NAPI-RS: Xcode Command Line Tools on macOS, a C/C++ build toolchain on Linux, or Visual Studio Build Tools on Windows.
 
