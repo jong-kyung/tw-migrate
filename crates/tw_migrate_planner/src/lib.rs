@@ -40,9 +40,9 @@ use source_map::{SourceMapping, map_rule_spans, mentions_word};
 use stylesheet::{
     batch_stylesheet_request, candidate_map_for_request, is_stylesheet_module, plan_request,
 };
-pub(crate) use tw_migrate_css::StylesheetSyntax;
+use tw_migrate_css::StylesheetSyntax;
 use tw_migrate_source as jsx_graph;
-pub(crate) use tw_migrate_source::{Edit, HtmlElement, SourceFile, Warning, original_offset};
+use tw_migrate_source::{Edit, HtmlElement, SourceFile, Warning, original_offset};
 use tw_migrate_source::{
     SourcePlan, candidates_fit_attribute, element_classes, element_has_context, element_ids,
     element_tag, opaque_reference_plan, plan_batch_source_file, plan_html_file,

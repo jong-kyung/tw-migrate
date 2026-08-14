@@ -24,4 +24,4 @@ pub use model::{
 };
 pub use source_analysis::{expression_analysis_json, source_analysis_json};
 
-pub(crate) use js_rewrite::{normalize_path, resolve_import, source_type_for_path};
+use js_rewrite::{normalize_path, resolve_import, source_type_for_path};
