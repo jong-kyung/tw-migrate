@@ -14,12 +14,12 @@ use crate::{
     theme::{exact_theme_token, parse_dimension},
 };
 
-pub(crate) struct GlobalAtRulePlan {
-    pub(crate) span: Range<usize>,
-    pub(crate) source: String,
+pub struct GlobalAtRulePlan {
+    pub span: Range<usize>,
+    pub source: String,
 }
 
-pub(crate) fn global_at_rule_plan(
+pub fn global_at_rule_plan(
     at_rule: &AtRule<'_>,
     source: &str,
     relative_urls_stable: bool,
@@ -48,7 +48,7 @@ pub(crate) fn global_at_rule_plan(
     })
 }
 
-pub(crate) fn append_global_at_rules(
+pub fn append_global_at_rules(
     source: &str,
     at_rules: &[&GlobalAtRulePlan],
 ) -> MigrationResult<String> {
@@ -71,7 +71,7 @@ pub(crate) fn append_global_at_rules(
 
 /// Parse a stylesheet with the allocator the caller owns; the error is the
 /// parser diagnostics rendered as text, so callers prepend their own context.
-pub(crate) fn parse_css<'a>(
+pub fn parse_css<'a>(
     allocator: &'a oxc_css_parser::Allocator,
     source: &'a str,
     syntax: Syntax,
@@ -81,7 +81,7 @@ pub(crate) fn parse_css<'a>(
         .map_err(|error| format!("{error:?}"))
 }
 
-pub(crate) fn parse_tailwind<'a>(
+pub fn parse_tailwind<'a>(
     allocator: &'a oxc_css_parser::Allocator,
     source: &'a str,
 ) -> Result<Stylesheet<'a>, String> {
@@ -90,7 +90,7 @@ pub(crate) fn parse_tailwind<'a>(
 }
 
 /// Walk every at-rule in document order, visiting each before its block.
-pub(crate) fn walk_at_rules<'a, 'b>(
+pub fn walk_at_rules<'a, 'b>(
     statements: &'a [Statement<'b>],
     visit: &mut impl FnMut(&'a AtRule<'b>),
 ) {
@@ -106,7 +106,7 @@ pub(crate) fn walk_at_rules<'a, 'b>(
 }
 
 /// Append a moved block to the Tailwind source, separated by a blank line.
-pub(crate) fn append_block(output: &mut String, block: &str) {
+pub fn append_block(output: &mut String, block: &str) {
     if !output.ends_with('\n') {
         output.push('\n');
     }
@@ -140,11 +140,11 @@ fn has_relative_url(source: &str) -> bool {
     false
 }
 
-pub(crate) fn is_conditional(name: &str) -> bool {
+pub fn is_conditional(name: &str) -> bool {
     matches!(name, "media" | "supports" | "container" | "starting-style")
 }
 
-pub(crate) fn conditional_variant(
+pub fn conditional_variant(
     at_rule: &AtRule<'_>,
     source: &str,
     theme_tokens: &HashMap<String, String>,
@@ -159,7 +159,7 @@ pub(crate) fn conditional_variant(
     }
 }
 
-pub(crate) fn unsupported_warning(name: &str) -> &'static str {
+pub fn unsupported_warning(name: &str) -> &'static str {
     match name {
         "media" => "unsupported-media-query",
         "supports" => "unsupported-supports-query",
@@ -212,7 +212,7 @@ fn named_media_chain(
     Some(names.join(":"))
 }
 
-pub(crate) fn media_feature_variant(at_rule: &AtRule<'_>, source: &str) -> Option<String> {
+pub fn media_feature_variant(at_rule: &AtRule<'_>, source: &str) -> Option<String> {
     let query = at_rule_query(at_rule, source, "media")?;
     builtin_media_variant(query).map(str::to_string)
 }
@@ -221,7 +221,7 @@ pub(crate) fn media_feature_variant(at_rule: &AtRule<'_>, source: &str) -> Optio
 /// text, or `None`. Reuse of a match still requires the caller to verify
 /// the loaded design system's effective expansion, because a project may
 /// redefine a built-in name.
-pub(crate) fn builtin_media_variant(query: &str) -> Option<&'static str> {
+pub fn builtin_media_variant(query: &str) -> Option<&'static str> {
     let normalized = query
         .chars()
         .filter(|character| !character.is_ascii_whitespace())
@@ -251,7 +251,7 @@ pub(crate) fn builtin_media_variant(query: &str) -> Option<&'static str> {
     Some(variant)
 }
 
-pub(crate) fn media_breakpoint_variant(
+pub fn media_breakpoint_variant(
     at_rule: &AtRule<'_>,
     source: &str,
     theme_tokens: &HashMap<String, String>,
@@ -332,11 +332,7 @@ fn normalize_query(query: &str) -> Option<String> {
     )
 }
 
-pub(crate) fn at_rule_query<'a>(
-    at_rule: &AtRule<'_>,
-    source: &'a str,
-    name: &str,
-) -> Option<&'a str> {
+pub fn at_rule_query<'a>(at_rule: &AtRule<'_>, source: &'a str, name: &str) -> Option<&'a str> {
     // Trim only CSS whitespace: Unicode-aware trimming would strip code
     // points such as U+00A0 that CSS treats as identifier content, turning
     // an exotic non-matching prelude into an ordinary one.

@@ -23,6 +23,7 @@ oxc_span.workspace = true
 oxc_syntax.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tw_migrate_css.workspace = true
 tw_migrate_error.workspace = true
 
 [build-dependencies]

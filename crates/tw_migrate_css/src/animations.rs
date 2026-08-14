@@ -8,18 +8,14 @@ use crate::{
 use oxc_css_parser::ast::{AtRule, AtRulePrelude, InterpolableIdent, KeyframesName};
 use tw_migrate_error::{MigrationError, MigrationResult};
 
-pub(crate) struct KeyframePlan {
-    pub(crate) span: Range<usize>,
-    pub(crate) name: String,
-    pub(crate) migrated_name: String,
-    pub(crate) source: String,
+pub struct KeyframePlan {
+    pub span: Range<usize>,
+    pub name: String,
+    pub migrated_name: String,
+    pub source: String,
 }
 
-pub(crate) fn keyframe_plan(
-    at_rule: &AtRule<'_>,
-    path: &str,
-    source: &str,
-) -> Option<KeyframePlan> {
+pub fn keyframe_plan(at_rule: &AtRule<'_>, path: &str, source: &str) -> Option<KeyframePlan> {
     if at_rule.name.name != "keyframes" || at_rule.block.is_none() {
         return None;
     }
@@ -47,7 +43,7 @@ pub(crate) fn keyframe_plan(
     })
 }
 
-pub(crate) fn animation_candidate(
+pub fn animation_candidate(
     property: &str,
     value: &str,
     keyframes: &HashMap<&str, &str>,
@@ -78,10 +74,7 @@ pub(crate) fn animation_candidate(
     Some(format!("[{property}:{}]", arbitrary_value(&migrated_value)))
 }
 
-pub(crate) fn append_keyframes(
-    source: &str,
-    keyframes: &[&KeyframePlan],
-) -> MigrationResult<String> {
+pub fn append_keyframes(source: &str, keyframes: &[&KeyframePlan]) -> MigrationResult<String> {
     let allocator = oxc_css_parser::Allocator::default();
     let stylesheet = parse_tailwind(&allocator, source)
         .map_err(|message| MigrationError::AuthoredStylesheetParse { message })?;

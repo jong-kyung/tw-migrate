@@ -17,13 +17,10 @@ use oxc_parser::Parser;
 use oxc_semantic::{Scoping, SemanticBuilder};
 use oxc_span::{GetSpan, SourceType, Span};
 use oxc_syntax::symbol::SymbolId;
+use tw_migrate_css::{SelectorKey, tailwind_utilities_conflict, utility_conflict};
 use tw_migrate_error::{MigrationError, MigrationResult};
 
-use crate::{
-    css_plan::SelectorKey,
-    planner::{Edit, SourceFile, Warning, original_offset},
-    utilities::{tailwind_utilities_conflict, utility_conflict},
-};
+use crate::planner::{Edit, SourceFile, Warning, original_offset};
 
 pub(crate) struct CandidateMatch {
     pub(crate) start: usize,

@@ -8,20 +8,16 @@ use serde::{Deserialize, Serialize};
 use tw_migrate_error::{MigrationError, MigrationResult};
 
 use crate::{
-    animations::append_keyframes,
-    at_rules::{append_global_at_rules, is_conditional, parse_css},
-    css_plan::{
-        ParseOptions, ParsedCss, RulePlan, SelectorKey, index_shadow_selectors, parse_css_rules,
-    },
     html_rewrite::{candidates_fit_attribute, plan_html_file, plan_vue_module_file, rebase_span},
     js_rewrite::{SourcePlan, opaque_reference_plan, plan_batch_source_file, validate_js},
     jsx_graph,
-    media::{MediaComponent, ParsedMediaCondition, parse_media_condition},
-    theme::parse_dimension,
-    utilities::{
-        css_properties_conflict, tailwind_utilities_conflict, tailwind_utility_parts,
-        tailwind_variants_match, variant_segments,
-    },
+};
+use tw_migrate_css::{
+    MediaComponent, ParseOptions, ParsedCss, ParsedMediaCondition, RulePlan, SelectorKey,
+    append_global_at_rules, append_keyframes, css_properties_conflict, index_shadow_selectors,
+    is_conditional, parse_css, parse_css_rules, parse_dimension, parse_media_condition,
+    tailwind_utilities_conflict, tailwind_utility_parts, tailwind_variants_match, validate_css,
+    variant_segments,
 };
 
 mod batch;
@@ -39,7 +35,7 @@ pub use batch::plan_batch_json;
 #[cfg(test)]
 use batch::plan_json;
 use consumer::plan_consumer_file;
-pub(crate) use edit::{Edit, original_offset, validate_css};
+pub(crate) use edit::{Edit, original_offset};
 use edit::{
     apply_edits, collect_empty_conditionals, remove_empty_conditionals, shift_offset,
     validate_stylesheet,
@@ -56,10 +52,10 @@ pub(crate) use source::{
     element_ids,
 };
 use source_map::{SourceMapping, map_rule_spans, mentions_word};
-pub(crate) use stylesheet::StylesheetSyntax;
 use stylesheet::{
     batch_stylesheet_request, candidate_map_for_request, is_stylesheet_module, plan_request,
 };
+pub(crate) use tw_migrate_css::StylesheetSyntax;
 use vue::{
     VueBlock, finish_vue_stylesheet, is_vue_path, mask_vue_source, rebase_vue_blocks,
     rule_site_reachable, stamp_in_file_shadow, vue_retention_warning,
@@ -126,11 +122,10 @@ mod tests {
     use std::collections::{BTreeSet, HashMap};
 
     use super::{SourceFile, apply_edits, plan_batch_json, plan_json};
-    use crate::animations::{KeyframePlan, animation_candidate, append_keyframes};
-    use crate::css_plan::SelectorKey;
     use crate::js_rewrite::plan_batch_source_file;
-    use crate::utilities::{
-        css_properties_conflict, declaration_to_candidate, tailwind_utilities_conflict,
+    use tw_migrate_css::{
+        KeyframePlan, SelectorKey, animation_candidate, append_keyframes, css_properties_conflict,
+        declaration_to_candidate, tailwind_utilities_conflict,
     };
 
     fn plan(request: serde_json::Value) -> serde_json::Value {
@@ -174,6 +169,7 @@ mod tests {
         let mut sources = format!("{}\n{}", &planner[..const_start], &planner[const_end..]);
         for (dir, extension) in [
             (manifest.join("src"), "rs"),
+            (manifest.join("../tw_migrate_css/src"), "rs"),
             (manifest.join("../../src"), "ts"),
         ] {
             let mut pending = vec![dir];

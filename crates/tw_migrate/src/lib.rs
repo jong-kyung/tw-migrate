@@ -1,17 +1,8 @@
-mod animations;
-mod arbitrary;
-mod at_rules;
-mod css_directives;
-mod css_plan;
 mod html_rewrite;
 mod js_rewrite;
 mod jsx_graph;
-mod media;
 mod planner;
 mod source_analysis;
-mod stylesheet_analysis;
-mod theme;
-mod utilities;
 
 use napi_derive::napi;
 use serde::Serialize;
@@ -72,7 +63,7 @@ pub fn decode_source_map(source_map: String) -> napi::Result<String> {
 
 #[napi]
 pub fn validate_css(source: String) -> napi::Result<()> {
-    planner::validate_css(&source).map_err(|error| native_error(error, false))
+    tw_migrate_css::validate_css(&source).map_err(|error| native_error(error, false))
 }
 
 #[napi]
@@ -89,25 +80,26 @@ pub fn source_analysis(path: String, source: String) -> napi::Result<String> {
 
 #[napi]
 pub fn stylesheet_analysis(path: String, source: String) -> napi::Result<String> {
-    stylesheet_analysis::stylesheet_analysis_json(&path, &source)
+    tw_migrate_css::stylesheet_analysis_json(&path, &source)
         .map_err(|error| native_error(error, false))
 }
 
 #[napi]
 pub fn collect_css_directives(source: String) -> napi::Result<String> {
-    css_directives::collect_css_directives_json(&source).map_err(|error| native_error(error, false))
+    tw_migrate_css::collect_css_directives_json(&source).map_err(|error| native_error(error, false))
 }
 
 #[napi]
 pub fn media_probe_key(css: String) -> napi::Result<String> {
-    media::media_probe_key_json(&css).map_err(|error| native_error(error, false))
+    tw_migrate_css::media_probe_key_json(&css).map_err(|error| native_error(error, false))
 }
 
 #[napi]
 pub fn collect_media_conditions(request: String) -> napi::Result<String> {
     // Package input failures stay recoverable so `--force` can skip the
     // affected package, matching plan_batch_migration.
-    media::collect_media_conditions_json(&request).map_err(|error| native_error(error, true))
+    tw_migrate_css::collect_media_conditions_json(&request)
+        .map_err(|error| native_error(error, true))
 }
 
 #[napi]
@@ -121,7 +113,7 @@ mod tests {
 
     #[test]
     fn recoverable_prefix_is_endpoint_specific() {
-        let media = super::media::collect_media_conditions_json(
+        let media = tw_migrate_css::collect_media_conditions_json(
             r#"{"stylesheets":[{"cssPath":"app.css","cssSource":"@media \u000bscreen {}"}]}"#,
         )
         .unwrap_err();
@@ -167,14 +159,10 @@ mod tests {
     #[test]
     fn other_native_boundaries_never_prefix_recoverable_errors() {
         let errors = [
-            super::stylesheet_analysis::stylesheet_analysis_json(
-                "app.css",
-                "@media \u{b}screen {}",
-            )
-            .unwrap_err(),
-            super::css_directives::collect_css_directives_json("@media \u{b}screen {}")
+            tw_migrate_css::stylesheet_analysis_json("app.css", "@media \u{b}screen {}")
                 .unwrap_err(),
-            super::media::media_probe_key_json("@media \u{b}screen {}").unwrap_err(),
+            tw_migrate_css::collect_css_directives_json("@media \u{b}screen {}").unwrap_err(),
+            tw_migrate_css::media_probe_key_json("@media \u{b}screen {}").unwrap_err(),
             super::decode_source_map_json("{").unwrap_err(),
         ];
         for error in errors {
@@ -186,7 +174,7 @@ mod tests {
 
     #[test]
     fn invalid_requests_are_not_recoverable() {
-        let media = super::media::collect_media_conditions_json("{").unwrap_err();
+        let media = tw_migrate_css::collect_media_conditions_json("{").unwrap_err();
         assert!(matches!(
             media,
             tw_migrate_error::MigrationError::InvalidRequest { .. }

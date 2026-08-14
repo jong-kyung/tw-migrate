@@ -1,26 +1,5 @@
 use super::*;
 
-#[derive(Clone, Copy, Default, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum StylesheetSyntax {
-    #[default]
-    Css,
-    Scss,
-    Sass,
-    Less,
-}
-
-impl StylesheetSyntax {
-    pub(crate) fn parser_syntax(self) -> Syntax {
-        match self {
-            Self::Css => Syntax::Css,
-            Self::Scss => Syntax::Scss,
-            Self::Sass => Syntax::Sass,
-            Self::Less => Syntax::Less,
-        }
-    }
-}
-
 pub(super) fn is_stylesheet_module(path: &str) -> bool {
     matches!(
         path.rsplit_once(".module."),

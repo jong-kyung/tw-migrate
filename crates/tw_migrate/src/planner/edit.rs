@@ -109,10 +109,6 @@ pub(super) fn collect_empty_conditionals(statements: &[Statement<'_>], edits: &m
     }
 }
 
-pub(crate) fn validate_css(source: &str) -> MigrationResult<()> {
-    validate_stylesheet(source, Syntax::Css)
-}
-
 pub(super) fn validate_stylesheet(source: &str, syntax: Syntax) -> MigrationResult<()> {
     let allocator = oxc_css_parser::Allocator::default();
     parse_css(&allocator, source, syntax)

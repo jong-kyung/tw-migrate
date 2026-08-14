@@ -1,12 +1,12 @@
 use std::collections::{BTreeSet, HashMap};
 
+use tw_migrate_css::{SelectorKey, utility_conflict};
+
 use crate::{
-    css_plan::SelectorKey,
     js_rewrite::{CandidateMatch, SourcePlan},
     planner::{
         Edit, HtmlAttribute, SourceFile, Warning, element_classes, element_has_context, element_ids,
     },
-    utilities::utility_conflict,
 };
 
 pub(crate) fn plan_html_file(

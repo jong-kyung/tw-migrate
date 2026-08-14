@@ -26,15 +26,9 @@ use oxc_semantic::{Scoping, SemanticBuilder};
 use oxc_span::Span;
 use oxc_syntax::scope::ScopeFlags;
 use oxc_syntax::symbol::SymbolId;
+use tw_migrate_css::{Relation, SelectorKey};
 
-use crate::css_plan::SelectorKey;
 use crate::js_rewrite::{normalize_path, resolve_import, source_type_for_path};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Relation {
-    Child,
-    Descendant,
-}
 
 #[derive(Debug)]
 pub(crate) struct UsageProof {
