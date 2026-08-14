@@ -10,12 +10,16 @@ struct BatchMatch {
 /// Single-stylesheet planning for unit tests: a thin wrapper that reshapes
 /// the flat request into a one-stylesheet batch, the only production path.
 #[cfg(test)]
-pub(super) fn plan_json(request: &str) -> Result<String, String> {
+pub(super) fn plan_json(request: &str) -> MigrationResult<String> {
     let mut request: serde_json::Value =
-        serde_json::from_str(request).map_err(|error| error.to_string())?;
+        serde_json::from_str(request).map_err(|error| MigrationError::InvalidRequest {
+            message: error.to_string(),
+        })?;
     let stylesheet = request
         .as_object_mut()
-        .ok_or_else(|| "Plan request must be an object".to_string())?;
+        .ok_or_else(|| MigrationError::InvalidRequest {
+            message: "Plan request must be an object".to_string(),
+        })?;
     let mut batch = serde_json::Map::new();
     for field in [
         "entryWritable",
@@ -270,11 +274,15 @@ impl<'a> MediaVariantContext<'a> {
     }
 }
 
-pub fn plan_batch_json(request: &str) -> Result<String, String> {
+pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
     let request: BatchPlanRequest =
-        serde_json::from_str(request).map_err(|error| error.to_string())?;
+        serde_json::from_str(request).map_err(|error| MigrationError::InvalidRequest {
+            message: error.to_string(),
+        })?;
     if request.stylesheets.is_empty() {
-        return Err("Batch migration requires at least one stylesheet".to_string());
+        return Err(MigrationError::InvalidRequest {
+            message: "Batch migration requires at least one stylesheet".to_string(),
+        });
     }
 
     let mut match_groups: HashMap<(String, usize, usize), Vec<BatchMatch>> = HashMap::new();
@@ -541,5 +549,7 @@ pub fn plan_batch_json(request: &str) -> Result<String, String> {
         warnings,
         applied_edits,
     })
-    .map_err(|error| error.to_string())
+    .map_err(|error| MigrationError::Serialization {
+        message: error.to_string(),
+    })
 }

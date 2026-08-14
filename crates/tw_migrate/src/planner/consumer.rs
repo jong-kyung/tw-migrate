@@ -10,7 +10,7 @@ pub(super) fn plan_consumer_file(
     utility_prefix: Option<&str>,
     vue_unscoped: bool,
     vue_module: bool,
-) -> Result<SourcePlan, String> {
+) -> MigrationResult<SourcePlan> {
     // Vue scoped styles never apply outside their own SFC, and a `.vue` file
     // is not parseable JS: the only live pairing is an SFC consuming its own
     // scoped blocks through the HTML contract. A `.vue` consumer of any other
@@ -61,10 +61,4 @@ pub(super) fn plan_consumer_file(
         candidates,
         preserved_module_classes,
     )
-}
-
-pub(crate) fn is_recoverable_input_error(error: &str) -> bool {
-    (!error.starts_with("Failed to parse edited CSS") && error.starts_with("Failed to parse "))
-        || error.starts_with("Failed to analyze ")
-        || error.starts_with("Unsupported source file ")
 }

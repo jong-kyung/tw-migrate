@@ -39,7 +39,7 @@ impl VueBlock {
 /// Same-length copy of a `.vue` source with every byte outside the scoped
 /// block contents replaced by a space, so parsing it as CSS yields spans in
 /// absolute `.vue` byte offsets with no rebasing.
-pub(super) fn mask_vue_source(source: &str, blocks: &[VueBlock]) -> Result<String, String> {
+pub(super) fn mask_vue_source(source: &str, blocks: &[VueBlock]) -> MigrationResult<String> {
     let mut bytes = vec![b' '; source.len()];
     for block in blocks {
         if block.content_start > block.content_end
@@ -52,12 +52,16 @@ pub(super) fn mask_vue_source(source: &str, blocks: &[VueBlock]) -> Result<Strin
             || !source.is_char_boundary(block.outer_start)
             || !source.is_char_boundary(block.outer_end)
         {
-            return Err("Invalid Vue style block span".to_string());
+            return Err(MigrationError::Invariant {
+                message: "Invalid Vue style block span".to_string(),
+            });
         }
         bytes[block.content_start..block.content_end]
             .copy_from_slice(&source.as_bytes()[block.content_start..block.content_end]);
     }
-    String::from_utf8(bytes).map_err(|_| "Invalid Vue style block span".to_string())
+    String::from_utf8(bytes).map_err(|_| MigrationError::Invariant {
+        message: "Invalid Vue style block span".to_string(),
+    })
 }
 
 /// Map a caller-supplied Vue retention code onto the static warning code and
@@ -65,7 +69,7 @@ pub(super) fn mask_vue_source(source: &str, blocks: &[VueBlock]) -> Result<Strin
 pub(super) fn rebase_vue_blocks(
     prior_edits: &[Vec<Edit>],
     blocks: &mut [VueBlock],
-) -> Result<(), String> {
+) -> MigrationResult<()> {
     // Earlier same-path entries edit template attributes and their own
     // blocks; those ranges are disjoint from this entry's blocks, so each
     // boundary shifts exactly through the applied edit rounds. An edit
@@ -79,7 +83,9 @@ pub(super) fn rebase_vue_blocks(
                     && (edit.end > block.outer_start
                         || (edit.start == edit.end && edit.start > block.outer_start))
             }) {
-                return Err("A Vue style block changed during batch planning".to_string());
+                return Err(MigrationError::PlanCollision {
+                    message: "A Vue style block changed during batch planning".to_string(),
+                });
             }
             block.shift(&round);
         }
@@ -87,7 +93,7 @@ pub(super) fn rebase_vue_blocks(
     Ok(())
 }
 
-pub(super) fn vue_retention_warning(code: &str) -> Result<(&'static str, &'static str), String> {
+pub(super) fn vue_retention_warning(code: &str) -> MigrationResult<(&'static str, &'static str)> {
     match code {
         "dynamic-template-class" => Ok((
             "dynamic-template-class",
@@ -101,7 +107,9 @@ pub(super) fn vue_retention_warning(code: &str) -> Result<(&'static str, &'stati
             "open-root-fallthrough",
             "A parent component can merge classes onto the single root element, so the scoped rule is retained.",
         )),
-        other => Err(format!("Unknown Vue retention code: {other}")),
+        other => Err(MigrationError::Invariant {
+            message: format!("Unknown Vue retention code: {other}"),
+        }),
     }
 }
 
@@ -216,7 +224,7 @@ pub(super) fn finish_vue_stylesheet(
     request: &PlanRequest,
     masked: &str,
     mut edits: Vec<Edit>,
-) -> Result<(String, Vec<Vec<Edit>>), String> {
+) -> MigrationResult<(String, Vec<Vec<Edit>>)> {
     if request
         .sheet
         .vue_blocks
@@ -256,8 +264,11 @@ pub(super) fn finish_vue_stylesheet(
     // conditionals the migration itself empties may be removed.
     let mut preexisting_empty = {
         let allocator = oxc_css_parser::Allocator::default();
-        let stylesheet = parse_css(&allocator, masked, Syntax::Css)
-            .map_err(|error| format!("Failed to parse edited CSS: {error}"))?;
+        let stylesheet = parse_css(&allocator, masked, Syntax::Css).map_err(|error| {
+            MigrationError::EditedStylesheetParse {
+                message: format!("Failed to parse edited CSS: {error}"),
+            }
+        })?;
         let mut already_empty = Vec::new();
         collect_empty_conditionals(&stylesheet.statements, &mut already_empty);
         already_empty
@@ -275,8 +286,11 @@ pub(super) fn finish_vue_stylesheet(
 
     loop {
         let allocator = oxc_css_parser::Allocator::default();
-        let stylesheet = parse_css(&allocator, &masked, Syntax::Css)
-            .map_err(|error| format!("Failed to parse edited CSS: {error}"))?;
+        let stylesheet = parse_css(&allocator, &masked, Syntax::Css).map_err(|error| {
+            MigrationError::EditedStylesheetParse {
+                message: format!("Failed to parse edited CSS: {error}"),
+            }
+        })?;
         let mut conditional_edits = Vec::new();
         collect_empty_conditionals(&stylesheet.statements, &mut conditional_edits);
         conditional_edits.retain(|edit| !preexisting_empty.contains(&(edit.start, edit.end)));
@@ -309,7 +323,7 @@ pub(super) fn finish_vue_stylesheet(
 fn finish_vue_preprocessor_stylesheet(
     request: &PlanRequest,
     mut edits: Vec<Edit>,
-) -> Result<(String, Vec<Vec<Edit>>), String> {
+) -> MigrationResult<(String, Vec<Vec<Edit>>)> {
     edits.sort_by_key(|edit| (edit.start, edit.end));
     let mut edit_batches = vec![edits.clone()];
     let mut blocks = request.sheet.vue_blocks.clone();
@@ -335,7 +349,7 @@ fn emptied_block_removals(
     content_view: &str,
     source: &str,
     validate_kept: bool,
-) -> Result<Vec<Edit>, String> {
+) -> MigrationResult<Vec<Edit>> {
     let mut removals = Vec::new();
     for (block, original) in blocks.iter().zip(&request.sheet.vue_blocks) {
         let originally_empty = request.sheet.css_source
@@ -344,7 +358,9 @@ fn emptied_block_removals(
             .is_empty();
         let content = content_view
             .get(block.content_start..block.content_end)
-            .ok_or_else(|| "Invalid Vue style block span".to_string())?;
+            .ok_or_else(|| MigrationError::Invariant {
+                message: "Invalid Vue style block span".to_string(),
+            })?;
         if originally_empty || !content.trim().is_empty() {
             if validate_kept {
                 validate_stylesheet(content, block.syntax.parser_syntax())?;

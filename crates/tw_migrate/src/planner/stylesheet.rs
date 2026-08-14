@@ -152,7 +152,9 @@ pub(super) fn batch_stylesheet_request(
 /// Shared head of the candidate-map and main planning passes: derive the
 /// request flags, parse the stylesheet, and apply the utility prefix, so
 /// rule-selection behavior cannot silently diverge between the two paths.
-fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option<String>), String> {
+fn parse_request_rules(
+    request: &PlanRequest,
+) -> MigrationResult<(bool, ParsedCss, Option<String>)> {
     let is_module = request
         .sheet
         .is_module
@@ -212,7 +214,8 @@ fn parse_request_rules(request: &PlanRequest) -> Result<(bool, ParsedCss, Option
                     .unwrap_or(request.global_at_rule_moves),
                 relative_urls_stable,
             },
-        )?;
+        )
+        .map_err(|message| MigrationError::AuthoredStylesheetParse { message })?;
         if request.sheet.analysis_source.is_some() {
             map_rule_spans(
                 &request.sheet.css_source,
@@ -335,7 +338,7 @@ fn parse_vue_rules(
     request: &PlanRequest,
     is_module: bool,
     keyframe_scope: &str,
-) -> Result<ParsedCss, String> {
+) -> MigrationResult<ParsedCss> {
     let mut rules = Vec::new();
     let mut analysis_base = 0;
     for block in &request.sheet.vue_blocks {
@@ -343,7 +346,9 @@ fn parse_vue_rules(
             .sheet
             .css_source
             .get(block.content_start..block.content_end)
-            .ok_or_else(|| "Invalid Vue style block span".to_string())?;
+            .ok_or_else(|| MigrationError::Invariant {
+                message: "Invalid Vue style block span".to_string(),
+            })?;
         let analysis = block.analysis_source.as_deref().unwrap_or(authored);
         let mut parsed = parse_css_rules(
             &request.sheet.css_path,
@@ -364,7 +369,8 @@ fn parse_vue_rules(
                 can_move_global_at_rules: false,
                 relative_urls_stable: false,
             },
-        )?;
+        )
+        .map_err(|message| MigrationError::AuthoredStylesheetParse { message })?;
         if block.analysis_source.is_some() {
             map_rule_spans(
                 authored,
@@ -413,7 +419,7 @@ fn dedup_candidate_map(candidate_map: &mut HashMap<SelectorKey, Vec<String>>) {
 pub(super) fn candidate_map_for_request(
     request: &PlanRequest,
     externally_blocked: &HashSet<RuleId>,
-) -> Result<CandidateMaps, String> {
+) -> MigrationResult<CandidateMaps> {
     let (_, ParsedCss { mut rules, .. }, _) = parse_request_rules(request)?;
     let unproven = unproven_relationship_rules(&rules, &request.sheet.css_path, &request.files);
     stamp_unproven_rules(&mut rules, &unproven);
@@ -494,7 +500,7 @@ pub(super) fn plan_request(
     blocked_rules: &RuleConflicts,
     externally_blocked: &HashSet<RuleId>,
     unproven_rules: &HashMap<RuleId, String>,
-) -> Result<PlanResponse, String> {
+) -> MigrationResult<PlanResponse> {
     let (
         is_module,
         ParsedCss {

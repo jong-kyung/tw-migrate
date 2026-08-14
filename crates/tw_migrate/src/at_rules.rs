@@ -7,6 +7,7 @@ use oxc_css_parser::{
     Parser as CssParser, Syntax,
     ast::{AtRule, Statement, Stylesheet},
 };
+use tw_migrate_error::{MigrationError, MigrationResult};
 
 use crate::{
     arbitrary::encode as encode_arbitrary,
@@ -50,9 +51,10 @@ pub(crate) fn global_at_rule_plan(
 pub(crate) fn append_global_at_rules(
     source: &str,
     at_rules: &[&GlobalAtRulePlan],
-) -> Result<String, String> {
+) -> MigrationResult<String> {
     let allocator = oxc_css_parser::Allocator::default();
-    let stylesheet = parse_tailwind(&allocator, source)?;
+    let stylesheet = parse_tailwind(&allocator, source)
+        .map_err(|message| MigrationError::AuthoredStylesheetParse { message })?;
     let mut existing = HashSet::new();
     walk_at_rules(&stylesheet.statements, &mut |at_rule| {
         existing.insert(source[at_rule.span.start..at_rule.span.end].trim());

@@ -6,6 +6,7 @@ use crate::{
 };
 
 use oxc_css_parser::ast::{AtRule, AtRulePrelude, InterpolableIdent, KeyframesName};
+use tw_migrate_error::{MigrationError, MigrationResult};
 
 pub(crate) struct KeyframePlan {
     pub(crate) span: Range<usize>,
@@ -80,9 +81,10 @@ pub(crate) fn animation_candidate(
 pub(crate) fn append_keyframes(
     source: &str,
     keyframes: &[&KeyframePlan],
-) -> Result<String, String> {
+) -> MigrationResult<String> {
     let allocator = oxc_css_parser::Allocator::default();
-    let stylesheet = parse_tailwind(&allocator, source)?;
+    let stylesheet = parse_tailwind(&allocator, source)
+        .map_err(|message| MigrationError::AuthoredStylesheetParse { message })?;
     let mut existing = HashMap::new();
     walk_at_rules(&stylesheet.statements, &mut |at_rule| {
         if at_rule.name.name == "keyframes"
@@ -101,10 +103,12 @@ pub(crate) fn append_keyframes(
     for keyframe in keyframes {
         if let Some(current) = existing.get(&keyframe.migrated_name) {
             if current.trim() != keyframe.source.trim() {
-                return Err(format!(
-                    "Tailwind CSS already defines a different @keyframes {}",
-                    keyframe.migrated_name
-                ));
+                return Err(MigrationError::PlanCollision {
+                    message: format!(
+                        "Tailwind CSS already defines a different @keyframes {}",
+                        keyframe.migrated_name
+                    ),
+                });
             }
             continue;
         }

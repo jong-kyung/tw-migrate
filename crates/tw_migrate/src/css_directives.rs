@@ -5,17 +5,21 @@
 //! values never counts.
 
 use serde::Serialize;
+use tw_migrate_error::{MigrationError, MigrationResult};
 
 use crate::at_rules::parse_css;
 use crate::stylesheet_analysis::{import_href, literal_str};
 use oxc_css_parser::ast::{
-    AtRulePrelude, ComponentValue, Function, FunctionName, InterpolableIdent, MediaQuery,
-    Statement,
+    AtRulePrelude, ComponentValue, Function, FunctionName, InterpolableIdent, MediaQuery, Statement,
 };
 use oxc_css_parser::token;
 
 #[derive(Serialize)]
-#[serde(tag = "kind", rename_all = "lowercase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "lowercase",
+    rename_all_fields = "camelCase"
+)]
 enum CssDirective {
     /// A top-level `@import`, read from the parser's structured prelude.
     Import {
@@ -78,7 +82,12 @@ fn import_directive(source_text: &str, at_rule: &oxc_css_parser::ast::AtRule<'_>
             }
         }
         if !structured {
-            read_source_tokens(source_text, &modifiers.values, &mut source, &mut source_unreadable);
+            read_source_tokens(
+                source_text,
+                &modifiers.values,
+                &mut source,
+                &mut source_unreadable,
+            );
         }
     }
     CssDirective::Import {
@@ -140,8 +149,13 @@ fn read_source_tokens(
             index += 1;
             continue;
         }
-        let wrapped = matches!(tokens.get(index + 1), Some((token::TokenData::LParen(_), _)))
-            && matches!(tokens.get(index + 3), Some((token::TokenData::RParen(_), _)));
+        let wrapped = matches!(
+            tokens.get(index + 1),
+            Some((token::TokenData::LParen(_), _))
+        ) && matches!(
+            tokens.get(index + 3),
+            Some((token::TokenData::RParen(_), _))
+        );
         match tokens.get(index + 2) {
             Some((token::TokenData::Ident(_), text)) if wrapped && *text == "none" => {
                 *source = Some("none".to_string());
@@ -198,10 +212,13 @@ fn source_directive(prelude: &str) -> CssDirective {
 }
 
 /// Top-level at-rule directives of a stylesheet.
-pub fn collect_css_directives_json(source: &str) -> Result<String, String> {
+pub fn collect_css_directives_json(source: &str) -> MigrationResult<String> {
     let allocator = oxc_css_parser::Allocator::default();
-    let parsed = parse_css(&allocator, source, oxc_css_parser::Syntax::Css)
-        .map_err(|error| format!("Failed to parse stylesheet: {error}"))?;
+    let parsed = parse_css(&allocator, source, oxc_css_parser::Syntax::Css).map_err(|error| {
+        MigrationError::AuthoredStylesheetParse {
+            message: format!("Failed to parse stylesheet: {error}"),
+        }
+    })?;
     let mut directives = Vec::new();
     for statement in &parsed.statements {
         let Statement::AtRule(at_rule) = statement else {
@@ -223,7 +240,9 @@ pub fn collect_css_directives_json(source: &str) -> Result<String, String> {
             }),
         }
     }
-    serde_json::to_string(&directives).map_err(|error| error.to_string())
+    serde_json::to_string(&directives).map_err(|error| MigrationError::Serialization {
+        message: error.to_string(),
+    })
 }
 
 #[cfg(test)]

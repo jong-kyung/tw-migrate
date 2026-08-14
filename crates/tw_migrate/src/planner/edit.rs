@@ -44,18 +44,22 @@ pub(crate) fn original_offset(edit_batches: &[Vec<Edit>], mut offset: usize) -> 
     offset
 }
 
-pub(super) fn apply_edits(source: &str, mut edits: Vec<Edit>) -> Result<String, String> {
+pub(super) fn apply_edits(source: &str, mut edits: Vec<Edit>) -> MigrationResult<String> {
     edits.sort_by_key(|edit| (edit.start, edit.end));
     for pair in edits.windows(2) {
         if pair[0].end > pair[1].start {
-            return Err("Overlapping source edits were produced".to_string());
+            return Err(MigrationError::PlanCollision {
+                message: "Overlapping source edits were produced".to_string(),
+            });
         }
     }
     let mut output = String::with_capacity(source.len());
     let mut cursor = 0;
     for edit in edits {
         if edit.end > source.len() || edit.start > edit.end {
-            return Err("Invalid source edit span".to_string());
+            return Err(MigrationError::InvalidEdit {
+                message: "Invalid source edit span".to_string(),
+            });
         }
         output.push_str(&source[cursor..edit.start]);
         output.push_str(&edit.replacement);
@@ -68,11 +72,14 @@ pub(super) fn apply_edits(source: &str, mut edits: Vec<Edit>) -> Result<String, 
 pub(super) fn remove_empty_conditionals(
     mut source: String,
     syntax: Syntax,
-) -> Result<String, String> {
+) -> MigrationResult<String> {
     loop {
         let allocator = oxc_css_parser::Allocator::default();
-        let stylesheet = parse_css(&allocator, &source, syntax)
-            .map_err(|error| format!("Failed to parse edited CSS: {error}"))?;
+        let stylesheet = parse_css(&allocator, &source, syntax).map_err(|error| {
+            MigrationError::EditedStylesheetParse {
+                message: format!("Failed to parse edited CSS: {error}"),
+            }
+        })?;
         let mut edits = Vec::new();
         collect_empty_conditionals(&stylesheet.statements, &mut edits);
         if edits.is_empty() {
@@ -102,13 +109,15 @@ pub(super) fn collect_empty_conditionals(statements: &[Statement<'_>], edits: &m
     }
 }
 
-pub(crate) fn validate_css(source: &str) -> Result<(), String> {
+pub(crate) fn validate_css(source: &str) -> MigrationResult<()> {
     validate_stylesheet(source, Syntax::Css)
 }
 
-pub(super) fn validate_stylesheet(source: &str, syntax: Syntax) -> Result<(), String> {
+pub(super) fn validate_stylesheet(source: &str, syntax: Syntax) -> MigrationResult<()> {
     let allocator = oxc_css_parser::Allocator::default();
     parse_css(&allocator, source, syntax)
         .map(|_| ())
-        .map_err(|error| format!("Edited stylesheet no longer parses: {error}"))
+        .map_err(|error| MigrationError::EditedStylesheetParse {
+            message: format!("Edited stylesheet no longer parses: {error}"),
+        })
 }

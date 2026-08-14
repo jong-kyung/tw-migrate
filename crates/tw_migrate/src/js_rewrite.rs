@@ -10,14 +10,14 @@ use oxc_ast::ast::{
     Argument, CallExpression, ComputedMemberExpression, ExportAllDeclaration,
     ExportFromDeclaration, Expression, ImportDeclaration, ImportDeclarationSpecifier,
     ImportExpression, JSXAttribute, JSXAttributeItem, JSXAttributeName, JSXAttributeValue,
-    JSXExpression, JSXOpeningElement,
-    StaticMemberExpression, TemplateLiteral, VariableDeclarator,
+    JSXExpression, JSXOpeningElement, StaticMemberExpression, TemplateLiteral, VariableDeclarator,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::Parser;
 use oxc_semantic::{Scoping, SemanticBuilder};
 use oxc_span::{GetSpan, SourceType, Span};
 use oxc_syntax::symbol::SymbolId;
+use tw_migrate_error::{MigrationError, MigrationResult};
 
 use crate::{
     css_plan::SelectorKey,
@@ -112,29 +112,32 @@ pub(crate) fn plan_batch_source_file(
     is_module: bool,
     candidates: &HashMap<SelectorKey, Vec<String>>,
     preserved_module_classes: &BTreeSet<String>,
-) -> Result<SourcePlan, String> {
+) -> MigrationResult<SourcePlan> {
     let allocator = Allocator::default();
-    let source_type = source_type_for_path(&file.path)
-        .map_err(|error| format!("Unsupported source file {}: {error}", file.path))?;
+    let source_type =
+        source_type_for_path(&file.path).map_err(|error| MigrationError::UnsupportedSource {
+            message: format!("Unsupported source file {}: {error}", file.path),
+        })?;
     let parsed = Parser::new(&allocator, &file.source, source_type).parse();
     if !parsed.diagnostics.is_empty() {
         if !file.writable {
             return Ok(opaque_reference_plan(file, css_path, is_module));
         }
-        return Err(format!(
-            "Failed to parse {}: {:?}",
-            file.path, parsed.diagnostics
-        ));
+        return Err(MigrationError::SourceParse {
+            message: format!("Failed to parse {}: {:?}", file.path, parsed.diagnostics),
+        });
     }
     let semantic = SemanticBuilder::new_compiler().build(&parsed.program);
     if !semantic.diagnostics.is_empty() {
         if !file.writable {
             return Ok(opaque_reference_plan(file, css_path, is_module));
         }
-        return Err(format!(
-            "Failed to analyze {}: {:?}",
-            file.path, semantic.diagnostics
-        ));
+        return Err(MigrationError::SourceAnalysis {
+            message: format!(
+                "Failed to analyze {}: {:?}",
+                file.path, semantic.diagnostics
+            ),
+        });
     }
 
     let mut imports = ImportCollector {
@@ -1157,14 +1160,18 @@ fn consume_following_newline(source: &str, end: usize) -> usize {
     }
 }
 
-pub(crate) fn validate_js(path: &str, source: &str) -> Result<(), String> {
+pub(crate) fn validate_js(path: &str, source: &str) -> MigrationResult<()> {
     let allocator = Allocator::default();
-    let source_type = source_type_for_path(path)
-        .map_err(|error| format!("Unsupported source file {path}: {error}"))?;
+    let source_type =
+        source_type_for_path(path).map_err(|error| MigrationError::UnsupportedSource {
+            message: format!("Unsupported source file {path}: {error}"),
+        })?;
     let parsed = Parser::new(&allocator, source, source_type).parse();
     if parsed.diagnostics.is_empty() {
         Ok(())
     } else {
-        Err(format!("Edited source no longer parses: {path}"))
+        Err(MigrationError::OutputValidation {
+            message: format!("Edited source no longer parses: {path}"),
+        })
     }
 }

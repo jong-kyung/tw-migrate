@@ -15,6 +15,7 @@ use oxc_parser::Parser;
 use oxc_semantic::{Semantic, SemanticBuilder};
 use oxc_syntax::symbol::SymbolId;
 use serde::Serialize;
+use tw_migrate_error::{MigrationError, MigrationResult};
 
 use crate::js_rewrite::source_type_for_path;
 
@@ -74,13 +75,20 @@ impl ExpressionCollector {
 impl<'a> Visit<'a> for ExpressionCollector {
     fn visit_identifier_reference(&mut self, identifier: &IdentifierReference<'a>) {
         self.record(&identifier.name);
-        if !self.references.iter().any(|name| name == identifier.name.as_str()) {
+        if !self
+            .references
+            .iter()
+            .any(|name| name == identifier.name.as_str())
+        {
             self.references.push(identifier.name.to_string());
         }
         walk::walk_identifier_reference(self, identifier);
     }
 
-    fn visit_static_member_expression(&mut self, member: &oxc_ast::ast::StaticMemberExpression<'a>) {
+    fn visit_static_member_expression(
+        &mut self,
+        member: &oxc_ast::ast::StaticMemberExpression<'a>,
+    ) {
         self.record(&member.property.name);
         walk::walk_static_member_expression(self, member);
     }
@@ -96,11 +104,15 @@ impl<'a> Visit<'a> for ExpressionCollector {
     }
 }
 
-pub fn expression_analysis_json(path: &str, source: &str) -> Result<String, String> {
+pub fn expression_analysis_json(path: &str, source: &str) -> MigrationResult<String> {
     let allocator = Allocator::default();
-    let expression = Parser::new(&allocator, source, source_type_for_path(path)?)
+    let source_type = source_type_for_path(path)
+        .map_err(|message| MigrationError::UnsupportedSource { message })?;
+    let expression = Parser::new(&allocator, source, source_type)
         .parse_expression()
-        .map_err(|diagnostics| format!("Failed to parse {path}: {diagnostics:?}"))?;
+        .map_err(|diagnostics| MigrationError::SourceParse {
+            message: format!("Failed to parse {path}: {diagnostics:?}"),
+        })?;
     let static_string = match &expression {
         Expression::StringLiteral(literal) => Some(literal.value.to_string()),
         Expression::TemplateLiteral(template) if template.expressions.is_empty() => template
@@ -111,9 +123,7 @@ pub fn expression_analysis_json(path: &str, source: &str) -> Result<String, Stri
         _ => None,
     };
     let vue_module_member = match &expression {
-        Expression::StaticMemberExpression(member)
-            if matches!(&member.object, Expression::Identifier(object) if object.name == "$style") =>
-        {
+        Expression::StaticMemberExpression(member) if matches!(&member.object, Expression::Identifier(object) if object.name == "$style") => {
             Some(member.property.name.to_string())
         }
         _ => None,
@@ -133,7 +143,9 @@ pub fn expression_analysis_json(path: &str, source: &str) -> Result<String, Stri
         references_use_css_module: collector.references_use_css_module,
         references: collector.references,
     })
-    .map_err(|error| error.to_string())
+    .map_err(|error| MigrationError::Serialization {
+        message: error.to_string(),
+    })
 }
 
 #[derive(Serialize)]
@@ -229,7 +241,11 @@ impl<'a> SourceCollector<'_, 'a> {
         }
         match self.semantic.symbol_declaration(symbol).kind() {
             AstKind::VariableDeclarator(declarator) => {
-                match declarator.init.as_ref().map(|init| init.get_inner_expression()) {
+                match declarator
+                    .init
+                    .as_ref()
+                    .map(|init| init.get_inner_expression())
+                {
                     Some(Expression::Identifier(identifier)) => self
                         .symbol(identifier)
                         .is_some_and(|inner| self.is_namespace_symbol(inner, depth - 1)),
@@ -286,7 +302,9 @@ impl<'a> SourceCollector<'_, 'a> {
     fn collect_glob_argument(&mut self, argument: &Argument<'_>) -> bool {
         match argument {
             Argument::StringLiteral(literal) => {
-                self.analysis.vue_glob_patterns.push(literal.value.to_string());
+                self.analysis
+                    .vue_glob_patterns
+                    .push(literal.value.to_string());
                 true
             }
             Argument::TemplateLiteral(template) if template.expressions.is_empty() => {
@@ -562,7 +580,10 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
         walk::walk_identifier_reference(self, identifier);
     }
 
-    fn visit_static_member_expression(&mut self, member: &oxc_ast::ast::StaticMemberExpression<'a>) {
+    fn visit_static_member_expression(
+        &mut self,
+        member: &oxc_ast::ast::StaticMemberExpression<'a>,
+    ) {
         if member.property.name == "$style" && self.may_be_instance(&member.object) {
             self.analysis.uses_css_module = true;
         }
@@ -590,12 +611,15 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
 
 /// Parse and semantically analyze one JavaScript or TypeScript source once,
 /// returning every fact the TypeScript orchestration layer needs.
-pub fn source_analysis_json(path: &str, source: &str) -> Result<String, String> {
-    let source_type = source_type_for_path(path)?;
+pub fn source_analysis_json(path: &str, source: &str) -> MigrationResult<String> {
+    let source_type = source_type_for_path(path)
+        .map_err(|message| MigrationError::UnsupportedSource { message })?;
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, source, source_type).parse();
     if parsed.panicked || !parsed.diagnostics.is_empty() {
-        return Err(format!("Failed to parse {path}"));
+        return Err(MigrationError::SourceParse {
+            message: format!("Failed to parse {path}"),
+        });
     }
     // Instance-alias checks resolve symbols back to their declaring node,
     // which needs the full node store rather than the compiler profile.
@@ -604,7 +628,9 @@ pub fn source_analysis_json(path: &str, source: &str) -> Result<String, String> 
         .with_check_syntax_error(true)
         .build(&parsed.program);
     if !semantic.diagnostics.is_empty() {
-        return Err(format!("Failed to analyze {path}"));
+        return Err(MigrationError::SourceAnalysis {
+            message: format!("Failed to analyze {path}"),
+        });
     }
     let mut use_css_module_symbols = Vec::new();
     let mut use_css_module_locals: Vec<String> = Vec::new();
@@ -662,7 +688,9 @@ pub fn source_analysis_json(path: &str, source: &str) -> Result<String, String> 
     collector.analysis.defines_root_use_css_module = scoping
         .get_binding(scoping.root_scope_id(), "useCssModule".into())
         .is_some_and(|symbol| !collector.use_css_module_symbols.contains(&symbol));
-    serde_json::to_string(&collector.analysis).map_err(|error| error.to_string())
+    serde_json::to_string(&collector.analysis).map_err(|error| MigrationError::Serialization {
+        message: error.to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -705,8 +733,16 @@ mod tests {
                 &super::expression_analysis_json("Component.js", source).unwrap(),
             )
             .unwrap();
-            assert_eq!(parsed["staticString"], serde_json::json!(static_string), "{source}");
-            assert_eq!(parsed["vueModuleMember"], serde_json::json!(member), "{source}");
+            assert_eq!(
+                parsed["staticString"],
+                serde_json::json!(static_string),
+                "{source}"
+            );
+            assert_eq!(
+                parsed["vueModuleMember"],
+                serde_json::json!(member),
+                "{source}"
+            );
             assert_eq!(parsed["usesCssModule"], uses_css_module, "{source}");
             assert_eq!(parsed["referencesUseCssModule"], references_api, "{source}");
         }
@@ -756,7 +792,10 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        assert_eq!(parsed["staticImports"], serde_json::json!(["./applied.css"]));
+        assert_eq!(
+            parsed["staticImports"],
+            serde_json::json!(["./applied.css"])
+        );
     }
 
     #[test]
@@ -827,11 +866,8 @@ mod tests {
     #[test]
     fn ignores_unused_use_css_module_imports() {
         let parsed: serde_json::Value = serde_json::from_str(
-            &super::source_analysis_json(
-                "/p/Card.vue.js",
-                "import { useCssModule } from 'vue';",
-            )
-            .unwrap(),
+            &super::source_analysis_json("/p/Card.vue.js", "import { useCssModule } from 'vue';")
+                .unwrap(),
         )
         .unwrap();
         assert_eq!(parsed["usesCssModule"], false);
@@ -849,8 +885,14 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        assert_eq!(parsed["useCssModuleLocals"], serde_json::json!(["css", "helper"]));
-        assert_eq!(parsed["unboundReferences"], serde_json::json!(["first", "second"]));
+        assert_eq!(
+            parsed["useCssModuleLocals"],
+            serde_json::json!(["css", "helper"])
+        );
+        assert_eq!(
+            parsed["unboundReferences"],
+            serde_json::json!(["first", "second"])
+        );
     }
 
     #[test]

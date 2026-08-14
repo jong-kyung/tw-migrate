@@ -11,10 +11,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use oxc_css_parser::ast::{
-    AtRule, ComplexSelectorChild, QualifiedRule, SimpleSelector, Statement,
-};
+use oxc_css_parser::ast::{AtRule, ComplexSelectorChild, QualifiedRule, SimpleSelector, Statement};
 use serde::{Deserialize, Serialize};
+use tw_migrate_error::{MigrationError, MigrationResult};
 
 use crate::{
     at_rules::{at_rule_query, builtin_media_variant, parse_css},
@@ -1193,9 +1192,11 @@ struct AuthoredVariant {
 /// reports its built-in candidate, existing-breakpoint match, readable
 /// name, and digest. Also returns authored custom-variant reservations
 /// parsed from the supplied Tailwind sources.
-pub fn collect_media_conditions_json(request: &str) -> Result<String, String> {
+pub fn collect_media_conditions_json(request: &str) -> MigrationResult<String> {
     let request: MediaCollectionRequest =
-        serde_json::from_str(request).map_err(|error| format!("Invalid request: {error}"))?;
+        serde_json::from_str(request).map_err(|error| MigrationError::InvalidRequest {
+            message: format!("Invalid request: {error}"),
+        })?;
 
     let mut components: Vec<CollectedComponent> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -1221,10 +1222,12 @@ pub fn collect_media_conditions_json(request: &str) -> Result<String, String> {
                             || !source.is_char_boundary(block.content_start)
                             || !source.is_char_boundary(block.content_end)
                         {
-                            return Err(format!(
-                                "Invalid Vue style block span in {}",
-                                stylesheet.css_path
-                            ));
+                            return Err(MigrationError::Invariant {
+                                message: format!(
+                                    "Invalid Vue style block span in {}",
+                                    stylesheet.css_path
+                                ),
+                            });
                         }
                         units.push((
                             &source[block.content_start..block.content_end],
@@ -1236,8 +1239,12 @@ pub fn collect_media_conditions_json(request: &str) -> Result<String, String> {
         }
         for (source, syntax) in units {
             let allocator = oxc_css_parser::Allocator::default();
-            let parsed = parse_css(&allocator, source, syntax.parser_syntax())
-                .map_err(|error| format!("Failed to parse {}: {error}", stylesheet.css_path))?;
+            let parsed =
+                parse_css(&allocator, source, syntax.parser_syntax()).map_err(|error| {
+                    MigrationError::AuthoredStylesheetParse {
+                        message: format!("Failed to parse {}: {error}", stylesheet.css_path),
+                    }
+                })?;
             let mut at_rules = Vec::new();
             walk_media_at_rules(&parsed.statements, &mut |at_rule| at_rules.push(at_rule));
             for at_rule in at_rules {
@@ -1304,7 +1311,9 @@ pub fn collect_media_conditions_json(request: &str) -> Result<String, String> {
         components,
         authored_variants,
     })
-    .map_err(|error| error.to_string())
+    .map_err(|error| MigrationError::Serialization {
+        message: error.to_string(),
+    })
 }
 
 /// The existing breakpoint variant for a width bound: an inclusive lower
@@ -1368,10 +1377,13 @@ fn collect_authored_variants(
     path: &str,
     source: &str,
     variants: &mut Vec<AuthoredVariant>,
-) -> Result<(), String> {
+) -> MigrationResult<()> {
     let allocator = oxc_css_parser::Allocator::default();
-    let parsed = parse_css(&allocator, source, oxc_css_parser::Syntax::Css)
-        .map_err(|error| format!("Failed to parse {path}: {error}"))?;
+    let parsed = parse_css(&allocator, source, oxc_css_parser::Syntax::Css).map_err(|error| {
+        MigrationError::AuthoredStylesheetParse {
+            message: format!("Failed to parse {path}: {error}"),
+        }
+    })?;
     let mut at_rules = Vec::new();
     walk_custom_variant_at_rules(&parsed.statements, &mut |at_rule| at_rules.push(at_rule));
     for at_rule in at_rules {
@@ -1530,7 +1542,10 @@ mod collection_tests {
             .to_string(),
         )
         .unwrap_err();
-        assert!(error.starts_with("Failed to parse card.css"), "{error}");
+        assert!(
+            error.to_string().starts_with("Failed to parse card.css"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -1681,19 +1696,30 @@ mod collection_tests {
 /// normalize to a single generated-variant unit. This is the shape the
 /// effective-expansion proof compares against a component or whole key;
 /// selector-based expansions and anything else return `None`.
-pub fn media_probe_key_json(css: &str) -> Result<String, String> {
+pub fn media_probe_key_json(css: &str) -> MigrationResult<String> {
     let allocator = oxc_css_parser::Allocator::default();
-    let parsed = parse_css(&allocator, css, oxc_css_parser::Syntax::Css)
-        .map_err(|error| format!("Failed to parse probe CSS: {error}"))?;
+    let parsed = parse_css(&allocator, css, oxc_css_parser::Syntax::Css).map_err(|error| {
+        MigrationError::AuthoredStylesheetParse {
+            message: format!("Failed to parse probe CSS: {error}"),
+        }
+    })?;
     let mut media_query: Option<&str> = None;
     for statement in &parsed.statements {
         let Statement::AtRule(at_rule) = statement else {
             // A top-level style rule means the expansion is not a pure
             // media wrapper.
-            return serde_json::to_string(&Option::<String>::None).map_err(|e| e.to_string());
+            return serde_json::to_string(&Option::<String>::None).map_err(|error| {
+                MigrationError::Serialization {
+                    message: error.to_string(),
+                }
+            });
         };
         let Some(block) = &at_rule.block else {
-            return serde_json::to_string(&Option::<String>::None).map_err(|e| e.to_string());
+            return serde_json::to_string(&Option::<String>::None).map_err(|error| {
+                MigrationError::Serialization {
+                    message: error.to_string(),
+                }
+            });
         };
         // The wrapper must contain exactly the probe rule with its selector
         // untouched: a nested at-rule means more than one media level, and
@@ -1705,7 +1731,11 @@ pub fn media_probe_key_json(css: &str) -> Result<String, String> {
             _ => false,
         };
         if at_rule.name.name != "media" || media_query.is_some() || !pure_wrapper {
-            return serde_json::to_string(&Option::<String>::None).map_err(|e| e.to_string());
+            return serde_json::to_string(&Option::<String>::None).map_err(|error| {
+                MigrationError::Serialization {
+                    message: error.to_string(),
+                }
+            });
         }
         media_query = at_rule_query(at_rule, css, "media");
     }
@@ -1718,7 +1748,9 @@ pub fn media_probe_key_json(css: &str) -> Result<String, String> {
             Some(component.key.clone())
         }
     });
-    serde_json::to_string(&key).map_err(|error| error.to_string())
+    serde_json::to_string(&key).map_err(|error| MigrationError::Serialization {
+        message: error.to_string(),
+    })
 }
 
 /// True when the rule's selector is exactly one bare class: the compiled

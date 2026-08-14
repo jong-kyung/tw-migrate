@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 
 use serde::Serialize;
+use tw_migrate_error::{MigrationError, MigrationResult};
 
 use crate::at_rules::parse_css;
 use oxc_css_parser::Syntax;
@@ -180,7 +181,10 @@ fn collect_compound_scope_escapes(
                 }
             }
             PseudoClassSelectorArgKind::Nth(nth) => {
-                if let Some(list) = nth.matcher.as_ref().and_then(|matcher| matcher.selector.as_ref())
+                if let Some(list) = nth
+                    .matcher
+                    .as_ref()
+                    .and_then(|matcher| matcher.selector.as_ref())
                 {
                     for selector in &list.selectors {
                         found |= collect_scope_escapes(selector, source, analysis);
@@ -251,7 +255,9 @@ fn declaration_value(source: &str, declaration: &oxc_css_parser::ast::Declaratio
         return String::new();
     };
     let last = declaration.value.last().expect("checked");
-    source[first.span().start..last.span().end].trim().to_string()
+    source[first.span().start..last.span().end]
+        .trim()
+        .to_string()
 }
 
 fn literal_ident<'a>(value: &'a InterpolableIdent<'a>) -> Option<&'a str> {
@@ -334,15 +340,13 @@ fn collect_at_rule_metadata(
                 }
             }
             "page" => analysis.global_at_rule_identities.push("page".to_string()),
-            name
-                @ ("color-profile"
-                | "counter-style"
-                | "font-feature-values"
-                | "font-palette-values"
-                | "position-try"
-                | "property"
-                | "view-transition") =>
-            {
+            name @ ("color-profile"
+            | "counter-style"
+            | "font-feature-values"
+            | "font-palette-values"
+            | "position-try"
+            | "property"
+            | "view-transition") => {
                 if let Some(prelude) = registration_prelude(at_rule.prelude.as_ref()) {
                     analysis
                         .global_at_rule_identities
@@ -408,7 +412,8 @@ fn collect_stylesheet_statements(
                         analysis.selectors_unverifiable = true;
                     }
                 }
-                let nested = collect_stylesheet_statements(&rule.block.statements, source, analysis);
+                let nested =
+                    collect_stylesheet_statements(&rule.block.statements, source, analysis);
                 if nested {
                     // Reconstructing mixed declaration and nested-rule scope is
                     // outside this collector; retain conservatively.
@@ -441,9 +446,9 @@ fn collect_stylesheet_statements(
                                 }
                                 None => analysis.unverifiable = true,
                             },
-                            ComponentValue::InterpolableIdent(InterpolableIdent::Literal(ident))
-                                if ident.name == "global" =>
-                            {
+                            ComponentValue::InterpolableIdent(InterpolableIdent::Literal(
+                                ident,
+                            )) if ident.name == "global" => {
                                 reference_read = true;
                             }
                             _ => analysis.unverifiable = true,
@@ -497,11 +502,15 @@ fn collect_loading_imports(
     }
 }
 
-pub fn stylesheet_analysis_json(path: &str, source: &str) -> Result<String, String> {
-    let syntax = stylesheet_syntax(path)?;
+pub fn stylesheet_analysis_json(path: &str, source: &str) -> MigrationResult<String> {
+    let syntax =
+        stylesheet_syntax(path).map_err(|message| MigrationError::UnsupportedSource { message })?;
     let allocator = oxc_css_parser::Allocator::default();
-    let parsed = parse_css(&allocator, source, syntax)
-        .map_err(|error| format!("Failed to parse {path}: {error}"))?;
+    let parsed = parse_css(&allocator, source, syntax).map_err(|error| {
+        MigrationError::AuthoredStylesheetParse {
+            message: format!("Failed to parse {path}: {error}"),
+        }
+    })?;
     let mut analysis = StylesheetAnalysis {
         references: Vec::new(),
         imports: Vec::new(),
@@ -521,7 +530,9 @@ pub fn stylesheet_analysis_json(path: &str, source: &str) -> Result<String, Stri
     }
     analysis.references.sort();
     analysis.references.dedup();
-    serde_json::to_string(&analysis).map_err(|error| error.to_string())
+    serde_json::to_string(&analysis).map_err(|error| MigrationError::Serialization {
+        message: error.to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -550,10 +561,9 @@ mod tests {
                 vec!["./tokens.less", "./x.module.css"],
             ),
         ] {
-            let parsed: serde_json::Value = serde_json::from_str(
-                &super::stylesheet_analysis_json(path, source).unwrap(),
-            )
-            .unwrap();
+            let parsed: serde_json::Value =
+                serde_json::from_str(&super::stylesheet_analysis_json(path, source).unwrap())
+                    .unwrap();
             assert_eq!(parsed["references"], serde_json::json!(expected), "{path}");
             assert_eq!(parsed["unverifiable"], false, "{path}");
         }
@@ -561,11 +571,11 @@ mod tests {
 
     #[test]
     fn collects_loading_import_media_and_byte_spans() {
-        let source = "/* 😀 */\n@import url(\"./print.css\") print;\n.rule {}\n@import \"./late.css\";\n";
-        let parsed: serde_json::Value = serde_json::from_str(
-            &super::stylesheet_analysis_json("/p/main.css", source).unwrap(),
-        )
-        .unwrap();
+        let source =
+            "/* 😀 */\n@import url(\"./print.css\") print;\n.rule {}\n@import \"./late.css\";\n";
+        let parsed: serde_json::Value =
+            serde_json::from_str(&super::stylesheet_analysis_json("/p/main.css", source).unwrap())
+                .unwrap();
         let start = source.find("@import").unwrap();
         let end = source[start..].find(';').unwrap() + start + 1;
         assert_eq!(
@@ -582,10 +592,9 @@ mod tests {
     #[test]
     fn collects_conditional_loading_import_modifiers() {
         let source = "@import \"./layered.css\" layer(base);\n@import \"./grid.css\" supports(display: grid);\n";
-        let parsed: serde_json::Value = serde_json::from_str(
-            &super::stylesheet_analysis_json("/p/main.css", source).unwrap(),
-        )
-        .unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&super::stylesheet_analysis_json("/p/main.css", source).unwrap())
+                .unwrap();
         assert_eq!(parsed["imports"][0]["media"], "layer(base)");
         assert_eq!(parsed["imports"][1]["media"], "supports(display: grid)");
     }

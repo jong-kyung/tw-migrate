@@ -18,10 +18,14 @@ pub(super) fn map_rule_spans(
     analysis_source: &str,
     rules: &mut [RulePlan],
     authored_base: usize,
-) -> Result<(), String> {
+) -> MigrationResult<()> {
     let allocator = oxc_css_parser::Allocator::default();
-    let stylesheet = parse_css(&allocator, authored_source, syntax.parser_syntax())
-        .map_err(|error| format!("Failed to parse {source_path}: {error}"))?;
+    let stylesheet =
+        parse_css(&allocator, authored_source, syntax.parser_syntax()).map_err(|error| {
+            MigrationError::AuthoredStylesheetParse {
+                message: format!("Failed to parse {source_path}: {error}"),
+            }
+        })?;
     let mut authored_rules = Vec::new();
     collect_qualified_rule_spans(&stylesheet.statements, &mut authored_rules);
     let mappings = source_mappings

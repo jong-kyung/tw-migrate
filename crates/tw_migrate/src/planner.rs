@@ -5,6 +5,7 @@ use std::{
 
 use oxc_css_parser::{Syntax, ast::Statement};
 use serde::{Deserialize, Serialize};
+use tw_migrate_error::{MigrationError, MigrationResult};
 
 use crate::{
     animations::append_keyframes,
@@ -37,7 +38,6 @@ mod vue;
 pub use batch::plan_batch_json;
 #[cfg(test)]
 use batch::plan_json;
-pub(crate) use consumer::is_recoverable_input_error;
 use consumer::plan_consumer_file;
 pub(crate) use edit::{Edit, original_offset, validate_css};
 use edit::{
