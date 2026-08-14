@@ -1,8 +1,4 @@
-mod html_rewrite;
-mod js_rewrite;
-mod jsx_graph;
 mod planner;
-mod source_analysis;
 
 use napi_derive::napi;
 use serde::Serialize;
@@ -68,13 +64,13 @@ pub fn validate_css(source: String) -> napi::Result<()> {
 
 #[napi]
 pub fn expression_analysis(path: String, source: String) -> napi::Result<String> {
-    source_analysis::expression_analysis_json(&path, &source)
+    tw_migrate_source::expression_analysis_json(&path, &source)
         .map_err(|error| native_error(error, false))
 }
 
 #[napi]
 pub fn source_analysis(path: String, source: String) -> napi::Result<String> {
-    source_analysis::source_analysis_json(&path, &source)
+    tw_migrate_source::source_analysis_json(&path, &source)
         .map_err(|error| native_error(error, false))
 }
 
@@ -136,7 +132,7 @@ mod tests {
         assert!(super::native_error_reason(&plan, true).starts_with(RECOVERABLE_INPUT_ERROR));
 
         let expression =
-            super::source_analysis::expression_analysis_json("app.js", "const =").unwrap_err();
+            tw_migrate_source::expression_analysis_json("app.js", "const =").unwrap_err();
         assert!(matches!(
             expression,
             tw_migrate_error::MigrationError::SourceParse { .. }
@@ -145,7 +141,7 @@ mod tests {
         assert_eq!(expression_reason, expression.to_string());
         assert!(!expression_reason.starts_with(RECOVERABLE_INPUT_ERROR));
 
-        let source = super::source_analysis::source_analysis_json("app.js", "const =").unwrap_err();
+        let source = tw_migrate_source::source_analysis_json("app.js", "const =").unwrap_err();
         assert!(matches!(
             source,
             tw_migrate_error::MigrationError::SourceParse { .. }

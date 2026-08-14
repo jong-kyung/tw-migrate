@@ -17,7 +17,7 @@ use oxc_syntax::symbol::SymbolId;
 use serde::Serialize;
 use tw_migrate_error::{MigrationError, MigrationResult};
 
-use crate::js_rewrite::source_type_for_path;
+use crate::source_type_for_path;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
