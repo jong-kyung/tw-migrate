@@ -1,4 +1,8 @@
-import { expect, test } from "vite-plus/test";
+import { expect, test, vi } from "vite-plus/test";
+
+// Tailwind builds its canonical candidate index on the first lookup for each
+// design-system instance, which exceeds Vitest's 5s default on slower CI runners.
+vi.setConfig({ testTimeout: 60000 });
 
 import { __unstable__loadDesignSystem as loadDesignSystem } from "tailwindcss";
 

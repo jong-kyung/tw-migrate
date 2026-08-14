@@ -25,7 +25,7 @@ import { writeChanges } from "../src/util/write.ts";
 // Full migrations replan with candidate canonicalization, whose first
 // design-system lookup builds Tailwind's utility index; slower CI runners
 // exceed the 5s default by a wide margin.
-vi.setConfig({ testTimeout: 60000 });
+vi.setConfig({ testTimeout: 120000 });
 
 const initialCss = ".button { padding: 13px; }\n";
 const initialTsx =

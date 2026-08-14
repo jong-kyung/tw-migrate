@@ -1,8 +1,12 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { expect, onTestFinished, test } from "vite-plus/test";
+import { expect, onTestFinished, test, vi } from "vite-plus/test";
 
 import { migrate } from "../src/index.ts";
+
+// Workspace cases load fresh Tailwind design systems, so their first canonical
+// candidate lookup can exceed Vitest's 5s default on slower CI runners.
+vi.setConfig({ testTimeout: 60000 });
 
 const mediaCss =
   ".button { padding: 13px; }\n@media screen and (max-width: 700px) { .button { margin: 7px; } }\n";
