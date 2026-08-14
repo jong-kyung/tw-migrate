@@ -1,5 +1,39 @@
 use super::*;
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DecodedSourceMapping {
+    generated_line: u32,
+    generated_column: u32,
+    source: String,
+    original_line: u32,
+    original_column: u32,
+}
+
+pub fn decode_source_map_json(source_map: &str) -> MigrationResult<String> {
+    let source_map = oxc_sourcemap::SourceMap::from_json_string(source_map).map_err(|error| {
+        MigrationError::SourceMap {
+            message: format!("Failed to decode source map: {error}"),
+        }
+    })?;
+    let mappings = source_map
+        .get_tokens()
+        .filter_map(|token| {
+            let source = source_map.get_source(token.get_source_id()?)?;
+            Some(DecodedSourceMapping {
+                generated_line: token.get_dst_line(),
+                generated_column: token.get_dst_col(),
+                source: source.to_owned(),
+                original_line: token.get_src_line(),
+                original_column: token.get_src_col(),
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_string(&mappings).map_err(|error| MigrationError::Serialization {
+        message: error.to_string(),
+    })
+}
+
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct SourceMapping {
@@ -198,4 +232,19 @@ pub(super) fn mentions_word(text: &str, word: &str) -> bool {
 
 fn is_ident_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-'
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn decodes_source_map_mappings() {
+        let decoded = super::decode_source_map_json(
+            r#"{"version":3,"sources":["input.scss"],"names":[],"mappings":"AAAA"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            decoded,
+            r#"[{"generatedLine":0,"generatedColumn":0,"source":"input.scss","originalLine":0,"originalColumn":0}]"#
+        );
+    }
 }

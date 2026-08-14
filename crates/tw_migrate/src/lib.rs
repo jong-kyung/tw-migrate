@@ -1,42 +1,5 @@
-mod planner;
-
 use napi_derive::napi;
-use serde::Serialize;
-use tw_migrate_error::{MigrationError, MigrationResult};
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DecodedSourceMapping {
-    generated_line: u32,
-    generated_column: u32,
-    source: String,
-    original_line: u32,
-    original_column: u32,
-}
-
-fn decode_source_map_json(source_map: &str) -> MigrationResult<String> {
-    let source_map = oxc_sourcemap::SourceMap::from_json_string(source_map).map_err(|error| {
-        MigrationError::SourceMap {
-            message: format!("Failed to decode source map: {error}"),
-        }
-    })?;
-    let mappings = source_map
-        .get_tokens()
-        .filter_map(|token| {
-            let source = source_map.get_source(token.get_source_id()?)?;
-            Some(DecodedSourceMapping {
-                generated_line: token.get_dst_line(),
-                generated_column: token.get_dst_col(),
-                source: source.to_owned(),
-                original_line: token.get_src_line(),
-                original_column: token.get_src_col(),
-            })
-        })
-        .collect::<Vec<_>>();
-    serde_json::to_string(&mappings).map_err(|error| MigrationError::Serialization {
-        message: error.to_string(),
-    })
-}
+use tw_migrate_error::MigrationError;
 
 const RECOVERABLE_INPUT_ERROR: &str = "TW_MIGRATE_RECOVERABLE_INPUT:";
 
@@ -54,7 +17,8 @@ fn native_error(error: MigrationError, prefix_recoverable: bool) -> napi::Error 
 
 #[napi]
 pub fn decode_source_map(source_map: String) -> napi::Result<String> {
-    decode_source_map_json(&source_map).map_err(|error| native_error(error, false))
+    tw_migrate_planner::decode_source_map_json(&source_map)
+        .map_err(|error| native_error(error, false))
 }
 
 #[napi]
@@ -100,7 +64,7 @@ pub fn collect_media_conditions(request: String) -> napi::Result<String> {
 
 #[napi]
 pub fn plan_batch_migration(request: String) -> napi::Result<String> {
-    planner::plan_batch_json(&request).map_err(|error| native_error(error, true))
+    tw_migrate_planner::plan_batch_json(&request).map_err(|error| native_error(error, true))
 }
 
 #[cfg(test)]
@@ -120,7 +84,7 @@ mod tests {
         assert!(media.is_recoverable());
         assert!(super::native_error_reason(&media, true).starts_with(RECOVERABLE_INPUT_ERROR));
 
-        let plan = super::planner::plan_batch_json(
+        let plan = tw_migrate_planner::plan_batch_json(
             r#"{"stylesheets":[{"cssPath":"app.css","cssSource":"@media \u000bscreen {}"}],"files":[]}"#,
         )
         .unwrap_err();
@@ -159,7 +123,7 @@ mod tests {
                 .unwrap_err(),
             tw_migrate_css::collect_css_directives_json("@media \u{b}screen {}").unwrap_err(),
             tw_migrate_css::media_probe_key_json("@media \u{b}screen {}").unwrap_err(),
-            super::decode_source_map_json("{").unwrap_err(),
+            tw_migrate_planner::decode_source_map_json("{").unwrap_err(),
         ];
         for error in errors {
             let reason = super::native_error_reason(&error, false);
@@ -178,24 +142,12 @@ mod tests {
         assert!(!media.is_recoverable());
         assert!(!super::native_error_reason(&media, true).starts_with(RECOVERABLE_INPUT_ERROR));
 
-        let plan = super::planner::plan_batch_json("{").unwrap_err();
+        let plan = tw_migrate_planner::plan_batch_json("{").unwrap_err();
         assert!(matches!(
             plan,
             tw_migrate_error::MigrationError::InvalidRequest { .. }
         ));
         assert!(!plan.is_recoverable());
         assert!(!super::native_error_reason(&plan, true).starts_with(RECOVERABLE_INPUT_ERROR));
-    }
-
-    #[test]
-    fn decodes_source_map_mappings() {
-        let decoded = super::decode_source_map_json(
-            r#"{"version":3,"sources":["input.scss"],"names":[],"mappings":"AAAA"}"#,
-        )
-        .unwrap();
-        assert_eq!(
-            decoded,
-            r#"[{"generatedLine":0,"generatedColumn":0,"source":"input.scss","originalLine":0,"originalColumn":0}]"#
-        );
     }
 }

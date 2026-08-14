@@ -35,6 +35,7 @@ use edit::{
 use request::{BatchPlanRequest, BatchStylesheet, PlanRequest};
 use response::{PlanResponse, PlannedFile, RuleReport};
 use rule::{CandidateMaps, RuleConflicts, RuleId, RuleOrigin, rule_id};
+pub use source_map::decode_source_map_json;
 use source_map::{SourceMapping, map_rule_spans, mentions_word};
 use stylesheet::{
     batch_stylesheet_request, candidate_map_for_request, is_stylesheet_module, plan_request,
@@ -150,7 +151,7 @@ mod tests {
         );
 
         // Strip the canonical list itself so it cannot satisfy its own check.
-        let planner = include_str!("planner.rs");
+        let planner = include_str!("lib.rs");
         let const_start = planner.find("const WARNING_CODES").unwrap();
         let const_end = const_start + planner[const_start..].find("];").unwrap();
         // Scan every crate source and every repo src/ TypeScript file,
@@ -160,6 +161,7 @@ mod tests {
         let mut sources = format!("{}\n{}", &planner[..const_start], &planner[const_end..]);
         for (dir, extension) in [
             (manifest.join("src"), "rs"),
+            (manifest.join("../tw_migrate/src"), "rs"),
             (manifest.join("../tw_migrate_css/src"), "rs"),
             (manifest.join("../tw_migrate_source/src"), "rs"),
             (manifest.join("../../src"), "ts"),
@@ -171,7 +173,7 @@ mod tests {
                     if path.is_dir() {
                         pending.push(path);
                     } else if path.extension().is_some_and(|ext| ext == extension)
-                        && path.file_name().is_some_and(|name| name != "planner.rs")
+                        && path != manifest.join("src/lib.rs")
                     {
                         sources.push('\n');
                         sources.push_str(&std::fs::read_to_string(path).unwrap());
