@@ -1,7 +1,7 @@
 import type { HtmlElementAttributes } from "./parser/html.ts";
 import type { SourceImportRecord } from "./native.ts";
 import type { SourceMapping } from "./parser/style-compiler.ts";
-import type { VueCompiler, VueStyleBlock, VueTemplateSite } from "./parser/vue.ts";
+import type { VueCompiler, VueStyleBlock, VueStyleRange, VueTemplateSite } from "./parser/vue.ts";
 
 export interface MigrateOptions {
   styleFile?: string;
@@ -183,7 +183,7 @@ export interface MigrationContext extends Scope {
   styleSources: Map<string, string>;
   sourceFiles: SourceFile[];
   styleDependents: Map<string, string[]>;
-  vueStyleRanges: Map<string, RuleSpan[]>;
+  vueStyleRanges: Map<string, VueStyleRange[]>;
   /** Tailwind entries per owning package, for ancestor-shared resolution. */
   entryCatalog: Map<string, string[]>;
   /** Scanned paths the utility scanner's ignore rules exclude. */
@@ -208,7 +208,7 @@ export interface PreparedHtml {
 export interface PreparedVue {
   files: Map<string, PreparedSourceFile>;
   stylesheets: StylesheetEntry[];
-  styleRanges: Map<string, RuleSpan[]>;
+  styleRanges: Map<string, VueStyleRange[]>;
   stylePaths: Set<string>;
   unscopedPaths: Set<string>;
   warnings: MigrationWarning[];

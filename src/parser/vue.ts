@@ -186,9 +186,16 @@ export interface VueComponentEdge {
 
 // The orchestrator-owned fields are populated by index.ts while building the
 // package component graph, after analysis produced the object.
+export interface VueStyleRange {
+  start: number;
+  end: number;
+  /** The block's declared style language, defaulting to css. */
+  lang: string;
+}
+
 interface VueAnalysisBase {
   warnings: MigrationWarning[];
-  styleRanges: { start: number; end: number }[];
+  styleRanges: VueStyleRange[];
   resolvedComponents?: VueComponentEdge[];
   componentsOpen?: boolean;
   setupImports?: Set<string>;
@@ -296,6 +303,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
   const styleRanges = descriptor.styles.map((style) => ({
     start: style.loc.start.offset,
     end: style.loc.end.offset,
+    lang: style.lang ?? "css",
   }));
   const byteRanges = (offset: (value: number) => number) => ({
     warnings: warnings.map((warning) => ({
@@ -304,6 +312,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
       end: offset(warning.end),
     })),
     styleRanges: styleRanges.map((range) => ({
+      ...range,
       start: offset(range.start),
       end: offset(range.end),
     })),

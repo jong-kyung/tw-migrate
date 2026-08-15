@@ -45,6 +45,7 @@ import {
 } from "./plan/media.ts";
 import type { MediaCollection, MediaExtraction } from "./plan/media.ts";
 import { verifyVueSource } from "./parser/vue.ts";
+import type { VueStyleRange } from "./parser/vue.ts";
 import { preparePackageVue, vueWarningsOnlyResult } from "./plan/vue.ts";
 import { verifySnapshots, writeChanges } from "./util/write.ts";
 import type {
@@ -191,7 +192,7 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
     styleSources.set(configuredEntry, await snapshotFile(snapshots, configuredEntry));
   }
 
-  const vueStyleRanges = new Map<string, RuleSpan[]>();
+  const vueStyleRanges = new Map<string, VueStyleRange[]>();
   const context: MigrationContext = {
     ...scope,
     options,
@@ -833,32 +834,33 @@ async function planPreparedGroup(
       const fileBytes = Buffer.from(file.source);
       for (const [index, range] of styleRanges.entries()) {
         const block = fileBytes.subarray(range.start, range.end).toString();
-        let parsed = false;
-        for (const syntax of ["css", "scss", "sass", "less"]) {
-          try {
-            const analysis = stylesheetAnalysis(`${file.path}.block.${index}.${syntax}`, block);
-            for (const name of analysis.classNames) reservations.names.add(name);
-            if (analysis.classReservationsUnbounded) reservations.unbounded = true;
-            // A block dependency outside the snapshot loads selectors the
-            // scan cannot see, exactly like a stylesheet's own imports.
-            if (analysis.unverifiable) reservations.unbounded = true;
-            for (const reference of analysis.references) {
-              if (reference === "tailwindcss" || reference.startsWith("tailwindcss/")) continue;
-              if (reference.startsWith("sass:")) continue;
-              if (
-                !context.styleSources.has(reference) &&
-                stylesheetReferenceTargets(file.path, reference, context.styleSources).length === 0
-              ) {
-                reservations.unbounded = true;
-              }
-            }
-            parsed = true;
-            break;
-          } catch {
-            continue;
-          }
+        // The declared language is authoritative: a permissive parser can
+        // accept another syntax's dependency at-rules without recording
+        // them, silently dropping reservation input.
+        if (!["css", "scss", "sass", "less"].includes(range.lang)) {
+          reservations.unbounded = true;
+          continue;
         }
-        if (!parsed) reservations.unbounded = true;
+        try {
+          const analysis = stylesheetAnalysis(`${file.path}.block.${index}.${range.lang}`, block);
+          for (const name of analysis.classNames) reservations.names.add(name);
+          if (analysis.classReservationsUnbounded) reservations.unbounded = true;
+          // A block dependency outside the snapshot loads selectors the
+          // scan cannot see, exactly like a stylesheet's own imports.
+          if (analysis.unverifiable) reservations.unbounded = true;
+          for (const reference of analysis.references) {
+            if (reference === "tailwindcss" || reference.startsWith("tailwindcss/")) continue;
+            if (reference.startsWith("sass:")) continue;
+            if (
+              !context.styleSources.has(reference) &&
+              stylesheetReferenceTargets(file.path, reference, context.styleSources).length === 0
+            ) {
+              reservations.unbounded = true;
+            }
+          }
+        } catch {
+          reservations.unbounded = true;
+        }
       }
       for (const prefix of file.templatePrefixes) reservations.prefixes.add(prefix);
       opaqueStylesheetImports(file.sourceImports ?? []);

@@ -578,6 +578,38 @@ fn collect_at_rule_metadata(
     }
 }
 
+/// Collect `.name` class tokens from raw selector text. An escape makes
+/// the match set unbounded because the decoded spelling is unknowable to
+/// this scanner.
+fn collect_selector_text_classes(text: &str, analysis: &mut StylesheetAnalysis) {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\\' {
+            analysis.class_reservations_unbounded = true;
+            return;
+        }
+        if bytes[index] == b'.' {
+            let start = index + 1;
+            let mut end = start;
+            while end < bytes.len()
+                && (bytes[end].is_ascii_alphanumeric()
+                    || bytes[end] == b'_'
+                    || bytes[end] == b'-'
+                    || !bytes[end].is_ascii())
+            {
+                end += 1;
+            }
+            if end > start {
+                analysis.class_names.push(text[start..end].to_string());
+            }
+            index = end.max(index + 1);
+            continue;
+        }
+        index += 1;
+    }
+}
+
 fn collect_stylesheet_statements(
     statements: &[Statement<'_>],
     source: &str,
@@ -590,6 +622,16 @@ fn collect_stylesheet_statements(
             Statement::AtRule(at_rule) => {
                 let mut at_rule_parents: Option<Vec<String>> = None;
                 match &at_rule.prelude {
+                    // A shorthand `@custom-variant` prelude embeds a raw
+                    // selector whose classes never pass through the
+                    // selector walk; the block form's inner rules are
+                    // collected by the generic recursion below.
+                    _ if at_rule.name.name == "custom-variant" && at_rule.block.is_none() => {
+                        collect_selector_text_classes(
+                            &source[at_rule.span.start..at_rule.span.end],
+                            analysis,
+                        );
+                    }
                     // A `@utility` definition owns its class spelling in
                     // the built output, so a canonical alias must never
                     // adopt it; a functional `name-*` utility owns an
@@ -1084,6 +1126,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed["classReservationsUnbounded"], true);
+    }
+
+    #[test]
+    fn reserves_custom_variant_selector_classes() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/globals.css",
+                "@custom-variant parent-auto (&:where(.mr-auto *));\n@custom-variant dark {\n  &:where(.dark-mode, .dark-mode *) {\n    @slot;\n  }\n}\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let names = parsed["classNames"].as_array().unwrap();
+        assert!(names.contains(&serde_json::json!("mr-auto")), "{names:?}");
+        assert!(names.contains(&serde_json::json!("dark-mode")), "{names:?}");
+        assert_eq!(parsed["classReservationsUnbounded"], false);
     }
 
     #[test]

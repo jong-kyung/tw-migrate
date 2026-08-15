@@ -586,6 +586,35 @@ test("entries disabling automatic scanning keep group spellings arbitrary", asyn
   assert.deepEqual(report.candidates, ["mr-[auto]"]);
 });
 
+test("selector custom variants reserve their referenced classes", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(
+    join(cwd, "globals.css"),
+    '@import "tailwindcss";\n@custom-variant parent-auto (&:where(.mr-auto *));\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("scss Vue blocks report their undiscovered dependencies", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  // The css parser would accept the @use at-rule without recording the
+  // dependency, so the declared block language must drive parsing. The
+  // target lives where discovery never scans, yet Sass still loads it.
+  await mkdir(join(cwd, "node_modules", "legacy"), { recursive: true });
+  await writeFile(
+    join(cwd, "node_modules", "legacy", "_theme.scss"),
+    ".mr-legacy { color: red; }\n",
+  );
+  await writeFile(
+    join(cwd, "Card.vue"),
+    '<template>\n  <div class="card">Card</div>\n</template>\n<style scoped lang="scss">\n@use "./node_modules/legacy/theme";\n.card { appearance: none; }\n</style>\n',
+  );
+  const report = await migrate({ cwd });
+  assert.ok(report.candidates.includes("mr-[auto]"), report.candidates.join(" "));
+  assert.ok(!report.candidates.includes("mr-auto"), report.candidates.join(" "));
+});
+
 test("entries loading plugins keep group spellings arbitrary", async () => {
   const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
   await Promise.all([
