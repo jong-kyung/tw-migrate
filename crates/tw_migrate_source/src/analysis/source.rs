@@ -465,7 +465,18 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
                             _ => {}
                         }
                     }
-                    oxc_ast::ast::JSXAttributeItem::SpreadAttribute(_) => spread = true,
+                    // JSX props apply left to right, so a spread replaces
+                    // any earlier explicit value with a runtime one; a
+                    // later explicit attribute pins the value again.
+                    oxc_ast::ast::JSXAttributeItem::SpreadAttribute(_) => {
+                        spread = true;
+                        if rel.is_some() {
+                            rel = Some(None);
+                        }
+                        if href.is_some() {
+                            href = Some(None);
+                        }
+                    }
                 }
             }
             let may_be_stylesheet = match rel {
@@ -1086,6 +1097,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(dynamic["stylesheetLinksUnverifiable"], true);
+
+        // A later spread overrides earlier explicit props, so the final
+        // rel and href are runtime values; a spread before them is
+        // repinned by the explicit attributes.
+        let overridden: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Layout.tsx",
+                "export const Layout = (props) => <link rel=\"icon\" href=\"/favicon.ico\" {...props} />;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(overridden["stylesheetLinksUnverifiable"], true);
+
+        let repinned: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Layout.tsx",
+                "export const Layout = (props) => <link {...props} rel=\"icon\" href=\"/favicon.ico\" />;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(repinned["stylesheetLinksUnverifiable"], false);
+        assert_eq!(repinned["stylesheetLinks"], serde_json::json!([]));
     }
 
     #[test]
