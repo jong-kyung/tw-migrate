@@ -578,6 +578,22 @@ fn collect_at_rule_metadata(
     }
 }
 
+/// Strip `/* */` comments from raw prelude text so a comment can neither
+/// hide a selector token nor pollute a reserved name.
+fn strip_css_comments(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("/*") {
+        output.push_str(&rest[..start]);
+        match rest[start + 2..].find("*/") {
+            Some(end) => rest = &rest[start + 2 + end + 2..],
+            None => return output,
+        }
+    }
+    output.push_str(rest);
+    output
+}
+
 /// Collect `.name` class tokens from raw selector text. An escape makes
 /// the match set unbounded because the decoded spelling is unknowable to
 /// this scanner.
@@ -644,10 +660,14 @@ fn collect_stylesheet_statements(
                     // selector walk; the block form's inner rules are
                     // collected by the generic recursion below.
                     _ if at_rule.name.name == "custom-variant" && at_rule.block.is_none() => {
-                        collect_selector_text_classes(
-                            &source[at_rule.span.start..at_rule.span.end],
-                            analysis,
-                        );
+                        let text =
+                            strip_css_comments(&source[at_rule.span.start..at_rule.span.end]);
+                        // A class-attribute selector matches class tokens
+                        // this dot-token scan cannot enumerate.
+                        if text.to_ascii_lowercase().contains("[class") {
+                            analysis.class_reservations_unbounded = true;
+                        }
+                        collect_selector_text_classes(&text, analysis);
                     }
                     // A `@utility` definition owns its class spelling in
                     // the built output, so a canonical alias must never
@@ -657,14 +677,30 @@ fn collect_stylesheet_statements(
                         let prelude = at_rule
                             .block
                             .as_ref()
-                            .map(|block| source[at_rule.span.start..block.span.start].trim())
+                            .map(|block| {
+                                strip_css_comments(&source[at_rule.span.start..block.span.start])
+                            })
+                            .as_deref()
+                            .map(str::trim)
                             .and_then(|text| text.strip_prefix("@utility"))
                             .map(str::trim)
-                            .unwrap_or("");
-                        if prelude.is_empty() || prelude.ends_with("-*") {
-                            analysis.class_reservations_unbounded = true;
+                            .unwrap_or("")
+                            .to_string();
+                        // Anything but a plain utility name (a functional
+                        // `name-*`, leftover tokens, or an unreadable
+                        // prelude) owns an unknowable spelling family.
+                        let plain = !prelude.is_empty()
+                            && prelude.chars().all(|character| {
+                                character.is_ascii_alphanumeric()
+                                    || character == '_'
+                                    || character == '-'
+                                    || !character.is_ascii()
+                            })
+                            && !prelude.ends_with("-*");
+                        if plain {
+                            analysis.class_names.push(prelude);
                         } else {
-                            analysis.class_names.push(prelude.to_string());
+                            analysis.class_reservations_unbounded = true;
                         }
                     }
                     // A selector-prelude `@at-root` emits its rule at the
@@ -1230,6 +1266,28 @@ mod tests {
         assert!(names.contains(&serde_json::json!("mr-auto")), "{names:?}");
         assert!(names.contains(&serde_json::json!("dark-mode")), "{names:?}");
         assert_eq!(parsed["classReservationsUnbounded"], false);
+
+        // Class-attribute selectors match spellings the dot-token scan
+        // cannot enumerate, while other attribute variants stay bounded.
+        let attribute: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/globals.css",
+                "@custom-variant parent-auto (&:where([class~=\"mr-auto\"] *));\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(attribute["classReservationsUnbounded"], true);
+
+        let aria: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/globals.css",
+                "@custom-variant checked (&[aria-checked=\"true\"]);\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(aria["classReservationsUnbounded"], false);
     }
 
     #[test]
@@ -1256,6 +1314,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(functional["classReservationsUnbounded"], true);
+
+        // A comment cannot pollute the reserved name.
+        let commented: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/globals.css",
+                "@utility /* legacy */ mr-auto {\n  margin-right: 1px;\n}\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let commented_names = commented["classNames"].as_array().unwrap();
+        assert!(
+            commented_names.contains(&serde_json::json!("mr-auto")),
+            "{commented_names:?}"
+        );
     }
 
     #[test]
