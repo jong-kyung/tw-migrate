@@ -590,6 +590,24 @@ fn collect_stylesheet_statements(
             Statement::AtRule(at_rule) => {
                 let mut at_rule_parents: Option<Vec<String>> = None;
                 match &at_rule.prelude {
+                    // A `@utility` definition owns its class spelling in
+                    // the built output, so a canonical alias must never
+                    // adopt it; a functional `name-*` utility owns an
+                    // unbounded family of spellings.
+                    _ if at_rule.name.name == "utility" => {
+                        let prelude = at_rule
+                            .block
+                            .as_ref()
+                            .map(|block| source[at_rule.span.start..block.span.start].trim())
+                            .and_then(|text| text.strip_prefix("@utility"))
+                            .map(str::trim)
+                            .unwrap_or("");
+                        if prelude.is_empty() || prelude.ends_with("-*") {
+                            analysis.class_reservations_unbounded = true;
+                        } else {
+                            analysis.class_names.push(prelude.to_string());
+                        }
+                    }
                     // A selector-prelude `@at-root` emits its rule at the
                     // stylesheet root, so its classes reserve like rule
                     // selectors and parent nested rules resolve against it.
@@ -1066,6 +1084,32 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed["classReservationsUnbounded"], true);
+    }
+
+    #[test]
+    fn reserves_entry_utility_definitions() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/globals.css",
+                "@utility mr-auto {\n  margin-right: 1px;\n}\n.card { color: red; }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let names = parsed["classNames"].as_array().unwrap();
+        assert!(names.contains(&serde_json::json!("mr-auto")), "{names:?}");
+        assert_eq!(parsed["classReservationsUnbounded"], false);
+
+        // A functional utility owns every spelling under its prefix.
+        let functional: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/globals.css",
+                "@utility tab-* {\n  tab-size: --value(integer);\n}\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(functional["classReservationsUnbounded"], true);
     }
 
     #[test]

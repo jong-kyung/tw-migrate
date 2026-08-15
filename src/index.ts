@@ -874,6 +874,23 @@ async function planPreparedGroup(
         reservations.prefixes.add(prefix);
       }
       opaqueStylesheetImports(analysis.imports);
+      // A rendered stylesheet link loads a sheet like an HTML document
+      // link: a remote, unresolved, or other-entry target is opaque.
+      if (analysis.stylesheetLinksUnverifiable) reservations.unbounded = true;
+      for (const link of analysis.stylesheetLinks) {
+        const href = link.split(/[?#]/, 1)[0];
+        if (!href || /^[a-z][a-z0-9+.-]*:|^\/\//i.test(href)) {
+          reservations.unbounded = true;
+          continue;
+        }
+        const resolved = resolve(dirname(file.path), href);
+        if (
+          !context.styleSources.has(resolved) ||
+          (workspaceEntries.has(resolved) && resolved !== entry.path)
+        ) {
+          reservations.unbounded = true;
+        }
+      }
     } catch {
       // An unparseable source cannot constrain anything; its dynamic sites
       // already carry the planner's dynamic-class warnings.

@@ -596,6 +596,25 @@ test("entries loading plugins keep group spellings arbitrary", async () => {
   assert.deepEqual(report.candidates, ["mr-[auto]"]);
 });
 
+test("JSX stylesheet links to remote sheets keep group spellings arbitrary", async () => {
+  const cwd = await fixture({
+    css: ".button { margin-right: auto; }\n",
+    tsx: 'import styles from \'./Button.module.css\';\nexport const Button = () => (<head><link rel="stylesheet" href="https://cdn.example/legacy.css" /><button className={styles.button}>B</button></head>);\n',
+  });
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("JSX links to snapshot stylesheets keep canonicalization enabled", async () => {
+  const cwd = await fixture({
+    css: ".button { margin-right: auto; }\n",
+    tsx: 'import styles from \'./Button.module.css\';\nexport const Button = () => (<head><link rel="stylesheet" href="./theme.css" /><button className={styles.button}>B</button></head>);\n',
+  });
+  await writeFile(join(cwd, "theme.css"), ".card { color: red; }\n");
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-auto"]);
+});
+
 test("opaque page style sources keep group spellings arbitrary", async () => {
   const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
   await writeFile(

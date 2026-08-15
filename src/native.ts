@@ -42,6 +42,8 @@ export interface SourceAnalysis {
   templatePrefixes: string[];
   useCssModuleLocals: string[];
   unboundReferences: string[];
+  stylesheetLinks: string[];
+  stylesheetLinksUnverifiable: boolean;
 }
 
 export interface CompiledShape {
@@ -161,6 +163,8 @@ function sourceAnalysisResult(value: unknown): value is SourceAnalysis {
     value.useCssModuleLocals.every((item) => typeof item === "string") &&
     Array.isArray(value.unboundReferences) &&
     value.unboundReferences.every((item) => typeof item === "string") &&
+    Array.isArray(value.stylesheetLinks) &&
+    value.stylesheetLinks.every((item) => typeof item === "string") &&
     [
       value.vueGlobUnverifiable,
       value.hasDynamicImport,
@@ -168,6 +172,7 @@ function sourceAnalysisResult(value: unknown): value is SourceAnalysis {
       value.usesCssModule,
       value.hasUnboundUseCssModule,
       value.definesRootUseCssModule,
+      value.stylesheetLinksUnverifiable,
     ].every((item) => typeof item === "boolean")
   );
 }

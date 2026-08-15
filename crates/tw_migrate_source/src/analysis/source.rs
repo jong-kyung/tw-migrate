@@ -249,6 +249,12 @@ struct SourceAnalysis {
     /// Unbound identifier reference names, for handler sources whose
     /// bindings live in the surrounding script.
     unbound_references: Vec<String>,
+    /// Static hrefs of JSX `<link rel="stylesheet">` elements, so spelling
+    /// reservations can resolve the loaded sheet like an HTML link.
+    stylesheet_links: Vec<String>,
+    /// True when a JSX link's rel or href cannot be read statically, so
+    /// the loaded target is unknowable.
+    stylesheet_links_unverifiable: bool,
 }
 
 struct SourceCollector<'s, 'a> {
@@ -428,6 +434,61 @@ impl<'a> SourceCollector<'_, 'a> {
 }
 
 impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
+    /// A rendered `<link rel="stylesheet">` loads a sheet exactly like an
+    /// HTML document link, so its target joins spelling reservations. A
+    /// rel or href the parser cannot read statically, or a spread that may
+    /// supply them, leaves the loaded target unknowable.
+    fn visit_jsx_opening_element(&mut self, element: &oxc_ast::ast::JSXOpeningElement<'a>) {
+        if let oxc_ast::ast::JSXElementName::Identifier(name) = &element.name
+            && name.name == "link"
+        {
+            let mut rel = None;
+            let mut href = None;
+            let mut spread = false;
+            for attribute in &element.attributes {
+                match attribute {
+                    oxc_ast::ast::JSXAttributeItem::Attribute(attribute) => {
+                        let oxc_ast::ast::JSXAttributeName::Identifier(attribute_name) =
+                            &attribute.name
+                        else {
+                            continue;
+                        };
+                        let value = match &attribute.value {
+                            Some(oxc_ast::ast::JSXAttributeValue::StringLiteral(literal)) => {
+                                Some(literal.value.as_str())
+                            }
+                            _ => None,
+                        };
+                        match attribute_name.name.as_str() {
+                            "rel" => rel = Some(value),
+                            "href" => href = Some(value),
+                            _ => {}
+                        }
+                    }
+                    oxc_ast::ast::JSXAttributeItem::SpreadAttribute(_) => spread = true,
+                }
+            }
+            let may_be_stylesheet = match rel {
+                Some(Some(value)) => value
+                    .split_ascii_whitespace()
+                    .any(|token| token.eq_ignore_ascii_case("stylesheet")),
+                // A dynamic rel, or a spread that may supply one, can
+                // resolve to a stylesheet at runtime.
+                Some(None) => true,
+                None => spread,
+            };
+            if may_be_stylesheet {
+                match href {
+                    Some(Some(value)) => {
+                        self.analysis.stylesheet_links.push(value.to_string());
+                    }
+                    _ => self.analysis.stylesheet_links_unverifiable = true,
+                }
+            }
+        }
+        walk::walk_jsx_opening_element(self, element);
+    }
+
     fn visit_import_declaration(&mut self, decl: &oxc_ast::ast::ImportDeclaration<'a>) {
         let type_only = decl.import_kind.is_type()
             || decl.specifiers.as_ref().is_some_and(|specifiers| {
@@ -767,6 +828,8 @@ pub fn source_analysis_json(path: &str, source: &str) -> MigrationResult<String>
             template_prefixes: Vec::new(),
             use_css_module_locals: use_css_module_locals.clone(),
             unbound_references: Vec::new(),
+            stylesheet_links: Vec::new(),
+            stylesheet_links_unverifiable: false,
         },
     };
     collector.visit_program(&parsed.program);
@@ -996,6 +1059,33 @@ mod tests {
         // Trailing tokens of pre-expression quasis constrain the dynamic
         // class; static tokens and whitespace-terminated quasis do not.
         assert_eq!(parsed["templatePrefixes"], serde_json::json!(["mr-", "p-", "pt-"]));
+    }
+
+    #[test]
+    fn collects_jsx_stylesheet_links() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Layout.tsx",
+                "export const Layout = () => (<head><link rel=\"stylesheet\" href=\"https://cdn.example/legacy.css\" /><link rel=\"icon\" href=\"/favicon.ico\" /><link rel=\"preload stylesheet\" href=\"./theme.css\" /></head>);",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            parsed["stylesheetLinks"],
+            serde_json::json!(["https://cdn.example/legacy.css", "./theme.css"])
+        );
+        assert_eq!(parsed["stylesheetLinksUnverifiable"], false);
+
+        let dynamic: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Layout.tsx",
+                "export const Layout = ({ href }) => <link rel=\"stylesheet\" href={href} />;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(dynamic["stylesheetLinksUnverifiable"], true);
     }
 
     #[test]

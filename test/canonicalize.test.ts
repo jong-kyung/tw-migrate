@@ -170,6 +170,23 @@ test("alias acceptance rejects theme-backed and reserved spellings", async () =>
   ).toEqual({});
 });
 
+test("entry utility overrides reject canonical aliases", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tw-canonicalize-"));
+  // The override owns the mr-auto spelling with its own declarations, so
+  // the entry-graph reservation keeps the arbitrary form.
+  await writeFile(
+    join(dir, "globals.css"),
+    '@import "tailwindcss";\n@utility mr-auto {\n  margin-right: 1px;\n}\n',
+  );
+  const entry = await loadTailwind(process.cwd(), join(dir, "globals.css"), new Map(), dir);
+  const reservations = spellingReservations(
+    new Map(),
+    entry.graphSources.map((graphSource) => [`${graphSource.path}.graph.css`, graphSource.source]),
+  );
+  expect(reservations.names.has("mr-auto")).toBe(true);
+  expect(acceptedCandidateAliases(entry.designSystem, ["mr-[auto]"], reservations)).toEqual({});
+});
+
 test("constrained dynamic class prefixes and variant brackets calibrate acceptance", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tw-canonicalize-"));
   await writeFile(join(dir, "globals.css"), '@import "tailwindcss";\n');
