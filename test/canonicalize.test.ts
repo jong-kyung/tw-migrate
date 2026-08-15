@@ -80,6 +80,13 @@ test("stylesheet references calibrate reservation boundedness", () => {
     spellingReservations(sources([[join(app, "globals.css"), '@import "tailwindcss";\n']]), [])
       .unbounded,
   ).toBe(false);
+  // Sass built-in modules define functions without loading any sheet.
+  expect(
+    spellingReservations(
+      sources([["/app/main.scss", '@use "sass:math";\n.card { width: math.div(4, 2); }\n']]),
+      [],
+    ).unbounded,
+  ).toBe(false);
   // A package or otherwise unresolved import loads unseen selectors.
   expect(
     spellingReservations(

@@ -588,7 +588,19 @@ fn collect_stylesheet_statements(
     for statement in statements {
         match statement {
             Statement::AtRule(at_rule) => {
+                let mut at_rule_parents: Option<Vec<String>> = None;
                 match &at_rule.prelude {
+                    // A selector-prelude `@at-root` emits its rule at the
+                    // stylesheet root, so its classes reserve like rule
+                    // selectors and parent nested rules resolve against it.
+                    Some(AtRulePrelude::SassAtRoot(prelude)) => {
+                        if let oxc_css_parser::ast::SassAtRootKind::Selector(list) = &prelude.kind {
+                            for selector in &list.selectors {
+                                collect_selector_classes(selector, parent_classes, analysis);
+                            }
+                            at_rule_parents = Some(selector_class_names(list, parent_classes));
+                        }
+                    }
                     // `@scope` roots and limits match live elements, so
                     // their selectors reserve spellings like rule selectors.
                     Some(AtRulePrelude::Scope(prelude)) => {
@@ -636,7 +648,7 @@ fn collect_stylesheet_statements(
                     has_scope_escape |= collect_stylesheet_statements(
                         &block.statements,
                         source,
-                        parent_classes,
+                        at_rule_parents.as_deref().unwrap_or(parent_classes),
                         analysis,
                     );
                 }
@@ -1054,6 +1066,23 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed["classReservationsUnbounded"], true);
+    }
+
+    #[test]
+    fn reserves_sass_at_root_prelude_selectors() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/legacy.scss",
+                ".card { @at-root .mr-auto { color: red; } }\n.mr- { @at-root .top { &auto { color: blue; } } }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let names = parsed["classNames"].as_array().unwrap();
+        assert!(names.contains(&serde_json::json!("mr-auto")), "{names:?}");
+        // Nested rules resolve their parent against the at-root selector.
+        assert!(names.contains(&serde_json::json!("topauto")), "{names:?}");
+        assert_eq!(parsed["classReservationsUnbounded"], false);
     }
 
     #[test]

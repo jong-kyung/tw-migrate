@@ -21,6 +21,7 @@ import {
   rejectSymlinkTarget,
   snapshotFile,
   snapshotLoadedSource,
+  stylesheetReferenceTargets,
   stylesheetSyntax,
   SOURCE_EXTENSIONS,
 } from "./util/shared.ts";
@@ -833,11 +834,24 @@ async function planPreparedGroup(
       for (const [index, range] of styleRanges.entries()) {
         const block = fileBytes.subarray(range.start, range.end).toString();
         let parsed = false;
-        for (const syntax of ["css", "scss", "less"]) {
+        for (const syntax of ["css", "scss", "sass", "less"]) {
           try {
             const analysis = stylesheetAnalysis(`${file.path}.block.${index}.${syntax}`, block);
             for (const name of analysis.classNames) reservations.names.add(name);
             if (analysis.classReservationsUnbounded) reservations.unbounded = true;
+            // A block dependency outside the snapshot loads selectors the
+            // scan cannot see, exactly like a stylesheet's own imports.
+            if (analysis.unverifiable) reservations.unbounded = true;
+            for (const reference of analysis.references) {
+              if (reference === "tailwindcss" || reference.startsWith("tailwindcss/")) continue;
+              if (reference.startsWith("sass:")) continue;
+              if (
+                !context.styleSources.has(reference) &&
+                stylesheetReferenceTargets(file.path, reference, context.styleSources).length === 0
+              ) {
+                reservations.unbounded = true;
+              }
+            }
             parsed = true;
             break;
           } catch {

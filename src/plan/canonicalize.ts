@@ -91,8 +91,11 @@ export function spellingReservations(
       // An interpolated reference can load a sheet this scan never sees.
       if (analysis.unverifiable) unbounded = true;
       for (const reference of analysis.references) {
-        // The Tailwind package emits utilities, never authored selectors.
+        // The Tailwind package emits utilities, never authored selectors,
+        // and Sass built-in modules define functions without loading any
+        // authored sheet.
         if (reference === "tailwindcss" || reference.startsWith("tailwindcss/")) continue;
+        if (reference.startsWith("sass:")) continue;
         if (resolvedImports.has(`${dirname(path)}\0${reference}`) || styleSources.has(reference))
           continue;
         // A reference outside the snapshot loads selectors this scan
