@@ -1,11 +1,11 @@
 import { lstat, readFile } from "node:fs/promises";
-import { basename, extname, join } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 
 import { unifiedDiff } from "./util/diff.ts";
 import { collectFiles, resolveScope, scannerIgnoredPaths } from "./discovery.ts";
 import { parseHtmlSource } from "./parser/html.ts";
 import { preparePackageHtml } from "./plan/html.ts";
-import { planBatchMigration, stylesheetAnalysis, validateCss } from "./native.ts";
+import { planBatchMigration, sourceAnalysis, stylesheetAnalysis, validateCss } from "./native.ts";
 import {
   indexStylesheetDependents,
   isIntegrityError,
@@ -32,6 +32,7 @@ import {
   loadTailwind,
   selectTailwindEntry,
 } from "./tailwind.ts";
+import { acceptedCandidateAliases, spellingReservations } from "./plan/canonicalize.ts";
 import { importsStylesheet, proveSharedEntry, tailwindEntryCatalog } from "./plan/entry.ts";
 import type { SharedEntryProofs } from "./plan/entry.ts";
 import {
@@ -199,12 +200,13 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
     styleDependents: indexStylesheetDependents(styleSources),
     vueStyleRanges,
     entryCatalog: tailwindEntryCatalog(styleSources, scope.pathOwners),
-    ignoredPaths: options.workspaces
-      ? await scannerIgnoredPaths(
-          workspaceRoot,
-          sourceFiles.map((file) => file.path),
-        )
-      : new Set(),
+    // Discovery keeps Git-ignored consumers for deletion safety, but the
+    // Tailwind scanner skips them in every mode, so ignore detection must
+    // not depend on --workspaces.
+    ignoredPaths: await scannerIgnoredPaths(
+      workspaceRoot,
+      sourceFiles.map((file) => file.path),
+    ),
   };
   const failures: MigrationFailure[] = [];
   const plans: Plan[] = [];
@@ -714,6 +716,124 @@ async function planPreparedGroup(
     return leftPath < rightPath ? -1 : leftPath > rightPath ? 1 : 0;
   });
   const entry = active[0].tailwind;
+  // Canonical spellings are reserved against every authored selector,
+  // including the entry's loaded import graph, and a consumer page keeping
+  // an opaque style source (a remote or unresolved stylesheet link, or an
+  // inline style block) can contain any selector, so such a group keeps
+  // its arbitrary spellings entirely.
+  const reservations = spellingReservations(
+    context.styleSources,
+    entry.graphSources.map(
+      (graphSource) => [`${graphSource.path}.graph.css`, graphSource.source] as const,
+    ),
+    new Set(
+      entry.graphSources.flatMap((graphSource) =>
+        graphSource.path.includes("\0") ? [graphSource.path] : [],
+      ),
+    ),
+  );
+  const groupFiles = new Map(
+    active.flatMap((member) => member.files.map((file) => [file.path, file] as const)),
+  );
+  const workspaceEntries = new Set([...context.entryCatalog.values()].flat());
+  for (const file of groupFiles.values()) {
+    if (reservations.unbounded) break;
+    // Tailwind's automatic scanner never generated utilities for a
+    // scanner-ignored source, so a canonical name may newly style its
+    // static classes; the group keeps arbitrary spellings.
+    if (context.ignoredPaths.has(file.path)) {
+      reservations.unbounded = true;
+      break;
+    }
+    const opaqueStylesheetImports = (records: { specifier: string; typeOnly: boolean }[]) => {
+      for (const record of records) {
+        if (record.typeOnly || !isStylesheetPath(record.specifier.split(/[?#]/, 1)[0])) continue;
+        const resolved = record.specifier.startsWith(".")
+          ? resolve(dirname(file.path), record.specifier)
+          : undefined;
+        if (resolved === undefined || !context.styleSources.has(resolved)) {
+          reservations.unbounded = true;
+        }
+      }
+    };
+    if (extname(file.path) === ".html") {
+      try {
+        const parsed = parseHtmlSource(file.path, file.source);
+        if (parsed.hasStyle) reservations.unbounded = true;
+        // A <base> element changes what every relative link loads, so a
+        // local file matching the raw href proves nothing about the sheet
+        // the browser fetches.
+        if (parsed.bases.length > 0) reservations.unbounded = true;
+        for (const link of parsed.links) {
+          const href = link.href.split(/[?#]/, 1)[0];
+          if (!href || /^[a-z][a-z0-9+.-]*:|^\/\//i.test(href)) {
+            reservations.unbounded = true;
+            continue;
+          }
+          const resolved = resolve(dirname(file.path), href);
+          // An unresolved local link loads a stylesheet the snapshot never
+          // parsed, and a link to another package's Tailwind entry
+          // co-loads a design system this group cannot validate against;
+          // full cross-entry compile validation lands with font
+          // registration.
+          if (
+            !context.styleSources.has(resolved) ||
+            (workspaceEntries.has(resolved) && resolved !== entry.path)
+          ) {
+            reservations.unbounded = true;
+          }
+        }
+        // The planner already treats inline scripts conservatively for
+        // module retention; spelling reservations follow the same rule.
+        // An analyzable script contributes its constrained prefixes and
+        // stylesheet imports, and an unanalyzable one turns the group
+        // opaque.
+        if (parsed.scriptText.trim() !== "") {
+          try {
+            const script = sourceAnalysis(`${file.path}.inline.js`, parsed.scriptText);
+            for (const prefix of script.templatePrefixes) reservations.prefixes.add(prefix);
+            opaqueStylesheetImports(script.imports);
+          } catch {
+            reservations.unbounded = true;
+          }
+        }
+      } catch {
+        reservations.unbounded = true;
+      }
+      continue;
+    }
+    // Statically constrained dynamic class construction reserves the
+    // spellings its runtime values can complete, and a stylesheet loaded
+    // through a source import outside the discovered snapshot (a package
+    // or ignored sheet) can define any selector, so it turns the group
+    // opaque.
+    if (extname(file.path) === ".vue") {
+      // Prepared SFCs carry their template and script prefixes; a Vue file
+      // this run never analyzed, or one whose script cannot be read, can
+      // hold dynamic classes or stylesheet loads it cannot see.
+      if (file.templatePrefixes === undefined || file.sourceImportsUnverifiable === true) {
+        reservations.unbounded = true;
+        continue;
+      }
+      for (const prefix of file.templatePrefixes) reservations.prefixes.add(prefix);
+      opaqueStylesheetImports(file.sourceImports ?? []);
+      continue;
+    }
+    if (
+      ![".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts"].includes(extname(file.path))
+    )
+      continue;
+    try {
+      const analysis = sourceAnalysis(file.path, file.source);
+      for (const prefix of analysis.templatePrefixes) {
+        reservations.prefixes.add(prefix);
+      }
+      opaqueStylesheetImports(analysis.imports);
+    } catch {
+      // An unparseable source cannot constrain anything; its dynamic sites
+      // already carry the planner's dynamic-class warnings.
+    }
+  }
   const recoverGroup = (error: unknown, fatal = false): PlanResult[] => {
     if (!options.force || fatal) throw error;
     // Group-level failures affect every package depending on the shared
@@ -859,6 +979,8 @@ async function planPreparedGroup(
   };
   let augmented = entry.css;
   const blocked: BlockedRules = new Map();
+  let candidateAliases: Record<string, string> | undefined;
+  let canonicalized = false;
 
   // The whole group plans as one native batch, so cross-member conflicts
   // on shared consumers go through the same analysis as conflicts inside
@@ -971,6 +1093,7 @@ async function planPreparedGroup(
         utilityPrefix: entry.designSystem.theme.prefix,
         themeTokens: entry.themeTokens,
         ...(names ? { mediaNames: names } : {}),
+        ...(candidateAliases ? { candidateAliases } : {}),
         ...(groupWritable ? {} : { entryWritable: false }),
         files,
       };
@@ -1046,6 +1169,22 @@ async function planPreparedGroup(
           throw new Error(`Tailwind did not generate CSS for candidate: ${failing[0]}`);
         }
         continue planning;
+      }
+      // One bounded canonicalization replan: the provisional system above
+      // already contains every generated media definition, so complete
+      // probes canonicalize with their variants, and accepted aliases are
+      // rendered by the planner on the next pass.
+      if (!canonicalized) {
+        canonicalized = true;
+        const aliases = acceptedCandidateAliases(
+          replanSystem,
+          plan.candidateProbes ?? [],
+          reservations,
+        );
+        if (Object.keys(aliases).length > 0) {
+          candidateAliases = aliases;
+          continue planning;
+        }
       }
       break;
     }

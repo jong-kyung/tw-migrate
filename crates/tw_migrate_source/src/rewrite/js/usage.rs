@@ -9,7 +9,10 @@ use oxc_ast_visit::{Visit, walk};
 use oxc_semantic::Scoping;
 use oxc_span::{GetSpan, Span};
 use oxc_syntax::symbol::SymbolId;
-use tw_migrate_css::{SelectorKey, tailwind_utilities_conflict, utility_conflict};
+use tw_migrate_css::{
+    SelectorKey, css_properties_conflict, tailwind_utilities_conflict, tailwind_variants_match,
+    utility_conflict,
+};
 
 use super::{CandidateMatch, ImportBinding};
 use crate::{Edit, Warning};
@@ -83,6 +86,10 @@ pub(super) struct UsageCollector<'s> {
     pub(super) import_bindings: &'s [ImportBinding],
     pub(super) global_module_symbols: &'s [SymbolId],
     pub(super) candidates: &'s HashMap<SelectorKey, Vec<String>>,
+    /// Union of transferred source properties per candidate; authoritative
+    /// for conflicts when both sides carry metadata so canonical aliases
+    /// are never classified by their class prefix.
+    pub(super) candidate_properties: &'s HashMap<String, BTreeSet<String>>,
     pub(super) preserved_module_classes: &'s BTreeSet<String>,
     pub(super) edits: Vec<Edit>,
     pub(super) emitted_candidates: BTreeSet<String>,
@@ -266,6 +273,31 @@ impl UsageCollector<'_> {
         None
     }
 
+    fn candidates_conflict(&self, left: &str, right: &str) -> bool {
+        // Identical spellings emit one effective class, matching the
+        // heuristic's equality exit.
+        if left == right {
+            return false;
+        }
+        if let (Some(left_properties), Some(right_properties)) = (
+            self.candidate_properties.get(left),
+            self.candidate_properties.get(right),
+        ) && !left_properties.is_empty()
+            && !right_properties.is_empty()
+        {
+            // Utilities under different variant chains occupy different
+            // slots and never compete, matching the spelling heuristic's
+            // variant gate.
+            return tailwind_variants_match(left, right)
+                && left_properties.iter().any(|left_property| {
+                    right_properties
+                        .iter()
+                        .any(|right_property| css_properties_conflict(left_property, right_property))
+                });
+        }
+        tailwind_utilities_conflict(left, right)
+    }
+
     fn conflicting_member_utilities(&self, members: &[String]) -> Option<(String, String)> {
         // Utilities generated from different module classes are ordered by
         // Tailwind's stylesheet, not by the source CSS cascade, so an
@@ -276,7 +308,7 @@ impl UsageCollector<'_> {
                 let right_candidates = self.candidates.get(&SelectorKey::Class(right.clone()))?;
                 for left_candidate in left_candidates {
                     if let Some(conflict) = right_candidates.iter().find(|right_candidate| {
-                        tailwind_utilities_conflict(left_candidate, right_candidate)
+                        self.candidates_conflict(left_candidate, right_candidate)
                     }) {
                         return Some((left_candidate.clone(), conflict.clone()));
                     }

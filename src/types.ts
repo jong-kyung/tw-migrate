@@ -84,6 +84,8 @@ export interface PreparedSourceFile extends SourceFile {
   htmlScriptText?: string;
   sourceImports?: SourceImportRecord[];
   sourceImportsUnverifiable?: boolean;
+  /** Static dynamic-class prefixes for canonical spelling reservations. */
+  templatePrefixes?: string[];
 }
 
 export interface PlannedFile extends PreparedSourceFile {
@@ -150,6 +152,9 @@ export interface Plan {
   deletedFiles: string[];
   unlinkedFiles: string[];
   candidates: string[];
+  /** Internal orchestration data: candidates collected before quote-fit
+   * checks, canonicalized between planning passes; never reported. */
+  candidateProbes?: string[];
   rules: PlanRule[];
   warnings: MigrationWarning[];
   convertedRules: number;
@@ -220,6 +225,9 @@ export interface ShadowCssEntry {
 export interface DesignSystem {
   theme: { prefix: string | null };
   candidatesToCss: (candidates: string[]) => (string | null)[];
+  /** Tailwind v4's unstable canonical-spelling lookup; feature-detected
+   * because older v4 builds do not expose it. */
+  canonicalizeCandidates?: (candidates: string[]) => string[];
 }
 
 export interface LoadedTailwind {

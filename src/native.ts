@@ -25,6 +25,7 @@ export interface ExpressionAnalysis {
   usesCssModule: boolean;
   referencesUseCssModule: boolean;
   references: string[];
+  templatePrefixes: string[];
 }
 
 export interface SourceAnalysis {
@@ -38,8 +39,14 @@ export interface SourceAnalysis {
   usesCssModule: boolean;
   hasUnboundUseCssModule: boolean;
   definesRootUseCssModule: boolean;
+  templatePrefixes: string[];
   useCssModuleLocals: string[];
   unboundReferences: string[];
+}
+
+export interface CompiledShape {
+  declarations: { property: string; important: boolean }[];
+  referencedProperties: string[];
 }
 
 export interface StylesheetAnalysis {
@@ -53,12 +60,15 @@ export interface StylesheetAnalysis {
   themeTokens: Record<string, string>;
   globalAtRuleIdentities: string[];
   globalAtRulesUnverifiable: boolean;
+  classNames: string[];
+  classReservationsUnbounded: boolean;
 }
 
 interface Binding {
   collectMediaConditions: (request: string) => string;
   sourceAnalysis: (path: string, source: string) => string;
   stylesheetAnalysis: (path: string, source: string) => string;
+  compiledShape: (css: string) => string;
   collectCssDirectives: (source: string) => string;
   mediaProbeKey: (css: string) => string;
   decodeSourceMap: (sourceMap: string) => string;
@@ -145,6 +155,8 @@ function sourceAnalysisResult(value: unknown): value is SourceAnalysis {
     ) &&
     Array.isArray(value.vueGlobPatterns) &&
     value.vueGlobPatterns.every((item) => typeof item === "string") &&
+    Array.isArray(value.templatePrefixes) &&
+    value.templatePrefixes.every((item) => typeof item === "string") &&
     Array.isArray(value.useCssModuleLocals) &&
     value.useCssModuleLocals.every((item) => typeof item === "string") &&
     Array.isArray(value.unboundReferences) &&
@@ -186,7 +198,9 @@ export function expressionAnalysis(path: string, source: string): ExpressionAnal
       typeof value.usesCssModule === "boolean" &&
       typeof value.referencesUseCssModule === "boolean" &&
       Array.isArray(value.references) &&
-      value.references.every((item) => typeof item === "string"),
+      value.references.every((item) => typeof item === "string") &&
+      Array.isArray(value.templatePrefixes) &&
+      value.templatePrefixes.every((item) => typeof item === "string"),
   );
 }
 
@@ -201,6 +215,22 @@ export function sourceAnalysis(path: string, source: string): SourceAnalysis {
   sourceAnalysisCache.set(path, { source, analysis });
   bound(sourceAnalysisCache);
   return analysis;
+}
+
+export function compiledShape(css: string): CompiledShape {
+  return decode(
+    "compiled shape",
+    binding.compiledShape(css),
+    (value): value is CompiledShape =>
+      object(value) &&
+      Array.isArray(value.declarations) &&
+      value.declarations.every(
+        (item) =>
+          object(item) && typeof item.property === "string" && typeof item.important === "boolean",
+      ) &&
+      Array.isArray(value.referencedProperties) &&
+      value.referencedProperties.every((item) => typeof item === "string"),
+  );
 }
 
 export function stylesheetAnalysis(path: string, source: string): StylesheetAnalysis {
@@ -233,7 +263,10 @@ export function stylesheetAnalysis(path: string, source: string): StylesheetAnal
       Object.values(value.themeTokens).every((item) => typeof item === "string") &&
       Array.isArray(value.globalAtRuleIdentities) &&
       value.globalAtRuleIdentities.every((item) => typeof item === "string") &&
-      typeof value.globalAtRulesUnverifiable === "boolean",
+      typeof value.globalAtRulesUnverifiable === "boolean" &&
+      Array.isArray(value.classNames) &&
+      value.classNames.every((item) => typeof item === "string") &&
+      typeof value.classReservationsUnbounded === "boolean",
   );
   stylesheetAnalysisCache.set(path, { source, analysis });
   bound(stylesheetAnalysisCache);

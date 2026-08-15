@@ -22,6 +22,7 @@ pub(super) fn plan_json(request: &str) -> MigrationResult<String> {
         })?;
     let mut batch = serde_json::Map::new();
     for field in [
+        "candidateAliases",
         "entryWritable",
         "files",
         "globalAtRuleMoves",
@@ -238,15 +239,22 @@ impl<'a> MediaVariantContext<'a> {
         if left_media == right_media || left_residual != right_residual {
             return false;
         }
-        let conflicting = tailwind_utilities_conflict(
-            &format!("probe:{}", tailwind_utility_parts(&left.candidate).1),
-            &format!("probe:{}", tailwind_utility_parts(&right.candidate).1),
-        ) || left.properties.iter().any(|left_property| {
-            right
-                .properties
-                .iter()
-                .any(|right_property| css_properties_conflict(left_property, right_property))
-        });
+        // Transferred source properties are authoritative when both sides
+        // carry them; the spelling heuristic only covers metadata-free
+        // candidates so a canonical alias cannot be misclassified by its
+        // class prefix.
+        let string_fallback = left.properties.is_empty() || right.properties.is_empty();
+        let conflicting = (string_fallback
+            && tailwind_utilities_conflict(
+                &format!("probe:{}", tailwind_utility_parts(&left.candidate).1),
+                &format!("probe:{}", tailwind_utility_parts(&right.candidate).1),
+            ))
+            || left.properties.iter().any(|left_property| {
+                right
+                    .properties
+                    .iter()
+                    .any(|right_property| css_properties_conflict(left_property, right_property))
+            });
         if !conflicting {
             return false;
         }
@@ -307,6 +315,13 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
     for (index, stylesheet) in request.stylesheets.iter().enumerate() {
         let plan_request = batch_stylesheet_request(&request, stylesheet, snapshot_files);
         let maps = candidate_map_for_request(&plan_request, &externally_blocked[index])?;
+        let map_properties = candidate_property_union(maps.origins.iter().flat_map(
+            |((_, candidate), origins)| {
+                origins
+                    .iter()
+                    .map(move |origin| (candidate, &origin.properties))
+            },
+        ));
         snapshot_files = plan_request.files;
         for file in request.files.iter().filter(|file| file.writable) {
             let result = plan_consumer_file(
@@ -316,6 +331,7 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
                     .is_module
                     .unwrap_or_else(|| is_stylesheet_module(&stylesheet.css_path)),
                 &maps.candidates,
+                &map_properties,
                 &BTreeSet::new(),
                 // The conflict pass must keep collecting matches; the main
                 // pass applies the unresolved-member retention itself.
@@ -350,8 +366,12 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
         for (left_index, left) in matches.iter().enumerate() {
             for right in &matches[left_index + 1..] {
                 if (left.stylesheet != right.stylesheet
-                    && (tailwind_utilities_conflict(&left.candidate, &right.candidate)
-                        || (tailwind_variants_match(&left.candidate, &right.candidate)
+                    && (((left.properties.is_empty() || right.properties.is_empty())
+                        && tailwind_utilities_conflict(&left.candidate, &right.candidate))
+                        // Identical spellings emit one class and never
+                        // compete, matching the heuristic's equality exit.
+                        || (left.candidate != right.candidate
+                            && tailwind_variants_match(&left.candidate, &right.candidate)
                             && left.properties.iter().any(|left_property| {
                                 right.properties.iter().any(|right_property| {
                                     css_properties_conflict(left_property, right_property)
@@ -444,6 +464,7 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
     let mut deleted = HashSet::new();
     let mut unlinked = HashSet::new();
     let mut candidates = BTreeSet::new();
+    let mut candidate_probes = BTreeSet::new();
     let mut converted_rules = 0;
     let mut retained_rules = 0;
     let mut rules = Vec::new();
@@ -510,6 +531,7 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
         }
         unlinked.extend(response.unlinked_files);
         candidates.extend(response.candidates);
+        candidate_probes.extend(response.candidate_probes);
         converted_rules += response.converted_rules;
         retained_rules += response.retained_rules;
         rules.extend(response.rules.into_iter().map(|mut rule| {
@@ -543,6 +565,7 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
         deleted_files,
         unlinked_files,
         candidates: candidates.into_iter().collect(),
+        candidate_probes: candidate_probes.into_iter().collect(),
         converted_rules,
         retained_rules,
         rules,

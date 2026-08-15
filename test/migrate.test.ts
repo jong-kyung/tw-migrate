@@ -14,7 +14,7 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
-import { onTestFinished, test } from "vite-plus/test";
+import { onTestFinished, test, vi } from "vite-plus/test";
 
 import { __unstable__loadDesignSystem as loadDesignSystem } from "tailwindcss";
 
@@ -32,6 +32,11 @@ import {
 } from "../src/native.ts";
 import { compileSassEntry, loadProjectSass, sourceMappings } from "../src/parser/style-compiler.ts";
 import { writeChanges } from "../src/util/write.ts";
+
+// Full migrations replan with candidate canonicalization, whose first
+// design-system lookup builds Tailwind's utility index; slower CI runners
+// exceed the 5s default by a wide margin.
+vi.setConfig({ testTimeout: 60000 });
 
 const initialCss = ".button { padding: 13px; }\n";
 const initialTsx =
@@ -367,6 +372,181 @@ test("anchors Sass compile-failure warnings to authored offsets", async () => {
   const end = source.indexOf("}", start) + 1;
   assert.equal(warning.file, "Button.module.scss");
   assert.ok(warning.start >= start && warning.end <= end && warning.end > warning.start);
+});
+
+test("canonicalizes literal utilities to the target design system's names", async () => {
+  const cwd = await fixture({
+    css: ".button { margin-right: auto; max-width: 100%; padding: 13px; }\n",
+  });
+  const report = await migrate({ cwd, styleFile: "Button.module.css", write: true });
+  assert.deepEqual(report.candidates, ["max-w-full", "mr-auto", "p-[13px]"]);
+  assert.match(await readFile(join(cwd, "Button.tsx"), "utf8"), /max-w-full mr-auto p-\[13px\]/);
+});
+
+test("Vue template class prefixes reserve canonical spellings", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(
+    join(cwd, "Card.vue"),
+    "<template>\n  <div :data-x=\"`mr-${side}`\">Card</div>\n</template>\n<script setup>\nconst side = 'auto';\n</script>\n",
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("undiscovered stylesheet imports keep group spellings arbitrary", async () => {
+  const cwd = await fixture({
+    css: ".button { margin-right: auto; }\n",
+    tsx: "import styles from './Button.module.css';\nimport 'legacy-package/styles.css';\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+  });
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("inline HTML script prefixes reserve canonical spellings", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(
+    join(cwd, "index.html"),
+    "<script>document.body.className = `mr-${'auto'}`;</script><div class=\"card\"></div>\n",
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("unresolved stylesheet imports inside retained sheets keep spellings arbitrary", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(
+    join(cwd, "legacy.css"),
+    '@import "legacy-package/theme.css";\n.legacy { color: red; }\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("opaque Vue scripts keep group spellings arbitrary", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(
+    join(cwd, "Card.vue"),
+    '<template>\n  <div class="card">Card</div>\n</template>\n<script lang="coffee">\nload "./legacy.css"\n</script>\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("scanner-ignored sources keep group spellings arbitrary", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await Promise.all([
+    writeFile(join(cwd, ".gitignore"), "Ignored.tsx\n.tmp\n"),
+    writeFile(join(cwd, "Ignored.tsx"), 'export const Note = () => <i className="mr-auto" />;\n'),
+  ]);
+  execFileSync("git", ["init", "-q"], { cwd });
+  const report = await migrate({ cwd, workspaces: true });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("authored selectors reserve canonical spellings", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(join(cwd, "legacy.css"), ".mr-auto { color: red; }\n");
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("resolved local stylesheet links keep canonicalization enabled", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await Promise.all([
+    writeFile(
+      join(cwd, "index.html"),
+      '<link rel="stylesheet" href="./Button.module.css"><div class="button"></div><main id="hero">T</main>\n',
+    ),
+    writeFile(join(cwd, "unlinked.html"), '<div class="button"></div>\n'),
+  ]);
+  const report = await migrate({ cwd, styleFile: "Button.module.css", tailwindCss: "globals.css" });
+  assert.deepEqual(report.candidates, ["mr-auto"]);
+});
+
+test("unresolved local stylesheet links keep group spellings arbitrary", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(
+    join(cwd, "index.html"),
+    '<link rel="stylesheet" href="/vendor/bootstrap.css"><div class="card"></div>\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("constrained dynamic class templates reserve canonical spellings", async () => {
+  const cwd = await fixture({
+    css: ".button { margin-right: auto; }\n",
+    tsx: "import styles from './Button.module.css';\nexport const Button = ({ side }) => <button className={styles.button} data-x={`mr-${side}`}>B</button>;\n",
+  });
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("constrained dynamic class concatenations reserve canonical spellings", async () => {
+  const cwd = await fixture({
+    css: ".button { margin-right: auto; }\n",
+    tsx: "import styles from './Button.module.css';\nexport const Button = ({ side }) => <button className={styles.button} data-x={'mr-' + side}>B</button>;\n",
+  });
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("documents with a base element keep group spellings arbitrary", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(
+    join(cwd, "index.html"),
+    '<base href="https://cdn.example/"><link rel="stylesheet" href="./Button.module.css"><div class="card"></div>\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("scanner-ignored sources stay reserved without workspaces mode", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await Promise.all([
+    writeFile(join(cwd, ".gitignore"), "Ignored.tsx\n"),
+    writeFile(join(cwd, "Ignored.tsx"), 'export const Note = () => <i className="mr-auto" />;\n'),
+  ]);
+  execFileSync("git", ["init", "-q"], { cwd });
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("entries excluding candidates keep group spellings arbitrary", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(
+    join(cwd, "globals.css"),
+    '@import "tailwindcss";\n@source not inline("mr-auto");\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("entries disabling automatic scanning keep group spellings arbitrary", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(join(cwd, "globals.css"), '@import "tailwindcss" source(none);\n');
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("entries loading plugins keep group spellings arbitrary", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await Promise.all([
+    writeFile(join(cwd, "noop-plugin.js"), "module.exports = () => {};\n"),
+    writeFile(join(cwd, "globals.css"), '@import "tailwindcss";\n@plugin "./noop-plugin.js";\n'),
+  ]);
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("opaque page style sources keep group spellings arbitrary", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(
+    join(cwd, "index.html"),
+    '<link rel="stylesheet" href="https://cdn.example.com/legacy.css"><div class="card"></div>\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
 });
 
 test("escapes literal underscores in arbitrary values", async () => {
