@@ -202,6 +202,10 @@ test("prefixed entry utility overrides reject canonical aliases", async () => {
   );
   expect(reservations.names.has("mr-auto")).toBe(true);
   expect(acceptedCandidateAliases(entry.designSystem, ["tw:mr-[auto]"], reservations)).toEqual({});
+  // The utility also owns its root beneath variant chains.
+  expect(
+    acceptedCandidateAliases(entry.designSystem, ["tw:hover:mr-[auto]"], reservations),
+  ).toEqual({});
 });
 
 test("constrained dynamic class prefixes and variant brackets calibrate acceptance", async () => {

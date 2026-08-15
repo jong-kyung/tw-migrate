@@ -511,6 +511,16 @@ test("unanalyzed Vue files keep scoped-run spellings arbitrary", async () => {
   assert.deepEqual(report.candidates, ["mr-[auto]"]);
 });
 
+test("globally composed module classes reserve canonical spellings", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(
+    join(cwd, "Legacy.module.css"),
+    ".featured { composes: mr-auto from global; color: red; }\n",
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
 test("authored selectors reserve canonical spellings", async () => {
   const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
   await writeFile(join(cwd, "legacy.css"), ".mr-auto { color: red; }\n");

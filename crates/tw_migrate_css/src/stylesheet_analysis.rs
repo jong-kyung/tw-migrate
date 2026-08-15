@@ -750,6 +750,12 @@ fn collect_stylesheet_statements(
                 }
                 let mut from = false;
                 let mut reference_read = false;
+                // Class tokens before `from`: a global composition exports
+                // them as literal runtime classes, so they reserve their
+                // spellings; hashed local and cross-module compositions
+                // never surface literal tokens.
+                let mut composed = Vec::new();
+                let mut composed_unreadable = false;
                 for value in &declaration.value {
                     if from {
                         match value {
@@ -764,6 +770,10 @@ fn collect_stylesheet_statements(
                                 ident,
                             )) if ident.name == "global" => {
                                 reference_read = true;
+                                analysis.class_names.append(&mut composed);
+                                if composed_unreadable {
+                                    analysis.class_reservations_unbounded = true;
+                                }
                             }
                             _ => analysis.unverifiable = true,
                         }
@@ -772,6 +782,13 @@ fn collect_stylesheet_statements(
                     if matches!(value, ComponentValue::InterpolableIdent(InterpolableIdent::Literal(ident)) if ident.name == "from")
                     {
                         from = true;
+                    } else {
+                        match value {
+                            ComponentValue::InterpolableIdent(InterpolableIdent::Literal(
+                                ident,
+                            )) => composed.push(ident.name.to_string()),
+                            _ => composed_unreadable = true,
+                        }
                     }
                 }
                 if from && !reference_read {
@@ -1126,6 +1143,24 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed["classReservationsUnbounded"], true);
+    }
+
+    #[test]
+    fn reserves_globally_composed_class_tokens() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/Card.module.css",
+                ".featured { composes: mr-auto pull-left from global; }\n.local { composes: featured; }\n.imported { composes: badge from \"./other.module.css\"; }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let names = parsed["classNames"].as_array().unwrap();
+        assert!(names.contains(&serde_json::json!("mr-auto")), "{names:?}");
+        assert!(names.contains(&serde_json::json!("pull-left")), "{names:?}");
+        // Local and cross-module compositions surface hashed classes only.
+        assert!(!names.contains(&serde_json::json!("badge")), "{names:?}");
+        assert_eq!(parsed["classReservationsUnbounded"], false);
     }
 
     #[test]

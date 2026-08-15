@@ -203,21 +203,26 @@ export function acceptedCandidateAliases(
   for (const probe of new Set(probes)) {
     const canonical = canonicalCandidate(system, probe);
     if (canonical === null) continue;
-    // A prefixed entry emits `@utility` definitions and dereferences
-    // reservations under the prefixed candidate, while the stylesheet
-    // scan records the authored unprefixed prelude; both spellings must
-    // stay unreserved.
+    // An entry `@utility` owns its root across every variant chain and
+    // prefix (`@utility mr-auto` compiles `tw:hover:mr-auto`), while the
+    // stylesheet scan records the authored unprefixed prelude, so the
+    // complete candidate, its unprefixed form, and its bare utility
+    // segment must all stay unreserved. Segment matching over-rejects an
+    // authored plain selector against a variant-wrapped candidate, which
+    // only costs the cosmetic respelling.
     const unprefixed =
       prefix !== null && canonical.startsWith(`${prefix}:`)
         ? canonical.slice(prefix.length + 1)
         : null;
+    const segment = utilitySegment(canonical);
     // Only a fully named utility is an idiom improvement; respelling one
     // arbitrary form as another churns byte-exact values without gaining a
     // name, while brackets inside a preserved variant chain stay welcome.
     if (
-      utilitySegment(canonical).includes("[") ||
+      segment.includes("[") ||
       reservedSpelling(reservations, canonical) ||
-      (unprefixed !== null && reservedSpelling(reservations, unprefixed))
+      (unprefixed !== null && reservedSpelling(reservations, unprefixed)) ||
+      reservedSpelling(reservations, segment)
     ) {
       continue;
     }
