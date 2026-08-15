@@ -925,8 +925,10 @@ async function planPreparedGroup(
         }
       }
     } catch {
-      // An unparseable source cannot constrain anything; its dynamic sites
-      // already carry the planner's dynamic-class warnings.
+      // An unparseable source can dynamically supply any class or load
+      // any stylesheet, matching the HTML and Vue failure paths; the
+      // planner keeps such non-writable consumers as opaque references.
+      reservations.unbounded = true;
     }
   }
   const recoverGroup = (error: unknown, fatal = false): PlanResult[] => {
