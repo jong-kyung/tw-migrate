@@ -228,6 +228,9 @@ export type VueAnalysis =
       /// Static dynamic-class prefixes from template expressions and
       /// script blocks, for canonical spelling reservations.
       templatePrefixes: string[];
+      /// Decoded static class tokens the raw scan cannot read, reserved
+      /// as complete spellings.
+      templateClassTokens: string[];
       /// Static hrefs of rendered `<link rel="stylesheet">` template
       /// elements, resolved by spelling reservations like HTML links.
       templateStylesheetLinks: string[];
@@ -271,6 +274,9 @@ interface TemplateState {
   /// Static prefixes of dynamic class construction in template
   /// expressions, for canonical spelling reservations.
   templatePrefixes: Set<string>;
+  /// Decoded tokens of static class values the raw scan cannot read
+  /// (entity-bearing or otherwise unwritable attributes).
+  entityClassTokens: string[];
   /// Static hrefs of rendered `<link rel="stylesheet">` elements.
   stylesheetLinks: string[];
   /// True when a rendered link's rel or href is dynamic.
@@ -518,6 +524,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     referencesUseCssModule: false,
     expressionReferences: new Set(),
     templatePrefixes: new Set(),
+    entityClassTokens: [],
     stylesheetLinks: [],
     stylesheetLinksUnverifiable: false,
     expressionPath: scriptLang === "ts" || scriptLang === "tsx" ? "Component.ts" : "Component.js",
@@ -683,6 +690,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     scriptVueGlobPatterns,
     scriptVueGlobUnverifiable,
     templatePrefixes: [...new Set([...state.templatePrefixes, ...scriptTemplatePrefixes])],
+    templateClassTokens: [...new Set(state.entityClassTokens)],
     templateStylesheetLinks: state.stylesheetLinks,
     templateStylesheetLinksUnverifiable: state.stylesheetLinksUnverifiable,
     hasOpaqueStyleBlocks: opaqueStyleBlocks,
@@ -883,6 +891,17 @@ function templateSite(
   );
   const hasIdAttr = node.props?.some((prop) => prop.type === PROP_ATTRIBUTE && prop.name === "id");
   if ((hasClassAttr && !classAttribute) || (hasIdAttr && !idAttribute)) {
+    // Vue renders the compiler-decoded value, which the raw-text scan
+    // never sees for an entity-bearing attribute, so the decoded tokens
+    // feed spelling reservations.
+    if (hasClassAttr && !classAttribute) {
+      const decoded = node.props?.find(
+        (prop) => prop.type === PROP_ATTRIBUTE && prop.name === "class",
+      )?.value?.content;
+      for (const token of decoded?.split(/[\t\n\f\r ]+/) ?? []) {
+        if (token !== "") state.entityClassTokens.push(token);
+      }
+    }
     state.dynamic = true;
     return { idAttribute };
   }

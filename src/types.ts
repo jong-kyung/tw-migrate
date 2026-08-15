@@ -86,6 +86,8 @@ export interface PreparedSourceFile extends SourceFile {
   sourceImportsUnverifiable?: boolean;
   /** Static dynamic-class prefixes for canonical spelling reservations. */
   templatePrefixes?: string[];
+  /** Decoded static class tokens invisible to the raw-text scan. */
+  templateClassTokens?: string[];
   /** Static hrefs of rendered stylesheet links in a Vue template. */
   templateStylesheetLinks?: string[];
   /** True when a rendered Vue template link's rel or href is dynamic. */

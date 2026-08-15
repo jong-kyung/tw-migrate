@@ -921,6 +921,9 @@ async function planPreparedGroup(
         }
       }
       for (const prefix of file.templatePrefixes) reservations.prefixes.add(prefix);
+      // Decoded class tokens the raw scan cannot read reserve complete
+      // spellings, matching the HTML entity rule.
+      for (const token of file.templateClassTokens ?? []) reservations.names.add(token);
       // Rendered template stylesheet links load sheets like HTML links.
       if (file.templateStylesheetLinksUnverifiable === true) reservations.unbounded = true;
       for (const link of file.templateStylesheetLinks ?? []) {

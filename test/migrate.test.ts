@@ -520,6 +520,24 @@ test("extensionless package style imports keep group spellings arbitrary", async
   assert.deepEqual(report.candidates, ["mr-[auto]"]);
 });
 
+test("entity-encoded Vue class tokens reserve canonical spellings", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(
+    join(cwd, "Card.vue"),
+    '<template>\n  <div class="mr&#45;auto">Card</div>\n</template>\n',
+  );
+  const report = await migrate({ cwd });
+  assert.ok(report.candidates.includes("mr-[auto]"), report.candidates.join(" "));
+  assert.ok(!report.candidates.includes("mr-auto"), report.candidates.join(" "));
+});
+
+test("ICSS export tokens reserve canonical spellings", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(join(cwd, "Theme.module.css"), ":export { legacy: mr-auto; }\n");
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
 test("non-colliding Vue style blocks keep canonicalization enabled", async () => {
   const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
   await writeFile(

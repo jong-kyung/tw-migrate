@@ -626,6 +626,25 @@ fn collect_selector_text_classes(text: &str, analysis: &mut StylesheetAnalysis) 
     }
 }
 
+/// A bare `:export` selector, the ICSS block whose declaration values a
+/// CSS Modules loader hands to JavaScript verbatim.
+fn is_icss_export_selector(selectors: &oxc_css_parser::ast::SelectorList<'_>) -> bool {
+    selectors.selectors.iter().any(|selector| {
+        selector.children.iter().any(|child| {
+            let ComplexSelectorChild::CompoundSelector(compound) = child else {
+                return false;
+            };
+            compound.children.iter().any(|simple| {
+                matches!(
+                    simple,
+                    SimpleSelector::PseudoClass(pseudo)
+                        if matches!(&pseudo.name, InterpolableIdent::Literal(name) if name.name == "export")
+                )
+            })
+        })
+    })
+}
+
 fn collect_stylesheet_statements(
     statements: &[Statement<'_>],
     source: &str,
@@ -767,6 +786,32 @@ fn collect_stylesheet_statements(
                 }
             }
             Statement::QualifiedRule(rule) => {
+                // ICSS `:export` values surface through the module's JS
+                // object as literal runtime tokens, so ident and string
+                // values reserve their spellings.
+                if is_icss_export_selector(&rule.selector) {
+                    for statement in &rule.block.statements {
+                        let Statement::Declaration(declaration) = statement else {
+                            continue;
+                        };
+                        for value in &declaration.value {
+                            match value {
+                                ComponentValue::InterpolableIdent(InterpolableIdent::Literal(
+                                    ident,
+                                )) => analysis.class_names.push(ident.name.to_string()),
+                                ComponentValue::InterpolableStr(value) => {
+                                    match literal_str(value) {
+                                        Some(text) => analysis.class_names.extend(
+                                            text.split_whitespace().map(str::to_string),
+                                        ),
+                                        None => analysis.class_reservations_unbounded = true,
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
                 let mut direct = false;
                 for selector in &rule.selector.selectors {
                     direct |= collect_scope_escapes(selector, source, analysis);
@@ -1232,6 +1277,23 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed["classReservationsUnbounded"], true);
+    }
+
+    #[test]
+    fn reserves_icss_export_value_tokens() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/Card.module.css",
+                ":export { legacy: mr-auto; stack: \"pull-left pull-right\"; width: 768px; }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let names = parsed["classNames"].as_array().unwrap();
+        assert!(names.contains(&serde_json::json!("mr-auto")), "{names:?}");
+        assert!(names.contains(&serde_json::json!("pull-left")), "{names:?}");
+        assert!(names.contains(&serde_json::json!("pull-right")), "{names:?}");
+        assert_eq!(parsed["classReservationsUnbounded"], false);
     }
 
     #[test]
