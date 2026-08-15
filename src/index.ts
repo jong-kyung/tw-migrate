@@ -854,6 +854,17 @@ async function planPreparedGroup(
       }
       const fileBytes = Buffer.from(file.source);
       for (const [index, range] of styleRanges.entries()) {
+        // An external style source resolving into the snapshot is scanned
+        // there; anything else loads a sheet this run never sees.
+        if (range.src !== undefined) {
+          const resolved = range.src.startsWith(".")
+            ? resolve(dirname(file.path), range.src)
+            : undefined;
+          if (resolved === undefined || !context.styleSources.has(resolved)) {
+            reservations.unbounded = true;
+          }
+          continue;
+        }
         const block = fileBytes.subarray(range.start, range.end).toString();
         // The declared language is authoritative: a permissive parser can
         // accept another syntax's dependency at-rules without recording

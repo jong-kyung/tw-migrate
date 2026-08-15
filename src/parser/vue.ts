@@ -191,6 +191,8 @@ export interface VueStyleRange {
   end: number;
   /** The block's declared style language, defaulting to css. */
   lang: string;
+  /** The block's external source reference, when it loads one. */
+  src?: string;
 }
 
 interface VueAnalysisBase {
@@ -304,6 +306,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     start: style.loc.start.offset,
     end: style.loc.end.offset,
     lang: style.lang ?? "css",
+    ...(style.src !== undefined ? { src: style.src } : {}),
   }));
   const byteRanges = (offset: (value: number) => number) => ({
     warnings: warnings.map((warning) => ({

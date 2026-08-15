@@ -478,6 +478,17 @@ test("unresolved Vue block imports keep group spellings arbitrary", async () => 
   assert.ok(!report.candidates.includes("mr-auto"), report.candidates.join(" "));
 });
 
+test("unresolved Vue style sources keep group spellings arbitrary", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(
+    join(cwd, "Card.vue"),
+    '<template>\n  <div class="card">Card</div>\n</template>\n<style scoped src="@/legacy.css"></style>\n',
+  );
+  const report = await migrate({ cwd });
+  assert.ok(report.candidates.includes("mr-[auto]"), report.candidates.join(" "));
+  assert.ok(!report.candidates.includes("mr-auto"), report.candidates.join(" "));
+});
+
 test("non-colliding Vue style blocks keep canonicalization enabled", async () => {
   const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
   await writeFile(
