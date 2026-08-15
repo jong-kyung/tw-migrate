@@ -858,7 +858,13 @@ async function planPreparedGroup(
       // Prepared SFCs carry their template and script prefixes; a Vue file
       // this run never analyzed, or one whose script cannot be read, can
       // hold dynamic classes or stylesheet loads it cannot see.
-      if (file.templatePrefixes === undefined || file.sourceImportsUnverifiable === true) {
+      // v-html injects runtime markup whose classes, like server-template
+      // data, can never appear in the scan corpus.
+      if (
+        file.templatePrefixes === undefined ||
+        file.sourceImportsUnverifiable === true ||
+        file.templateInjectsMarkup === true
+      ) {
         reservations.unbounded = true;
         continue;
       }

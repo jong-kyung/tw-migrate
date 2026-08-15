@@ -533,6 +533,17 @@ test("ICSS export tokens reserve canonical spellings", async () => {
   assert.deepEqual(report.candidates, ["mr-[auto]"]);
 });
 
+test("v-html templates keep group spellings arbitrary", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(
+    join(cwd, "Card.vue"),
+    '<template>\n  <div v-html="markup"></div>\n</template>\n<script setup>\nconst markup = "";\n</script>\n',
+  );
+  const report = await migrate({ cwd });
+  assert.ok(report.candidates.includes("mr-[auto]"), report.candidates.join(" "));
+  assert.ok(!report.candidates.includes("mr-auto"), report.candidates.join(" "));
+});
+
 test("non-colliding Vue style blocks keep canonicalization enabled", async () => {
   const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
   await writeFile(

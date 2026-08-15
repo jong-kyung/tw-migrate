@@ -811,6 +811,7 @@ export async function preparePackageVue({
       sourceImports: analysis.scriptImports,
       sourceImportsUnverifiable: analysis.scriptImportsUnverifiable,
       templatePrefixes: analysis.templatePrefixes,
+      templateInjectsMarkup: analysis.vHtml,
       templateClassTokens: analysis.templateClassTokens,
       templateStylesheetLinks: analysis.templateStylesheetLinks,
       templateStylesheetLinksUnverifiable: analysis.templateStylesheetLinksUnverifiable,
