@@ -72,13 +72,20 @@ fn collect_template_prefixes(
         let Some(cooked) = quasi.value.cooked.as_ref() else {
             continue;
         };
-        let token = cooked
-            .rsplit(|character: char| character.is_whitespace())
-            .next()
-            .unwrap_or("");
-        if !token.is_empty() && !prefixes.iter().any(|existing| existing == token) {
-            prefixes.push(token.to_string());
-        }
+        record_trailing_prefix(cooked, prefixes);
+    }
+}
+
+/// The trailing whitespace-delimited token of static text preceding a
+/// dynamic part constrains the produced class; whitespace-terminated text
+/// constrains nothing.
+fn record_trailing_prefix(text: &str, prefixes: &mut Vec<String>) {
+    let token = text
+        .rsplit(|character: char| character.is_whitespace())
+        .next()
+        .unwrap_or("");
+    if !token.is_empty() && !prefixes.iter().any(|existing| existing == token) {
+        prefixes.push(token.to_string());
     }
 }
 
@@ -96,10 +103,7 @@ fn collect_concat_prefixes(
     let Some(text) = trailing_static_string(&expression.left) else {
         return;
     };
-    let token = text.rsplit(|character: char| character.is_whitespace()).next().unwrap_or("");
-    if !token.is_empty() && !prefixes.iter().any(|existing| existing == token) {
-        prefixes.push(token.to_string());
-    }
+    record_trailing_prefix(text, prefixes);
 }
 
 fn trailing_static_string<'e>(expression: &'e Expression<'_>) -> Option<&'e str> {

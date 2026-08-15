@@ -10,7 +10,7 @@ use oxc_semantic::Scoping;
 use oxc_span::{GetSpan, Span};
 use oxc_syntax::symbol::SymbolId;
 use tw_migrate_css::{
-    SelectorKey, css_properties_conflict, tailwind_utilities_conflict, tailwind_variants_match,
+    SelectorKey, css_property_sets_conflict, tailwind_utilities_conflict, tailwind_variants_match,
     utility_conflict,
 };
 
@@ -289,11 +289,7 @@ impl UsageCollector<'_> {
             // slots and never compete, matching the spelling heuristic's
             // variant gate.
             return tailwind_variants_match(left, right)
-                && left_properties.iter().any(|left_property| {
-                    right_properties
-                        .iter()
-                        .any(|right_property| css_properties_conflict(left_property, right_property))
-                });
+                && css_property_sets_conflict(left_properties, right_properties);
         }
         tailwind_utilities_conflict(left, right)
     }

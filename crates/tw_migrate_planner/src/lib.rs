@@ -9,7 +9,7 @@ use tw_migrate_error::{MigrationError, MigrationResult};
 
 use tw_migrate_css::{
     KeyframePlan, MediaComponent, ParseOptions, ParsedCss, ParsedMediaCondition, RulePlan,
-    SelectorKey, append_global_at_rules, append_keyframes, css_properties_conflict,
+    SelectorKey, append_global_at_rules, append_keyframes, css_property_sets_conflict,
     index_shadow_selectors, is_conditional, parse_css, parse_css_rules, parse_dimension,
     parse_media_condition, tailwind_utilities_conflict, tailwind_utility_parts,
     tailwind_variants_match, validate_css, variant_segments,

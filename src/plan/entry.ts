@@ -16,7 +16,7 @@ import { basename, dirname, extname, join, resolve } from "node:path";
 import { cssDirectives as decodeCssDirectives, sourceAnalysis } from "../native.ts";
 import type { SourceImportRecord } from "../native.ts";
 import { parseHtmlSource } from "../parser/html.ts";
-import { isWithin } from "../util/shared.ts";
+import { isWithin, localHrefTarget } from "../util/shared.ts";
 import type { PreparedSourceFile } from "../types.ts";
 
 /// True for a specifier whose import actually emits utilities: the full
@@ -541,8 +541,8 @@ function htmlLinksEntry(file: { path: string; source: string }, entry: string): 
       // matches, so it proves nothing unconditionally.
       const media = link.media.trim().toLowerCase();
       if (media !== "" && media !== "all") return false;
-      const href = link.href.split(/[?#]/, 1)[0];
-      if (!href || /^[a-z][a-z0-9+.-]*:|^\/\//i.test(href)) return false;
+      const href = localHrefTarget(link.href);
+      if (href === undefined) return false;
       return resolve(dirname(file.path), href) === entry;
     });
   } catch {

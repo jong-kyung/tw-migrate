@@ -249,12 +249,7 @@ impl<'a> MediaVariantContext<'a> {
                 &format!("probe:{}", tailwind_utility_parts(&left.candidate).1),
                 &format!("probe:{}", tailwind_utility_parts(&right.candidate).1),
             ))
-            || left.properties.iter().any(|left_property| {
-                right
-                    .properties
-                    .iter()
-                    .any(|right_property| css_properties_conflict(left_property, right_property))
-            });
+            || css_property_sets_conflict(&left.properties, &right.properties);
         if !conflicting {
             return false;
         }
@@ -372,11 +367,7 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
                         // compete, matching the heuristic's equality exit.
                         || (left.candidate != right.candidate
                             && tailwind_variants_match(&left.candidate, &right.candidate)
-                            && left.properties.iter().any(|left_property| {
-                                right.properties.iter().any(|right_property| {
-                                    css_properties_conflict(left_property, right_property)
-                                })
-                            }))))
+                            && css_property_sets_conflict(&left.properties, &right.properties))))
                     || media_context.ordering_sensitive(left, right)
                 {
                     let pair = if left.candidate <= right.candidate {

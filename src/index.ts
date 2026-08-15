@@ -15,13 +15,13 @@ import {
   isStylesheetModule,
   isStylesheetPath,
   isWithin,
+  localHrefTarget,
   normalizedRelativePath,
   packageFailure,
   recordSnapshot,
   rejectSymlinkTarget,
   snapshotFile,
   snapshotLoadedSource,
-  stylesheetReferenceTargets,
   stylesheetSyntax,
   SOURCE_EXTENSIONS,
 } from "./util/shared.ts";
@@ -33,7 +33,11 @@ import {
   loadTailwind,
   selectTailwindEntry,
 } from "./tailwind.ts";
-import { acceptedCandidateAliases, spellingReservations } from "./plan/canonicalize.ts";
+import {
+  acceptedCandidateAliases,
+  scanStylesheetReservations,
+  spellingReservations,
+} from "./plan/canonicalize.ts";
 import { importsStylesheet, proveSharedEntry, tailwindEntryCatalog } from "./plan/entry.ts";
 import type { SharedEntryProofs } from "./plan/entry.ts";
 import {
@@ -750,8 +754,8 @@ async function planPreparedGroup(
       break;
     }
     const opaqueStylesheetLink = (link: string) => {
-      const href = link.split(/[?#]/, 1)[0];
-      if (!href || /^[a-z][a-z0-9+.-]*:|^\/\//i.test(href)) return true;
+      const href = localHrefTarget(link);
+      if (href === undefined) return true;
       const resolved = resolve(dirname(file.path), href);
       return (
         !context.styleSources.has(resolved) ||
@@ -887,26 +891,14 @@ async function planPreparedGroup(
           reservations.unbounded = true;
           continue;
         }
-        try {
-          const analysis = stylesheetAnalysis(`${file.path}.block.${index}.${range.lang}`, block);
-          for (const name of analysis.classNames) reservations.names.add(name);
-          if (analysis.classReservationsUnbounded) reservations.unbounded = true;
-          // A block dependency outside the snapshot loads selectors the
-          // scan cannot see, exactly like a stylesheet's own imports.
-          if (analysis.unverifiable) reservations.unbounded = true;
-          for (const reference of analysis.references) {
-            if (reference === "tailwindcss" || reference.startsWith("tailwindcss/")) continue;
-            if (reference.startsWith("sass:")) continue;
-            if (
-              !context.styleSources.has(reference) &&
-              stylesheetReferenceTargets(file.path, reference, context.styleSources).length === 0
-            ) {
-              reservations.unbounded = true;
-            }
-          }
-        } catch {
-          reservations.unbounded = true;
-        }
+        // A block dependency outside the snapshot loads selectors the
+        // scan cannot see, exactly like a stylesheet's own imports.
+        scanStylesheetReservations(
+          `${file.path}.block.${index}.${range.lang}`,
+          block,
+          context.styleSources,
+          reservations,
+        );
       }
       for (const prefix of file.templatePrefixes) reservations.prefixes.add(prefix);
       // Decoded class tokens the raw scan cannot read reserve complete

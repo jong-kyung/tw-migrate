@@ -72,46 +72,67 @@ export function spellingReservations(
   /// specifier text can resolve differently from another location.
   resolvedImports: Set<string> = new Set(),
 ): SpellingReservations {
-  const names = new Set<string>();
-  let unbounded = false;
-  const scan = (path: string, source: string, entryGraph: boolean) => {
+  const reservations: SpellingReservations = {
+    names: new Set(),
+    prefixes: new Set(),
+    unbounded: false,
+  };
+  for (const [path, source] of styleSources) {
+    scanStylesheetReservations(path, source, styleSources, reservations, resolvedImports);
+  }
+  for (const [path, source] of resolvedExtras) {
     try {
       const analysis = stylesheetAnalysis(path, source);
-      for (const name of analysis.classNames) names.add(name);
-      if (analysis.classReservationsUnbounded) unbounded = true;
-      if (entryGraph) {
-        // A plugin or legacy config module can emit any selector into the
-        // built output without it appearing in scanned CSS, and a
-        // `@source not` exclusion can keep Tailwind from generating a
-        // canonical spelling the migrated source would then rely on.
-        if (entryDirectiveHazard(source)) unbounded = true;
-        // The loader already resolved the entry graph's imports.
-        return;
-      }
-      // An interpolated reference can load a sheet this scan never sees.
-      if (analysis.unverifiable) unbounded = true;
-      for (const reference of analysis.references) {
-        // The Tailwind package emits utilities, never authored selectors,
-        // and Sass built-in modules define functions without loading any
-        // authored sheet.
-        if (reference === "tailwindcss" || reference.startsWith("tailwindcss/")) continue;
-        if (reference.startsWith("sass:")) continue;
-        if (resolvedImports.has(`${dirname(path)}\0${reference}`) || styleSources.has(reference))
-          continue;
-        // A reference outside the snapshot loads selectors this scan
-        // cannot see: a package or remote import, or a sheet discovery
-        // never captured.
-        if (stylesheetReferenceTargets(path, reference, styleSources).length === 0) {
-          unbounded = true;
-        }
-      }
+      for (const name of analysis.classNames) reservations.names.add(name);
+      if (analysis.classReservationsUnbounded) reservations.unbounded = true;
+      // A plugin or legacy config module can emit any selector into the
+      // built output without it appearing in scanned CSS, and a
+      // `@source not` exclusion can keep Tailwind from generating a
+      // canonical spelling the migrated source would then rely on. The
+      // loader already resolved the entry graph's imports.
+      if (entryDirectiveHazard(source)) reservations.unbounded = true;
     } catch {
-      unbounded = true;
+      reservations.unbounded = true;
     }
-  };
-  for (const [path, source] of styleSources) scan(path, source, false);
-  for (const [path, source] of resolvedExtras) scan(path, source, true);
-  return { names, prefixes: new Set(), unbounded };
+  }
+  return reservations;
+}
+
+/// Scan one stylesheet outside the entry graph into the reservation set:
+/// authored class names, boundedness, and references that must resolve
+/// into the snapshot. Shared by the snapshot loop above and the Vue
+/// style-block scan so the reference-exemption rules cannot diverge.
+export function scanStylesheetReservations(
+  path: string,
+  source: string,
+  styleSources: Map<string, string>,
+  reservations: SpellingReservations,
+  resolvedImports: Set<string> = new Set(),
+): void {
+  try {
+    const analysis = stylesheetAnalysis(path, source);
+    for (const name of analysis.classNames) reservations.names.add(name);
+    if (analysis.classReservationsUnbounded) reservations.unbounded = true;
+    // An interpolated reference can load a sheet this scan never sees.
+    if (analysis.unverifiable) reservations.unbounded = true;
+    for (const reference of analysis.references) {
+      // The Tailwind package emits utilities, never authored selectors,
+      // and Sass built-in modules define functions without loading any
+      // authored sheet.
+      if (reference === "tailwindcss" || reference.startsWith("tailwindcss/")) continue;
+      if (reference.startsWith("sass:")) continue;
+      if (resolvedImports.has(`${dirname(path)}\0${reference}`) || styleSources.has(reference))
+        continue;
+      // A reference outside the snapshot loads selectors this scan cannot
+      // see: a package or remote import, or a sheet discovery never
+      // captured.
+      if (stylesheetReferenceTargets(path, reference, styleSources).length === 0) {
+        reservations.unbounded = true;
+      }
+    }
+  } catch {
+    reservations.unbounded = true;
+  }
 }
 
 /// True when an entry-graph sheet declares a directive whose effect on the

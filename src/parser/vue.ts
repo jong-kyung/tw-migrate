@@ -884,21 +884,16 @@ function templateSite(
   classOpaque: boolean,
   state: TemplateState,
 ): TemplateSiteAttributes {
-  let classAttribute = literalAttribute(source, node, "class");
-  const idAttribute = literalAttribute(source, node, "id");
-  const hasClassAttr = node.props?.some(
-    (prop) => prop.type === PROP_ATTRIBUTE && prop.name === "class",
-  );
-  const hasIdAttr = node.props?.some((prop) => prop.type === PROP_ATTRIBUTE && prop.name === "id");
-  if ((hasClassAttr && !classAttribute) || (hasIdAttr && !idAttribute)) {
+  const classProp = staticAttribute(node, "class");
+  const idProp = staticAttribute(node, "id");
+  let classAttribute = literalAttribute(source, classProp);
+  const idAttribute = literalAttribute(source, idProp);
+  if ((classProp && !classAttribute) || (idProp && !idAttribute)) {
     // Vue renders the compiler-decoded value, which the raw-text scan
     // never sees for an entity-bearing attribute, so the decoded tokens
     // feed spelling reservations.
-    if (hasClassAttr && !classAttribute) {
-      const decoded = node.props?.find(
-        (prop) => prop.type === PROP_ATTRIBUTE && prop.name === "class",
-      )?.value?.content;
-      for (const token of decoded?.split(/[\t\n\f\r ]+/) ?? []) {
+    if (classProp && !classAttribute) {
+      for (const token of classProp.value?.content.split(/[\t\n\f\r ]+/) ?? []) {
         if (token !== "") state.entityClassTokens.push(token);
       }
     }
@@ -922,12 +917,14 @@ function templateSite(
 
 // The inner span of a quoted, entity-free, literal attribute value, or
 // undefined when the attribute is absent or cannot be edited safely.
+function staticAttribute(node: TemplateNode, name: string): TemplateProp | undefined {
+  return node.props?.find((prop) => prop.type === PROP_ATTRIBUTE && prop.name === name);
+}
+
 function literalAttribute(
   source: string,
-  node: TemplateNode,
-  name: string,
+  prop: TemplateProp | undefined,
 ): VueTemplateAttribute | undefined {
-  const prop = node.props?.find((prop) => prop.type === PROP_ATTRIBUTE && prop.name === name);
   if (!prop?.value) return undefined;
   const start = prop.value.loc.start.offset;
   const end = prop.value.loc.end.offset;
