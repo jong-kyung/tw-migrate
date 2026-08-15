@@ -45,6 +45,11 @@ pub fn stylesheet_analysis(path: String, source: String) -> napi::Result<String>
 }
 
 #[napi]
+pub fn compiled_shape(css: String) -> napi::Result<String> {
+    tw_migrate_css::compiled_shape_json(&css).map_err(|error| native_error(error, false))
+}
+
+#[napi]
 pub fn collect_css_directives(source: String) -> napi::Result<String> {
     tw_migrate_css::collect_css_directives_json(&source).map_err(|error| native_error(error, false))
 }
