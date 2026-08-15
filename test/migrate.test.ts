@@ -489,6 +489,37 @@ test("unresolved Vue style sources keep group spellings arbitrary", async () => 
   assert.ok(!report.candidates.includes("mr-auto"), report.candidates.join(" "));
 });
 
+test("Vue template stylesheet links keep group spellings arbitrary", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(
+    join(cwd, "Card.vue"),
+    '<template>\n  <link rel="stylesheet" href="https://cdn.example/legacy.css" />\n  <div class="card">Card</div>\n</template>\n',
+  );
+  const report = await migrate({ cwd });
+  assert.ok(report.candidates.includes("mr-[auto]"), report.candidates.join(" "));
+  assert.ok(!report.candidates.includes("mr-auto"), report.candidates.join(" "));
+});
+
+test("extensionless package style imports keep group spellings arbitrary", async () => {
+  const cwd = await fixture({
+    css: ".button { margin-right: auto; }\n",
+    tsx: "import styles from './Button.module.css';\nimport '@scope/theme';\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+  });
+  await mkdir(join(cwd, "node_modules", "@scope", "theme"), { recursive: true });
+  await Promise.all([
+    writeFile(
+      join(cwd, "node_modules", "@scope", "theme", "package.json"),
+      '{"name":"@scope/theme","main":"theme.css"}',
+    ),
+    writeFile(
+      join(cwd, "node_modules", "@scope", "theme", "theme.css"),
+      ".mr-auto { color: red; }\n",
+    ),
+  ]);
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
 test("non-colliding Vue style blocks keep canonicalization enabled", async () => {
   const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
   await writeFile(

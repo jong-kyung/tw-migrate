@@ -214,7 +214,8 @@ export function acceptedCandidateAliases(
       prefix !== null && canonical.startsWith(`${prefix}:`)
         ? canonical.slice(prefix.length + 1)
         : null;
-    const segment = utilitySegment(canonical);
+    // An entry utility owns its root beneath the important modifier too.
+    const segment = utilitySegment(canonical).replace(/!$/, "");
     // Only a fully named utility is an idiom improvement; respelling one
     // arbitrary form as another churns byte-exact values without gaining a
     // name, while brackets inside a preserved variant chain stay welcome.

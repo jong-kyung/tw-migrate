@@ -44,6 +44,8 @@ import {
   usedGeneratedDefinitions,
 } from "./plan/media.ts";
 import type { MediaCollection, MediaExtraction } from "./plan/media.ts";
+import { createRequire } from "node:module";
+
 import { verifyVueSource } from "./parser/vue.ts";
 import type { VueStyleRange } from "./parser/vue.ts";
 import { preparePackageVue, vueWarningsOnlyResult } from "./plan/vue.ts";
@@ -747,11 +749,36 @@ async function planPreparedGroup(
       reservations.unbounded = true;
       break;
     }
+    const opaqueStylesheetLink = (link: string) => {
+      const href = link.split(/[?#]/, 1)[0];
+      if (!href || /^[a-z][a-z0-9+.-]*:|^\/\//i.test(href)) return true;
+      const resolved = resolve(dirname(file.path), href);
+      return (
+        !context.styleSources.has(resolved) ||
+        (workspaceEntries.has(resolved) && resolved !== entry.path)
+      );
+    };
     const opaqueStylesheetImports = (records: { specifier: string; typeOnly: boolean }[]) => {
       for (const record of records) {
-        if (record.typeOnly || !isStylesheetPath(record.specifier.split(/[?#]/, 1)[0])) continue;
-        const resolved = record.specifier.startsWith(".")
-          ? resolve(dirname(file.path), record.specifier)
+        if (record.typeOnly) continue;
+        const specifier = record.specifier.split(/[?#]/, 1)[0];
+        if (!isStylesheetPath(specifier)) {
+          // A bare extensionless import can hide a package style entry
+          // behind an exports map; whatever node cannot resolve (bundler
+          // aliases, ESM-only maps) stays outside the reservation scope.
+          if (extname(specifier) !== "" || specifier.startsWith(".")) continue;
+          try {
+            const resolved = createRequire(file.path).resolve(specifier);
+            if (isStylesheetPath(resolved) && !context.styleSources.has(resolved)) {
+              reservations.unbounded = true;
+            }
+          } catch {
+            // Unresolvable specifiers are bundler-specific; see above.
+          }
+          continue;
+        }
+        const resolved = specifier.startsWith(".")
+          ? resolve(dirname(file.path), specifier)
           : undefined;
         // A different workspace entry co-loads a design system this group
         // cannot validate against, matching the HTML-link rule below.
@@ -894,6 +921,11 @@ async function planPreparedGroup(
         }
       }
       for (const prefix of file.templatePrefixes) reservations.prefixes.add(prefix);
+      // Rendered template stylesheet links load sheets like HTML links.
+      if (file.templateStylesheetLinksUnverifiable === true) reservations.unbounded = true;
+      for (const link of file.templateStylesheetLinks ?? []) {
+        if (opaqueStylesheetLink(link)) reservations.unbounded = true;
+      }
       opaqueStylesheetImports(file.sourceImports ?? []);
       continue;
     }
@@ -911,18 +943,7 @@ async function planPreparedGroup(
       // link: a remote, unresolved, or other-entry target is opaque.
       if (analysis.stylesheetLinksUnverifiable) reservations.unbounded = true;
       for (const link of analysis.stylesheetLinks) {
-        const href = link.split(/[?#]/, 1)[0];
-        if (!href || /^[a-z][a-z0-9+.-]*:|^\/\//i.test(href)) {
-          reservations.unbounded = true;
-          continue;
-        }
-        const resolved = resolve(dirname(file.path), href);
-        if (
-          !context.styleSources.has(resolved) ||
-          (workspaceEntries.has(resolved) && resolved !== entry.path)
-        ) {
-          reservations.unbounded = true;
-        }
+        if (opaqueStylesheetLink(link)) reservations.unbounded = true;
       }
     } catch {
       // An unparseable source can dynamically supply any class or load

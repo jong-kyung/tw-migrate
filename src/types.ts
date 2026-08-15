@@ -86,6 +86,10 @@ export interface PreparedSourceFile extends SourceFile {
   sourceImportsUnverifiable?: boolean;
   /** Static dynamic-class prefixes for canonical spelling reservations. */
   templatePrefixes?: string[];
+  /** Static hrefs of rendered stylesheet links in a Vue template. */
+  templateStylesheetLinks?: string[];
+  /** True when a rendered Vue template link's rel or href is dynamic. */
+  templateStylesheetLinksUnverifiable?: boolean;
 }
 
 export interface PlannedFile extends PreparedSourceFile {

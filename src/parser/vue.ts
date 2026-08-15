@@ -228,6 +228,11 @@ export type VueAnalysis =
       /// Static dynamic-class prefixes from template expressions and
       /// script blocks, for canonical spelling reservations.
       templatePrefixes: string[];
+      /// Static hrefs of rendered `<link rel="stylesheet">` template
+      /// elements, resolved by spelling reservations like HTML links.
+      templateStylesheetLinks: string[];
+      /// True when a rendered link's rel or href is dynamic.
+      templateStylesheetLinksUnverifiable: boolean;
       /// True when a retained unsupported block keeps style content outside
       /// the analyzable block arrays, hiding possible global registrations.
       hasOpaqueStyleBlocks: boolean;
@@ -266,6 +271,10 @@ interface TemplateState {
   /// Static prefixes of dynamic class construction in template
   /// expressions, for canonical spelling reservations.
   templatePrefixes: Set<string>;
+  /// Static hrefs of rendered `<link rel="stylesheet">` elements.
+  stylesheetLinks: string[];
+  /// True when a rendered link's rel or href is dynamic.
+  stylesheetLinksUnverifiable: boolean;
   /// Synthetic path for template expression parsing, carrying the SFC's
   /// script language so TypeScript assertions parse in TypeScript SFCs.
   expressionPath: string;
@@ -509,6 +518,8 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     referencesUseCssModule: false,
     expressionReferences: new Set(),
     templatePrefixes: new Set(),
+    stylesheetLinks: [],
+    stylesheetLinksUnverifiable: false,
     expressionPath: scriptLang === "ts" || scriptLang === "tsx" ? "Component.ts" : "Component.js",
   };
   visitTemplateNode(source, template.ast, state);
@@ -672,6 +683,8 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     scriptVueGlobPatterns,
     scriptVueGlobUnverifiable,
     templatePrefixes: [...new Set([...state.templatePrefixes, ...scriptTemplatePrefixes])],
+    templateStylesheetLinks: state.stylesheetLinks,
+    templateStylesheetLinksUnverifiable: state.stylesheetLinksUnverifiable,
     hasOpaqueStyleBlocks: opaqueStyleBlocks,
     styleBlockImports: styleBlockImports.map((entry) => ({
       ...entry,
@@ -721,6 +734,29 @@ export function verifyVueSource(
 function visitTemplateNode(source: string, node: TemplateNode, state: TemplateState): void {
   if (node.type === NODE_ELEMENT) {
     if (node.tagType === TAG_SLOT) state.hasSlot = true;
+    // A rendered stylesheet link loads a sheet like an HTML document
+    // link; a bound rel or href resolves at runtime.
+    if (node.tag === "link" && node.tagType === TAG_ELEMENT) {
+      let rel: string | undefined;
+      let href: string | undefined;
+      let dynamic = false;
+      for (const prop of node.props ?? []) {
+        if (prop.type === PROP_ATTRIBUTE) {
+          if (prop.name === "rel") rel = prop.value?.content ?? "";
+          if (prop.name === "href") href = prop.value?.content ?? "";
+        } else if (prop.type === PROP_DIRECTIVE && prop.name === "bind") {
+          const argument = prop.arg?.isStatic ? prop.arg.content : undefined;
+          if (argument === undefined || argument === "rel" || argument === "href") dynamic = true;
+        }
+      }
+      const relTokens = rel?.toLowerCase().split(/\s+/) ?? [];
+      if (relTokens.includes("stylesheet") || (rel === undefined && dynamic)) {
+        if (href !== undefined && !dynamic) state.stylesheetLinks.push(href);
+        else state.stylesheetLinksUnverifiable = true;
+      } else if (dynamic) {
+        state.stylesheetLinksUnverifiable = true;
+      }
+    }
     const bindingClasses: string[] = [];
     let classOpaque = false;
     let moduleBinding: VueModuleBinding | undefined;

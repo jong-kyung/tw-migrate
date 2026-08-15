@@ -811,6 +811,8 @@ export async function preparePackageVue({
       sourceImports: analysis.scriptImports,
       sourceImportsUnverifiable: analysis.scriptImportsUnverifiable,
       templatePrefixes: analysis.templatePrefixes,
+      templateStylesheetLinks: analysis.templateStylesheetLinks,
+      templateStylesheetLinksUnverifiable: analysis.templateStylesheetLinksUnverifiable,
     });
   }
   return {
