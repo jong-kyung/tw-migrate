@@ -231,6 +231,13 @@ fn collect_compound_selector_classes(
                     _ => analysis.class_reservations_unbounded = true,
                 }
             }
+            // A nonliteral tag position interpolates arbitrary selector
+            // text, which can be a class selector such as `.mr-auto`.
+            SimpleSelector::Type(oxc_css_parser::ast::TypeSelector::TagName(tag))
+                if !matches!(tag.name.name, InterpolableIdent::Literal(_)) =>
+            {
+                analysis.class_reservations_unbounded = true;
+            }
             SimpleSelector::Attribute(attribute) => {
                 let Some(name) = literal_ident(&attribute.name.name) else {
                     // An interpolated attribute name can resolve to
@@ -1047,6 +1054,25 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed["classReservationsUnbounded"], true);
+    }
+
+    #[test]
+    fn marks_unbounded_interpolated_selector_positions() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/legacy.scss",
+                "$sel: \".mr-auto\";\n#{$sel} { color: red; }\ndiv { color: blue; }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["classReservationsUnbounded"], true);
+
+        let literal: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json("/p/plain.css", "div { color: blue; }\n").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(literal["classReservationsUnbounded"], false);
     }
 
     #[test]

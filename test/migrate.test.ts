@@ -453,6 +453,42 @@ test("source-imported workspace entries keep group spellings arbitrary", async (
   assert.deepEqual(report.candidates, ["mr-[auto]"]);
 });
 
+test("Vue style block selectors reserve canonical spellings", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  // A scoped `.mr-auto` still styles a migrated element inside its own
+  // SFC. The full-package run analyzes the SFC, so the reservation comes
+  // from the block scan rather than blanket opacity.
+  await writeFile(
+    join(cwd, "Card.vue"),
+    '<template>\n  <div class="mr-auto">Card</div>\n</template>\n<style scoped>\n.mr-auto { appearance: none; }\n</style>\n',
+  );
+  const report = await migrate({ cwd });
+  assert.ok(report.candidates.includes("mr-[auto]"), report.candidates.join(" "));
+  assert.ok(!report.candidates.includes("mr-auto"), report.candidates.join(" "));
+});
+
+test("non-colliding Vue style blocks keep canonicalization enabled", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(
+    join(cwd, "Card.vue"),
+    '<template>\n  <div class="card">Card</div>\n</template>\n<style scoped>\n.card { appearance: none; }\n</style>\n',
+  );
+  const report = await migrate({ cwd });
+  assert.ok(report.candidates.includes("mr-auto"), report.candidates.join(" "));
+});
+
+test("unanalyzed Vue files keep scoped-run spellings arbitrary", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  // A styleFile-scoped run never prepares the SFC, so its blocks and
+  // dynamic classes are unknowable and the group stays arbitrary.
+  await writeFile(
+    join(cwd, "Card.vue"),
+    '<template>\n  <div class="card">Card</div>\n</template>\n<style scoped>\n.card { appearance: none; }\n</style>\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
 test("authored selectors reserve canonical spellings", async () => {
   const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
   await writeFile(join(cwd, "legacy.css"), ".mr-auto { color: red; }\n");

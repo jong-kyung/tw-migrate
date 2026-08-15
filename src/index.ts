@@ -821,6 +821,31 @@ async function planPreparedGroup(
         reservations.unbounded = true;
         continue;
       }
+      // SFC style blocks never join the stylesheet snapshot, so their
+      // authored selectors reserve here; a block no supported syntax can
+      // parse stays opaque.
+      const styleRanges = context.vueStyleRanges.get(file.path);
+      if (styleRanges === undefined) {
+        reservations.unbounded = true;
+        continue;
+      }
+      const fileBytes = Buffer.from(file.source);
+      for (const [index, range] of styleRanges.entries()) {
+        const block = fileBytes.subarray(range.start, range.end).toString();
+        let parsed = false;
+        for (const syntax of ["css", "scss", "less"]) {
+          try {
+            const analysis = stylesheetAnalysis(`${file.path}.block.${index}.${syntax}`, block);
+            for (const name of analysis.classNames) reservations.names.add(name);
+            if (analysis.classReservationsUnbounded) reservations.unbounded = true;
+            parsed = true;
+            break;
+          } catch {
+            continue;
+          }
+        }
+        if (!parsed) reservations.unbounded = true;
+      }
       for (const prefix of file.templatePrefixes) reservations.prefixes.add(prefix);
       opaqueStylesheetImports(file.sourceImports ?? []);
       continue;
