@@ -644,6 +644,22 @@ test("JSX links to snapshot stylesheets keep canonicalization enabled", async ()
   assert.deepEqual(report.candidates, ["mr-auto"]);
 });
 
+test("templated HTML class attributes keep group spellings arbitrary", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(join(cwd, "index.html"), '<div class="{{ cls }}">T</div>\n');
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("prefix-constrained templated HTML classes reserve their prefixes", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  // The btn- prefix cannot complete to mr-auto, so canonicalization
+  // stays enabled while the template's own family is reserved.
+  await writeFile(join(cwd, "index.html"), '<div class="card btn-{{ kind }}">T</div>\n');
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-auto"]);
+});
+
 test("opaque page style sources keep group spellings arbitrary", async () => {
   const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
   await writeFile(

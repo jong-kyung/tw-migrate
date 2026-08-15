@@ -3,7 +3,7 @@ import { basename, dirname, extname, join, resolve } from "node:path";
 
 import { unifiedDiff } from "./util/diff.ts";
 import { collectFiles, resolveScope, scannerIgnoredPaths } from "./discovery.ts";
-import { parseHtmlSource } from "./parser/html.ts";
+import { parseHtmlSource, TEMPLATE_EXPRESSIONS, TEMPLATE_MARKERS } from "./parser/html.ts";
 import { preparePackageHtml } from "./plan/html.ts";
 import { planBatchMigration, sourceAnalysis, stylesheetAnalysis, validateCss } from "./native.ts";
 import {
@@ -789,6 +789,27 @@ async function planPreparedGroup(
             (workspaceEntries.has(resolved) && resolved !== entry.path)
           ) {
             reservations.unbounded = true;
+          }
+        }
+        // A templated class value resolves from data the scan corpus
+        // never contains, so a token's static lead reserves as a prefix
+        // and a token with no static lead can be any spelling. Static
+        // dynamic-attribute values (unquoted or entity-bearing) carry
+        // complete tokens the Tailwind scanner already reads.
+        for (const value of parsed.dynamicClassValues) {
+          const masked = value.replace(TEMPLATE_EXPRESSIONS, "\0");
+          if (masked === value) continue;
+          // A marker outside a balanced expression leaves the templated
+          // region unknowable.
+          if (TEMPLATE_MARKERS.test(masked)) {
+            reservations.unbounded = true;
+            continue;
+          }
+          for (const token of masked.split(/\s+/)) {
+            const index = token.indexOf("\0");
+            if (index < 0) continue;
+            if (index === 0) reservations.unbounded = true;
+            else reservations.prefixes.add(token.slice(0, index));
           }
         }
         // The planner already treats inline scripts conservatively for
