@@ -578,22 +578,6 @@ fn collect_at_rule_metadata(
     }
 }
 
-/// Strip `/* */` comments from raw prelude text so a comment can neither
-/// hide a selector token nor pollute a reserved name.
-fn strip_css_comments(text: &str) -> String {
-    let mut output = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(start) = rest.find("/*") {
-        output.push_str(&rest[..start]);
-        match rest[start + 2..].find("*/") {
-            Some(end) => rest = &rest[start + 2 + end + 2..],
-            None => return output,
-        }
-    }
-    output.push_str(rest);
-    output
-}
-
 /// Collect `.name` class tokens from raw selector text. An escape makes
 /// the match set unbounded because the decoded spelling is unknowable to
 /// this scanner.
@@ -679,14 +663,13 @@ fn collect_stylesheet_statements(
                     // selector walk; the block form's inner rules are
                     // collected by the generic recursion below.
                     _ if at_rule.name.name == "custom-variant" && at_rule.block.is_none() => {
-                        let text =
-                            strip_css_comments(&source[at_rule.span.start..at_rule.span.end]);
+                        let text = &source[at_rule.span.start..at_rule.span.end];
                         // A class-attribute selector matches class tokens
                         // this dot-token scan cannot enumerate.
-                        if text.to_ascii_lowercase().contains("[class") {
+                        if text.contains("[class") {
                             analysis.class_reservations_unbounded = true;
                         }
-                        collect_selector_text_classes(&text, analysis);
+                        collect_selector_text_classes(text, analysis);
                     }
                     // A `@utility` definition owns its class spelling in
                     // the built output, so a canonical alias must never
@@ -696,18 +679,14 @@ fn collect_stylesheet_statements(
                         let prelude = at_rule
                             .block
                             .as_ref()
-                            .map(|block| {
-                                strip_css_comments(&source[at_rule.span.start..block.span.start])
-                            })
-                            .as_deref()
-                            .map(str::trim)
+                            .map(|block| source[at_rule.span.start..block.span.start].trim())
                             .and_then(|text| text.strip_prefix("@utility"))
                             .map(str::trim)
-                            .unwrap_or("")
-                            .to_string();
+                            .unwrap_or("");
                         // Anything but a plain utility name (a functional
-                        // `name-*`, leftover tokens, or an unreadable
-                        // prelude) owns an unknowable spelling family.
+                        // `name-*`, a comment, leftover tokens, or an
+                        // unreadable prelude) conservatively owns an
+                        // unknowable spelling family.
                         let plain = !prelude.is_empty()
                             && prelude.chars().all(|character| {
                                 character.is_ascii_alphanumeric()
@@ -717,7 +696,7 @@ fn collect_stylesheet_statements(
                             })
                             && !prelude.ends_with("-*");
                         if plain {
-                            analysis.class_names.push(prelude);
+                            analysis.class_names.push(prelude.to_string());
                         } else {
                             analysis.class_reservations_unbounded = true;
                         }
@@ -1377,7 +1356,8 @@ mod tests {
         .unwrap();
         assert_eq!(functional["classReservationsUnbounded"], true);
 
-        // A comment cannot pollute the reserved name.
+        // A comment in the prelude cannot pollute the reserved name; the
+        // unrecognizable prelude conservatively turns unbounded instead.
         let commented: serde_json::Value = serde_json::from_str(
             &super::stylesheet_analysis_json(
                 "/p/globals.css",
@@ -1386,11 +1366,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let commented_names = commented["classNames"].as_array().unwrap();
-        assert!(
-            commented_names.contains(&serde_json::json!("mr-auto")),
-            "{commented_names:?}"
-        );
+        assert_eq!(commented["classReservationsUnbounded"], true);
     }
 
     #[test]
