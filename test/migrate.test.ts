@@ -443,6 +443,16 @@ test("scanner-ignored sources keep group spellings arbitrary", async () => {
   assert.deepEqual(report.candidates, ["mr-[auto]"]);
 });
 
+test("source-imported workspace entries keep group spellings arbitrary", async () => {
+  const cwd = await fixture({
+    css: ".button { margin-right: auto; }\n",
+    tsx: "import styles from './Button.module.css';\nimport './other.css';\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+  });
+  await writeFile(join(cwd, "other.css"), '@import "tailwindcss";\n');
+  const report = await migrate({ cwd, styleFile: "Button.module.css", tailwindCss: "globals.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
 test("authored selectors reserve canonical spellings", async () => {
   const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
   await writeFile(join(cwd, "legacy.css"), ".mr-auto { color: red; }\n");

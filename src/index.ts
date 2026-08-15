@@ -751,7 +751,13 @@ async function planPreparedGroup(
         const resolved = record.specifier.startsWith(".")
           ? resolve(dirname(file.path), record.specifier)
           : undefined;
-        if (resolved === undefined || !context.styleSources.has(resolved)) {
+        // A different workspace entry co-loads a design system this group
+        // cannot validate against, matching the HTML-link rule below.
+        if (
+          resolved === undefined ||
+          !context.styleSources.has(resolved) ||
+          (workspaceEntries.has(resolved) && resolved !== entry.path)
+        ) {
           reservations.unbounded = true;
         }
       }
