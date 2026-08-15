@@ -1,9 +1,4 @@
-import { expect, test, vi } from "vite-plus/test";
-
-// Full migrations replan with candidate canonicalization, whose first
-// design-system lookup builds Tailwind's utility index; slower CI runners
-// exceed the 5s default by a wide margin.
-vi.setConfig({ testTimeout: 60000 });
+import { expect, test } from "vite-plus/test";
 
 import { __unstable__loadDesignSystem as loadDesignSystem } from "tailwindcss";
 
@@ -69,11 +64,10 @@ test("stylesheet references calibrate reservation boundedness", () => {
   // through node:path and drive-letter normalization on Windows would
   // never match a hard-coded POSIX key.
   const app = resolve("/app");
-  const sources = (entries: [string, string][]) => new Map(entries);
   // A relative import resolving into the snapshot stays bounded.
   expect(
     spellingReservations(
-      sources([
+      new Map([
         [join(app, "main.css"), '@import "./theme.css";\n.card { color: red; }\n'],
         [join(app, "theme.css"), ".hero { color: blue; }\n"],
       ]),
@@ -82,20 +76,20 @@ test("stylesheet references calibrate reservation boundedness", () => {
   ).toEqual({ names: new Set(["card", "hero"]), prefixes: new Set(), unbounded: false });
   // The Tailwind package emits utilities, never authored selectors.
   expect(
-    spellingReservations(sources([[join(app, "globals.css"), '@import "tailwindcss";\n']]), [])
+    spellingReservations(new Map([[join(app, "globals.css"), '@import "tailwindcss";\n']]), [])
       .unbounded,
   ).toBe(false);
   // Sass built-in modules define functions without loading any sheet.
   expect(
     spellingReservations(
-      sources([["/app/main.scss", '@use "sass:math";\n.card { width: math.div(4, 2); }\n']]),
+      new Map([["/app/main.scss", '@use "sass:math";\n.card { width: math.div(4, 2); }\n']]),
       [],
     ).unbounded,
   ).toBe(false);
   // A package or otherwise unresolved import loads unseen selectors.
   expect(
     spellingReservations(
-      sources([[join(app, "main.css"), '@import "legacy-package/theme.css";\n']]),
+      new Map([[join(app, "main.css"), '@import "legacy-package/theme.css";\n']]),
       [],
     ).unbounded,
   ).toBe(true);
@@ -108,14 +102,14 @@ test("stylesheet references calibrate reservation boundedness", () => {
   ];
   expect(
     spellingReservations(
-      sources([[join(app, "globals.css"), '@import "some-kit/styles.css";\n']]),
+      new Map([[join(app, "globals.css"), '@import "some-kit/styles.css";\n']]),
       extras,
       resolved,
     ),
   ).toEqual({ names: new Set(["kit"]), prefixes: new Set(), unbounded: false });
   expect(
     spellingReservations(
-      sources([[join(app, "nested", "pkg", "legacy.css"), '@import "some-kit/styles.css";\n']]),
+      new Map([[join(app, "nested", "pkg", "legacy.css"), '@import "some-kit/styles.css";\n']]),
       extras,
       resolved,
     ).unbounded,

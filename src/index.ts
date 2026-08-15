@@ -731,9 +731,9 @@ async function planPreparedGroup(
       (graphSource) => [`${graphSource.path}.graph.css`, graphSource.source] as const,
     ),
     new Set(
-      entry.graphSources.flatMap((graphSource) =>
-        graphSource.path.includes("\0") ? [graphSource.path] : [],
-      ),
+      entry.graphSources
+        .map((graphSource) => graphSource.path)
+        .filter((path) => path.includes("\0")),
     ),
   );
   const groupFiles = new Map(
@@ -799,24 +799,12 @@ async function planPreparedGroup(
         // local file matching the raw href proves nothing about the sheet
         // the browser fetches.
         if (parsed.bases.length > 0) reservations.unbounded = true;
+        // An unresolved local link loads a stylesheet the snapshot never
+        // parsed, and a link to another package's Tailwind entry co-loads
+        // a design system this group cannot validate against; full
+        // cross-entry compile validation lands with font registration.
         for (const link of parsed.links) {
-          const href = link.href.split(/[?#]/, 1)[0];
-          if (!href || /^[a-z][a-z0-9+.-]*:|^\/\//i.test(href)) {
-            reservations.unbounded = true;
-            continue;
-          }
-          const resolved = resolve(dirname(file.path), href);
-          // An unresolved local link loads a stylesheet the snapshot never
-          // parsed, and a link to another package's Tailwind entry
-          // co-loads a design system this group cannot validate against;
-          // full cross-entry compile validation lands with font
-          // registration.
-          if (
-            !context.styleSources.has(resolved) ||
-            (workspaceEntries.has(resolved) && resolved !== entry.path)
-          ) {
-            reservations.unbounded = true;
-          }
+          if (opaqueStylesheetLink(link.href)) reservations.unbounded = true;
         }
         // These decoded values never reach Tailwind's raw-text scan: a
         // templated token's static lead reserves as a prefix, a token

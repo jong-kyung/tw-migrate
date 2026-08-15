@@ -1,10 +1,5 @@
 import assert from "node:assert/strict";
-import { test, vi } from "vite-plus/test";
-
-// Full migrations replan with candidate canonicalization, whose first
-// design-system lookup builds Tailwind's utility index; slower CI runners
-// exceed the 5s default by a wide margin.
-vi.setConfig({ testTimeout: 60000 });
+import { test } from "vite-plus/test";
 
 import { collectMediaConditions } from "../src/native.ts";
 import { resolveMediaNames } from "../src/plan/media.ts";

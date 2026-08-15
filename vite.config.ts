@@ -14,6 +14,12 @@ const pinnedPatterns = ["crates/snapshots/fixtures/**", "ecosystem-ci/fixtures/*
 const generatedPatterns = ["dist/**"];
 
 export default defineConfig({
+  test: {
+    // Full migrations replan with candidate canonicalization, whose first
+    // design-system lookup builds Tailwind's utility index; slower CI
+    // runners exceed the 5s default by a wide margin.
+    testTimeout: 60000,
+  },
   pack: {
     entry: ["src/bin.ts", "src/index.ts"],
     fixedExtension: false,

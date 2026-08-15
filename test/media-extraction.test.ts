@@ -1,16 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { expect, onTestFinished, test, vi } from "vite-plus/test";
+import { expect, onTestFinished, test } from "vite-plus/test";
 
 import { migrate } from "../src/index.ts";
 import { usedGeneratedDefinitions } from "../src/plan/media.ts";
 import type { Plan, PlanRule } from "../src/types.ts";
-// Full migrations replan with candidate canonicalization, whose first
-// design-system lookup builds Tailwind's utility index; slower CI runners
-// exceed the 5s default by a wide margin.
-vi.setConfig({ testTimeout: 60000 });
-
 const mediaCss =
   ".button { padding: 13px; }\n@media screen and (max-width: 700px) { .button { margin: 7px; } }\n";
 const consumerTsx =

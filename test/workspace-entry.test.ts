@@ -1,11 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { expect, onTestFinished, test, vi } from "vite-plus/test";
-
-// Full migrations replan with candidate canonicalization, whose first
-// design-system lookup builds Tailwind's utility index; slower CI runners
-// exceed the 5s default by a wide margin.
-vi.setConfig({ testTimeout: 60000 });
+import { expect, onTestFinished, test } from "vite-plus/test";
 
 import { migrate } from "../src/index.ts";
 

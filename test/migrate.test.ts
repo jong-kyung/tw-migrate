@@ -14,7 +14,7 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
-import { onTestFinished, test, vi } from "vite-plus/test";
+import { onTestFinished, test } from "vite-plus/test";
 
 import { __unstable__loadDesignSystem as loadDesignSystem } from "tailwindcss";
 
@@ -32,11 +32,6 @@ import {
 } from "../src/native.ts";
 import { compileSassEntry, loadProjectSass, sourceMappings } from "../src/parser/style-compiler.ts";
 import { writeChanges } from "../src/util/write.ts";
-
-// Full migrations replan with candidate canonicalization, whose first
-// design-system lookup builds Tailwind's utility index; slower CI runners
-// exceed the 5s default by a wide margin.
-vi.setConfig({ testTimeout: 60000 });
 
 const initialCss = ".button { padding: 13px; }\n";
 const initialTsx =
