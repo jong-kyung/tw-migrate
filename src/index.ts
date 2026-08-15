@@ -791,14 +791,12 @@ async function planPreparedGroup(
             reservations.unbounded = true;
           }
         }
-        // A templated class value resolves from data the scan corpus
-        // never contains, so a token's static lead reserves as a prefix
-        // and a token with no static lead can be any spelling. Static
-        // dynamic-attribute values (unquoted or entity-bearing) carry
-        // complete tokens the Tailwind scanner already reads.
+        // These decoded values never reach Tailwind's raw-text scan: a
+        // templated token's static lead reserves as a prefix, a token
+        // with no static lead can be any spelling, and a complete
+        // decoded token (an entity-bearing class) reserves its name.
         for (const value of parsed.dynamicClassValues) {
           const masked = value.replace(TEMPLATE_EXPRESSIONS, "\0");
-          if (masked === value) continue;
           // A marker outside a balanced expression leaves the templated
           // region unknowable.
           if (TEMPLATE_MARKERS.test(masked)) {
@@ -806,9 +804,10 @@ async function planPreparedGroup(
             continue;
           }
           for (const token of masked.split(/\s+/)) {
+            if (token === "") continue;
             const index = token.indexOf("\0");
-            if (index < 0) continue;
-            if (index === 0) reservations.unbounded = true;
+            if (index < 0) reservations.names.add(token);
+            else if (index === 0) reservations.unbounded = true;
             else reservations.prefixes.add(token.slice(0, index));
           }
         }

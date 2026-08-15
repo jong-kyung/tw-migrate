@@ -622,6 +622,23 @@ fn collect_stylesheet_statements(
             Statement::AtRule(at_rule) => {
                 let mut at_rule_parents: Option<Vec<String>> = None;
                 match &at_rule.prelude {
+                    // `meta.load-css` executes another stylesheet into the
+                    // output, and its target stays invisible to this scan
+                    // under any namespace alias, so the sheet's
+                    // dependencies become unknowable.
+                    Some(AtRulePrelude::SassInclude(include)) => {
+                        let text = &source[include.span.start..include.span.end];
+                        let name = text.split(['(', ' ']).next().unwrap_or("").trim();
+                        if name == "load-css" || name.ends_with(".load-css") {
+                            analysis.unverifiable = true;
+                        }
+                    }
+                    // A Less `@plugin` executes JavaScript that can
+                    // synthesize arbitrary selectors during compilation, so
+                    // the sheet's class match set cannot be bounded.
+                    _ if at_rule.name.name == "plugin" => {
+                        analysis.class_reservations_unbounded = true;
+                    }
                     // A shorthand `@custom-variant` prelude embeds a raw
                     // selector whose classes never pass through the
                     // selector walk; the block form's inner rules are
@@ -1140,6 +1157,42 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(
             &super::stylesheet_analysis_json("/p/legacy.css", "[class*=\"auto\"] { color: red; }\n")
                 .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["classReservationsUnbounded"], true);
+    }
+
+    #[test]
+    fn marks_load_css_includes_unverifiable() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/main.scss",
+                "@use \"sass:meta\" as m;\n@include m.load-css(\"pkg/theme\");\n.card { color: red; }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["unverifiable"], true);
+
+        let plain: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/main.scss",
+                "@mixin pad { padding: 1rem; }\n.card { @include pad; }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(plain["unverifiable"], false);
+    }
+
+    #[test]
+    fn marks_less_plugins_unbounded() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/main.less",
+                "@plugin \"plugin.js\";\n.card { color: red; }\n",
+            )
+            .unwrap(),
         )
         .unwrap();
         assert_eq!(parsed["classReservationsUnbounded"], true);

@@ -154,8 +154,21 @@ export function parseHtmlSource(path: string, source: string): ParsedHtml {
           (classAttribute && unquoted(classAttribute) ? classAttribute : undefined);
         if (dynamic) {
           dynamicAttributes.push({ start: dynamic.start, end: dynamic.end });
-          if (dynamic !== idAttribute && attributes.has("class")) {
-            dynamicClassValues.push(attributes.get("class") ?? "");
+          // Templated, entity-bearing, and unlocatable class values are
+          // invisible to Tailwind's raw-text scan, so their decoded forms
+          // feed spelling reservations. A clean unquoted value reads the
+          // same raw and decoded, so the scanner already covers it.
+          const decoded = attributes.get("class");
+          const entityBearing =
+            classAttribute !== undefined &&
+            dynamic === classAttribute &&
+            classAttribute.writable === false;
+          if (
+            dynamic !== idAttribute &&
+            decoded !== undefined &&
+            (TEMPLATE_MARKERS.test(decoded) || entityBearing || dynamic === unparsedClass)
+          ) {
+            dynamicClassValues.push(decoded);
           }
         } else if (classAttribute || idAttribute) {
           if (!classAttribute && idAttribute) {

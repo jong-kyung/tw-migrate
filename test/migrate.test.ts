@@ -521,6 +521,18 @@ test("globally composed module classes reserve canonical spellings", async () =>
   assert.deepEqual(report.candidates, ["mr-[auto]"]);
 });
 
+test("meta.load-css stylesheets keep group spellings arbitrary", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await mkdir(join(cwd, "node_modules", "kit"), { recursive: true });
+  await writeFile(join(cwd, "node_modules", "kit", "_theme.scss"), ".kit { color: red; }\n");
+  await writeFile(
+    join(cwd, "legacy.scss"),
+    '@use "sass:meta";\n.legacy { @include meta.load-css("./node_modules/kit/theme"); }\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
 test("authored selectors reserve canonical spellings", async () => {
   const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
   await writeFile(join(cwd, "legacy.css"), ".mr-auto { color: red; }\n");
@@ -679,6 +691,15 @@ test("prefix-constrained templated HTML classes reserve their prefixes", async (
   await writeFile(join(cwd, "index.html"), '<div class="card btn-{{ kind }}">T</div>\n');
   const report = await migrate({ cwd, styleFile: "Button.module.css" });
   assert.deepEqual(report.candidates, ["mr-auto"]);
+});
+
+test("entity-encoded HTML class tokens reserve canonical spellings", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  // Tailwind scans the raw text and never sees the decoded mr-auto, so
+  // the decoded token must reserve the spelling.
+  await writeFile(join(cwd, "index.html"), '<div class="mr&#45;auto">T</div>\n');
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
 });
 
 test("opaque page style sources keep group spellings arbitrary", async () => {
