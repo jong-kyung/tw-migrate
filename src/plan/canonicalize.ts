@@ -199,15 +199,25 @@ export function acceptedCandidateAliases(
 ): Record<string, string> {
   const aliases: Record<string, string> = {};
   if (reservations.unbounded) return aliases;
+  const prefix = system.theme.prefix;
   for (const probe of new Set(probes)) {
     const canonical = canonicalCandidate(system, probe);
+    if (canonical === null) continue;
+    // A prefixed entry emits `@utility` definitions and dereferences
+    // reservations under the prefixed candidate, while the stylesheet
+    // scan records the authored unprefixed prelude; both spellings must
+    // stay unreserved.
+    const unprefixed =
+      prefix !== null && canonical.startsWith(`${prefix}:`)
+        ? canonical.slice(prefix.length + 1)
+        : null;
     // Only a fully named utility is an idiom improvement; respelling one
     // arbitrary form as another churns byte-exact values without gaining a
     // name, while brackets inside a preserved variant chain stay welcome.
     if (
-      canonical === null ||
       utilitySegment(canonical).includes("[") ||
-      reservedSpelling(reservations, canonical)
+      reservedSpelling(reservations, canonical) ||
+      (unprefixed !== null && reservedSpelling(reservations, unprefixed))
     ) {
       continue;
     }

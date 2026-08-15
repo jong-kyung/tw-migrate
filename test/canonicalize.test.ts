@@ -187,6 +187,23 @@ test("entry utility overrides reject canonical aliases", async () => {
   expect(acceptedCandidateAliases(entry.designSystem, ["mr-[auto]"], reservations)).toEqual({});
 });
 
+test("prefixed entry utility overrides reject canonical aliases", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tw-canonicalize-"));
+  // The utility emits tw:mr-auto while the stylesheet scan records the
+  // authored mr-auto prelude; the unprefixed lookup must still reserve.
+  await writeFile(
+    join(dir, "globals.css"),
+    '@import "tailwindcss" prefix(tw);\n@utility mr-auto {\n  margin-right: 1px;\n}\n',
+  );
+  const entry = await loadTailwind(process.cwd(), join(dir, "globals.css"), new Map(), dir);
+  const reservations = spellingReservations(
+    new Map(),
+    entry.graphSources.map((graphSource) => [`${graphSource.path}.graph.css`, graphSource.source]),
+  );
+  expect(reservations.names.has("mr-auto")).toBe(true);
+  expect(acceptedCandidateAliases(entry.designSystem, ["tw:mr-[auto]"], reservations)).toEqual({});
+});
+
 test("constrained dynamic class prefixes and variant brackets calibrate acceptance", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tw-canonicalize-"));
   await writeFile(join(dir, "globals.css"), '@import "tailwindcss";\n');
