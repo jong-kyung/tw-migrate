@@ -72,6 +72,8 @@ const WARNING_CODES: &[&str] = &[
     "dynamic-html-attribute",
     "dynamic-template-class",
     "existing-tailwind-conflict",
+    "font-theme-registration-failed",
+    "font-theme-registration-required",
     "inferred-preprocessor-source",
     "media-query-definition-fallback",
     "module-utilities-conflict",

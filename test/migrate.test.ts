@@ -422,6 +422,47 @@ test("generic and reserved font stacks keep their arbitrary spellings", async ()
   assert.deepEqual(report2.candidates, ["font-open-sans-2"]);
 });
 
+test("unwritable entries warn when a font stack requires a token", async () => {
+  const cwd = await fixture({ css: ".unused { color: red; }\n" });
+  // The gitignored entry stays discoverable through the HTML link but is
+  // not writable.
+  await Promise.all([
+    writeFile(join(cwd, ".gitignore"), "globals.css\n"),
+    writeFile(join(cwd, "index.html"), '<link rel="stylesheet" href="globals.css">\n'),
+    writeFile(
+      join(cwd, "Card.vue"),
+      '<template>\n  <p class="card">A</p>\n</template>\n<style scoped>\n.card { font-family: "My Font", sans-serif; }\n</style>\n',
+    ),
+  ]);
+  execFileSync("git", ["init", "-q"], { cwd });
+  const report = await migrate({ cwd, styleFile: "Card.vue" });
+  assert.equal(report.retainedRules, 1);
+  const warning = report.warnings.find(
+    (entry) => entry.code === "font-theme-registration-required",
+  );
+  assert.ok(warning, JSON.stringify(report.warnings));
+  assert.ok(!report.candidates.includes("font-my-font"), report.candidates.join(" "));
+});
+
+test("exhausted font allocation warns as a registration failure", async () => {
+  const cwd = await fixture({ css: ".unused { color: red; }\n" });
+  // Every allocation spelling from the base through -100 is owned by an
+  // authored custom property, so allocation exhausts its bounded search.
+  const owned = ["--font-my-font: a;"];
+  for (let suffix = 2; suffix <= 100; suffix += 1) owned.push(`--font-my-font-${suffix}: a;`);
+  await Promise.all([
+    writeFile(join(cwd, "legacy.css"), `:root { ${owned.join(" ")} }\n`),
+    writeFile(
+      join(cwd, "Card.vue"),
+      '<template>\n  <p class="card">A</p>\n</template>\n<style scoped>\n.card { font-family: "My Font", sans-serif; }\n</style>\n',
+    ),
+  ]);
+  const report = await migrate({ cwd, styleFile: "Card.vue" });
+  assert.equal(report.retainedRules, 1);
+  const warning = report.warnings.find((entry) => entry.code === "font-theme-registration-failed");
+  assert.ok(warning, JSON.stringify(report.warnings));
+});
+
 test("canonicalizes literal utilities to the target design system's names", async () => {
   const cwd = await fixture({
     css: ".button { margin-right: auto; max-width: 100%; padding: 13px; }\n",

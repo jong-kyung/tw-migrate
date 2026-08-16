@@ -48,6 +48,11 @@ export interface FontRegistration {
   /// Newly generated token names (without --font-) to stack values; empty
   /// when every alias reused an existing token.
   tokens: Record<string, string>;
+  /// Probe candidates that attempted registration and produced no alias:
+  /// exhausted allocation, a provisional entry that would not load, or a
+  /// semantic rejection. Rules these retain warn as registration
+  /// failures.
+  failures: Set<string>;
 }
 
 /// A generated `@theme` block after existing entry content, following the
@@ -124,13 +129,14 @@ export interface FontRegistrationOptions {
 export async function registerFontTokens(
   options: FontRegistrationOptions,
 ): Promise<FontRegistration> {
-  const none: FontRegistration = { aliases: {}, tokens: {} };
+  const none: FontRegistration = { aliases: {}, tokens: {}, failures: new Set() };
   const { system, reservations } = options;
   if (reservations.unbounded || reservations.propertiesUnbounded) return none;
   const prefix = system.theme.prefix;
   const prefixed = (utility: string) => (prefix !== null ? `${prefix}:${utility}` : utility);
 
   const aliases: Record<string, string> = {};
+  const failures = new Set<string>();
   const seen = new Set<string>();
   /// Repeated occurrences of one normalized stack share one allocation.
   const allocatedByStack = new Map<string, string>();
@@ -165,6 +171,7 @@ export async function registerFontTokens(
       continue;
     }
     const base = fontTokenName(probe.firstFamily.name);
+    let allocated = false;
     for (const name of fontNameCandidates(base)) {
       if (claimed.has(name)) continue;
       if (reservations.properties.has(`--font-${name}`)) continue;
@@ -175,10 +182,12 @@ export async function registerFontTokens(
       claimed.add(name);
       allocatedByStack.set(stackKey, name);
       proposals.push({ probe, name });
+      allocated = true;
       break;
     }
+    if (!allocated) failures.add(probe.candidate);
   }
-  if (proposals.length === 0) return { aliases, tokens: {} };
+  if (proposals.length === 0) return { aliases, tokens: {}, failures };
 
   const tokens: Record<string, string> = {};
   for (const { probe, name } of proposals) tokens[name] = probe.value;
@@ -187,7 +196,8 @@ export async function registerFontTokens(
     fontSystem = await options.loadWith(appendFontTheme(options.entryCss, tokens));
   } catch {
     // A provisional entry that does not load registers nothing.
-    return { aliases, tokens: {} };
+    for (const { probe } of proposals) failures.add(probe.candidate);
+    return { aliases, tokens: {}, failures };
   }
 
   const corpus = [...new Set(options.corpus)];
@@ -197,17 +207,21 @@ export async function registerFontTokens(
 
   const accepted: Record<string, string> = {};
   for (const { probe, name } of proposals) {
-    if (corpusChanged) continue;
-    const canonical = canonicalCandidate(fontSystem, probe.candidate);
+    const canonical = corpusChanged ? null : canonicalCandidate(fontSystem, probe.candidate);
     const expected = aliasedCandidate(probe.candidate, `font-${name}`);
     // Semantic rejection is terminal: another suffix cannot change the
     // candidate's behavior.
-    if (canonical !== expected) continue;
-    if (!fontShapesAccept(fontSystem, probe.candidate, canonical, reservations)) continue;
-    aliases[probe.candidate] = canonical;
+    if (
+      canonical !== expected ||
+      !fontShapesAccept(fontSystem, probe.candidate, expected, reservations)
+    ) {
+      failures.add(probe.candidate);
+      continue;
+    }
+    aliases[probe.candidate] = expected;
     accepted[name] = probe.value;
   }
-  return { aliases, tokens: accepted };
+  return { aliases, tokens: accepted, failures };
 }
 
 /// Existing `--font-*` theme tokens whose parsed stack equals the probe's

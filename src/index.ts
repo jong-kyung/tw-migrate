@@ -1112,6 +1112,7 @@ async function planPreparedGroup(
   let candidateAliases: Record<string, string> | undefined;
   let canonicalized = false;
   let fontTokens: Record<string, string> = {};
+  let fontFailures = new Set<string>();
   let composeEntry: (tokens: Record<string, string>) => string = () => entry.css;
 
   // The whole group plans as one native batch, so cross-member conflicts
@@ -1337,6 +1338,7 @@ async function planPreparedGroup(
           });
           Object.assign(aliases, fonts.aliases);
           fontTokens = fonts.tokens;
+          fontFailures = fonts.failures;
         }
         if (Object.keys(aliases).length > 0) {
           candidateAliases = aliases;
@@ -1344,6 +1346,35 @@ async function planPreparedGroup(
         }
       }
       break;
+    }
+
+    // Retained rules whose font stacks needed a token explain why: an
+    // unwritable entry cannot hold one, and a failed registration could
+    // not prove one safe. A rule that converted with its arbitrary
+    // spelling needs no explanation.
+    const ruleStatus = new Map(
+      plan.rules.map((rule) => [
+        `${rule.stylesheet}:${rule.ruleId.start}-${rule.ruleId.end}`,
+        rule.status,
+      ]),
+    );
+    const warned = new Set<string>();
+    for (const probe of plan.fontFamilyProbes ?? []) {
+      if (probe.firstFamily.kind !== "name") continue;
+      const ruleKey = `${probe.stylesheet}:${probe.ruleId.start}-${probe.ruleId.end}`;
+      if (ruleStatus.get(ruleKey) !== "retained" || warned.has(ruleKey)) continue;
+      const failed = fontFailures.has(probe.candidate);
+      if (groupWritable && !failed) continue;
+      warned.add(ruleKey);
+      plan.warnings.push({
+        code: groupWritable ? "font-theme-registration-failed" : "font-theme-registration-required",
+        file: sheets[probe.stylesheet].stylesheet.cssPath,
+        start: probe.authoredSpan.start,
+        end: probe.authoredSpan.end,
+        message: groupWritable
+          ? "A safe Tailwind font theme token could not be registered, so the rule is retained."
+          : "The font family requires a Tailwind theme token, but the Tailwind entry cannot be edited, so the rule is retained.",
+      });
     }
 
     // A generated token stays in the entry only while an applied
