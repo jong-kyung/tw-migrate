@@ -118,14 +118,17 @@ pub fn parse_font_stack(value: &str) -> Option<(String, String, &'static str)> {
         {
             return None;
         }
-        // A CSS-wide keyword inside a multi-token sequence (inherit Foo)
-        // is not a valid custom identifier, and `default` is forbidden as
-        // a custom identifier everywhere; quoting either would turn an
-        // ignored invalid declaration into an active font lookup.
+        // A CSS-wide or generic keyword inside a multi-token sequence
+        // (inherit Foo, serif Foo) is not a valid custom identifier, and
+        // `default` is forbidden as a custom identifier everywhere;
+        // quoting any of them would turn an ignored invalid declaration
+        // into an active font lookup.
         if tokens.len() > 1
-            && tokens
-                .iter()
-                .any(|token| CSS_WIDE_KEYWORDS.contains(&token.to_ascii_lowercase().as_str()))
+            && tokens.iter().any(|token| {
+                let folded = token.to_ascii_lowercase();
+                CSS_WIDE_KEYWORDS.contains(&folded.as_str())
+                    || GENERIC_FAMILIES.contains(&folded.as_str())
+            })
         {
             return None;
         }
@@ -252,6 +255,8 @@ mod tests {
         // `default` is never a valid custom identifier.
         assert_eq!(parse_font_stack("inherit Foo"), None);
         assert_eq!(parse_font_stack("Foo unset, serif"), None);
+        assert_eq!(parse_font_stack("serif Foo"), None);
+        assert_eq!(parse_font_stack("Foo Monospace, serif"), None);
         assert_eq!(parse_font_stack("default"), None);
         assert_eq!(parse_font_stack("default Foo, serif"), None);
     }
