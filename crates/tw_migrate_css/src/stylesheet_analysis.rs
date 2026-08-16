@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use tw_migrate_error::{MigrationError, MigrationResult};
 
-use crate::at_rules::parse_css;
+use crate::at_rules::{is_conditional, parse_css};
 use oxc_css_parser::Syntax;
 use oxc_css_parser::ast::{
     AtRulePrelude, AttributeSelectorMatcherKind, AttributeSelectorValue, ColorProfilePrelude,
@@ -595,6 +595,33 @@ fn collect_at_rule_metadata(
     }
 }
 
+/// Collect literal `--name` mentions from raw conditional prelude text
+/// into the custom-property inventory.
+fn collect_prelude_custom_properties(text: &str, analysis: &mut StylesheetAnalysis) {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index + 1 < bytes.len() {
+        if bytes[index] == b'-' && bytes[index + 1] == b'-' {
+            let start = index;
+            let mut end = index + 2;
+            while end < bytes.len()
+                && (bytes[end].is_ascii_alphanumeric()
+                    || bytes[end] == b'_'
+                    || bytes[end] == b'-'
+                    || !bytes[end].is_ascii())
+            {
+                end += 1;
+            }
+            if end > index + 2 {
+                analysis.custom_properties.push(text[start..end].to_string());
+            }
+            index = end;
+            continue;
+        }
+        index += 1;
+    }
+}
+
 /// Collect `.name` class tokens from raw selector text. An escape makes
 /// the match set unbounded because the decoded spelling is unknowable to
 /// this scanner.
@@ -658,6 +685,20 @@ fn collect_stylesheet_statements(
         match statement {
             Statement::AtRule(at_rule) => {
                 let mut at_rule_parents: Option<Vec<String>> = None;
+                // Conditional preludes can read custom properties
+                // (@supports (--x: y), @container style(--x: y)); a newly
+                // registered token could flip such a query, so literal
+                // property mentions reserve their names.
+                if is_conditional(at_rule.name.name) {
+                    let end = at_rule
+                        .block
+                        .as_ref()
+                        .map_or(at_rule.span.end, |block| block.span.start);
+                    collect_prelude_custom_properties(
+                        &source[at_rule.span.start..end],
+                        analysis,
+                    );
+                }
                 match &at_rule.prelude {
                     // `meta.load-css` executes another stylesheet into the
                     // output, and its target stays invisible to this scan
@@ -1418,6 +1459,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed["classReservationsUnbounded"], true);
+    }
+
+    #[test]
+    fn reserves_style_query_custom_properties() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/legacy.css",
+                "@container card style(--font-brand: \"Brand\") { .x { color: red; } }\n@supports (--font-flag: 1) { .y { color: blue; } }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let properties = parsed["customProperties"].as_array().unwrap();
+        assert!(properties.contains(&serde_json::json!("--font-brand")), "{properties:?}");
+        assert!(properties.contains(&serde_json::json!("--font-flag")), "{properties:?}");
     }
 
     #[test]
