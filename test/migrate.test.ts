@@ -527,6 +527,14 @@ test("mentioned inert spellings force the next font suffix", async () => {
   });
   const report = await migrate({ cwd, styleFile: "Button.module.css" });
   assert.deepEqual(report.candidates, ["font-my-font-2"]);
+
+  // The important modifier spells the same utility.
+  const important = await fixture({
+    css: '.button { font-family: "My Font", sans-serif; }\n',
+    tsx: "import styles from './Button.module.css';\nconst planned = 'font-my-font!';\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+  });
+  const report2 = await migrate({ cwd: important, styleFile: "Button.module.css" });
+  assert.deepEqual(report2.candidates, ["font-my-font-2"]);
 });
 
 test("prefixed entries register font tokens under the prefix", async () => {

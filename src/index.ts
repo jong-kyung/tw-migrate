@@ -754,7 +754,8 @@ async function planPreparedGroup(
   for (const file of groupFiles.values()) {
     for (const token of file.source.split(/[\s"'`<>=,;{}()\\]+/)) {
       if (token === "") continue;
-      const segment = token.split(":").pop();
+      // The important modifier spells the same utility.
+      const segment = token.split(":").pop()?.replace(/!$/, "");
       if (segment) mentionedSegments.add(segment);
     }
   }
