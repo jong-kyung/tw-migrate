@@ -606,6 +606,47 @@ test("workspace groups with distinct stacks never share a token name", async () 
   assert.ok(report.candidates.includes("font-brand-2"), report.candidates.join(" "));
 });
 
+test("a reused token blocks another group generating its name", async () => {
+  const cwd = await tempDir();
+  await writeFile(join(cwd, "package.json"), '{"private":true,"workspaces":["packages/*"]}');
+  await mkdir(join(cwd, "packages", "app"), { recursive: true });
+  await mkdir(join(cwd, "packages", "lib"), { recursive: true });
+  await Promise.all([
+    writeFile(join(cwd, "packages", "app", "package.json"), '{"private":true}'),
+    // The app entry already owns --font-brand for stack A, so its group
+    // reuses it.
+    writeFile(
+      join(cwd, "packages", "app", "globals.css"),
+      '@import "tailwindcss";\n@theme {\n  --font-brand: "Brand", serif;\n}\n',
+    ),
+    writeFile(
+      join(cwd, "packages", "app", "Button.module.css"),
+      '.button { font-family: "Brand", serif; }\n',
+    ),
+    writeFile(
+      join(cwd, "packages", "app", "Button.tsx"),
+      "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+    ),
+    writeFile(join(cwd, "packages", "lib", "package.json"), '{"private":true}'),
+    writeFile(join(cwd, "packages", "lib", "globals.css"), '@import "tailwindcss";\n'),
+    // The lib stack differs, so generation must not adopt the reused
+    // global name.
+    writeFile(
+      join(cwd, "packages", "lib", "Button.module.css"),
+      '.button { font-family: "Brand", sans-serif; }\n',
+    ),
+    writeFile(
+      join(cwd, "packages", "lib", "Button.tsx"),
+      "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+    ),
+  ]);
+  const report = await migrate({ cwd, workspaces: true, write: true });
+  assert.ok(report.candidates.includes("font-brand"), report.candidates.join(" "));
+  assert.ok(report.candidates.includes("font-brand-2"), report.candidates.join(" "));
+  const libEntry = await readFile(join(cwd, "packages", "lib", "globals.css"), "utf8");
+  assert.match(libEntry, /--font-brand-2: "Brand", sans-serif;/);
+});
+
 test("canonicalizes literal utilities to the target design system's names", async () => {
   const cwd = await fixture({
     css: ".button { margin-right: auto; max-width: 100%; padding: 13px; }\n",

@@ -196,10 +196,16 @@ export async function registerFontTokens(
       if (reservedSpelling(reservations, token) || reservedSpelling(reservations, aliased)) {
         continue;
       }
+      // A reused token also joins the run-wide registry: another group
+      // must not generate the same global property for a different stack.
+      const reuseName = token.replace(/^font-/, "");
+      const owner = options.globalAllocations.get(reuseName);
+      if (owner !== undefined && owner !== probe.value) continue;
       // The probe candidate carries the entry prefix inside its chain, so
       // the segment swap keeps prefix, variants, and importance.
       if (fontShapesAccept(system, probe.candidate, aliased, reservations, token)) {
         aliases[probe.candidate] = aliased;
+        options.globalAllocations.set(reuseName, probe.value);
         reused = true;
         break;
       }
