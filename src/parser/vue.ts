@@ -754,19 +754,23 @@ export function verifyVueSource(
 function visitTemplateNode(source: string, node: TemplateNode, state: TemplateState): void {
   if (node.type === NODE_ELEMENT) {
     if (node.tagType === TAG_SLOT) state.hasSlot = true;
+    // Bindings merge left to right: an argumentless or dynamic-argument
+    // v-bind can supply a runtime style, and a later static style
+    // attribute pins the value again.
+    let styleHidden = false;
     for (const prop of node.props ?? []) {
       if (prop.type === PROP_ATTRIBUTE && prop.name === "style" && prop.value?.content) {
         state.styleAttributeValues.push(prop.value.content);
+        styleHidden = false;
       }
-      if (
-        prop.type === PROP_DIRECTIVE &&
-        prop.name === "bind" &&
-        prop.arg?.isStatic === true &&
-        prop.arg.content === "style"
-      ) {
-        state.styleAttributesUnverifiable = true;
+      if (prop.type === PROP_DIRECTIVE && prop.name === "bind") {
+        const argument = prop.arg?.isStatic === true ? prop.arg.content : undefined;
+        if (prop.arg === undefined || argument === undefined || argument === "style") {
+          styleHidden = true;
+        }
       }
     }
+    if (styleHidden) state.styleAttributesUnverifiable = true;
     // A rendered stylesheet link loads a sheet like an HTML document
     // link; a bound rel or href resolves at runtime.
     if (node.tag === "link" && node.tagType === TAG_ELEMENT) {

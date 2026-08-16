@@ -647,6 +647,21 @@ test("a reused token blocks another group generating its name", async () => {
   assert.match(libEntry, /--font-brand-2: "Brand", sans-serif;/);
 });
 
+test("Vue v-bind spreads hide style overrides from font allocation", async () => {
+  const cwd = await fixture({ css: '.button { font-family: "My Font", sans-serif; }\n' });
+  await writeFile(
+    join(cwd, "Card.vue"),
+    '<template>\n  <div v-bind="attrs">Card</div>\n</template>\n<script setup>\nconst attrs = {};\n</script>\n',
+  );
+  const report = await migrate({ cwd });
+  // Property reservations are unbounded, so no token registers and the
+  // quoteless module site keeps the arbitrary spelling.
+  assert.ok(
+    !report.candidates.some((c) => c.startsWith("font-my-font")),
+    report.candidates.join(" "),
+  );
+});
+
 test("canonicalizes literal utilities to the target design system's names", async () => {
   const cwd = await fixture({
     css: ".button { margin-right: auto; max-width: 100%; padding: 13px; }\n",
