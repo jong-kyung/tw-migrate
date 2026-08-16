@@ -289,6 +289,10 @@ interface TemplateState {
   /// override custom properties. A bound style is dynamic data.
   styleAttributeValues: string[];
   styleAttributesUnverifiable: boolean;
+  /// Custom properties template handler expressions mention or write, so
+  /// allocation cannot claim a name a handler already touches.
+  customProperties: Set<string>;
+  customPropertiesUnbounded: boolean;
   /// Static hrefs of rendered `<link rel="stylesheet">` elements.
   stylesheetLinks: string[];
   /// True when a rendered link's rel or href is dynamic.
@@ -539,6 +543,8 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     entityClassTokens: [],
     styleAttributeValues: [],
     styleAttributesUnverifiable: false,
+    customProperties: new Set(),
+    customPropertiesUnbounded: false,
     stylesheetLinks: [],
     stylesheetLinksUnverifiable: false,
     expressionPath: scriptLang === "ts" || scriptLang === "tsx" ? "Component.ts" : "Component.js",
@@ -711,8 +717,9 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     templateClassTokens: [...new Set(state.entityClassTokens)],
     templateStyleValues: state.styleAttributeValues,
     templateStylesUnverifiable: state.styleAttributesUnverifiable,
-    scriptCustomProperties,
-    scriptCustomPropertiesUnbounded,
+    scriptCustomProperties: [...scriptCustomProperties, ...state.customProperties],
+    scriptCustomPropertiesUnbounded:
+      scriptCustomPropertiesUnbounded || state.customPropertiesUnbounded,
     templateStylesheetLinks: state.stylesheetLinks,
     templateStylesheetLinksUnverifiable: state.stylesheetLinksUnverifiable,
     hasOpaqueStyleBlocks: opaqueStyleBlocks,
@@ -846,6 +853,8 @@ function visitTemplateNode(source: string, node: TemplateNode, state: TemplateSt
       if (expression?.referencesUseCssModule) state.referencesUseCssModule = true;
       for (const name of expression?.references ?? []) state.expressionReferences.add(name);
       for (const prefix of expression?.templatePrefixes ?? []) state.templatePrefixes.add(prefix);
+      for (const name of expression?.customProperties ?? []) state.customProperties.add(name);
+      if (expression?.customPropertiesUnbounded) state.customPropertiesUnbounded = true;
       if (prop.arg && !prop.arg.isStatic && prop.arg.content) {
         const argExpression = templateExpression(state.expressionPath, prop.arg.content);
         state.moduleClosureBroken ||= argExpression?.usesCssModule ?? true;
@@ -884,7 +893,12 @@ function attributeRemovalStart(source: string, node: TemplateNode, prop: Templat
   return /[\r\n]/.test(source.slice(start, attributeStart)) ? attributeStart : start;
 }
 
-function templateExpression(path: string, source: string): ExpressionAnalysis | undefined {
+type TemplateExpressionAnalysis = ExpressionAnalysis & {
+  customProperties?: string[];
+  customPropertiesUnbounded?: boolean;
+};
+
+function templateExpression(path: string, source: string): TemplateExpressionAnalysis | undefined {
   try {
     return expressionAnalysis(path, source);
   } catch {
@@ -892,7 +906,7 @@ function templateExpression(path: string, source: string): ExpressionAnalysis | 
   }
 }
 
-function templateHandler(source: string): ExpressionAnalysis | undefined {
+function templateHandler(source: string): TemplateExpressionAnalysis | undefined {
   try {
     const analysis = sourceAnalysis(
       "Component.handler.ts",
@@ -907,6 +921,8 @@ function templateHandler(source: string): ExpressionAnalysis | undefined {
       referencesUseCssModule: analysis.hasUnboundUseCssModule,
       references: analysis.unboundReferences,
       templatePrefixes: analysis.templatePrefixes,
+      customProperties: analysis.customProperties,
+      customPropertiesUnbounded: analysis.customPropertiesUnbounded,
     };
   } catch {
     return undefined;
