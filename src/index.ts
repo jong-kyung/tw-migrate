@@ -244,9 +244,16 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
     for (const [token, value] of Object.entries(preparation.tailwind.themeTokens)) {
       if (!token.startsWith("font-")) continue;
       // A value the stack parser cannot normalize still owns its global
-      // name; null marks that opaque ownership.
+      // name, and two entries owning one name with different stacks
+      // collapse to opaque ownership; null marks both.
       const parsed = fontFamilyStack(value);
-      context.fontAllocations.set(token.replace(/^font-/, ""), parsed && parsed.value);
+      const name = token.replace(/^font-/, "");
+      const stack = parsed && parsed.value;
+      const existing = context.fontAllocations.get(name);
+      context.fontAllocations.set(
+        name,
+        existing === undefined || existing === stack ? stack : null,
+      );
     }
   }
 
