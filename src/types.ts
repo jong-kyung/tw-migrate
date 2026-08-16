@@ -213,6 +213,9 @@ export interface MigrationContext extends Scope {
   entryCatalog: Map<string, string[]>;
   /** Scanned paths the utility scanner's ignore rules exclude. */
   ignoredPaths: Set<string>;
+  /** Run-wide font token allocations (name to stack), because emitted
+   * theme variables share one runtime namespace across entry groups. */
+  fontAllocations: Map<string, string>;
 }
 
 export interface RemovableLink {

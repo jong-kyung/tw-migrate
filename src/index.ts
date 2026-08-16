@@ -217,6 +217,7 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
       workspaceRoot,
       sourceFiles.map((file) => file.path),
     ),
+    fontAllocations: new Map(),
   };
   const failures: MigrationFailure[] = [];
   const plans: Plan[] = [];
@@ -1361,10 +1362,14 @@ async function planPreparedGroup(
           generate: groupWritable,
           mentionedSegments,
           referenceTokens: entry.referenceTokens,
+          globalAllocations: context.fontAllocations,
         });
         Object.assign(aliases, fonts.aliases);
         fontTokens = fonts.tokens;
         fontFailures = fonts.failures;
+        for (const [name, value] of Object.entries(fonts.tokens)) {
+          context.fontAllocations.set(name, value);
+        }
         if (Object.keys(aliases).length > 0) {
           candidateAliases = aliases;
           continue planning;

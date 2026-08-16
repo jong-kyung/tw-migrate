@@ -543,6 +543,33 @@ test("mentioned inert spellings force the next font suffix", async () => {
   assert.deepEqual(report.candidates, ["font-my-font-2"]);
 });
 
+test("workspace groups with distinct stacks never share a token name", async () => {
+  const cwd = await tempDir();
+  const pkg = async (name: string, stack: string) => {
+    await mkdir(join(cwd, "packages", name), { recursive: true });
+    await Promise.all([
+      writeFile(join(cwd, "packages", name, "package.json"), '{"private":true}'),
+      writeFile(join(cwd, "packages", name, "globals.css"), '@import "tailwindcss";\n'),
+      writeFile(
+        join(cwd, "packages", name, "Button.module.css"),
+        `.button { font-family: ${stack}; }\n`,
+      ),
+      writeFile(
+        join(cwd, "packages", name, "Button.tsx"),
+        "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+      ),
+    ]);
+  };
+  await writeFile(join(cwd, "package.json"), '{"private":true,"workspaces":["packages/*"]}');
+  await pkg("app", '"Brand", serif');
+  await pkg("lib", '"Brand", sans-serif');
+  const report = await migrate({ cwd, workspaces: true, write: true });
+  // Emitted theme variables share one runtime namespace, so the second
+  // group takes the next suffix.
+  assert.ok(report.candidates.includes("font-brand"), report.candidates.join(" "));
+  assert.ok(report.candidates.includes("font-brand-2"), report.candidates.join(" "));
+});
+
 test("canonicalizes literal utilities to the target design system's names", async () => {
   const cwd = await fixture({
     css: ".button { margin-right: auto; max-width: 100%; padding: 13px; }\n",

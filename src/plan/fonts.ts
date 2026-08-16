@@ -140,6 +140,11 @@ export interface FontRegistrationOptions {
   /// Theme tokens loaded in Tailwind reference mode, which never emit
   /// their custom properties at runtime.
   referenceTokens: Set<string>;
+  /// The run-wide allocation registry (token name to stack value):
+  /// emitted @theme variables are global at runtime, so two entry groups
+  /// deriving one name from different stacks must not share it, while
+  /// the same stack shares the spelling with per-entry definitions.
+  globalAllocations: Map<string, string>;
 }
 
 /// Font aliases for one planning group: reuse an existing matching token
@@ -209,6 +214,8 @@ export async function registerFontTokens(
       if (reservations.properties.has(`--font-${name}`)) continue;
       if (reservedSpelling(reservations, `font-${name}`)) continue;
       if (options.mentionedSegments.has(`font-${name}`)) continue;
+      const global = options.globalAllocations.get(name);
+      if (global !== undefined && global !== probe.value) continue;
       // A spelling the pre-font system already compiles is owned by an
       // existing utility, such as font-bold.
       if (system.candidatesToCss([prefixed(`font-${name}`)])[0] !== null) continue;
