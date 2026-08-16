@@ -749,6 +749,18 @@ test("inline event handlers reserve their property writes", async () => {
   assert.deepEqual(report.candidates, ["font-my-font-2"]);
 });
 
+test("Vue script property writes force the next font suffix", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "My Font", sans-serif; }\n',
+  });
+  await writeFile(
+    join(cwd, "Card.vue"),
+    '<template>\n  <div class="card">Card</div>\n</template>\n<script setup>\ndocument.documentElement.style.setProperty("--font-my-font", "serif");\n</script>\n',
+  );
+  const report = await migrate({ cwd });
+  assert.ok(report.candidates.includes("font-my-font-2"), report.candidates.join(" "));
+});
+
 test("canonicalizes literal utilities to the target design system's names", async () => {
   const cwd = await fixture({
     css: ".button { margin-right: auto; max-width: 100%; padding: 13px; }\n",

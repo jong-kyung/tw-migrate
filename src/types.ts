@@ -90,6 +90,10 @@ export interface PreparedSourceFile extends SourceFile {
   templateInjectsMarkup?: boolean;
   /** Decoded static class tokens invisible to the raw-text scan. */
   templateClassTokens?: string[];
+  /** Custom-property mentions from an SFC's script blocks. */
+  sourceCustomProperties?: string[];
+  /** True when a script property API received a computed name. */
+  sourceCustomPropertiesUnbounded?: boolean;
   /** Decoded static style attribute values in a Vue template. */
   templateStyleValues?: string[];
   /** True when a bound style attribute hides inline declarations. */

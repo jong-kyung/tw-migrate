@@ -1001,8 +1001,13 @@ async function planPreparedGroup(
       // Decoded class tokens the raw scan cannot read reserve complete
       // spellings, matching the HTML entity rule.
       for (const token of file.templateClassTokens ?? []) reservations.names.add(token);
-      // Static style attributes join property reservations; a bound
+      // Script property writes reserve names like any other source, and
+      // static style attributes join property reservations; a bound
       // style hides its declarations.
+      for (const property of file.sourceCustomProperties ?? []) {
+        reservations.properties.add(property);
+      }
+      if (file.sourceCustomPropertiesUnbounded === true) reservations.propertiesUnbounded = true;
       if (file.templateStylesUnverifiable === true) reservations.propertiesUnbounded = true;
       for (const [index, value] of (file.templateStyleValues ?? []).entries()) {
         scanInlineStyleReservations(`${file.path}.style.${index}.css`, value, reservations);

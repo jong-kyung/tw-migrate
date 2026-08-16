@@ -235,6 +235,10 @@ export type VueAnalysis =
       /// reservations; true when a bound style hides them.
       templateStyleValues: string[];
       templateStylesUnverifiable: boolean;
+      /// Custom-property mentions from script blocks, so runtime writes
+      /// reserve names like any other source file's.
+      scriptCustomProperties: string[];
+      scriptCustomPropertiesUnbounded: boolean;
       /// Static hrefs of rendered `<link rel="stylesheet">` template
       /// elements, resolved by spelling reservations like HTML links.
       templateStylesheetLinks: string[];
@@ -563,6 +567,8 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
   let setupAnalysis: SourceAnalysis | undefined;
   let scriptUsesCssModule = false;
   let scriptHasDynamicImport = false;
+  const scriptCustomProperties: string[] = [];
+  let scriptCustomPropertiesUnbounded = false;
   const scriptVueReferences: string[] = [];
   const scriptVueGlobPatterns: string[] = [];
   const scriptTemplatePrefixes: string[] = [];
@@ -584,6 +590,8 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
       );
       scriptVueGlobPatterns.push(...analysis.vueGlobPatterns);
       scriptTemplatePrefixes.push(...analysis.templatePrefixes);
+      scriptCustomProperties.push(...analysis.customProperties);
+      if (analysis.customPropertiesUnbounded) scriptCustomPropertiesUnbounded = true;
       if (analysis.vueGlobUnverifiable) scriptVueGlobUnverifiable = true;
       return analysis.staticImports;
     } catch {
@@ -703,6 +711,8 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     templateClassTokens: [...new Set(state.entityClassTokens)],
     templateStyleValues: state.styleAttributeValues,
     templateStylesUnverifiable: state.styleAttributesUnverifiable,
+    scriptCustomProperties,
+    scriptCustomPropertiesUnbounded,
     templateStylesheetLinks: state.stylesheetLinks,
     templateStylesheetLinksUnverifiable: state.stylesheetLinksUnverifiable,
     hasOpaqueStyleBlocks: opaqueStyleBlocks,

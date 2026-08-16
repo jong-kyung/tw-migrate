@@ -815,6 +815,8 @@ export async function preparePackageVue({
       templateClassTokens: analysis.templateClassTokens,
       templateStyleValues: analysis.templateStyleValues,
       templateStylesUnverifiable: analysis.templateStylesUnverifiable,
+      sourceCustomProperties: analysis.scriptCustomProperties,
+      sourceCustomPropertiesUnbounded: analysis.scriptCustomPropertiesUnbounded,
       templateStylesheetLinks: analysis.templateStylesheetLinks,
       templateStylesheetLinksUnverifiable: analysis.templateStylesheetLinksUnverifiable,
     });
