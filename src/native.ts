@@ -50,7 +50,7 @@ export interface SourceAnalysis {
 }
 
 export interface CompiledShape {
-  declarations: { property: string; important: boolean }[];
+  declarations: { property: string; important: boolean; value: string }[];
   referencedProperties: string[];
 }
 
@@ -264,7 +264,10 @@ export function compiledShape(css: string): CompiledShape {
       Array.isArray(value.declarations) &&
       value.declarations.every(
         (item) =>
-          object(item) && typeof item.property === "string" && typeof item.important === "boolean",
+          object(item) &&
+          typeof item.property === "string" &&
+          typeof item.important === "boolean" &&
+          typeof item.value === "string",
       ) &&
       Array.isArray(value.referencedProperties) &&
       value.referencedProperties.every((item) => typeof item === "string"),

@@ -97,13 +97,18 @@ function fontShapesAccept(
   if (aliasedShape.referencedProperties.some((property) => reservations.properties.has(property))) {
     return false;
   }
-  if (
-    backingToken !== undefined &&
-    !aliasedShape.referencedProperties.some(
-      (property) => property === `--${backingToken}` || property.endsWith(`-${backingToken}`),
-    )
-  ) {
-    return false;
+  if (backingToken !== undefined) {
+    // The compiled utility must be a bare dereference of the matched
+    // token: a custom utility composing the token with other families,
+    // or substituting an unrelated value, keeps the arbitrary spelling.
+    const bare = aliasedShape.declarations.some(
+      (declaration) =>
+        declaration.property === "font-family" &&
+        /^var\(--[\w-]+\)$/.test(declaration.value) &&
+        (declaration.value === `var(--${backingToken})` ||
+          declaration.value.endsWith(`-${backingToken})`)),
+    );
+    if (!bare) return false;
   }
   return (
     probeShape.declarations.length === aliasedShape.declarations.length &&

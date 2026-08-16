@@ -565,6 +565,18 @@ test("reuse rejects a custom utility not backed by the matched token", async () 
   );
   const report = await migrate({ cwd, styleFile: "Button.module.css" });
   assert.ok(!report.candidates.includes("font-brand"), report.candidates.join(" "));
+
+  // A utility composing the token with another family is not a bare
+  // dereference either.
+  const composed = await fixture({
+    css: '.button { font-family: "My Font", sans-serif; }\n',
+  });
+  await writeFile(
+    join(composed, "globals.css"),
+    '@import "tailwindcss";\n@theme {\n  --font-brand: "My Font", sans-serif;\n}\n@utility font-brand {\n  font-family: "Other", var(--font-brand);\n}\n',
+  );
+  const report2 = await migrate({ cwd: composed, styleFile: "Button.module.css" });
+  assert.ok(!report2.candidates.includes("font-brand"), report2.candidates.join(" "));
 });
 
 test("workspace groups with distinct stacks never share a token name", async () => {

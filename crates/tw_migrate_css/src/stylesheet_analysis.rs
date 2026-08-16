@@ -1040,6 +1040,10 @@ struct CompiledShape {
 struct CompiledDeclaration {
     property: String,
     important: bool,
+    /// The whitespace-collapsed value text. Alias shape comparison
+    /// ignores it (equivalent spellings such as 0 and 0px differ), while
+    /// font reuse requires a bare token dereference.
+    value: String,
 }
 
 fn collect_value_references(values: &[ComponentValue<'_>], references: &mut Vec<String>) {
@@ -1070,6 +1074,7 @@ fn collect_value_references(values: &[ComponentValue<'_>], references: &mut Vec<
 
 fn collect_shape_statements(
     statements: &[Statement<'_>],
+    source: &str,
     shape: &mut CompiledShape,
 ) -> Result<(), String> {
     for statement in statements {
@@ -1078,18 +1083,29 @@ fn collect_shape_statements(
                 let InterpolableIdent::Literal(name) = &declaration.name else {
                     return Err("Nonliteral compiled property".to_string());
                 };
+                let value = source[declaration.span.start..declaration.span.end]
+                    .split_once(':')
+                    .map(|(_, value)| value)
+                    .unwrap_or("")
+                    .trim()
+                    .trim_end_matches("!important")
+                    .trim_end()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 shape.declarations.push(CompiledDeclaration {
                     property: name.name.to_string(),
                     important: declaration.important.is_some(),
+                    value,
                 });
                 collect_value_references(&declaration.value, &mut shape.referenced_properties);
             }
             Statement::QualifiedRule(rule) => {
-                collect_shape_statements(&rule.block.statements, shape)?;
+                collect_shape_statements(&rule.block.statements, source, shape)?;
             }
             Statement::AtRule(at_rule) => {
                 if let Some(block) = &at_rule.block {
-                    collect_shape_statements(&block.statements, shape)?;
+                    collect_shape_statements(&block.statements, source, shape)?;
                 }
             }
             _ => {}
@@ -1114,7 +1130,7 @@ pub fn compiled_shape_json(css: &str) -> MigrationResult<String> {
         declarations: Vec::new(),
         referenced_properties: Vec::new(),
     };
-    collect_shape_statements(&parsed.statements, &mut shape)
+    collect_shape_statements(&parsed.statements, css, &mut shape)
         .map_err(|message| MigrationError::EditedStylesheetParse { message })?;
     shape.declarations.sort();
     shape.referenced_properties.sort();
@@ -1571,7 +1587,11 @@ mod tests {
         assert_eq!(
             shape,
             serde_json::json!({
-                "declarations": [{ "property": "margin-right", "important": false }],
+                "declarations": [{
+                    "property": "margin-right",
+                    "important": false,
+                    "value": "auto",
+                }],
                 "referencedProperties": [],
             })
         );
@@ -1599,8 +1619,8 @@ mod tests {
         assert_eq!(
             important["declarations"],
             serde_json::json!([
-                { "property": "font-size", "important": true },
-                { "property": "line-height", "important": false },
+                { "property": "font-size", "important": true, "value": "1rem" },
+                { "property": "line-height", "important": false, "value": "1.5" },
             ])
         );
     }
