@@ -80,9 +80,6 @@ export function spellingReservations(
   /// not read as opaque. Keys carry the importer because the same
   /// specifier text can resolve differently from another location.
   resolvedImports: Set<string> = new Set(),
-  /// Real paths of entry-graph sheets, whose custom-property declarations
-  /// are the theme's own definitions rather than authored overrides.
-  entryPaths: Set<string> = new Set(),
 ): SpellingReservations {
   const reservations: SpellingReservations = {
     names: new Set(),
@@ -92,9 +89,7 @@ export function spellingReservations(
     propertiesUnbounded: false,
   };
   for (const [path, source] of styleSources) {
-    scanStylesheetReservations(path, source, styleSources, reservations, resolvedImports, {
-      collectProperties: !entryPaths.has(path),
-    });
+    scanStylesheetReservations(path, source, styleSources, reservations, resolvedImports);
   }
   for (const [path, source] of resolvedExtras) {
     try {
@@ -124,16 +119,16 @@ export function scanStylesheetReservations(
   styleSources: Map<string, string>,
   reservations: SpellingReservations,
   resolvedImports: Set<string> = new Set(),
-  { collectProperties = true } = {},
 ): void {
   try {
     const analysis = stylesheetAnalysis(path, source);
     for (const name of analysis.classNames) reservations.names.add(name);
     if (analysis.classReservationsUnbounded) reservations.unbounded = true;
-    if (collectProperties) {
-      for (const property of analysis.customProperties) reservations.properties.add(property);
-      if (analysis.customPropertiesUnbounded) reservations.propertiesUnbounded = true;
-    }
+    // Theme-block declarations never reach the inventory, so entry-graph
+    // sheets need no exemption while their ordinary-rule overrides and
+    // reads still reserve.
+    for (const property of analysis.customProperties) reservations.properties.add(property);
+    if (analysis.customPropertiesUnbounded) reservations.propertiesUnbounded = true;
     // An interpolated reference can load a sheet this scan never sees.
     if (analysis.unverifiable) reservations.unbounded = true;
     for (const reference of analysis.references) {

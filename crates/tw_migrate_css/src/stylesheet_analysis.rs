@@ -650,6 +650,7 @@ fn collect_stylesheet_statements(
     statements: &[Statement<'_>],
     source: &str,
     parent_classes: &[String],
+    in_theme: bool,
     analysis: &mut StylesheetAnalysis,
 ) -> bool {
     let mut has_scope_escape = false;
@@ -777,6 +778,9 @@ fn collect_stylesheet_statements(
                         &block.statements,
                         source,
                         at_rule_parents.as_deref().unwrap_or(parent_classes),
+                        // Theme-block declarations are the theme's own
+                        // definitions, never authored overrides.
+                        in_theme || at_rule.name.name == "theme",
                         analysis,
                     );
                 }
@@ -868,6 +872,7 @@ fn collect_stylesheet_statements(
                     &rule.block.statements,
                     source,
                     &selector_class_names(&rule.selector, parent_classes),
+                    in_theme,
                     analysis,
                 );
                 if nested {
@@ -890,7 +895,7 @@ fn collect_stylesheet_statements(
                     analysis.custom_properties_unbounded = true;
                     continue;
                 };
-                if name.name.starts_with("--") {
+                if name.name.starts_with("--") && !in_theme {
                     analysis.custom_properties.push(name.name.to_string());
                 }
                 collect_value_references(&declaration.value, &mut analysis.custom_properties);
@@ -1007,7 +1012,7 @@ pub fn stylesheet_analysis_json(path: &str, source: &str) -> MigrationResult<Str
         custom_properties_unbounded: false,
         class_reservations_unbounded: false,
     };
-    collect_stylesheet_statements(&parsed.statements, source, &[], &mut analysis);
+    collect_stylesheet_statements(&parsed.statements, source, &[], false, &mut analysis);
     collect_at_rule_metadata(&parsed.statements, source, syntax, &mut analysis);
     if syntax == Syntax::Css {
         collect_loading_imports(&parsed.statements, source, &mut analysis);

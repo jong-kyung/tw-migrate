@@ -740,11 +740,6 @@ async function planPreparedGroup(
         .map((graphSource) => graphSource.path)
         .filter((path) => path.includes("\0")),
     ),
-    new Set(
-      entry.graphSources
-        .map((graphSource) => graphSource.path)
-        .filter((path) => !path.includes("\0")),
-    ),
   );
   const groupFiles = new Map(
     active.flatMap((member) => member.files.map((file) => [file.path, file] as const)),
