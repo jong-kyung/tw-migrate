@@ -690,6 +690,15 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
     }
 
     fn visit_assignment_expression(&mut self, assignment: &oxc_ast::ast::AssignmentExpression<'a>) {
+        // A dynamic cssText assignment replaces the whole inline style,
+        // so it can set any custom property; a literal value's mentions
+        // are collected by the string-literal visitor.
+        if let AssignmentTarget::StaticMemberExpression(member) = &assignment.left
+            && member.property.name == "cssText"
+            && !matches!(assignment.right, Expression::StringLiteral(_))
+        {
+            self.analysis.custom_properties_unbounded = true;
+        }
         // Assigning a namespace after declaration carries its identity to
         // the target, matching the declarator alias path.
         if let AssignmentTarget::AssignmentTargetIdentifier(target) = &assignment.left
@@ -1207,6 +1216,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(repinned["customPropertiesUnbounded"], false);
+    }
+
+    #[test]
+    fn treats_dynamic_css_text_assignments_as_unbounded() {
+        let dynamic: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Theme.ts",
+                "document.documentElement.style.cssText = themeCss;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(dynamic["customPropertiesUnbounded"], true);
+
+        let literal: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Theme.ts",
+                "document.documentElement.style.cssText = \"--font-brand: serif\";",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(literal["customPropertiesUnbounded"], false);
+        assert_eq!(literal["customProperties"], serde_json::json!(["--font-brand"]));
     }
 
     #[test]
