@@ -577,6 +577,15 @@ test("revert-layer font declarations stay retained", async () => {
   assert.deepEqual(report.candidates, []);
 });
 
+test("prefixed entries register font tokens under the prefix", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "Open Sans", sans-serif; }\n',
+  });
+  await writeFile(join(cwd, "globals.css"), '@import "tailwindcss" prefix(tw);\n');
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["tw:font-open-sans"]);
+});
+
 test("canonicalizes literal utilities to the target design system's names", async () => {
   const cwd = await fixture({
     css: ".button { margin-right: auto; max-width: 100%; padding: 13px; }\n",

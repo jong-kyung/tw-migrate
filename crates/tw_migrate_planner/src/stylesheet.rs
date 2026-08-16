@@ -107,6 +107,10 @@ fn prefix_rule_candidates(rules: &mut [RulePlan], prefix: &str) {
             .into_iter()
             .map(|(candidate, properties)| (format!("{prefix}:{candidate}"), properties))
             .collect();
+        // Probe candidates mirror the candidate spellings exactly.
+        for probe in &mut rule.font_family_probes {
+            probe.candidate = format!("{prefix}:{}", probe.candidate);
+        }
     }
 }
 
