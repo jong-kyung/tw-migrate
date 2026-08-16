@@ -570,6 +570,13 @@ test("workspace groups with distinct stacks never share a token name", async () 
   assert.ok(report.candidates.includes("font-brand-2"), report.candidates.join(" "));
 });
 
+test("revert-layer font declarations stay retained", async () => {
+  const cwd = await fixture({ css: ".button { font-family: revert-layer; }\n" });
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.equal(report.retainedRules, 1);
+  assert.deepEqual(report.candidates, []);
+});
+
 test("canonicalizes literal utilities to the target design system's names", async () => {
   const cwd = await fixture({
     css: ".button { margin-right: auto; max-width: 100%; padding: 13px; }\n",
