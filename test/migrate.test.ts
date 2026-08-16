@@ -534,6 +534,15 @@ test("reuse rejects a custom utility not backed by the matched token", async () 
   assert.ok(!report.candidates.includes("font-brand"), report.candidates.join(" "));
 });
 
+test("mentioned inert spellings force the next font suffix", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "My Font", sans-serif; }\n',
+    tsx: "import styles from './Button.module.css';\nconst planned = 'hover:font-my-font';\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+  });
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["font-my-font-2"]);
+});
+
 test("canonicalizes literal utilities to the target design system's names", async () => {
   const cwd = await fixture({
     css: ".button { margin-right: auto; max-width: 100%; padding: 13px; }\n",

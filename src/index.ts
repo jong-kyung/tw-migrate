@@ -745,6 +745,18 @@ async function planPreparedGroup(
   const groupFiles = new Map(
     active.flatMap((member) => member.files.map((file) => [file.path, file] as const)),
   );
+  // Inert class-like tokens already present in group sources sit in
+  // Tailwind's scan corpus; a generated font token must never adopt one,
+  // or registration would newly emit CSS for an existing class. Utility
+  // segments cover variant-wrapped spellings such as hover:font-brand.
+  const mentionedSegments = new Set<string>();
+  for (const file of groupFiles.values()) {
+    for (const token of file.source.split(/[\s"'`<>=,;{}()\\]+/)) {
+      if (token === "") continue;
+      const segment = token.split(":").pop();
+      if (segment) mentionedSegments.add(segment);
+    }
+  }
   const fileRoots = new Map(
     active.flatMap((member) =>
       member.files.map((file) => [file.path, member.packageRoot] as const),
@@ -1347,6 +1359,7 @@ async function planPreparedGroup(
           reservations,
           existingAliases: aliases,
           generate: groupWritable,
+          mentionedSegments,
         });
         Object.assign(aliases, fonts.aliases);
         fontTokens = fonts.tokens;

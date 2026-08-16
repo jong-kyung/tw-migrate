@@ -134,6 +134,9 @@ export interface FontRegistrationOptions {
   /// False for an unwritable entry: existing tokens may still be reused
   /// because reuse needs no entry edit, but no new token registers.
   generate: boolean;
+  /// Utility segments of class-like tokens already present in group
+  /// sources; allocation never adopts one.
+  mentionedSegments: Set<string>;
 }
 
 /// Font aliases for one planning group: reuse an existing matching token
@@ -198,6 +201,7 @@ export async function registerFontTokens(
       if (claimed.has(name)) continue;
       if (reservations.properties.has(`--font-${name}`)) continue;
       if (reservedSpelling(reservations, `font-${name}`)) continue;
+      if (options.mentionedSegments.has(`font-${name}`)) continue;
       // A spelling the pre-font system already compiles is owned by an
       // existing utility, such as font-bold.
       if (system.candidatesToCss([prefixed(`font-${name}`)])[0] !== null) continue;
