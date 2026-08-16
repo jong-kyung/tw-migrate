@@ -37,6 +37,8 @@ import {
   scanStylesheetReservations,
   spellingReservations,
 } from "./plan/canonicalize.ts";
+import { appendFontTheme, registerFontTokens } from "./plan/fonts.ts";
+import { utilitySegment } from "./plan/canonicalize.ts";
 import { importsStylesheet, proveSharedEntry, tailwindEntryCatalog } from "./plan/entry.ts";
 import type { SharedEntryProofs } from "./plan/entry.ts";
 import {
@@ -738,6 +740,11 @@ async function planPreparedGroup(
         .map((graphSource) => graphSource.path)
         .filter((path) => path.includes("\0")),
     ),
+    new Set(
+      entry.graphSources
+        .map((graphSource) => graphSource.path)
+        .filter((path) => !path.includes("\0")),
+    ),
   );
   const groupFiles = new Map(
     active.flatMap((member) => member.files.map((file) => [file.path, file] as const)),
@@ -848,6 +855,8 @@ async function planPreparedGroup(
           try {
             const script = sourceAnalysis(`${file.path}.inline.js`, parsed.scriptText);
             for (const prefix of script.templatePrefixes) reservations.prefixes.add(prefix);
+            for (const property of script.customProperties) reservations.properties.add(property);
+            if (script.customPropertiesUnbounded) reservations.propertiesUnbounded = true;
             opaqueStylesheetImports(script.imports);
           } catch {
             reservations.unbounded = true;
@@ -936,6 +945,8 @@ async function planPreparedGroup(
       for (const prefix of analysis.templatePrefixes) {
         reservations.prefixes.add(prefix);
       }
+      for (const property of analysis.customProperties) reservations.properties.add(property);
+      if (analysis.customPropertiesUnbounded) reservations.propertiesUnbounded = true;
       opaqueStylesheetImports(analysis.imports);
       // A rendered <style> element carries selectors this analysis never
       // reads, matching the HTML hasStyle rule.
@@ -1100,6 +1111,8 @@ async function planPreparedGroup(
   const blocked: BlockedRules = new Map();
   let candidateAliases: Record<string, string> | undefined;
   let canonicalized = false;
+  let fontTokens: Record<string, string> = {};
+  let composeEntry: (tokens: Record<string, string>) => string = () => entry.css;
 
   // The whole group plans as one native batch, so cross-member conflicts
   // on shared consumers go through the same analysis as conflicts inside
@@ -1242,7 +1255,15 @@ async function planPreparedGroup(
 
       const currentExtraction = names !== undefined ? { names, generated } : undefined;
       const used = currentExtraction ? usedGeneratedDefinitions(currentExtraction, plan) : [];
-      augmented = currentExtraction ? appendMediaDefinitions(composed, used) : composed;
+      // Entry additions follow the RFC order: planner-owned moved
+      // definitions, the generated font theme block, generated media
+      // custom variants. The composer is kept so post-loop token pruning
+      // can rebuild the entry without another planning pass.
+      composeEntry = (tokens) => {
+        const withFonts = appendFontTheme(composed, tokens);
+        return currentExtraction ? appendMediaDefinitions(withFonts, used) : withFonts;
+      };
+      augmented = composeEntry(fontTokens);
       let system: DesignSystem;
       try {
         system = augmented === entry.css ? entry.designSystem : await entry.loadWith(augmented);
@@ -1300,12 +1321,45 @@ async function planPreparedGroup(
           plan.candidateProbes ?? [],
           reservations,
         );
+        // Font registration shares the single bounded replan; an
+        // unwritable entry cannot hold new tokens, and its retention
+        // warnings are planner-side outcomes.
+        if (groupWritable) {
+          const fonts = await registerFontTokens({
+            system: replanSystem,
+            entryCss: augmented,
+            loadWith: entry.loadWith,
+            themeTokens: entry.themeTokens,
+            probes: plan.fontFamilyProbes ?? [],
+            corpus: [...new Set([...plan.candidates, ...(plan.candidateProbes ?? [])])],
+            reservations,
+            existingAliases: aliases,
+          });
+          Object.assign(aliases, fonts.aliases);
+          fontTokens = fonts.tokens;
+        }
         if (Object.keys(aliases).length > 0) {
           candidateAliases = aliases;
           continue planning;
         }
       }
       break;
+    }
+
+    // A generated token stays in the entry only while an applied
+    // candidate references its utility; removing an unused token cannot
+    // affect an applied candidate, so no further planning pass runs.
+    if (Object.keys(fontTokens).length > 0) {
+      const applied = new Set(
+        plan.candidates.map((candidate) => utilitySegment(candidate).replace(/!$/, "")),
+      );
+      const pruned = Object.fromEntries(
+        Object.entries(fontTokens).filter(([name]) => applied.has(`font-${name}`)),
+      );
+      if (Object.keys(pruned).length !== Object.keys(fontTokens).length) {
+        fontTokens = pruned;
+        augmented = composeEntry(pruned);
+      }
     }
 
     for (const [index, rules] of blocked) {

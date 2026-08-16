@@ -53,6 +53,15 @@ export interface SpellingReservations {
   /// unparseable sheet, an interpolated class, or an attribute matcher
   /// beyond word equality); every alias is then rejected.
   unbounded: boolean;
+  /// Custom property names (with `--`) the snapshot outside the entry
+  /// graph declares, registers, reads, or mentions; a generated font
+  /// token must never adopt one, and a theme-backed alias must not
+  /// dereference one.
+  properties: Set<string>;
+  /// True when a property name cannot be bounded (an interpolated
+  /// declaration name or a computed style-property API call); font
+  /// registration is then skipped entirely.
+  propertiesUnbounded: boolean;
 }
 
 /// Authored-selector reservations over the complete stylesheet snapshot,
@@ -71,14 +80,21 @@ export function spellingReservations(
   /// not read as opaque. Keys carry the importer because the same
   /// specifier text can resolve differently from another location.
   resolvedImports: Set<string> = new Set(),
+  /// Real paths of entry-graph sheets, whose custom-property declarations
+  /// are the theme's own definitions rather than authored overrides.
+  entryPaths: Set<string> = new Set(),
 ): SpellingReservations {
   const reservations: SpellingReservations = {
     names: new Set(),
     prefixes: new Set(),
     unbounded: false,
+    properties: new Set(),
+    propertiesUnbounded: false,
   };
   for (const [path, source] of styleSources) {
-    scanStylesheetReservations(path, source, styleSources, reservations, resolvedImports);
+    scanStylesheetReservations(path, source, styleSources, reservations, resolvedImports, {
+      collectProperties: !entryPaths.has(path),
+    });
   }
   for (const [path, source] of resolvedExtras) {
     try {
@@ -108,11 +124,16 @@ export function scanStylesheetReservations(
   styleSources: Map<string, string>,
   reservations: SpellingReservations,
   resolvedImports: Set<string> = new Set(),
+  { collectProperties = true } = {},
 ): void {
   try {
     const analysis = stylesheetAnalysis(path, source);
     for (const name of analysis.classNames) reservations.names.add(name);
     if (analysis.classReservationsUnbounded) reservations.unbounded = true;
+    if (collectProperties) {
+      for (const property of analysis.customProperties) reservations.properties.add(property);
+      if (analysis.customPropertiesUnbounded) reservations.propertiesUnbounded = true;
+    }
     // An interpolated reference can load a sheet this scan never sees.
     if (analysis.unverifiable) reservations.unbounded = true;
     for (const reference of analysis.references) {
@@ -181,7 +202,7 @@ export function reservedSpelling(reservations: SpellingReservations, spelling: s
 /// The utility segment of one complete candidate: everything after the
 /// last top-level variant separator, bracket-aware so arbitrary variants
 /// keep their inner colons.
-function utilitySegment(candidate: string): string {
+export function utilitySegment(candidate: string): string {
   let depth = 0;
   let start = 0;
   for (let index = 0; index < candidate.length; index += 1) {

@@ -369,6 +369,59 @@ test("anchors Sass compile-failure warnings to authored offsets", async () => {
   assert.ok(warning.start >= start && warning.end <= end && warning.end > warning.start);
 });
 
+test("registers font theme tokens and emits the generated utility", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "Open Sans", sans-serif; }\n',
+  });
+  const report = await migrate({ cwd, styleFile: "Button.module.css", write: true });
+  assert.deepEqual(report.candidates, ["font-open-sans"]);
+  assert.match(await readFile(join(cwd, "Button.tsx"), "utf8"), /font-open-sans/);
+  const entry = await readFile(join(cwd, "globals.css"), "utf8");
+  assert.match(entry, /@theme \{\n  --font-open-sans: "Open Sans", sans-serif;\n\}/);
+});
+
+test("reuses an existing font token with a matching stack", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "Open Sans", sans-serif; }\n',
+  });
+  await writeFile(
+    join(cwd, "globals.css"),
+    '@import "tailwindcss";\n@theme {\n  --font-brand: "Open Sans", sans-serif;\n}\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css", write: true });
+  assert.deepEqual(report.candidates, ["font-brand"]);
+  const entry = await readFile(join(cwd, "globals.css"), "utf8");
+  assert.ok(!entry.includes("--font-open-sans"), entry);
+});
+
+test("suffixes a font token owned by an existing utility", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "Bold", serif; }\n',
+  });
+  const report = await migrate({ cwd, styleFile: "Button.module.css", write: true });
+  // font-bold is the design system's font-weight utility.
+  assert.deepEqual(report.candidates, ["font-bold-2"]);
+  const entry = await readFile(join(cwd, "globals.css"), "utf8");
+  assert.match(entry, /--font-bold-2: "Bold", serif;/);
+});
+
+test("generic and reserved font stacks keep their arbitrary spellings", async () => {
+  const cwd = await fixture({
+    css: ".button { font-family: monospace; }\n",
+  });
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["[font-family:monospace]"]);
+
+  const reserved = await fixture({
+    css: '.button { font-family: "Open Sans", sans-serif; }\n',
+    tsx: "import styles from './Button.module.css';\nconst token = \"--font-open-sans\";\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+  });
+  const report2 = await migrate({ cwd: reserved, styleFile: "Button.module.css" });
+  // The mentioned property name reserves the base spelling, so the token
+  // allocates the next suffix instead.
+  assert.deepEqual(report2.candidates, ["font-open-sans-2"]);
+});
+
 test("canonicalizes literal utilities to the target design system's names", async () => {
   const cwd = await fixture({
     css: ".button { margin-right: auto; max-width: 100%; padding: 13px; }\n",
@@ -809,11 +862,17 @@ test("round-trips quoted values and urls through arbitrary candidates", async ()
   const cwd = await fixture({
     css: '.button { background-image: url("a_b.png"); font-family: "My Font", sans-serif; content: "a_b"; width: calc(min(100%, 50vw)); }\n',
   });
-  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  const report = await migrate({ cwd, styleFile: "Button.module.css", write: true });
+  // The quoted font stack registers a theme token instead of keeping its
+  // arbitrary candidate; the other quoted values round-trip unchanged.
+  assert.ok(report.candidates.includes("font-my-font"), report.candidates.join(" "));
+  const entry = await readFile(join(cwd, "globals.css"), "utf8");
+  assert.match(entry, /--font-my-font: "My Font", sans-serif;/);
   const designSystem = await loadDesignSystem("@tailwind utilities;");
-  const css = designSystem.candidatesToCss(report.candidates).join("");
+  const css = designSystem
+    .candidatesToCss(report.candidates.filter((candidate) => candidate !== "font-my-font"))
+    .join("");
   assert.match(css, /url\("a_b\.png"\)/);
-  assert.match(css, /"My Font", sans-serif/);
   assert.match(css, /content: "a_b"/);
   assert.match(css, /calc\(min\(100%, 50vw\)\)/);
 });
@@ -1066,15 +1125,18 @@ test("a gitignored SFC's unscoped block shadows scoped deletion", async () => {
   assert.equal(report.convertedRules, 0);
 });
 
-test("withholds quote-bearing candidates inside Vue class attributes", async () => {
+test("converts quoted font families in Vue class attributes through the named alias", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { font-family: "My Font", sans-serif; }\n</style>\n';
   await writeFile(join(cwd, "Card.vue"), vue);
-  const report = await migrate({ cwd, styleFile: "Card.vue" });
-  assert.deepEqual(report.changedFiles, []);
-  assert.equal(report.retainedRules, 1);
-  assert.ok(report.warnings.some((entry) => entry.code === "unresolved-selector-target"));
+  const report = await migrate({ cwd, styleFile: "Card.vue", write: true });
+  // The arbitrary candidate carries a quote the class attribute cannot
+  // hold; the registered token's named alias removes it, so the rewrite
+  // that was previously withheld now fits.
+  assert.deepEqual(report.changedFiles, ["Card.vue", "globals.css"]);
+  assert.deepEqual(report.candidates, ["font-my-font"]);
+  assert.match(await readFile(join(cwd, "Card.vue"), "utf8"), /class="card font-my-font"/);
 });
 
 test("reports Vue-only warnings without requiring a Tailwind entry", async () => {

@@ -73,7 +73,13 @@ test("stylesheet references calibrate reservation boundedness", () => {
       ]),
       [],
     ),
-  ).toEqual({ names: new Set(["card", "hero"]), prefixes: new Set(), unbounded: false });
+  ).toEqual({
+    names: new Set(["card", "hero"]),
+    prefixes: new Set(),
+    unbounded: false,
+    properties: new Set(),
+    propertiesUnbounded: false,
+  });
   // The Tailwind package emits utilities, never authored selectors.
   expect(
     spellingReservations(new Map([[join(app, "globals.css"), '@import "tailwindcss";\n']]), [])
@@ -106,7 +112,13 @@ test("stylesheet references calibrate reservation boundedness", () => {
       extras,
       resolved,
     ),
-  ).toEqual({ names: new Set(["kit"]), prefixes: new Set(), unbounded: false });
+  ).toEqual({
+    names: new Set(["kit"]),
+    prefixes: new Set(),
+    unbounded: false,
+    properties: new Set(),
+    propertiesUnbounded: false,
+  });
   expect(
     spellingReservations(
       new Map([[join(app, "nested", "pkg", "legacy.css"), '@import "some-kit/styles.css";\n']]),
@@ -141,7 +153,13 @@ test("alias acceptance rejects theme-backed and reserved spellings", async () =>
   // The repository itself is the target project: Tailwind v4 resolves from
   // its node_modules exactly like a migrated project's own installation.
   const entry = await loadTailwind(process.cwd(), join(dir, "globals.css"), new Map(), dir);
-  const open = { names: new Set<string>(), prefixes: new Set<string>(), unbounded: false };
+  const open = {
+    names: new Set<string>(),
+    prefixes: new Set<string>(),
+    unbounded: false,
+    properties: new Set<string>(),
+    propertiesUnbounded: false,
+  };
 
   // p-4 dereferences --spacing, which literal-only runtime stability
   // rejects until the reservation scan lands with font registration.
@@ -157,6 +175,8 @@ test("alias acceptance rejects theme-backed and reserved spellings", async () =>
       names: new Set(["mr-auto"]),
       prefixes: new Set<string>(),
       unbounded: false,
+      properties: new Set<string>(),
+      propertiesUnbounded: false,
     }),
   ).toEqual({});
   // An unbounded reservation rejects every alias.
@@ -165,6 +185,8 @@ test("alias acceptance rejects theme-backed and reserved spellings", async () =>
       names: new Set<string>(),
       prefixes: new Set<string>(),
       unbounded: true,
+      properties: new Set<string>(),
+      propertiesUnbounded: false,
     }),
   ).toEqual({});
 });
@@ -220,6 +242,8 @@ test("constrained dynamic class prefixes and variant brackets calibrate acceptan
       names: new Set<string>(),
       prefixes: new Set(["mr-"]),
       unbounded: false,
+      properties: new Set<string>(),
+      propertiesUnbounded: false,
     }),
   ).toEqual({});
   // Brackets inside a preserved arbitrary variant do not reject the named
@@ -229,6 +253,8 @@ test("constrained dynamic class prefixes and variant brackets calibrate acceptan
       names: new Set<string>(),
       prefixes: new Set<string>(),
       unbounded: false,
+      properties: new Set<string>(),
+      propertiesUnbounded: false,
     }),
   ).toEqual({ "[@media_(min-width:48rem)]:mr-[auto]": "[@media_(min-width:48rem)]:mr-auto" });
 });

@@ -6,19 +6,21 @@ case: html_quoted_value_retained
 
 --- step: preview ---
 status: 0
-stdout: "--- a/Button.module.css\n+++ b/Button.module.css\n@@ -1,7 +1,5 @@\n-.card {\n-  font-family: \"My Font\", sans-serif;\n-}\n-.btn {\n-  padding: 13px;\n-}\n \n+.card {\n+  font-family: \"My Font\", sans-serif;\n+}\n+\n \n--- a/index.html\n+++ b/index.html\n@@ -1,4 +1,4 @@\n-<link rel=\"stylesheet\" href=\"./Button.module.css\">\n-<div class=\"card\">Quoted</div>\n-<div class=\"btn\">Plain</div>\n \n+<link rel=\"stylesheet\" href=\"./Button.module.css\">\n+<div class=\"card\">Quoted</div>\n+<div class=\"btn p-[13px]\">Plain</div>\n \nPreviewed 2 file(s); 1 rule(s) converted, 1 retained.\n"
-stderr: "warning[unresolved-selector-target] Button.module.css:1:1-3:2 No exclusively supported className references were found.\n"
+stdout: "--- a/Button.module.css\n+++ b/Button.module.css\n@@ -1,7 +1,1 @@\n-.card {\n-  font-family: \"My Font\", sans-serif;\n-}\n-.btn {\n-  padding: 13px;\n-}\n \n \n--- a/globals.css\n+++ b/globals.css\n@@ -1,2 +1,6 @@\n-@import \"tailwindcss\";\n \n+@import \"tailwindcss\";\n+\n+@theme {\n+  --font-my-font: \"My Font\", sans-serif;\n+}\n \n--- a/index.html\n+++ b/index.html\n@@ -1,4 +1,4 @@\n-<link rel=\"stylesheet\" href=\"./Button.module.css\">\n-<div class=\"card\">Quoted</div>\n-<div class=\"btn\">Plain</div>\n \n+\n+<div class=\"card font-my-font\">Quoted</div>\n+<div class=\"btn p-[13px]\">Plain</div>\n \nPreviewed 3 file(s); 2 rule(s) converted, 0 retained.\n"
+stderr: ""
 workspace delta:
   unchanged
 
 --- step: write ---
 status: 0
-stdout: "--- a/Button.module.css\n+++ b/Button.module.css\n@@ -1,7 +1,5 @@\n-.card {\n-  font-family: \"My Font\", sans-serif;\n-}\n-.btn {\n-  padding: 13px;\n-}\n \n+.card {\n+  font-family: \"My Font\", sans-serif;\n+}\n+\n \n--- a/index.html\n+++ b/index.html\n@@ -1,4 +1,4 @@\n-<link rel=\"stylesheet\" href=\"./Button.module.css\">\n-<div class=\"card\">Quoted</div>\n-<div class=\"btn\">Plain</div>\n \n+<link rel=\"stylesheet\" href=\"./Button.module.css\">\n+<div class=\"card\">Quoted</div>\n+<div class=\"btn p-[13px]\">Plain</div>\n \nApplied 2 file(s); 1 rule(s) converted, 1 retained.\n"
-stderr: "warning[unresolved-selector-target] Button.module.css:1:1-3:2 No exclusively supported className references were found.\n"
+stdout: "--- a/Button.module.css\n+++ b/Button.module.css\n@@ -1,7 +1,1 @@\n-.card {\n-  font-family: \"My Font\", sans-serif;\n-}\n-.btn {\n-  padding: 13px;\n-}\n \n \n--- a/globals.css\n+++ b/globals.css\n@@ -1,2 +1,6 @@\n-@import \"tailwindcss\";\n \n+@import \"tailwindcss\";\n+\n+@theme {\n+  --font-my-font: \"My Font\", sans-serif;\n+}\n \n--- a/index.html\n+++ b/index.html\n@@ -1,4 +1,4 @@\n-<link rel=\"stylesheet\" href=\"./Button.module.css\">\n-<div class=\"card\">Quoted</div>\n-<div class=\"btn\">Plain</div>\n \n+\n+<div class=\"card font-my-font\">Quoted</div>\n+<div class=\"btn p-[13px]\">Plain</div>\n \nApplied 3 file(s); 2 rule(s) converted, 0 retained.\n"
+stderr: ""
 workspace delta:
-  modified Button.module.css
+  deleted Button.module.css
     before: ".card {\n  font-family: \"My Font\", sans-serif;\n}\n.btn {\n  padding: 13px;\n}\n"
-    after: ".card {\n  font-family: \"My Font\", sans-serif;\n}\n\n"
+  modified globals.css
+    before: "@import \"tailwindcss\";\n"
+    after: "@import \"tailwindcss\";\n\n@theme {\n  --font-my-font: \"My Font\", sans-serif;\n}\n"
   modified index.html
     before: "<link rel=\"stylesheet\" href=\"./Button.module.css\">\n<div class=\"card\">Quoted</div>\n<div class=\"btn\">Plain</div>\n"
-    after: "<link rel=\"stylesheet\" href=\"./Button.module.css\">\n<div class=\"card\">Quoted</div>\n<div class=\"btn p-[13px]\">Plain</div>\n"
+    after: "\n<div class=\"card font-my-font\">Quoted</div>\n<div class=\"btn p-[13px]\">Plain</div>\n"

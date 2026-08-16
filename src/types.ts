@@ -149,6 +149,16 @@ export interface PlannerRequest {
   files: PlannedFile[];
 }
 
+export interface FontFamilyProbe {
+  candidate: string;
+  /** The normalized family stack: names quoted, generics bare. */
+  value: string;
+  firstFamily: { name: string; kind: "name" | "generic" | "css-wide" };
+  stylesheet: number;
+  ruleId: RuleSpan;
+  authoredSpan: RuleSpan;
+}
+
 // `stylesheet` is the planner's compile-failure attribution index into the
 // request stylesheets; it is stripped from the public RuleReport.
 export interface PlanRule extends RuleReport {
@@ -163,6 +173,9 @@ export interface Plan {
   /** Internal orchestration data: candidates collected before quote-fit
    * checks, canonicalized between planning passes; never reported. */
   candidateProbes?: string[];
+  /** Internal orchestration data: arbitrary font-family candidates with
+   * parsed stacks for theme-token registration; never reported. */
+  fontFamilyProbes?: FontFamilyProbe[];
   rules: PlanRule[];
   warnings: MigrationWarning[];
   convertedRules: number;
