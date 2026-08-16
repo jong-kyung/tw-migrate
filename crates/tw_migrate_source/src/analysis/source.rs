@@ -790,12 +790,34 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
         walk::walk_binary_expression(self, expression);
     }
 
-    /// Any `--` string literal may name a custom property this run would
-    /// otherwise allocate, so it reserves the spelling wherever it
-    /// appears; ownership precision is not worth chasing call shapes.
+    /// Any `--name` inside a string literal may name a custom property
+    /// this run would otherwise allocate: a bare property string, or an
+    /// arbitrary-property candidate such as [--font-brand:serif]. Every
+    /// embedded mention reserves; ownership precision is not worth
+    /// chasing call shapes.
     fn visit_string_literal(&mut self, literal: &oxc_ast::ast::StringLiteral<'a>) {
-        if literal.value.starts_with("--") {
-            self.analysis.custom_properties.push(literal.value.to_string());
+        let text = literal.value.as_str();
+        let bytes = text.as_bytes();
+        let mut index = 0;
+        while index + 2 < bytes.len() + 1 {
+            if index + 1 < bytes.len() && bytes[index] == b'-' && bytes[index + 1] == b'-' {
+                let start = index;
+                let mut end = index + 2;
+                while end < bytes.len()
+                    && (bytes[end].is_ascii_alphanumeric()
+                        || bytes[end] == b'_'
+                        || bytes[end] == b'-'
+                        || !bytes[end].is_ascii())
+                {
+                    end += 1;
+                }
+                if end > index + 2 {
+                    self.analysis.custom_properties.push(text[start..end].to_string());
+                }
+                index = end;
+                continue;
+            }
+            index += 1;
         }
         walk::walk_string_literal(self, literal);
     }
@@ -1244,6 +1266,17 @@ mod tests {
             parsed["customProperties"],
             serde_json::json!(["--font-brand", "--gap"]),
         );
+
+        // Embedded mentions such as arbitrary-property candidates count.
+        let embedded: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.tsx",
+                "export const Card = () => <div className=\"[--font-brand:serif] p-4\" />;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(embedded["customProperties"], serde_json::json!(["--font-brand"]));
         // setProperty received a computed name.
         assert_eq!(parsed["customPropertiesUnbounded"], true);
 
