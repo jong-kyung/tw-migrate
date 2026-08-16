@@ -5,7 +5,13 @@ import { unifiedDiff } from "./util/diff.ts";
 import { collectFiles, resolveScope, scannerIgnoredPaths } from "./discovery.ts";
 import { parseHtmlSource, TEMPLATE_EXPRESSIONS, TEMPLATE_MARKERS } from "./parser/html.ts";
 import { localHtmlReference, preparePackageHtml } from "./plan/html.ts";
-import { planBatchMigration, sourceAnalysis, stylesheetAnalysis, validateCss } from "./native.ts";
+import {
+  fontFamilyStack,
+  planBatchMigration,
+  sourceAnalysis,
+  stylesheetAnalysis,
+  validateCss,
+} from "./native.ts";
 import {
   indexStylesheetDependents,
   isIntegrityError,
@@ -231,6 +237,19 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
     else if (preparation.plan) plans.push(preparation.plan);
     if (preparation.prepared) prepared.push(preparation.prepared);
   }
+  // Every entry's existing font tokens seed the run-wide registry:
+  // emitted theme variables share one runtime namespace, so another
+  // group must not generate an already-owned name for a different stack.
+  for (const preparation of prepared) {
+    for (const [token, value] of Object.entries(preparation.tailwind.themeTokens)) {
+      if (!token.startsWith("font-")) continue;
+      const parsed = fontFamilyStack(value);
+      if (parsed !== null) {
+        context.fontAllocations.set(token.replace(/^font-/, ""), parsed.value);
+      }
+    }
+  }
+
   const groups = new Map<string, PreparedPackage[]>();
   for (const preparation of prepared) {
     const members = groups.get(preparation.tailwind.path) ?? [];
