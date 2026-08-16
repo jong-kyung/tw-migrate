@@ -820,9 +820,10 @@ fn collect_stylesheet_statements(
                         &block.statements,
                         source,
                         at_rule_parents.as_deref().unwrap_or(parent_classes),
-                        // Theme-block declarations are the theme's own
-                        // definitions, never authored overrides.
-                        in_theme || at_rule.name.name == "theme",
+                        // Only the theme block's direct declarations are
+                        // the theme's own definitions; a nested at-rule
+                        // such as @keyframes declares runtime values.
+                        at_rule.name.name == "theme",
                         analysis,
                     );
                 }
@@ -914,7 +915,7 @@ fn collect_stylesheet_statements(
                     &rule.block.statements,
                     source,
                     &selector_class_names(&rule.selector, parent_classes),
-                    in_theme,
+                    false,
                     analysis,
                 );
                 if nested {
@@ -929,6 +930,17 @@ fn collect_stylesheet_statements(
                     ));
                 }
                 has_scope_escape |= direct || nested;
+            }
+            // Keyframe blocks hold runtime declarations, including custom
+            // property writes that animate over migrated utilities.
+            Statement::KeyframeBlock(block) => {
+                has_scope_escape |= collect_stylesheet_statements(
+                    &block.block.statements,
+                    source,
+                    parent_classes,
+                    false,
+                    analysis,
+                );
             }
             Statement::Declaration(declaration) => {
                 let InterpolableIdent::Literal(name) = &declaration.name else {
@@ -1488,6 +1500,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed["customPropertiesUnbounded"], true);
+    }
+
+    #[test]
+    fn reserves_runtime_declarations_nested_under_theme() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/globals.css",
+                "@theme {\n  --font-brand: serif;\n  @keyframes pulse { from { --font-flash: serif; } }\n}\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let properties = parsed["customProperties"].as_array().unwrap();
+        // The direct token stays exempt; the keyframe write reserves.
+        assert!(!properties.contains(&serde_json::json!("--font-brand")), "{properties:?}");
+        assert!(properties.contains(&serde_json::json!("--font-flash")), "{properties:?}");
     }
 
     #[test]
