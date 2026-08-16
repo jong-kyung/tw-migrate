@@ -44,9 +44,34 @@ const CSS_WIDE_KEYWORDS: &[&str] = &["initial", "inherit", "unset", "revert", "r
 /// value is runtime-dependent or otherwise unreadable (functions,
 /// escapes, unterminated quotes, empty families), in which case the rule
 /// keeps its arbitrary candidate under the existing safety rules.
+/// Split on top-level commas, keeping commas inside quoted names
+/// ("ACME, Inc.") as content. `None` for an unterminated quote.
+fn split_families(value: &str) -> Option<Vec<&str>> {
+    let mut segments = Vec::new();
+    let mut start = 0;
+    let mut delimiter: Option<char> = None;
+    for (index, character) in value.char_indices() {
+        match delimiter {
+            Some(active) if character == active => delimiter = None,
+            Some(_) => {}
+            None if character == '"' || character == '\'' => delimiter = Some(character),
+            None if character == ',' => {
+                segments.push(&value[start..index]);
+                start = index + character.len_utf8();
+            }
+            None => {}
+        }
+    }
+    if delimiter.is_some() {
+        return None;
+    }
+    segments.push(&value[start..]);
+    Some(segments)
+}
+
 pub fn parse_font_stack(value: &str) -> Option<(String, String, &'static str)> {
     let mut families = Vec::new();
-    for segment in value.split(',') {
+    for segment in split_families(value)? {
         let segment = segment.trim();
         if segment.is_empty() {
             return None;
@@ -161,6 +186,15 @@ mod tests {
             Some((
                 "\"Rock 'n' Roll\", serif".to_string(),
                 "Rock 'n' Roll".to_string(),
+                "name",
+            )),
+        );
+        // Commas inside quoted names are content, not separators.
+        assert_eq!(
+            parse_font_stack("\"ACME, Inc.\", sans-serif"),
+            Some((
+                "\"ACME, Inc.\", sans-serif".to_string(),
+                "ACME, Inc.".to_string(),
                 "name",
             )),
         );
