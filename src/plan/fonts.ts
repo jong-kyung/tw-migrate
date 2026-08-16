@@ -21,17 +21,6 @@ export function fontTokenName(family: string): string {
   return /^\p{N}/u.test(collapsed) ? `family-${collapsed}` : collapsed;
 }
 
-/// The RFC's bounded allocation sequence for one base name: the base
-/// spelling, then numeric suffixes from -2, at most 100 spellings total.
-/// Exhaustion is the caller's font-theme-registration-failed outcome.
-export function fontNameCandidates(base: string): string[] {
-  const names = [base];
-  for (let suffix = 2; names.length < 100; suffix += 1) {
-    names.push(`${base}-${suffix}`);
-  }
-  return names;
-}
-
 /// The probe's candidate with its utility segment replaced by a named
 /// font utility, preserving the variant chain, Tailwind prefix, and
 /// important modifier.
@@ -161,11 +150,11 @@ export interface FontRegistrationOptions {
 export async function registerFontTokens(
   options: FontRegistrationOptions,
 ): Promise<FontRegistration> {
-  const none: FontRegistration = { aliases: {}, tokens: {}, failures: new Set() };
   const { system, reservations } = options;
-  if (reservations.unbounded || reservations.propertiesUnbounded) return none;
+  if (reservations.unbounded || reservations.propertiesUnbounded) {
+    return { aliases: {}, tokens: {}, failures: new Set() };
+  }
   const prefix = system.theme.prefix;
-  const prefixed = (utility: string) => (prefix !== null ? `${prefix}:${utility}` : utility);
 
   const aliases: Record<string, string> = {};
   const failures = new Set<string>();
@@ -221,7 +210,10 @@ export async function registerFontTokens(
     }
     const base = fontTokenName(probe.firstFamily.name);
     let allocated = false;
-    for (const name of fontNameCandidates(base)) {
+    // The RFC's bounded sequence: the base spelling, then numeric
+    // suffixes, at most 100 attempts before registration fails.
+    for (let attempt = 1; attempt <= 100; attempt += 1) {
+      const name = attempt === 1 ? base : `${base}-${attempt}`;
       if (claimed.has(name)) continue;
       // A prefixed entry dereferences the token through the prefixed
       // runtime property, so both spellings must be free; otherwise the
@@ -234,7 +226,8 @@ export async function registerFontTokens(
       if (global !== undefined && global !== probe.value) continue;
       // A spelling the pre-font system already compiles is owned by an
       // existing utility, such as font-bold.
-      if (system.candidatesToCss([prefixed(`font-${name}`)])[0] !== null) continue;
+      const compiled = prefix !== null ? `${prefix}:font-${name}` : `font-${name}`;
+      if (system.candidatesToCss([compiled])[0] !== null) continue;
       claimed.add(name);
       allocatedByStack.set(stackKey, name);
       proposals.push({ probe, name });
@@ -256,10 +249,10 @@ export async function registerFontTokens(
     return { aliases, tokens: {}, failures };
   }
 
-  const corpus = [...new Set(options.corpus)];
-  const before = system.candidatesToCss(corpus);
-  const after = fontSystem.candidatesToCss(corpus);
-  const corpusChanged = corpus.some((candidate, index) => before[index] !== after[index]);
+  // The caller passes distinct candidates already.
+  const before = system.candidatesToCss(options.corpus);
+  const after = fontSystem.candidatesToCss(options.corpus);
+  const corpusChanged = options.corpus.some((candidate, index) => before[index] !== after[index]);
 
   const accepted: Record<string, string> = {};
   for (const { probe, name } of proposals) {
