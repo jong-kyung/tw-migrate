@@ -78,6 +78,14 @@ pub fn parse_font_stack(value: &str) -> Option<(String, String, &'static str)> {
                         || !character.is_ascii())
                 })
             })
+            // Unescaped CSS identifiers cannot start with a digit or a
+            // hyphen-digit pair; quoting such a segment would turn an
+            // ignored invalid declaration into an active font lookup.
+            || tokens.iter().any(|token| {
+                token.starts_with(|character: char| character.is_ascii_digit())
+                    || (token.starts_with('-')
+                        && token[1..].starts_with(|character: char| character.is_ascii_digit()))
+            })
         {
             return None;
         }
@@ -173,5 +181,8 @@ mod tests {
         assert_eq!(parse_font_stack("\"Open \\\"Sans\\\"\""), None);
         assert_eq!(parse_font_stack(""), None);
         assert_eq!(parse_font_stack("Brand,,serif"), None);
+        // Digit-leading segments are not valid unescaped family names.
+        assert_eq!(parse_font_stack("123"), None);
+        assert_eq!(parse_font_stack("Brand 3D, serif"), None);
     }
 }
