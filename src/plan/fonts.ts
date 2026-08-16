@@ -137,6 +137,9 @@ export interface FontRegistrationOptions {
   /// Utility segments of class-like tokens already present in group
   /// sources; allocation never adopts one.
   mentionedSegments: Set<string>;
+  /// Theme tokens loaded in Tailwind reference mode, which never emit
+  /// their custom properties at runtime.
+  referenceTokens: Set<string>;
 }
 
 /// Font aliases for one planning group: reuse an existing matching token
@@ -171,7 +174,11 @@ export async function registerFontTokens(
     // Targeted reuse: the lexicographically first existing token whose
     // stack matches and whose compiled utility passes every proof.
     let reused = false;
-    for (const token of matchingFontTokens(options.themeTokens, probe.value)) {
+    for (const token of matchingFontTokens(
+      options.themeTokens,
+      probe.value,
+      options.referenceTokens,
+    )) {
       // The reused spelling obeys the same reservation rules as ordinary
       // canonical aliases.
       const aliased = aliasedCandidate(probe.candidate, token);
@@ -258,10 +265,14 @@ export async function registerFontTokens(
 export function matchingFontTokens(
   themeTokens: Record<string, string>,
   normalizedStack: string,
+  referenceTokens: Set<string> = new Set(),
 ): string[] {
   const matches: string[] = [];
   for (const [token, value] of Object.entries(themeTokens)) {
     if (!token.startsWith("font-")) continue;
+    // A reference-mode token never emits its custom property at runtime,
+    // so a utility dereferencing it would resolve to nothing.
+    if (referenceTokens.has(token)) continue;
     const parsed = fontFamilyStack(value);
     if (parsed !== null && parsed.value === normalizedStack) {
       matches.push(token);

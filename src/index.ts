@@ -1360,6 +1360,7 @@ async function planPreparedGroup(
           existingAliases: aliases,
           generate: groupWritable,
           mentionedSegments,
+          referenceTokens: entry.referenceTokens,
         });
         Object.assign(aliases, fonts.aliases);
         fontTokens = fonts.tokens;

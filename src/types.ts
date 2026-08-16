@@ -260,6 +260,9 @@ export interface LoadedTailwind {
   css: string;
   path: string;
   themeTokens: Record<string, string>;
+  /** Theme tokens loaded in Tailwind reference mode, which never emit
+   * their custom properties at runtime. */
+  referenceTokens: Set<string>;
   /** Stylesheet sources retained from the entry's import graph, parsed for
    * authored custom-variant reservations and content-identity adoption. */
   graphSources: { path: string; source: string }[];

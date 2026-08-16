@@ -74,15 +74,31 @@ export async function loadTailwind(
   };
   const defaultTheme = await readFile(join(dirname(packagePath), "theme.css"), "utf8");
   const graphSources: { path: string; source: string }[] = [];
+  const referenceTokens = new Set<string>();
   const themeTokens = {
     ...extractThemeTokens("tailwind-default.theme.css", defaultTheme),
-    ...(await extractThemeTokensFromGraph(tailwindCss, css, base, loadStylesheet, graphSources)),
+    ...(await extractThemeTokensFromGraph(
+      tailwindCss,
+      css,
+      base,
+      loadStylesheet,
+      graphSources,
+      referenceTokens,
+    )),
   };
   graphSources.push({ path: tailwindCss, source: css });
   const designSystem = await loadDesignSystem(css, { base, loadModule, loadStylesheet });
   const loadWith = (replacement: string): Promise<DesignSystem> =>
     loadDesignSystem(replacement, { base, loadModule, loadStylesheet });
-  return { designSystem, css, path: tailwindCss, themeTokens, graphSources, loadWith };
+  return {
+    designSystem,
+    css,
+    path: tailwindCss,
+    themeTokens,
+    referenceTokens,
+    graphSources,
+    loadWith,
+  };
 }
 
 /// Theme keys carry the loaded stylesheet's identity so the native cache
@@ -91,9 +107,10 @@ function extractThemeTokens(key: string, css: string): Record<string, string> {
   return stylesheetAnalysis(key, css).themeTokens;
 }
 
-/// Import specifiers of one stylesheet through the structured directive
-/// parser, covering quoted and url() forms at the top level only.
-function importSpecifiers(css: string): string[] {
+/// Import directives of one stylesheet through the structured parser,
+/// covering quoted and url() forms at the top level only, with the
+/// reference-mode marker for theme(reference) imports.
+function importEntries(css: string): { specifier: string; reference: boolean }[] {
   return (cssDirectives(css) ?? []).flatMap((directive) =>
     directive !== null &&
     typeof directive === "object" &&
@@ -101,9 +118,18 @@ function importSpecifiers(css: string): string[] {
     directive.kind === "import" &&
     "specifier" in directive &&
     typeof directive.specifier === "string"
-      ? [directive.specifier]
+      ? [
+          {
+            specifier: directive.specifier,
+            reference: "reference" in directive && directive.reference === true,
+          },
+        ]
       : [],
   );
+}
+
+function importSpecifiers(css: string): string[] {
+  return importEntries(css).map((entry) => entry.specifier);
 }
 
 async function extractThemeTokensFromGraph(
@@ -112,10 +138,12 @@ async function extractThemeTokensFromGraph(
   base: string,
   loadStylesheet: StylesheetLoader,
   graphSources: { path: string; source: string }[],
+  referenceTokens: Set<string>,
+  inReference = false,
   seen = new Set<string>(),
 ): Promise<Record<string, string>> {
   const tokens: Record<string, string> = {};
-  for (const spec of importSpecifiers(css)) {
+  for (const { specifier: spec, reference } of importEntries(css)) {
     const key = `${base}\0${spec}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -132,11 +160,17 @@ async function extractThemeTokensFromGraph(
         loaded.base,
         loadStylesheet,
         graphSources,
+        referenceTokens,
+        inReference || reference,
         seen,
       ),
     );
   }
-  return Object.assign(tokens, extractThemeTokens(`${identity}.theme.css`, css));
+  const own = extractThemeTokens(`${identity}.theme.css`, css);
+  // Reference-mode subtrees load design tokens without emitting their
+  // custom properties at runtime.
+  if (inReference) for (const token of Object.keys(own)) referenceTokens.add(token);
+  return Object.assign(tokens, own);
 }
 
 export function invalidCandidates(system: DesignSystem, candidates: string[]): string[] {

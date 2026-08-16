@@ -32,6 +32,11 @@ enum CssDirective {
         source: Option<String>,
         /// True when a `source(...)` modifier exists but cannot be read.
         source_unreadable: bool,
+        /// True when the prelude mentions `reference`: a
+        /// `theme(reference)` import loads design tokens without emitting
+        /// their custom properties. Over-broad on a path containing the
+        /// word, which only skips a reuse.
+        reference: bool,
     },
     /// A top-level `@source` directive, using Tailwind's own grammar over
     /// the parser-proven prelude text.
@@ -54,6 +59,7 @@ fn import_directive(source_text: &str, at_rule: &oxc_css_parser::ast::AtRule<'_>
             tailwind: false,
             source: None,
             source_unreadable: false,
+            reference: false,
         };
     };
     let specifier = import_href(&prelude.href);
@@ -90,11 +96,13 @@ fn import_directive(source_text: &str, at_rule: &oxc_css_parser::ast::AtRule<'_>
             );
         }
     }
+    let reference = source_text[at_rule.span.start..at_rule.span.end].contains("reference");
     CssDirective::Import {
         specifier,
         tailwind,
         source,
         source_unreadable,
+        reference,
     }
 }
 
@@ -267,21 +275,21 @@ mod tests {
             serde_json::json!([
                 {
                     "kind": "import",
-                    "specifier": "tailwindcss",
+                    "reference": false, "specifier": "tailwindcss",
                     "tailwind": true,
                     "source": "none",
                     "sourceUnreadable": false
                 },
                 {
                     "kind": "import",
-                    "specifier": "tailwindcss/utilities",
+                    "reference": false, "specifier": "tailwindcss/utilities",
                     "tailwind": true,
                     "source": "./apps",
                     "sourceUnreadable": false
                 },
                 {
                     "kind": "import",
-                    "specifier": "./theme.css",
+                    "reference": false, "specifier": "./theme.css",
                     "tailwind": false,
                     "source": null,
                     "sourceUnreadable": false
