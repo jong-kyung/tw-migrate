@@ -3,6 +3,46 @@ use super::*;
 use super::vue::vue_module_request;
 
 #[test]
+fn returns_structured_font_family_probes() {
+    let request = serde_json::json!({
+        "cssPath": "/project/Button.module.css",
+        "cssSource": ".button { font-family: \"Open Sans\", sans-serif; }\n.plain { font-family: Arial, serif; }\n.generic { font-family: monospace; }\n.wide { font-family: inherit; }\n.runtime { font-family: var(--font-body); }\n",
+        "files": [{
+            "path": "/project/Button.tsx",
+            "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={`${styles.button} ${styles.plain} ${styles.generic} ${styles.wide} ${styles.runtime}`}>B</button>;\n"
+        }]
+    });
+
+    let response = plan(request);
+
+    let probes = response["fontFamilyProbes"].as_array().unwrap();
+    // The runtime-dependent stack emits no probe; every parsed stack
+    // carries its normalized value and first-family kind.
+    assert_eq!(probes.len(), 4, "{probes:?}");
+    let by_value: Vec<(&str, &str, &str)> = probes
+        .iter()
+        .map(|probe| {
+            (
+                probe["value"].as_str().unwrap(),
+                probe["firstFamily"]["name"].as_str().unwrap(),
+                probe["firstFamily"]["kind"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert!(by_value.contains(&("\"Open Sans\", sans-serif", "Open Sans", "name")), "{by_value:?}");
+    assert!(by_value.contains(&("\"Arial\", serif", "Arial", "name")), "{by_value:?}");
+    assert!(by_value.contains(&("monospace", "monospace", "generic")), "{by_value:?}");
+    assert!(by_value.contains(&("inherit", "inherit", "css-wide")), "{by_value:?}");
+    for probe in probes {
+        assert!(
+            probe["candidate"].as_str().unwrap().starts_with("[font-family:"),
+            "{probe:?}"
+        );
+        assert!(probe["ruleId"]["end"].as_u64().unwrap() > 0, "{probe:?}");
+    }
+}
+
+#[test]
 fn identical_member_candidates_do_not_conflict() {
     let request = serde_json::json!({
         "cssPath": "/project/Card.module.css",

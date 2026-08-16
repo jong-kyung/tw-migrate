@@ -2,6 +2,7 @@ mod animations;
 mod arbitrary;
 mod at_rules;
 mod css_directives;
+mod fonts;
 mod media;
 mod plan;
 mod stylesheet_analysis;
@@ -12,6 +13,7 @@ mod utilities;
 pub use animations::{KeyframePlan, animation_candidate, append_keyframes};
 pub use at_rules::{GlobalAtRulePlan, append_global_at_rules, is_conditional, parse_css};
 pub use css_directives::collect_css_directives_json;
+pub use fonts::{FontFamilyProbe, parse_font_stack};
 pub use media::{
     MediaComponent, ParsedMediaCondition, collect_media_conditions_json, media_probe_key_json,
     parse_media_condition,
