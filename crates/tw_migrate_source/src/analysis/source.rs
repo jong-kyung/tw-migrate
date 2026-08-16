@@ -457,41 +457,48 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
         {
             self.analysis.renders_style_element = true;
         }
-        // A dynamic style attribute can set any custom property at
-        // runtime. A literal object is transparent: its custom-property
-        // keys are string literals the literal visitor already collects,
-        // while spreads or computed keys hide them.
+        // A dynamic style value can set any custom property at runtime,
+        // and a prop spread can supply a style prop the same way. JSX
+        // props apply left to right, so a literal-object style after the
+        // last spread pins the value again; a literal object is
+        // transparent because its custom-property keys are string
+        // literals the literal visitor already collects.
+        let mut style_opaque = false;
         for attribute in &element.attributes {
-            let oxc_ast::ast::JSXAttributeItem::Attribute(attribute) = attribute else {
-                continue;
-            };
-            let oxc_ast::ast::JSXAttributeName::Identifier(attribute_name) = &attribute.name
-            else {
-                continue;
-            };
-            if attribute_name.name != "style" {
-                continue;
-            }
-            let Some(oxc_ast::ast::JSXAttributeValue::ExpressionContainer(container)) =
-                &attribute.value
-            else {
-                continue;
-            };
-            let transparent = match container.expression.as_expression() {
-                Some(Expression::ObjectExpression(object)) => {
-                    object.properties.iter().all(|property| {
-                        matches!(
-                            property,
-                            oxc_ast::ast::ObjectPropertyKind::ObjectProperty(entry)
-                                if !entry.computed
-                        )
-                    })
+            match attribute {
+                oxc_ast::ast::JSXAttributeItem::SpreadAttribute(_) => style_opaque = true,
+                oxc_ast::ast::JSXAttributeItem::Attribute(attribute) => {
+                    let oxc_ast::ast::JSXAttributeName::Identifier(attribute_name) =
+                        &attribute.name
+                    else {
+                        continue;
+                    };
+                    if attribute_name.name != "style" {
+                        continue;
+                    }
+                    let transparent = match &attribute.value {
+                        Some(oxc_ast::ast::JSXAttributeValue::ExpressionContainer(container)) => {
+                            match container.expression.as_expression() {
+                                Some(Expression::ObjectExpression(object)) => {
+                                    object.properties.iter().all(|property| {
+                                        matches!(
+                                            property,
+                                            oxc_ast::ast::ObjectPropertyKind::ObjectProperty(entry)
+                                                if !entry.computed
+                                        )
+                                    })
+                                }
+                                _ => false,
+                            }
+                        }
+                        _ => true,
+                    };
+                    style_opaque = !transparent;
                 }
-                _ => false,
-            };
-            if !transparent {
-                self.analysis.custom_properties_unbounded = true;
             }
+        }
+        if style_opaque {
+            self.analysis.custom_properties_unbounded = true;
         }
         if let oxc_ast::ast::JSXElementName::Identifier(name) = &element.name
             && name.name == "link"
@@ -1150,6 +1157,30 @@ mod tests {
         // Trailing tokens of pre-expression quasis constrain the dynamic
         // class; static tokens and whitespace-terminated quasis do not.
         assert_eq!(parsed["templatePrefixes"], serde_json::json!(["mr-", "p-", "pt-"]));
+    }
+
+    #[test]
+    fn treats_prop_spreads_as_hiding_style_overrides() {
+        let spread: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.tsx",
+                "export const Card = (props) => <div {...props} className=\"x\" />;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(spread["customPropertiesUnbounded"], true);
+
+        // A literal style after the spread pins the value again.
+        let repinned: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.tsx",
+                "export const Card = (props) => <div {...props} style={{ width: 4 }} />;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(repinned["customPropertiesUnbounded"], false);
     }
 
     #[test]
