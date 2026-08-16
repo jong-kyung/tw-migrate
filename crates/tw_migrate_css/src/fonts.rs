@@ -56,10 +56,14 @@ pub fn parse_font_stack(value: &str) -> Option<(String, String, &'static str)> {
             let inner = segment
                 .strip_prefix(quote)
                 .and_then(|rest| rest.strip_suffix(quote))?;
+            // The opposite quote is ordinary content ("Rock 'n' Roll"),
+            // but a double quote anywhere would break the double-quoted
+            // normalized output, and the active delimiter inside means
+            // the segment was never one quoted name.
             if inner.is_empty()
                 || inner.contains('\\')
                 || inner.contains(quote)
-                || inner.contains(['"', '\''])
+                || inner.contains('"')
             {
                 return None;
             }
@@ -150,6 +154,15 @@ mod tests {
         assert_eq!(
             parse_font_stack("'serif'"),
             Some(("\"serif\"".to_string(), "serif".to_string(), "name")),
+        );
+        // The opposite quote is ordinary content.
+        assert_eq!(
+            parse_font_stack("\"Rock 'n' Roll\", serif"),
+            Some((
+                "\"Rock 'n' Roll\", serif".to_string(),
+                "Rock 'n' Roll".to_string(),
+                "name",
+            )),
         );
         assert_eq!(
             parse_font_stack("sans-serif"),
