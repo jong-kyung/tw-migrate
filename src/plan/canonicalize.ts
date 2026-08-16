@@ -96,6 +96,11 @@ export function spellingReservations(
       const analysis = stylesheetAnalysis(path, source);
       for (const name of analysis.classNames) reservations.names.add(name);
       if (analysis.classReservationsUnbounded) reservations.unbounded = true;
+      // Ordinary-rule overrides in entry-graph sheets reserve like any
+      // other sheet's; theme-block declarations never reach the
+      // inventory.
+      for (const property of analysis.customProperties) reservations.properties.add(property);
+      if (analysis.customPropertiesUnbounded) reservations.propertiesUnbounded = true;
       // A plugin or legacy config module can emit any selector into the
       // built output without it appearing in scanned CSS, and a
       // `@source not` exclusion can keep Tailwind from generating a

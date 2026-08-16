@@ -128,6 +128,18 @@ test("stylesheet references calibrate reservation boundedness", () => {
   ).toBe(true);
 });
 
+test("entry-graph sheets reserve their ordinary property overrides", () => {
+  const reservations = spellingReservations(new Map(), [
+    [
+      "/app\0kit/styles.css.graph.css",
+      "@theme {\n  --font-brand: serif;\n}\n.compact { --font-other: serif; }\n",
+    ],
+  ]);
+  // Theme definitions stay exempt while scoped overrides reserve.
+  expect(reservations.properties.has("--font-brand")).toBe(false);
+  expect(reservations.properties.has("--font-other")).toBe(true);
+});
+
 test("entry-graph directives calibrate reservation boundedness", () => {
   const bounded = (entry: string) =>
     spellingReservations(new Map(), [["/app/globals.css.graph.css", entry]]).unbounded === false;
