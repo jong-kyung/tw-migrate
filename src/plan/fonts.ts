@@ -4,6 +4,7 @@
 // provisional registration and safety proofs stay with the caller.
 
 import { compiledShape, fontFamilyStack } from "../native.ts";
+import { isIntegrityError } from "../util/shared.ts";
 import { canonicalCandidate, reservedSpelling, utilitySegment } from "./canonicalize.ts";
 import type { SpellingReservations } from "./canonicalize.ts";
 import type { DesignSystem, FontFamilyProbe } from "../types.ts";
@@ -244,8 +245,10 @@ export async function registerFontTokens(
   let fontSystem: DesignSystem;
   try {
     fontSystem = await options.loadWith(appendFontTheme(options.entryCss, tokens));
-  } catch {
-    // A provisional entry that does not load registers nothing.
+  } catch (error) {
+    // Source drift during the reload is fatal like every other integrity
+    // failure; only an ordinary load failure registers nothing.
+    if (isIntegrityError(error)) throw error;
     for (const { probe } of proposals) failures.add(probe.candidate);
     return { aliases, tokens: {}, failures };
   }
