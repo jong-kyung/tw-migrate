@@ -30,6 +30,13 @@ pub(super) struct PlanRequest {
     /// keyframes may still move.
     #[serde(default = "default_entry_writable")]
     pub(super) global_at_rule_moves: bool,
+    /// Caller-accepted canonical spellings keyed by the planner's
+    /// rule-level candidate, the same form candidateProbes emits. Applied
+    /// after prefixing and before HTML context variants wrap the spelling,
+    /// so conditional contexts render the canonical name inside their
+    /// generated variants; empty on the first planning pass.
+    #[serde(default)]
+    pub(super) candidate_aliases: HashMap<String, String>,
     pub(super) files: Vec<SourceFile>,
 }
 
@@ -55,6 +62,8 @@ pub(super) struct BatchPlanRequest {
     pub(super) entry_writable: bool,
     #[serde(default = "default_entry_writable")]
     pub(super) global_at_rule_moves: bool,
+    #[serde(default)]
+    pub(super) candidate_aliases: HashMap<String, String>,
     pub(super) files: Vec<SourceFile>,
 }
 

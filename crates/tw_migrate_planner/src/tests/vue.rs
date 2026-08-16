@@ -26,7 +26,7 @@ fn plans_a_direct_css_module_padding_migration() {
     );
 }
 
-fn vue_module_request(source: &str, bindings: &[(&str, &str)]) -> serde_json::Value {
+pub(super) fn vue_module_request(source: &str, bindings: &[(&str, &str)]) -> serde_json::Value {
     let content_start = source.find("<style module>").unwrap() + "<style module>".len();
     let content_end = source.find("</style>").unwrap();
     let elements = bindings
@@ -111,6 +111,14 @@ fn vue_module_rewrites_withhold_quote_bearing_candidates() {
     assert_eq!(response["convertedRules"], 0);
     assert_eq!(response["retainedRules"], 1);
     assert_eq!(response["files"], serde_json::json!([]));
+    // The probe still surfaces the candidate so canonicalization can
+    // discover an alias that fits the attribute on the next pass.
+    let probes = response["candidateProbes"].as_array().unwrap();
+    assert_eq!(probes.len(), 1);
+    assert!(
+        probes[0].as_str().unwrap().starts_with("[font-family:"),
+        "{probes:?}"
+    );
 }
 
 fn vue_batch_request(

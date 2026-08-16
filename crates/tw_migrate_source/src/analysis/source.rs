@@ -10,6 +10,7 @@ use oxc_ast::ast::{
     Argument, ArrayExpressionElement, AssignmentTarget, AssignmentTargetProperty, BindingPattern,
     Expression, IdentifierReference, ImportDeclarationSpecifier, VariableDeclarator,
 };
+use oxc_syntax::operator::BinaryOperator;
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::Parser;
 use oxc_semantic::{Semantic, SemanticBuilder};
@@ -50,6 +51,69 @@ struct ExpressionAnalysis {
     /// Identifier reference names, for matching script-provided helper
     /// aliases the expression may call.
     references: Vec<String>,
+    /// Nonempty leading quasis of template literals with expressions, for
+    /// dynamic class spelling reservations.
+    template_prefixes: Vec<String>,
+}
+
+/// The class token each interpolation continues: the trailing
+/// whitespace-delimited token of every quasi that precedes an expression,
+/// because `` `base mr-${side}` `` constrains the dynamic class to the
+/// `mr-` prefix while `base` stays a static token. A quasi ending in
+/// whitespace leaves its expression unconstrained and reserves nothing.
+fn collect_template_prefixes(
+    template: &oxc_ast::ast::TemplateLiteral<'_>,
+    prefixes: &mut Vec<String>,
+) {
+    if template.expressions.is_empty() {
+        return;
+    }
+    for quasi in template.quasis.iter().take(template.expressions.len()) {
+        let Some(cooked) = quasi.value.cooked.as_ref() else {
+            continue;
+        };
+        record_trailing_prefix(cooked, prefixes);
+    }
+}
+
+/// The trailing whitespace-delimited token of static text preceding a
+/// dynamic part constrains the produced class; whitespace-terminated text
+/// constrains nothing.
+fn record_trailing_prefix(text: &str, prefixes: &mut Vec<String>) {
+    let token = text
+        .rsplit(|character: char| character.is_whitespace())
+        .next()
+        .unwrap_or("");
+    if !token.is_empty() && !prefixes.iter().any(|existing| existing == token) {
+        prefixes.push(token.to_string());
+    }
+}
+
+/// A string concatenation such as `'mr-' + side` constrains the produced
+/// class the same way a template quasi does: the trailing
+/// whitespace-delimited token of the static text before a dynamic part is
+/// a prefix the runtime value could complete.
+fn collect_concat_prefixes(
+    expression: &oxc_ast::ast::BinaryExpression<'_>,
+    prefixes: &mut Vec<String>,
+) {
+    if expression.operator != BinaryOperator::Addition {
+        return;
+    }
+    let Some(text) = trailing_static_string(&expression.left) else {
+        return;
+    };
+    record_trailing_prefix(text, prefixes);
+}
+
+fn trailing_static_string<'e>(expression: &'e Expression<'_>) -> Option<&'e str> {
+    match expression {
+        Expression::StringLiteral(literal) => Some(literal.value.as_str()),
+        Expression::BinaryExpression(binary) if binary.operator == BinaryOperator::Addition => {
+            trailing_static_string(&binary.right)
+        }
+        _ => None,
+    }
 }
 
 /// Template expressions carry no bindings of their own, so any `$style` or
@@ -59,6 +123,7 @@ struct ExpressionCollector {
     uses_css_module: bool,
     references_use_css_module: bool,
     references: Vec<String>,
+    template_prefixes: Vec<String>,
 }
 
 impl ExpressionCollector {
@@ -73,6 +138,16 @@ impl ExpressionCollector {
 }
 
 impl<'a> Visit<'a> for ExpressionCollector {
+    fn visit_template_literal(&mut self, template: &oxc_ast::ast::TemplateLiteral<'a>) {
+        collect_template_prefixes(template, &mut self.template_prefixes);
+        walk::walk_template_literal(self, template);
+    }
+
+    fn visit_binary_expression(&mut self, expression: &oxc_ast::ast::BinaryExpression<'a>) {
+        collect_concat_prefixes(expression, &mut self.template_prefixes);
+        walk::walk_binary_expression(self, expression);
+    }
+
     fn visit_identifier_reference(&mut self, identifier: &IdentifierReference<'a>) {
         self.record(&identifier.name);
         if !self
@@ -132,6 +207,7 @@ pub fn expression_analysis_json(path: &str, source: &str) -> MigrationResult<Str
         uses_css_module: false,
         references_use_css_module: false,
         references: Vec::new(),
+        template_prefixes: Vec::new(),
     };
     collector.visit_expression(&expression);
     // The proven `$style.member` form is rewritten rather than retained, so
@@ -142,6 +218,7 @@ pub fn expression_analysis_json(path: &str, source: &str) -> MigrationResult<Str
         uses_css_module: collector.uses_css_module,
         references_use_css_module: collector.references_use_css_module,
         references: collector.references,
+        template_prefixes: collector.template_prefixes,
     })
     .map_err(|error| MigrationError::Serialization {
         message: error.to_string(),
@@ -165,6 +242,10 @@ struct SourceAnalysis {
     /// A root-scope binding named `useCssModule` that is not the Vue
     /// import; template references resolve to it instead of the Vue API.
     defines_root_use_css_module: bool,
+    /// Nonempty leading quasis of template literals with expressions, so
+    /// spelling reservations can match statically constrained dynamic
+    /// class construction such as `mr-${value}`.
+    template_prefixes: Vec<String>,
     /// Local names bound to the Vue `useCssModule` helper, including
     /// import aliases and namespace destructures, so template analysis can
     /// recognize calls through them.
@@ -172,6 +253,15 @@ struct SourceAnalysis {
     /// Unbound identifier reference names, for handler sources whose
     /// bindings live in the surrounding script.
     unbound_references: Vec<String>,
+    /// Static hrefs of JSX `<link rel="stylesheet">` elements, so spelling
+    /// reservations can resolve the loaded sheet like an HTML link.
+    stylesheet_links: Vec<String>,
+    /// True when a JSX link's rel or href cannot be read statically, so
+    /// the loaded target is unknowable.
+    stylesheet_links_unverifiable: bool,
+    /// True when the source renders a `<style>` element (styled-jsx and
+    /// similar inline CSS), whose selectors this analysis never reads.
+    renders_style_element: bool,
 }
 
 struct SourceCollector<'s, 'a> {
@@ -351,6 +441,77 @@ impl<'a> SourceCollector<'_, 'a> {
 }
 
 impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
+    /// A rendered `<link rel="stylesheet">` loads a sheet exactly like an
+    /// HTML document link, so its target joins spelling reservations. A
+    /// rel or href the parser cannot read statically, or a spread that may
+    /// supply them, leaves the loaded target unknowable.
+    fn visit_jsx_opening_element(&mut self, element: &oxc_ast::ast::JSXOpeningElement<'a>) {
+        if let oxc_ast::ast::JSXElementName::Identifier(name) = &element.name
+            && name.name == "style"
+        {
+            self.analysis.renders_style_element = true;
+        }
+        if let oxc_ast::ast::JSXElementName::Identifier(name) = &element.name
+            && name.name == "link"
+        {
+            let mut rel = None;
+            let mut href = None;
+            let mut spread = false;
+            for attribute in &element.attributes {
+                match attribute {
+                    oxc_ast::ast::JSXAttributeItem::Attribute(attribute) => {
+                        let oxc_ast::ast::JSXAttributeName::Identifier(attribute_name) =
+                            &attribute.name
+                        else {
+                            continue;
+                        };
+                        let value = match &attribute.value {
+                            Some(oxc_ast::ast::JSXAttributeValue::StringLiteral(literal)) => {
+                                Some(literal.value.as_str())
+                            }
+                            _ => None,
+                        };
+                        match attribute_name.name.as_str() {
+                            "rel" => rel = Some(value),
+                            "href" => href = Some(value),
+                            _ => {}
+                        }
+                    }
+                    // JSX props apply left to right, so a spread replaces
+                    // any earlier explicit value with a runtime one; a
+                    // later explicit attribute pins the value again.
+                    oxc_ast::ast::JSXAttributeItem::SpreadAttribute(_) => {
+                        spread = true;
+                        if rel.is_some() {
+                            rel = Some(None);
+                        }
+                        if href.is_some() {
+                            href = Some(None);
+                        }
+                    }
+                }
+            }
+            let may_be_stylesheet = match rel {
+                Some(Some(value)) => value
+                    .split_ascii_whitespace()
+                    .any(|token| token.eq_ignore_ascii_case("stylesheet")),
+                // A dynamic rel, or a spread that may supply one, can
+                // resolve to a stylesheet at runtime.
+                Some(None) => true,
+                None => spread,
+            };
+            if may_be_stylesheet {
+                match href {
+                    Some(Some(value)) => {
+                        self.analysis.stylesheet_links.push(value.to_string());
+                    }
+                    _ => self.analysis.stylesheet_links_unverifiable = true,
+                }
+            }
+        }
+        walk::walk_jsx_opening_element(self, element);
+    }
+
     fn visit_import_declaration(&mut self, decl: &oxc_ast::ast::ImportDeclaration<'a>) {
         let type_only = decl.import_kind.is_type()
             || decl.specifiers.as_ref().is_some_and(|specifiers| {
@@ -552,6 +713,16 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
         walk::walk_call_expression(self, call);
     }
 
+    fn visit_template_literal(&mut self, template: &oxc_ast::ast::TemplateLiteral<'a>) {
+        collect_template_prefixes(template, &mut self.analysis.template_prefixes);
+        walk::walk_template_literal(self, template);
+    }
+
+    fn visit_binary_expression(&mut self, expression: &oxc_ast::ast::BinaryExpression<'a>) {
+        collect_concat_prefixes(expression, &mut self.analysis.template_prefixes);
+        walk::walk_binary_expression(self, expression);
+    }
+
     fn visit_identifier_reference(&mut self, identifier: &IdentifierReference<'a>) {
         if identifier.name == "$style" && self.is_unbound(identifier) {
             self.analysis.uses_css_module = true;
@@ -677,8 +848,12 @@ pub fn source_analysis_json(path: &str, source: &str) -> MigrationResult<String>
             uses_css_module: false,
             has_unbound_use_css_module: false,
             defines_root_use_css_module: false,
+            template_prefixes: Vec::new(),
             use_css_module_locals: use_css_module_locals.clone(),
             unbound_references: Vec::new(),
+            stylesheet_links: Vec::new(),
+            stylesheet_links_unverifiable: false,
+            renders_style_element: false,
         },
     };
     collector.visit_program(&parsed.program);
@@ -893,6 +1068,97 @@ mod tests {
             parsed["unboundReferences"],
             serde_json::json!(["first", "second"])
         );
+    }
+
+    #[test]
+    fn collects_constrained_template_prefixes() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.tsx",
+                "const cls = `mr-${side}`; const combined = `base p-${size} pt-${top}`; const open = `loose ${value}`; const fixed = `static`;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        // Trailing tokens of pre-expression quasis constrain the dynamic
+        // class; static tokens and whitespace-terminated quasis do not.
+        assert_eq!(parsed["templatePrefixes"], serde_json::json!(["mr-", "p-", "pt-"]));
+    }
+
+    #[test]
+    fn collects_jsx_stylesheet_links() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Layout.tsx",
+                "export const Layout = () => (<head><link rel=\"stylesheet\" href=\"https://cdn.example/legacy.css\" /><link rel=\"icon\" href=\"/favicon.ico\" /><link rel=\"preload stylesheet\" href=\"./theme.css\" /></head>);",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            parsed["stylesheetLinks"],
+            serde_json::json!(["https://cdn.example/legacy.css", "./theme.css"])
+        );
+        assert_eq!(parsed["stylesheetLinksUnverifiable"], false);
+
+        let dynamic: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Layout.tsx",
+                "export const Layout = ({ href }) => <link rel=\"stylesheet\" href={href} />;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(dynamic["stylesheetLinksUnverifiable"], true);
+
+        // A later spread overrides earlier explicit props, so the final
+        // rel and href are runtime values; a spread before them is
+        // repinned by the explicit attributes.
+        let overridden: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Layout.tsx",
+                "export const Layout = (props) => <link rel=\"icon\" href=\"/favicon.ico\" {...props} />;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(overridden["stylesheetLinksUnverifiable"], true);
+
+        let styled: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Page.tsx",
+                "export const Page = () => <style>{`.mr-auto { margin-right: 1px }`}</style>;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(styled["rendersStyleElement"], true);
+
+        let repinned: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Layout.tsx",
+                "export const Layout = (props) => <link {...props} rel=\"icon\" href=\"/favicon.ico\" />;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(repinned["stylesheetLinksUnverifiable"], false);
+        assert_eq!(repinned["stylesheetLinks"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn collects_constrained_concat_prefixes() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.tsx",
+                "const cls = 'mr-' + side; const chained = base + 'pt-' + top; const loose = 'open ' + value; const numeric = count + 1;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        // The trailing static token before a dynamic part constrains the
+        // class; whitespace-terminated and non-string additions do not.
+        assert_eq!(parsed["templatePrefixes"], serde_json::json!(["mr-", "pt-"]));
     }
 
     #[test]

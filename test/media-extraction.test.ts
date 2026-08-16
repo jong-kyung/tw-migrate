@@ -6,7 +6,6 @@ import { expect, onTestFinished, test } from "vite-plus/test";
 import { migrate } from "../src/index.ts";
 import { usedGeneratedDefinitions } from "../src/plan/media.ts";
 import type { Plan, PlanRule } from "../src/types.ts";
-
 const mediaCss =
   ".button { padding: 13px; }\n@media screen and (max-width: 700px) { .button { margin: 7px; } }\n";
 const consumerTsx =

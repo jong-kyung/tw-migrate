@@ -1,11 +1,11 @@
 import { lstat, readFile } from "node:fs/promises";
-import { basename, extname, join } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 
 import { unifiedDiff } from "./util/diff.ts";
 import { collectFiles, resolveScope, scannerIgnoredPaths } from "./discovery.ts";
-import { parseHtmlSource } from "./parser/html.ts";
-import { preparePackageHtml } from "./plan/html.ts";
-import { planBatchMigration, stylesheetAnalysis, validateCss } from "./native.ts";
+import { parseHtmlSource, TEMPLATE_EXPRESSIONS, TEMPLATE_MARKERS } from "./parser/html.ts";
+import { localHtmlReference, preparePackageHtml } from "./plan/html.ts";
+import { planBatchMigration, sourceAnalysis, stylesheetAnalysis, validateCss } from "./native.ts";
 import {
   indexStylesheetDependents,
   isIntegrityError,
@@ -32,6 +32,11 @@ import {
   loadTailwind,
   selectTailwindEntry,
 } from "./tailwind.ts";
+import {
+  acceptedCandidateAliases,
+  scanStylesheetReservations,
+  spellingReservations,
+} from "./plan/canonicalize.ts";
 import { importsStylesheet, proveSharedEntry, tailwindEntryCatalog } from "./plan/entry.ts";
 import type { SharedEntryProofs } from "./plan/entry.ts";
 import {
@@ -42,7 +47,10 @@ import {
   usedGeneratedDefinitions,
 } from "./plan/media.ts";
 import type { MediaCollection, MediaExtraction } from "./plan/media.ts";
+import { createRequire } from "node:module";
+
 import { verifyVueSource } from "./parser/vue.ts";
+import type { VueStyleRange } from "./parser/vue.ts";
 import { preparePackageVue, vueWarningsOnlyResult } from "./plan/vue.ts";
 import { verifySnapshots, writeChanges } from "./util/write.ts";
 import type {
@@ -189,7 +197,7 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
     styleSources.set(configuredEntry, await snapshotFile(snapshots, configuredEntry));
   }
 
-  const vueStyleRanges = new Map<string, RuleSpan[]>();
+  const vueStyleRanges = new Map<string, VueStyleRange[]>();
   const context: MigrationContext = {
     ...scope,
     options,
@@ -199,12 +207,13 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
     styleDependents: indexStylesheetDependents(styleSources),
     vueStyleRanges,
     entryCatalog: tailwindEntryCatalog(styleSources, scope.pathOwners),
-    ignoredPaths: options.workspaces
-      ? await scannerIgnoredPaths(
-          workspaceRoot,
-          sourceFiles.map((file) => file.path),
-        )
-      : new Set(),
+    // Discovery keeps Git-ignored consumers for deletion safety, but the
+    // Tailwind scanner skips them in every mode, so ignore detection must
+    // not depend on --workspaces.
+    ignoredPaths: await scannerIgnoredPaths(
+      workspaceRoot,
+      sourceFiles.map((file) => file.path),
+    ),
   };
   const failures: MigrationFailure[] = [];
   const plans: Plan[] = [];
@@ -714,6 +723,236 @@ async function planPreparedGroup(
     return leftPath < rightPath ? -1 : leftPath > rightPath ? 1 : 0;
   });
   const entry = active[0].tailwind;
+  // Canonical spellings are reserved against every authored selector,
+  // including the entry's loaded import graph, and a consumer page keeping
+  // an opaque style source (a remote or unresolved stylesheet link, or an
+  // inline style block) can contain any selector, so such a group keeps
+  // its arbitrary spellings entirely.
+  const reservations = spellingReservations(
+    context.styleSources,
+    entry.graphSources.map(
+      (graphSource) => [`${graphSource.path}.graph.css`, graphSource.source] as const,
+    ),
+    new Set(
+      entry.graphSources
+        .map((graphSource) => graphSource.path)
+        .filter((path) => path.includes("\0")),
+    ),
+  );
+  const groupFiles = new Map(
+    active.flatMap((member) => member.files.map((file) => [file.path, file] as const)),
+  );
+  const fileRoots = new Map(
+    active.flatMap((member) =>
+      member.files.map((file) => [file.path, member.packageRoot] as const),
+    ),
+  );
+  const workspaceEntries = new Set([...context.entryCatalog.values()].flat());
+  for (const file of groupFiles.values()) {
+    if (reservations.unbounded) break;
+    // Tailwind's automatic scanner never generated utilities for a
+    // scanner-ignored source, so a canonical name may newly style its
+    // static classes; the group keeps arbitrary spellings.
+    if (context.ignoredPaths.has(file.path)) {
+      reservations.unbounded = true;
+      break;
+    }
+    const opaqueStylesheetLink = (link: string) => {
+      // Root-relative hrefs resolve against the package root, matching
+      // HTML preparation's own link resolution.
+      const resolved = localHtmlReference(
+        fileRoots.get(file.path) ?? context.workspaceRoot,
+        dirname(file.path),
+        link,
+      );
+      return (
+        resolved === undefined ||
+        !context.styleSources.has(resolved) ||
+        (workspaceEntries.has(resolved) && resolved !== entry.path)
+      );
+    };
+    const opaqueStylesheetImports = (records: { specifier: string; typeOnly: boolean }[]) => {
+      for (const record of records) {
+        if (record.typeOnly) continue;
+        const specifier = record.specifier.split(/[?#]/, 1)[0];
+        if (!isStylesheetPath(specifier)) {
+          // A bare extensionless import can hide a package style entry
+          // behind an exports map; whatever node cannot resolve (bundler
+          // aliases, ESM-only maps) stays outside the reservation scope.
+          if (extname(specifier) !== "" || specifier.startsWith(".")) continue;
+          try {
+            const resolved = createRequire(file.path).resolve(specifier);
+            if (isStylesheetPath(resolved) && !context.styleSources.has(resolved)) {
+              reservations.unbounded = true;
+            }
+          } catch {
+            // Unresolvable specifiers are bundler-specific; see above.
+          }
+          continue;
+        }
+        const resolved = specifier.startsWith(".")
+          ? resolve(dirname(file.path), specifier)
+          : undefined;
+        // A different workspace entry co-loads a design system this group
+        // cannot validate against, matching the HTML-link rule below.
+        if (
+          resolved === undefined ||
+          !context.styleSources.has(resolved) ||
+          (workspaceEntries.has(resolved) && resolved !== entry.path)
+        ) {
+          reservations.unbounded = true;
+        }
+      }
+    };
+    if (extname(file.path) === ".html") {
+      try {
+        const parsed = parseHtmlSource(file.path, file.source);
+        if (parsed.hasStyle) reservations.unbounded = true;
+        // A <base> element changes what every relative link loads, so a
+        // local file matching the raw href proves nothing about the sheet
+        // the browser fetches.
+        if (parsed.bases.length > 0) reservations.unbounded = true;
+        // An unresolved local link loads a stylesheet the snapshot never
+        // parsed, and a link to another package's Tailwind entry co-loads
+        // a design system this group cannot validate against; full
+        // cross-entry compile validation lands with font registration.
+        for (const link of parsed.links) {
+          if (opaqueStylesheetLink(link.href)) reservations.unbounded = true;
+        }
+        // These decoded values never reach Tailwind's raw-text scan: a
+        // templated token's static lead reserves as a prefix, a token
+        // with no static lead can be any spelling, and a complete
+        // decoded token (an entity-bearing class) reserves its name.
+        for (const value of parsed.dynamicClassValues) {
+          const masked = value.replace(TEMPLATE_EXPRESSIONS, "\0");
+          // A marker outside a balanced expression leaves the templated
+          // region unknowable.
+          if (TEMPLATE_MARKERS.test(masked)) {
+            reservations.unbounded = true;
+            continue;
+          }
+          for (const token of masked.split(/\s+/)) {
+            if (token === "") continue;
+            const index = token.indexOf("\0");
+            if (index < 0) reservations.names.add(token);
+            else if (index === 0) reservations.unbounded = true;
+            else reservations.prefixes.add(token.slice(0, index));
+          }
+        }
+        // The planner already treats inline scripts conservatively for
+        // module retention; spelling reservations follow the same rule.
+        // An analyzable script contributes its constrained prefixes and
+        // stylesheet imports, and an unanalyzable one turns the group
+        // opaque.
+        if (parsed.scriptText.trim() !== "") {
+          try {
+            const script = sourceAnalysis(`${file.path}.inline.js`, parsed.scriptText);
+            for (const prefix of script.templatePrefixes) reservations.prefixes.add(prefix);
+            opaqueStylesheetImports(script.imports);
+          } catch {
+            reservations.unbounded = true;
+          }
+        }
+      } catch {
+        reservations.unbounded = true;
+      }
+      continue;
+    }
+    // Statically constrained dynamic class construction reserves the
+    // spellings its runtime values can complete, and a stylesheet loaded
+    // through a source import outside the discovered snapshot (a package
+    // or ignored sheet) can define any selector, so it turns the group
+    // opaque.
+    if (extname(file.path) === ".vue") {
+      // Prepared SFCs carry their template and script prefixes; a Vue file
+      // this run never analyzed, or one whose script cannot be read, can
+      // hold dynamic classes or stylesheet loads it cannot see.
+      // v-html injects runtime markup whose classes, like server-template
+      // data, can never appear in the scan corpus.
+      if (
+        file.templatePrefixes === undefined ||
+        file.sourceImportsUnverifiable === true ||
+        file.templateInjectsMarkup === true
+      ) {
+        reservations.unbounded = true;
+        continue;
+      }
+      // SFC style blocks never join the stylesheet snapshot, so their
+      // authored selectors reserve here; a block no supported syntax can
+      // parse stays opaque.
+      const styleRanges = context.vueStyleRanges.get(file.path);
+      if (styleRanges === undefined) {
+        reservations.unbounded = true;
+        continue;
+      }
+      const fileBytes = Buffer.from(file.source);
+      for (const [index, range] of styleRanges.entries()) {
+        // An external style source resolving into the snapshot is scanned
+        // there; anything else loads a sheet this run never sees.
+        if (range.src !== undefined) {
+          const resolved = range.src.startsWith(".")
+            ? resolve(dirname(file.path), range.src)
+            : undefined;
+          if (resolved === undefined || !context.styleSources.has(resolved)) {
+            reservations.unbounded = true;
+          }
+          continue;
+        }
+        const block = fileBytes.subarray(range.start, range.end).toString();
+        // The declared language is authoritative: a permissive parser can
+        // accept another syntax's dependency at-rules without recording
+        // them, silently dropping reservation input.
+        if (!["css", "scss", "sass", "less"].includes(range.lang)) {
+          reservations.unbounded = true;
+          continue;
+        }
+        // A block dependency outside the snapshot loads selectors the
+        // scan cannot see, exactly like a stylesheet's own imports.
+        scanStylesheetReservations(
+          `${file.path}.block.${index}.${range.lang}`,
+          block,
+          context.styleSources,
+          reservations,
+        );
+      }
+      for (const prefix of file.templatePrefixes) reservations.prefixes.add(prefix);
+      // Decoded class tokens the raw scan cannot read reserve complete
+      // spellings, matching the HTML entity rule.
+      for (const token of file.templateClassTokens ?? []) reservations.names.add(token);
+      // Rendered template stylesheet links load sheets like HTML links.
+      if (file.templateStylesheetLinksUnverifiable === true) reservations.unbounded = true;
+      for (const link of file.templateStylesheetLinks ?? []) {
+        if (opaqueStylesheetLink(link)) reservations.unbounded = true;
+      }
+      opaqueStylesheetImports(file.sourceImports ?? []);
+      continue;
+    }
+    if (
+      ![".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts"].includes(extname(file.path))
+    )
+      continue;
+    try {
+      const analysis = sourceAnalysis(file.path, file.source);
+      for (const prefix of analysis.templatePrefixes) {
+        reservations.prefixes.add(prefix);
+      }
+      opaqueStylesheetImports(analysis.imports);
+      // A rendered <style> element carries selectors this analysis never
+      // reads, matching the HTML hasStyle rule.
+      if (analysis.rendersStyleElement) reservations.unbounded = true;
+      // A rendered stylesheet link loads a sheet like an HTML document
+      // link: a remote, unresolved, or other-entry target is opaque.
+      if (analysis.stylesheetLinksUnverifiable) reservations.unbounded = true;
+      for (const link of analysis.stylesheetLinks) {
+        if (opaqueStylesheetLink(link)) reservations.unbounded = true;
+      }
+    } catch {
+      // An unparseable source can dynamically supply any class or load
+      // any stylesheet, matching the HTML and Vue failure paths; the
+      // planner keeps such non-writable consumers as opaque references.
+      reservations.unbounded = true;
+    }
+  }
   const recoverGroup = (error: unknown, fatal = false): PlanResult[] => {
     if (!options.force || fatal) throw error;
     // Group-level failures affect every package depending on the shared
@@ -859,6 +1098,8 @@ async function planPreparedGroup(
   };
   let augmented = entry.css;
   const blocked: BlockedRules = new Map();
+  let candidateAliases: Record<string, string> | undefined;
+  let canonicalized = false;
 
   // The whole group plans as one native batch, so cross-member conflicts
   // on shared consumers go through the same analysis as conflicts inside
@@ -971,6 +1212,7 @@ async function planPreparedGroup(
         utilityPrefix: entry.designSystem.theme.prefix,
         themeTokens: entry.themeTokens,
         ...(names ? { mediaNames: names } : {}),
+        ...(candidateAliases ? { candidateAliases } : {}),
         ...(groupWritable ? {} : { entryWritable: false }),
         files,
       };
@@ -1046,6 +1288,22 @@ async function planPreparedGroup(
           throw new Error(`Tailwind did not generate CSS for candidate: ${failing[0]}`);
         }
         continue planning;
+      }
+      // One bounded canonicalization replan: the provisional system above
+      // already contains every generated media definition, so complete
+      // probes canonicalize with their variants, and accepted aliases are
+      // rendered by the planner on the next pass.
+      if (!canonicalized) {
+        canonicalized = true;
+        const aliases = acceptedCandidateAliases(
+          replanSystem,
+          plan.candidateProbes ?? [],
+          reservations,
+        );
+        if (Object.keys(aliases).length > 0) {
+          candidateAliases = aliases;
+          continue planning;
+        }
       }
       break;
     }

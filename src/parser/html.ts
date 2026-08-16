@@ -1,6 +1,11 @@
 import { parse, type Token } from "parse5";
 
-const TEMPLATE_MARKERS = /\{\{|\}\}|\$\{|<%|%>|<#|#>|\[%|%\]/;
+export const TEMPLATE_MARKERS = /\{\{|\}\}|\$\{|<%|%>|<#|#>|\[%|%\]/;
+
+/** Balanced template expressions, for masking a templated attribute value
+ * before extracting its static class-prefix tokens. */
+export const TEMPLATE_EXPRESSIONS =
+  /\{\{[\s\S]*?\}\}|\$\{[\s\S]*?\}|<%[\s\S]*?%>|<#[\s\S]*?#>|\[%[\s\S]*?%\]/g;
 
 // Minimal structural view of the parse5 tree; the walk duck-types nodes the
 // same way the untyped implementation did.
@@ -53,6 +58,9 @@ interface ParsedHtml {
   bases: HtmlBase[];
   elements: HtmlElementAttributes[];
   dynamicAttributes: HtmlSpan[];
+  /** Decoded values of dynamic class attributes, so spelling
+   * reservations can extract template-constrained prefixes. */
+  dynamicClassValues: string[];
   scriptText: string;
   hasStyle: boolean;
 }
@@ -77,6 +85,7 @@ export function parseHtmlSource(path: string, source: string): ParsedHtml {
   const bases: HtmlBase[] = [];
   const elements: HtmlElementAttributes[] = [];
   const dynamicAttributes: HtmlSpan[] = [];
+  const dynamicClassValues: string[] = [];
   const scriptTexts: string[] = [];
   let hasStyle = false;
   // The value span of a quoted attribute starts right after its quote, so the
@@ -145,6 +154,22 @@ export function parseHtmlSource(path: string, source: string): ParsedHtml {
           (classAttribute && unquoted(classAttribute) ? classAttribute : undefined);
         if (dynamic) {
           dynamicAttributes.push({ start: dynamic.start, end: dynamic.end });
+          // Templated, entity-bearing, and unlocatable class values are
+          // invisible to Tailwind's raw-text scan, so their decoded forms
+          // feed spelling reservations. A clean unquoted value reads the
+          // same raw and decoded, so the scanner already covers it.
+          const decoded = attributes.get("class");
+          const entityBearing =
+            classAttribute !== undefined &&
+            dynamic === classAttribute &&
+            classAttribute.writable === false;
+          if (
+            dynamic !== idAttribute &&
+            decoded !== undefined &&
+            (TEMPLATE_MARKERS.test(decoded) || entityBearing || dynamic === unparsedClass)
+          ) {
+            dynamicClassValues.push(decoded);
+          }
         } else if (classAttribute || idAttribute) {
           if (!classAttribute && idAttribute) {
             const startTag = node.sourceCodeLocation?.startTag;
@@ -169,6 +194,7 @@ export function parseHtmlSource(path: string, source: string): ParsedHtml {
   visit(document);
   return {
     ...toByteOffsets(source, { links, bases, elements, dynamicAttributes }),
+    dynamicClassValues,
     scriptText: scriptTexts.join("\n"),
     hasStyle,
   };
@@ -201,8 +227,8 @@ export function offsetLookup(offsets: Map<number, number>): (index: number) => n
 
 function toByteOffsets(
   source: string,
-  parsed: Omit<ParsedHtml, "scriptText" | "hasStyle">,
-): Omit<ParsedHtml, "scriptText" | "hasStyle"> {
+  parsed: Omit<ParsedHtml, "dynamicClassValues" | "scriptText" | "hasStyle">,
+): Omit<ParsedHtml, "dynamicClassValues" | "scriptText" | "hasStyle"> {
   const offsets = utf8OffsetMap(source, [
     ...parsed.links.flatMap((link) => [link.start, link.end, link.tagStart, link.tagEnd]),
     ...parsed.bases.flatMap((base) => [base.start, base.end]),

@@ -203,6 +203,15 @@ export function stylesheetReferenceTargets(
   return candidates.filter((path) => styleSources.has(path));
 }
 
+/// The query- and hash-stripped target of a link href, or undefined for
+/// an empty, scheme-qualified, or protocol-relative reference that never
+/// resolves into the local snapshot.
+export function localHrefTarget(href: string): string | undefined {
+  const target = href.split(/[?#]/, 1)[0];
+  if (!target || /^[a-z][a-z0-9+.-]*:|^\/\//i.test(target)) return undefined;
+  return target;
+}
+
 export function cssImports(path: string, source: string): CssImport[] {
   return stylesheetAnalysis(path, source).imports;
 }

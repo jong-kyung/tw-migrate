@@ -5,6 +5,7 @@ pub(super) fn plan_consumer_file(
     css_path: &str,
     is_module: bool,
     candidates: &HashMap<SelectorKey, Vec<String>>,
+    candidate_properties: &HashMap<String, BTreeSet<String>>,
     preserved_module_classes: &BTreeSet<String>,
     module_rule_classes: Option<&BTreeSet<String>>,
     utility_prefix: Option<&str>,
@@ -37,7 +38,14 @@ pub(super) fn plan_consumer_file(
         {
             return Ok(plan_html_file(file, css_path, candidates, utility_prefix));
         }
-        return plan_batch_source_file(file, css_path, false, candidates, preserved_module_classes);
+        return plan_batch_source_file(
+            file,
+            css_path,
+            false,
+            candidates,
+            candidate_properties,
+            preserved_module_classes,
+        );
     }
     if stylesheet_is_vue || file_is_vue {
         if file_is_vue && file.has_analyzable_context(css_path) {
@@ -59,6 +67,7 @@ pub(super) fn plan_consumer_file(
         css_path,
         is_module,
         candidates,
+        candidate_properties,
         preserved_module_classes,
     )
 }

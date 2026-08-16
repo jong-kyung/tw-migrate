@@ -11,9 +11,10 @@ use tw_migrate_error::{MigrationError, MigrationResult};
 use crate::at_rules::parse_css;
 use oxc_css_parser::Syntax;
 use oxc_css_parser::ast::{
-    AtRulePrelude, ColorProfilePrelude, CombinatorKind, ComplexSelectorChild, ComponentValue,
-    CompoundSelector, FontFamilyName, ImportPrelude, ImportPreludeHref, InterpolableIdent,
-    InterpolableStr, PseudoClassSelectorArgKind, SimpleSelector, Statement, UrlValue,
+    AtRulePrelude, AttributeSelectorMatcherKind, AttributeSelectorValue, ColorProfilePrelude,
+    CombinatorKind, ComplexSelectorChild, ComponentValue, CompoundSelector, FontFamilyName,
+    ImportPrelude, ImportPreludeHref, InterpolableIdent, InterpolableStr,
+    PseudoClassSelectorArgKind, SimpleSelector, Statement, UrlValue,
 };
 
 #[derive(Serialize)]
@@ -38,6 +39,14 @@ pub(crate) struct StylesheetAnalysis {
     theme_tokens: BTreeMap<String, String>,
     global_at_rule_identities: Vec<String>,
     global_at_rules_unverifiable: bool,
+    /// Authored class spellings this stylesheet's selectors can match:
+    /// literal class selectors plus exact and word-matching class-attribute
+    /// selector values. Canonicalization reserves these spellings.
+    class_names: Vec<String>,
+    /// True when a selector's class match set cannot be bounded: an
+    /// interpolated class name, or a class-attribute matcher such as
+    /// `[class*=]` whose semantics exceed word equality.
+    class_reservations_unbounded: bool,
 }
 
 fn stylesheet_syntax(path: &str) -> Result<Syntax, String> {
@@ -197,6 +206,188 @@ fn collect_compound_scope_escapes(
     found
 }
 
+fn collect_compound_selector_classes(
+    compound: &CompoundSelector<'_>,
+    parent_classes: &[String],
+    analysis: &mut StylesheetAnalysis,
+) {
+    for simple in &compound.children {
+        match simple {
+            SimpleSelector::Class(class) => match literal_ident(&class.name) {
+                Some(name) => analysis.class_names.push(name.to_string()),
+                None => analysis.class_reservations_unbounded = true,
+            },
+            // A suffixed parent selector compiles each parent class with
+            // the suffix appended, so `.mr- { &auto {} }` reserves
+            // `mr-auto`. A suffix with no class parents (or one the parser
+            // cannot read) stays unbounded.
+            SimpleSelector::Nesting(nesting) if nesting.suffix.is_some() => {
+                match nesting.suffix.as_ref().and_then(static_ident_text) {
+                    Some(suffix) if !parent_classes.is_empty() => {
+                        for parent in parent_classes {
+                            analysis.class_names.push(format!("{parent}{suffix}"));
+                        }
+                    }
+                    _ => analysis.class_reservations_unbounded = true,
+                }
+            }
+            // A nonliteral tag position interpolates arbitrary selector
+            // text, which can be a class selector such as `.mr-auto`.
+            SimpleSelector::Type(oxc_css_parser::ast::TypeSelector::TagName(tag))
+                if !matches!(tag.name.name, InterpolableIdent::Literal(_)) =>
+            {
+                analysis.class_reservations_unbounded = true;
+            }
+            SimpleSelector::Attribute(attribute) => {
+                let Some(name) = literal_ident(&attribute.name.name) else {
+                    // An interpolated attribute name can resolve to
+                    // `class`, so the match set cannot be bounded.
+                    analysis.class_reservations_unbounded = true;
+                    continue;
+                };
+                if name != "class" {
+                    continue;
+                }
+                let value = attribute.value.as_ref().and_then(|value| match value {
+                    AttributeSelectorValue::Ident(ident) => {
+                        literal_ident(ident).map(str::to_string)
+                    }
+                    AttributeSelectorValue::Str(value) => literal_str(value),
+                    _ => None,
+                });
+                let case_insensitive = attribute.modifier.is_some();
+                match (attribute.matcher.as_ref().map(|matcher| &matcher.kind), value) {
+                    // `[class]` alone matches presence, not a spelling.
+                    (None, _) => {}
+                    (
+                        Some(
+                            AttributeSelectorMatcherKind::Exact
+                            | AttributeSelectorMatcherKind::MatchWord,
+                        ),
+                        Some(value),
+                    ) => analysis.class_names.extend(value.split_whitespace().map(|word| {
+                        // Canonical spellings are lowercase, so an
+                        // ASCII-case-insensitive matcher reserves through
+                        // its lowercase form.
+                        if case_insensitive {
+                            word.to_ascii_lowercase()
+                        } else {
+                            word.to_string()
+                        }
+                    })),
+                    _ => analysis.class_reservations_unbounded = true,
+                }
+            }
+            SimpleSelector::PseudoClass(pseudo) => {
+                if let Some(arg) = &pseudo.arg {
+                    collect_pseudo_arg_classes(&arg.kind, parent_classes, analysis);
+                }
+            }
+            SimpleSelector::PseudoElement(pseudo) => {
+                if let Some(arg) = &pseudo.arg {
+                    match &arg.kind {
+                        oxc_css_parser::ast::PseudoElementSelectorArgKind::CompoundSelector(
+                            compound,
+                        ) => collect_compound_selector_classes(compound, parent_classes, analysis),
+                        oxc_css_parser::ast::PseudoElementSelectorArgKind::CompoundSelectorList(
+                            list,
+                        ) => {
+                            for selector in &list.selectors {
+                                collect_compound_selector_classes(
+                                    selector,
+                                    parent_classes,
+                                    analysis,
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_pseudo_arg_classes(
+    kind: &PseudoClassSelectorArgKind<'_>,
+    parent_classes: &[String],
+    analysis: &mut StylesheetAnalysis,
+) {
+    match kind {
+        PseudoClassSelectorArgKind::CompoundSelectorList(list) => {
+            for selector in &list.selectors {
+                collect_compound_selector_classes(selector, parent_classes, analysis);
+            }
+        }
+        PseudoClassSelectorArgKind::RelativeSelectorList(list) => {
+            for selector in &list.selectors {
+                collect_selector_classes(&selector.complex_selector, parent_classes, analysis);
+            }
+        }
+        PseudoClassSelectorArgKind::SelectorList(list) => {
+            for selector in &list.selectors {
+                collect_selector_classes(selector, parent_classes, analysis);
+            }
+        }
+        PseudoClassSelectorArgKind::Nth(nth) => {
+            if let Some(list) = nth.matcher.as_ref().and_then(|matcher| matcher.selector.as_ref()) {
+                for selector in &list.selectors {
+                    collect_selector_classes(selector, parent_classes, analysis);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_selector_classes(
+    selector: &oxc_css_parser::ast::ComplexSelector<'_>,
+    parent_classes: &[String],
+    analysis: &mut StylesheetAnalysis,
+) {
+    for child in &selector.children {
+        if let ComplexSelectorChild::CompoundSelector(compound) = child {
+            collect_compound_selector_classes(compound, parent_classes, analysis);
+        }
+    }
+}
+
+/// Literal class names of one selector list, resolved against the current
+/// parents so chained suffix nesting keeps compounding.
+fn selector_class_names(
+    selectors: &oxc_css_parser::ast::SelectorList<'_>,
+    parent_classes: &[String],
+) -> Vec<String> {
+    let mut names = Vec::new();
+    for selector in &selectors.selectors {
+        for child in &selector.children {
+            if let ComplexSelectorChild::CompoundSelector(compound) = child {
+                for simple in &compound.children {
+                    match simple {
+                        SimpleSelector::Class(class) => {
+                            if let Some(name) = literal_ident(&class.name) {
+                                names.push(name.to_string());
+                            }
+                        }
+                        SimpleSelector::Nesting(nesting) if nesting.suffix.is_some() => {
+                            if let Some(suffix) =
+                                nesting.suffix.as_ref().and_then(static_ident_text)
+                            {
+                                for parent in parent_classes {
+                                    names.push(format!("{parent}{suffix}"));
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    names
+}
+
 fn collect_scope_escapes(
     selector: &oxc_css_parser::ast::ComplexSelector<'_>,
     source: &str,
@@ -258,6 +449,27 @@ fn declaration_value(source: &str, declaration: &oxc_css_parser::ast::Declaratio
     source[first.span().start..last.span().end]
         .trim()
         .to_string()
+}
+
+/// The static text of an ident, covering the plain literal form and a
+/// Sass-interpolated ident whose elements are all static (the parser's
+/// representation of a plain nesting suffix such as `&auto`).
+fn static_ident_text(value: &InterpolableIdent<'_>) -> Option<String> {
+    match value {
+        InterpolableIdent::Literal(value) => Some(value.name.to_string()),
+        InterpolableIdent::SassInterpolated(value) => value
+            .elements
+            .iter()
+            .map(|element| match element {
+                oxc_css_parser::ast::SassInterpolatedIdentElement::Static(part) => {
+                    Some(part.value.to_string())
+                }
+                oxc_css_parser::ast::SassInterpolatedIdentElement::Expression(_) => None,
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(|parts| parts.join("")),
+        _ => None,
+    }
 }
 
 fn literal_ident<'a>(value: &'a InterpolableIdent<'a>) -> Option<&'a str> {
@@ -366,16 +578,160 @@ fn collect_at_rule_metadata(
     }
 }
 
+/// Collect `.name` class tokens from raw selector text. An escape makes
+/// the match set unbounded because the decoded spelling is unknowable to
+/// this scanner.
+fn collect_selector_text_classes(text: &str, analysis: &mut StylesheetAnalysis) {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\\' {
+            analysis.class_reservations_unbounded = true;
+            return;
+        }
+        if bytes[index] == b'.' {
+            let start = index + 1;
+            let mut end = start;
+            while end < bytes.len()
+                && (bytes[end].is_ascii_alphanumeric()
+                    || bytes[end] == b'_'
+                    || bytes[end] == b'-'
+                    || !bytes[end].is_ascii())
+            {
+                end += 1;
+            }
+            if end > start {
+                analysis.class_names.push(text[start..end].to_string());
+            }
+            index = end.max(index + 1);
+            continue;
+        }
+        index += 1;
+    }
+}
+
+/// A bare `:export` selector, the ICSS block whose declaration values a
+/// CSS Modules loader hands to JavaScript verbatim.
+fn is_icss_export_selector(selectors: &oxc_css_parser::ast::SelectorList<'_>) -> bool {
+    selectors.selectors.iter().any(|selector| {
+        selector.children.iter().any(|child| {
+            let ComplexSelectorChild::CompoundSelector(compound) = child else {
+                return false;
+            };
+            compound.children.iter().any(|simple| {
+                matches!(
+                    simple,
+                    SimpleSelector::PseudoClass(pseudo)
+                        if matches!(&pseudo.name, InterpolableIdent::Literal(name) if name.name == "export")
+                )
+            })
+        })
+    })
+}
+
 fn collect_stylesheet_statements(
     statements: &[Statement<'_>],
     source: &str,
+    parent_classes: &[String],
     analysis: &mut StylesheetAnalysis,
 ) -> bool {
     let mut has_scope_escape = false;
     for statement in statements {
         match statement {
             Statement::AtRule(at_rule) => {
+                let mut at_rule_parents: Option<Vec<String>> = None;
                 match &at_rule.prelude {
+                    // `meta.load-css` executes another stylesheet into the
+                    // output, and its target stays invisible to this scan
+                    // under any namespace alias, so the sheet's
+                    // dependencies become unknowable.
+                    Some(AtRulePrelude::SassInclude(include)) => {
+                        let text = &source[include.span.start..include.span.end];
+                        let name = text.split(['(', ' ']).next().unwrap_or("").trim();
+                        if name == "load-css" || name.ends_with(".load-css") {
+                            analysis.unverifiable = true;
+                        }
+                    }
+                    // A Less `@plugin` executes JavaScript that can
+                    // synthesize arbitrary selectors during compilation, so
+                    // the sheet's class match set cannot be bounded.
+                    _ if at_rule.name.name == "plugin" => {
+                        analysis.class_reservations_unbounded = true;
+                    }
+                    // A shorthand `@custom-variant` prelude embeds a raw
+                    // selector whose classes never pass through the
+                    // selector walk; the block form's inner rules are
+                    // collected by the generic recursion below.
+                    _ if at_rule.name.name == "custom-variant" && at_rule.block.is_none() => {
+                        let text = &source[at_rule.span.start..at_rule.span.end];
+                        // A class-attribute selector matches class tokens
+                        // this dot-token scan cannot enumerate.
+                        if text.contains("[class") {
+                            analysis.class_reservations_unbounded = true;
+                        }
+                        collect_selector_text_classes(text, analysis);
+                    }
+                    // A `@utility` definition owns its class spelling in
+                    // the built output, so a canonical alias must never
+                    // adopt it; a functional `name-*` utility owns an
+                    // unbounded family of spellings.
+                    _ if at_rule.name.name == "utility" => {
+                        let prelude = at_rule
+                            .block
+                            .as_ref()
+                            .map(|block| source[at_rule.span.start..block.span.start].trim())
+                            .and_then(|text| text.strip_prefix("@utility"))
+                            .map(str::trim)
+                            .unwrap_or("");
+                        // Anything but a plain utility name (a functional
+                        // `name-*`, a comment, leftover tokens, or an
+                        // unreadable prelude) conservatively owns an
+                        // unknowable spelling family.
+                        let plain = !prelude.is_empty()
+                            && prelude.chars().all(|character| {
+                                character.is_ascii_alphanumeric()
+                                    || character == '_'
+                                    || character == '-'
+                                    || !character.is_ascii()
+                            })
+                            && !prelude.ends_with("-*");
+                        if plain {
+                            analysis.class_names.push(prelude.to_string());
+                        } else {
+                            analysis.class_reservations_unbounded = true;
+                        }
+                    }
+                    // A selector-prelude `@at-root` emits its rule at the
+                    // stylesheet root, so its classes reserve like rule
+                    // selectors and parent nested rules resolve against it.
+                    Some(AtRulePrelude::SassAtRoot(prelude)) => {
+                        if let oxc_css_parser::ast::SassAtRootKind::Selector(list) = &prelude.kind {
+                            for selector in &list.selectors {
+                                collect_selector_classes(selector, parent_classes, analysis);
+                            }
+                            at_rule_parents = Some(selector_class_names(list, parent_classes));
+                        }
+                    }
+                    // `@scope` roots and limits match live elements, so
+                    // their selectors reserve spellings like rule selectors.
+                    Some(AtRulePrelude::Scope(prelude)) => {
+                        let (start, end) = match prelude.as_ref() {
+                            oxc_css_parser::ast::ScopePrelude::StartOnly(start) => {
+                                (start.selector.as_ref(), None)
+                            }
+                            oxc_css_parser::ast::ScopePrelude::EndOnly(end) => {
+                                (None, end.selector.as_ref())
+                            }
+                            oxc_css_parser::ast::ScopePrelude::Both(both) => {
+                                (both.start.selector.as_ref(), both.end.selector.as_ref())
+                            }
+                        };
+                        for list in [start, end].into_iter().flatten() {
+                            for selector in &list.selectors {
+                                collect_selector_classes(selector, parent_classes, analysis);
+                            }
+                        }
+                    }
                     Some(AtRulePrelude::Import(prelude)) => match import_href(&prelude.href) {
                         Some(reference) => analysis.references.push(reference),
                         None => analysis.unverifiable = true,
@@ -400,20 +756,103 @@ fn collect_stylesheet_statements(
                     _ => {}
                 }
                 if let Some(block) = &at_rule.block {
-                    has_scope_escape |=
-                        collect_stylesheet_statements(&block.statements, source, analysis);
+                    has_scope_escape |= collect_stylesheet_statements(
+                        &block.statements,
+                        source,
+                        at_rule_parents.as_deref().unwrap_or(parent_classes),
+                        analysis,
+                    );
                 }
             }
             Statement::QualifiedRule(rule) => {
+                // Raw ICSS `:import("...")` loads another module, so its
+                // target joins reference resolution like a composes
+                // source; an unreadable target is unknowable.
+                for selector in &rule.selector.selectors {
+                    for child in &selector.children {
+                        let ComplexSelectorChild::CompoundSelector(compound) = child else {
+                            continue;
+                        };
+                        for simple in &compound.children {
+                            let SimpleSelector::PseudoClass(pseudo) = simple else {
+                                continue;
+                            };
+                            if !matches!(&pseudo.name, InterpolableIdent::Literal(name) if name.name == "import")
+                            {
+                                continue;
+                            }
+                            let reference = pseudo.arg.as_ref().and_then(|arg| {
+                                let text = source[arg.span.start..arg.span.end]
+                                    .trim()
+                                    .trim_start_matches('(')
+                                    .trim_end_matches(')')
+                                    .trim();
+                                text.strip_prefix('"')
+                                    .and_then(|text| text.strip_suffix('"'))
+                                    .or_else(|| {
+                                        text.strip_prefix('\'')
+                                            .and_then(|text| text.strip_suffix('\''))
+                                    })
+                                    .filter(|reference| !reference.is_empty())
+                            });
+                            match reference {
+                                Some(reference) => analysis.references.push(reference.to_string()),
+                                None => analysis.unverifiable = true,
+                            }
+                        }
+                    }
+                }
+                // ICSS `:export` values surface through the module's JS
+                // object as literal runtime tokens, so ident and string
+                // values reserve their spellings.
+                if is_icss_export_selector(&rule.selector) {
+                    for statement in &rule.block.statements {
+                        let Statement::Declaration(declaration) = statement else {
+                            continue;
+                        };
+                        for value in &declaration.value {
+                            match value {
+                                ComponentValue::InterpolableIdent(InterpolableIdent::Literal(
+                                    ident,
+                                )) => analysis.class_names.push(ident.name.to_string()),
+                                ComponentValue::InterpolableStr(value) => {
+                                    match literal_str(value) {
+                                        Some(text) => analysis.class_names.extend(
+                                            text.split_whitespace().map(str::to_string),
+                                        ),
+                                        None => analysis.class_reservations_unbounded = true,
+                                    }
+                                }
+                                // A preprocessor variable or interpolation
+                                // compiles to an export token this scan
+                                // cannot read; provably non-class literals
+                                // (numbers, colors, functions) stay inert.
+                                ComponentValue::SassVariable(_)
+                                | ComponentValue::LessVariable(_)
+                                | ComponentValue::LessVariableCall(_)
+                                | ComponentValue::LessVariableVariable(_)
+                                | ComponentValue::InterpolableIdent(_) => {
+                                    analysis.class_reservations_unbounded = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
                 let mut direct = false;
                 for selector in &rule.selector.selectors {
                     direct |= collect_scope_escapes(selector, source, analysis);
+                    collect_selector_classes(selector, parent_classes, analysis);
                     if selector_is_unverifiable(selector) {
                         analysis.selectors_unverifiable = true;
                     }
                 }
-                let nested =
-                    collect_stylesheet_statements(&rule.block.statements, source, analysis);
+                let nested = collect_stylesheet_statements(
+                    &rule.block.statements,
+                    source,
+                    &selector_class_names(&rule.selector, parent_classes),
+                    analysis,
+                );
                 if nested {
                     // Reconstructing mixed declaration and nested-rule scope is
                     // outside this collector; retain conservatively.
@@ -436,6 +875,12 @@ fn collect_stylesheet_statements(
                 }
                 let mut from = false;
                 let mut reference_read = false;
+                // Class tokens before `from`: a global composition exports
+                // them as literal runtime classes, so they reserve their
+                // spellings; hashed local and cross-module compositions
+                // never surface literal tokens.
+                let mut composed = Vec::new();
+                let mut composed_unreadable = false;
                 for value in &declaration.value {
                     if from {
                         match value {
@@ -450,6 +895,10 @@ fn collect_stylesheet_statements(
                                 ident,
                             )) if ident.name == "global" => {
                                 reference_read = true;
+                                analysis.class_names.append(&mut composed);
+                                if composed_unreadable {
+                                    analysis.class_reservations_unbounded = true;
+                                }
                             }
                             _ => analysis.unverifiable = true,
                         }
@@ -458,6 +907,13 @@ fn collect_stylesheet_statements(
                     if matches!(value, ComponentValue::InterpolableIdent(InterpolableIdent::Literal(ident)) if ident.name == "from")
                     {
                         from = true;
+                    } else {
+                        match value {
+                            ComponentValue::InterpolableIdent(InterpolableIdent::Literal(
+                                ident,
+                            )) => composed.push(ident.name.to_string()),
+                            _ => composed_unreadable = true,
+                        }
                     }
                 }
                 if from && !reference_read {
@@ -522,15 +978,115 @@ pub fn stylesheet_analysis_json(path: &str, source: &str) -> MigrationResult<Str
         theme_tokens: BTreeMap::new(),
         global_at_rule_identities: Vec::new(),
         global_at_rules_unverifiable: false,
+        class_names: Vec::new(),
+        class_reservations_unbounded: false,
     };
-    collect_stylesheet_statements(&parsed.statements, source, &mut analysis);
+    collect_stylesheet_statements(&parsed.statements, source, &[], &mut analysis);
     collect_at_rule_metadata(&parsed.statements, source, syntax, &mut analysis);
     if syntax == Syntax::Css {
         collect_loading_imports(&parsed.statements, source, &mut analysis);
     }
     analysis.references.sort();
     analysis.references.dedup();
+    analysis.class_names.sort();
+    analysis.class_names.dedup();
     serde_json::to_string(&analysis).map_err(|error| MigrationError::Serialization {
+        message: error.to_string(),
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompiledShape {
+    declarations: Vec<CompiledDeclaration>,
+    referenced_properties: Vec<String>,
+}
+
+#[derive(Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "camelCase")]
+struct CompiledDeclaration {
+    property: String,
+    important: bool,
+}
+
+fn collect_value_references(values: &[ComponentValue<'_>], references: &mut Vec<String>) {
+    for value in values {
+        match value {
+            ComponentValue::Function(function) => {
+                if matches!(
+                    &function.name,
+                    oxc_css_parser::ast::FunctionName::Ident(InterpolableIdent::Literal(name))
+                        if name.name == "var"
+                ) && let Some(ComponentValue::InterpolableIdent(InterpolableIdent::Literal(
+                    ident,
+                ))) = function.args.first()
+                    && ident.name.starts_with("--")
+                {
+                    references.push(ident.name.to_string());
+                }
+                collect_value_references(&function.args, references);
+            }
+            ComponentValue::Calc(calc) => {
+                collect_value_references(std::slice::from_ref(&calc.left), references);
+                collect_value_references(std::slice::from_ref(&calc.right), references);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_shape_statements(
+    statements: &[Statement<'_>],
+    shape: &mut CompiledShape,
+) -> Result<(), String> {
+    for statement in statements {
+        match statement {
+            Statement::Declaration(declaration) => {
+                let InterpolableIdent::Literal(name) = &declaration.name else {
+                    return Err("Nonliteral compiled property".to_string());
+                };
+                shape.declarations.push(CompiledDeclaration {
+                    property: name.name.to_string(),
+                    important: declaration.important.is_some(),
+                });
+                collect_value_references(&declaration.value, &mut shape.referenced_properties);
+            }
+            Statement::QualifiedRule(rule) => {
+                collect_shape_statements(&rule.block.statements, shape)?;
+            }
+            Statement::AtRule(at_rule) => {
+                if let Some(block) = &at_rule.block {
+                    collect_shape_statements(&block.statements, shape)?;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// The declaration shape of one compiled Tailwind utility: every effective
+/// property with its importance, in sorted order, plus every custom
+/// property the compiled values dereference. The orchestration layer
+/// compares shapes to reject canonical aliases with companion declarations
+/// and to prove literal runtime stability.
+pub fn compiled_shape_json(css: &str) -> MigrationResult<String> {
+    let allocator = oxc_css_parser::Allocator::default();
+    let parsed = parse_css(&allocator, css, Syntax::Css).map_err(|error| {
+        MigrationError::EditedStylesheetParse {
+            message: format!("Failed to parse compiled CSS: {error}"),
+        }
+    })?;
+    let mut shape = CompiledShape {
+        declarations: Vec::new(),
+        referenced_properties: Vec::new(),
+    };
+    collect_shape_statements(&parsed.statements, &mut shape)
+        .map_err(|message| MigrationError::EditedStylesheetParse { message })?;
+    shape.declarations.sort();
+    shape.referenced_properties.sort();
+    shape.referenced_properties.dedup();
+    serde_json::to_string(&shape).map_err(|error| MigrationError::Serialization {
         message: error.to_string(),
     })
 }
@@ -652,6 +1208,341 @@ mod tests {
         );
         assert_eq!(parsed["scopeEscapesUnverifiable"], true);
         assert_eq!(parsed["selectorsUnverifiable"], false);
+    }
+
+    #[test]
+    fn collects_authored_class_reservations() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/legacy.css",
+                ".mr-auto { margin-right: auto; }\n.card:is(.p-4, .stack) {}\n[class~=\"font-open-sans\"] { color: red; }\n[class=\"pill wide\"] {}\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            parsed["classNames"],
+            serde_json::json!(["card", "font-open-sans", "mr-auto", "p-4", "pill", "stack", "wide"])
+        );
+        assert_eq!(parsed["classReservationsUnbounded"], false);
+    }
+
+    #[test]
+    fn reserves_case_insensitive_and_scope_prelude_classes() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/legacy.css",
+                "[class~=\"MR-AUTO\" i] { color: red; }\n@scope (.p-4) to (.stack) { .legacy { color: blue; } }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            parsed["classNames"],
+            serde_json::json!(["legacy", "mr-auto", "p-4", "stack"])
+        );
+        assert_eq!(parsed["classReservationsUnbounded"], false);
+    }
+
+    #[test]
+    fn resolves_suffixed_nesting_selectors_against_parents() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/legacy.scss",
+                ".mr- { &auto { color: red; } }\n.btn { &-primary { color: blue; } }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let names = parsed["classNames"].as_array().unwrap();
+        assert!(names.contains(&serde_json::json!("mr-auto")), "{parsed}");
+        assert!(names.contains(&serde_json::json!("btn-primary")), "{names:?}");
+        assert_eq!(parsed["classReservationsUnbounded"], false);
+    }
+
+    #[test]
+    fn marks_unbounded_class_attribute_matchers() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json("/p/legacy.css", "[class*=\"auto\"] { color: red; }\n")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["classReservationsUnbounded"], true);
+    }
+
+    #[test]
+    fn marks_load_css_includes_unverifiable() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/main.scss",
+                "@use \"sass:meta\" as m;\n@include m.load-css(\"pkg/theme\");\n.card { color: red; }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["unverifiable"], true);
+
+        let plain: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/main.scss",
+                "@mixin pad { padding: 1rem; }\n.card { @include pad; }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(plain["unverifiable"], false);
+    }
+
+    #[test]
+    fn marks_less_plugins_unbounded() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/main.less",
+                "@plugin \"plugin.js\";\n.card { color: red; }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["classReservationsUnbounded"], true);
+    }
+
+    #[test]
+    fn records_icss_import_targets_as_references() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/Card.module.css",
+                ":import(\"./legacy.css\") { legacy: button; }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            parsed["references"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("./legacy.css")),
+            "{parsed}"
+        );
+        assert_eq!(parsed["unverifiable"], false);
+    }
+
+    #[test]
+    fn marks_nonliteral_icss_export_values_unbounded() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/Card.module.scss",
+                "$name: mr-auto;\n:export { legacy: $name; }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["classReservationsUnbounded"], true);
+    }
+
+    #[test]
+    fn reserves_icss_export_value_tokens() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/Card.module.css",
+                ":export { legacy: mr-auto; stack: \"pull-left pull-right\"; width: 768px; }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let names = parsed["classNames"].as_array().unwrap();
+        assert!(names.contains(&serde_json::json!("mr-auto")), "{names:?}");
+        assert!(names.contains(&serde_json::json!("pull-left")), "{names:?}");
+        assert!(names.contains(&serde_json::json!("pull-right")), "{names:?}");
+        assert_eq!(parsed["classReservationsUnbounded"], false);
+    }
+
+    #[test]
+    fn reserves_globally_composed_class_tokens() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/Card.module.css",
+                ".featured { composes: mr-auto pull-left from global; }\n.local { composes: featured; }\n.imported { composes: badge from \"./other.module.css\"; }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let names = parsed["classNames"].as_array().unwrap();
+        assert!(names.contains(&serde_json::json!("mr-auto")), "{names:?}");
+        assert!(names.contains(&serde_json::json!("pull-left")), "{names:?}");
+        // Local and cross-module compositions surface hashed classes only.
+        assert!(!names.contains(&serde_json::json!("badge")), "{names:?}");
+        assert_eq!(parsed["classReservationsUnbounded"], false);
+    }
+
+    #[test]
+    fn reserves_custom_variant_selector_classes() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/globals.css",
+                "@custom-variant parent-auto (&:where(.mr-auto *));\n@custom-variant dark {\n  &:where(.dark-mode, .dark-mode *) {\n    @slot;\n  }\n}\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let names = parsed["classNames"].as_array().unwrap();
+        assert!(names.contains(&serde_json::json!("mr-auto")), "{names:?}");
+        assert!(names.contains(&serde_json::json!("dark-mode")), "{names:?}");
+        assert_eq!(parsed["classReservationsUnbounded"], false);
+
+        // Class-attribute selectors match spellings the dot-token scan
+        // cannot enumerate, while other attribute variants stay bounded.
+        let attribute: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/globals.css",
+                "@custom-variant parent-auto (&:where([class~=\"mr-auto\"] *));\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(attribute["classReservationsUnbounded"], true);
+
+        let aria: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/globals.css",
+                "@custom-variant checked (&[aria-checked=\"true\"]);\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(aria["classReservationsUnbounded"], false);
+    }
+
+    #[test]
+    fn reserves_entry_utility_definitions() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/globals.css",
+                "@utility mr-auto {\n  margin-right: 1px;\n}\n.card { color: red; }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let names = parsed["classNames"].as_array().unwrap();
+        assert!(names.contains(&serde_json::json!("mr-auto")), "{names:?}");
+        assert_eq!(parsed["classReservationsUnbounded"], false);
+
+        // A functional utility owns every spelling under its prefix.
+        let functional: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/globals.css",
+                "@utility tab-* {\n  tab-size: --value(integer);\n}\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(functional["classReservationsUnbounded"], true);
+
+        // A comment in the prelude cannot pollute the reserved name; the
+        // unrecognizable prelude conservatively turns unbounded instead.
+        let commented: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/globals.css",
+                "@utility /* legacy */ mr-auto {\n  margin-right: 1px;\n}\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(commented["classReservationsUnbounded"], true);
+    }
+
+    #[test]
+    fn reserves_sass_at_root_prelude_selectors() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/legacy.scss",
+                ".card { @at-root .mr-auto { color: red; } }\n.mr- { @at-root .top { &auto { color: blue; } } }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let names = parsed["classNames"].as_array().unwrap();
+        assert!(names.contains(&serde_json::json!("mr-auto")), "{names:?}");
+        // Nested rules resolve their parent against the at-root selector.
+        assert!(names.contains(&serde_json::json!("topauto")), "{names:?}");
+        assert_eq!(parsed["classReservationsUnbounded"], false);
+    }
+
+    #[test]
+    fn marks_unbounded_interpolated_selector_positions() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/legacy.scss",
+                "$sel: \".mr-auto\";\n#{$sel} { color: red; }\ndiv { color: blue; }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["classReservationsUnbounded"], true);
+
+        let literal: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json("/p/plain.css", "div { color: blue; }\n").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(literal["classReservationsUnbounded"], false);
+    }
+
+    #[test]
+    fn marks_unbounded_interpolated_attribute_names() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/legacy.scss",
+                "$attr: class;\n[#{$attr}~=\"mr-auto\"] { color: red; }\n[data-kind=\"x\"] { color: blue; }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["classReservationsUnbounded"], true);
+    }
+
+    #[test]
+    fn extracts_compiled_declaration_shapes() {
+        let shape: serde_json::Value = serde_json::from_str(
+            &super::compiled_shape_json(
+                ".mr-auto { margin-right: auto; }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            shape,
+            serde_json::json!({
+                "declarations": [{ "property": "margin-right", "important": false }],
+                "referencedProperties": [],
+            })
+        );
+
+        let themed: serde_json::Value = serde_json::from_str(
+            &super::compiled_shape_json(
+                ".p-4 { padding: calc(var(--spacing) * 4); }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(themed["referencedProperties"], serde_json::json!(["--spacing"]));
+
+        let important: serde_json::Value = serde_json::from_str(
+            &super::compiled_shape_json(
+                "@media (hover: hover) { .hover\\:text-sm:hover { font-size: 1rem !important; line-height: 1.5; } }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            shape["declarations"] != important["declarations"],
+            true,
+        );
+        assert_eq!(
+            important["declarations"],
+            serde_json::json!([
+                { "property": "font-size", "important": true },
+                { "property": "line-height", "important": false },
+            ])
+        );
     }
 
     #[test]

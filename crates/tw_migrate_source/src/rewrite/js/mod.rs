@@ -102,6 +102,7 @@ pub fn plan_batch_source_file(
     css_path: &str,
     is_module: bool,
     candidates: &HashMap<SelectorKey, Vec<String>>,
+    candidate_properties: &HashMap<String, BTreeSet<String>>,
     preserved_module_classes: &BTreeSet<String>,
 ) -> MigrationResult<SourcePlan> {
     let allocator = Allocator::default();
@@ -177,6 +178,7 @@ pub fn plan_batch_source_file(
         import_bindings: &imports.bindings,
         global_module_symbols: &global_module_symbols,
         candidates,
+        candidate_properties,
         preserved_module_classes,
         edits: Vec::new(),
         emitted_candidates: BTreeSet::new(),

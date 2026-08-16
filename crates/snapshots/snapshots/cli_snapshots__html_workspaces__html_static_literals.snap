@@ -6,19 +6,19 @@ case: html_static_literals
 
 --- step: preview ---
 status: 0
-stdout: "--- a/index.html\n+++ b/index.html\n@@ -1,3 +1,3 @@\n-<!doctype html>\n-<link rel=\"stylesheet\" href=\"./legacy.css\"><p>Hello é</p><div class=\"card\"></div><main id=\"hero\">Text</main>\n \n+<!doctype html>\n+<link rel=\"stylesheet\" href=\"./legacy.css\"><p>Hello é</p><div class=\"card p-[13px]\"></div><main id=\"hero\" class=\"h-[100vh]\">Text</main>\n \nPreviewed 1 file(s); 0 rule(s) converted, 2 retained.\n"
+stdout: "--- a/index.html\n+++ b/index.html\n@@ -1,3 +1,3 @@\n-<!doctype html>\n-<link rel=\"stylesheet\" href=\"./legacy.css\"><p>Hello é</p><div class=\"card\"></div><main id=\"hero\">Text</main>\n \n+<!doctype html>\n+<link rel=\"stylesheet\" href=\"./legacy.css\"><p>Hello é</p><div class=\"card p-[13px]\"></div><main id=\"hero\" class=\"h-screen\">Text</main>\n \nPreviewed 1 file(s); 0 rule(s) converted, 2 retained.\n"
 stderr: "warning[retained-global-rule] legacy.css:1:1-1:25 Global CSS is never deleted automatically.\nwarning[retained-global-rule] legacy.css:2:1-2:25 Global CSS is never deleted automatically.\n"
 workspace delta:
   unchanged
 
 --- step: write ---
 status: 0
-stdout: "--- a/index.html\n+++ b/index.html\n@@ -1,3 +1,3 @@\n-<!doctype html>\n-<link rel=\"stylesheet\" href=\"./legacy.css\"><p>Hello é</p><div class=\"card\"></div><main id=\"hero\">Text</main>\n \n+<!doctype html>\n+<link rel=\"stylesheet\" href=\"./legacy.css\"><p>Hello é</p><div class=\"card p-[13px]\"></div><main id=\"hero\" class=\"h-[100vh]\">Text</main>\n \nApplied 1 file(s); 0 rule(s) converted, 2 retained.\n"
+stdout: "--- a/index.html\n+++ b/index.html\n@@ -1,3 +1,3 @@\n-<!doctype html>\n-<link rel=\"stylesheet\" href=\"./legacy.css\"><p>Hello é</p><div class=\"card\"></div><main id=\"hero\">Text</main>\n \n+<!doctype html>\n+<link rel=\"stylesheet\" href=\"./legacy.css\"><p>Hello é</p><div class=\"card p-[13px]\"></div><main id=\"hero\" class=\"h-screen\">Text</main>\n \nApplied 1 file(s); 0 rule(s) converted, 2 retained.\n"
 stderr: "warning[retained-global-rule] legacy.css:1:1-1:25 Global CSS is never deleted automatically.\nwarning[retained-global-rule] legacy.css:2:1-2:25 Global CSS is never deleted automatically.\n"
 workspace delta:
   modified index.html
     before: "<!doctype html>\n<link rel=\"stylesheet\" href=\"./legacy.css\"><p>Hello é</p><div class=\"card\"></div><main id=\"hero\">Text</main>\n"
-    after: "<!doctype html>\n<link rel=\"stylesheet\" href=\"./legacy.css\"><p>Hello é</p><div class=\"card p-[13px]\"></div><main id=\"hero\" class=\"h-[100vh]\">Text</main>\n"
+    after: "<!doctype html>\n<link rel=\"stylesheet\" href=\"./legacy.css\"><p>Hello é</p><div class=\"card p-[13px]\"></div><main id=\"hero\" class=\"h-screen\">Text</main>\n"
 
 --- step: second run ---
 status: 0

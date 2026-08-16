@@ -7,6 +7,11 @@ pub(super) struct PlanResponse {
     pub(super) deleted_files: Vec<String>,
     pub(super) unlinked_files: Vec<String>,
     pub(super) candidates: Vec<String>,
+    /// Every candidate a rule produced, collected before quote-fit and
+    /// source-edit checks so the orchestration layer can canonicalize
+    /// spellings whose alias may make a rejected rewrite fit on the next
+    /// pass. Over-inclusive by design; internal orchestration data only.
+    pub(super) candidate_probes: Vec<String>,
     pub(super) converted_rules: usize,
     pub(super) retained_rules: usize,
     pub(super) rules: Vec<RuleReport>,

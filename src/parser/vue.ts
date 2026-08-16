@@ -186,9 +186,18 @@ export interface VueComponentEdge {
 
 // The orchestrator-owned fields are populated by index.ts while building the
 // package component graph, after analysis produced the object.
+export interface VueStyleRange {
+  start: number;
+  end: number;
+  /** The block's declared style language, defaulting to css. */
+  lang: string;
+  /** The block's external source reference, when it loads one. */
+  src?: string;
+}
+
 interface VueAnalysisBase {
   warnings: MigrationWarning[];
-  styleRanges: { start: number; end: number }[];
+  styleRanges: VueStyleRange[];
   resolvedComponents?: VueComponentEdge[];
   componentsOpen?: boolean;
   setupImports?: Set<string>;
@@ -216,6 +225,17 @@ export type VueAnalysis =
       scriptVueReferences: string[];
       scriptVueGlobPatterns: string[];
       scriptVueGlobUnverifiable: boolean;
+      /// Static dynamic-class prefixes from template expressions and
+      /// script blocks, for canonical spelling reservations.
+      templatePrefixes: string[];
+      /// Decoded static class tokens the raw scan cannot read, reserved
+      /// as complete spellings.
+      templateClassTokens: string[];
+      /// Static hrefs of rendered `<link rel="stylesheet">` template
+      /// elements, resolved by spelling reservations like HTML links.
+      templateStylesheetLinks: string[];
+      /// True when a rendered link's rel or href is dynamic.
+      templateStylesheetLinksUnverifiable: boolean;
       /// True when a retained unsupported block keeps style content outside
       /// the analyzable block arrays, hiding possible global registrations.
       hasOpaqueStyleBlocks: boolean;
@@ -251,6 +271,16 @@ interface TemplateState {
   /// Identifier names referenced from template expressions, matched after
   /// script analysis against helper aliases the script provides.
   expressionReferences: Set<string>;
+  /// Static prefixes of dynamic class construction in template
+  /// expressions, for canonical spelling reservations.
+  templatePrefixes: Set<string>;
+  /// Decoded tokens of static class values the raw scan cannot read
+  /// (entity-bearing or otherwise unwritable attributes).
+  entityClassTokens: string[];
+  /// Static hrefs of rendered `<link rel="stylesheet">` elements.
+  stylesheetLinks: string[];
+  /// True when a rendered link's rel or href is dynamic.
+  stylesheetLinksUnverifiable: boolean;
   /// Synthetic path for template expression parsing, carrying the SFC's
   /// script language so TypeScript assertions parse in TypeScript SFCs.
   expressionPath: string;
@@ -290,6 +320,8 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
   const styleRanges = descriptor.styles.map((style) => ({
     start: style.loc.start.offset,
     end: style.loc.end.offset,
+    lang: style.lang ?? "css",
+    ...(style.src !== undefined ? { src: style.src } : {}),
   }));
   const byteRanges = (offset: (value: number) => number) => ({
     warnings: warnings.map((warning) => ({
@@ -298,6 +330,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
       end: offset(warning.end),
     })),
     styleRanges: styleRanges.map((range) => ({
+      ...range,
       start: offset(range.start),
       end: offset(range.end),
     })),
@@ -490,6 +523,10 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     moduleClosureBroken: false,
     referencesUseCssModule: false,
     expressionReferences: new Set(),
+    templatePrefixes: new Set(),
+    entityClassTokens: [],
+    stylesheetLinks: [],
+    stylesheetLinksUnverifiable: false,
     expressionPath: scriptLang === "ts" || scriptLang === "tsx" ? "Component.ts" : "Component.js",
   };
   visitTemplateNode(source, template.ast, state);
@@ -518,6 +555,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
   let scriptHasDynamicImport = false;
   const scriptVueReferences: string[] = [];
   const scriptVueGlobPatterns: string[] = [];
+  const scriptTemplatePrefixes: string[] = [];
   let scriptVueGlobUnverifiable = false;
   const styleImports = [descriptor.script, descriptor.scriptSetup].flatMap((script) => {
     if (!script) return [];
@@ -535,6 +573,7 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
         ...analysis.imports.filter((record) => !record.typeOnly).map((record) => record.specifier),
       );
       scriptVueGlobPatterns.push(...analysis.vueGlobPatterns);
+      scriptTemplatePrefixes.push(...analysis.templatePrefixes);
       if (analysis.vueGlobUnverifiable) scriptVueGlobUnverifiable = true;
       return analysis.staticImports;
     } catch {
@@ -650,6 +689,10 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     scriptVueReferences,
     scriptVueGlobPatterns,
     scriptVueGlobUnverifiable,
+    templatePrefixes: [...new Set([...state.templatePrefixes, ...scriptTemplatePrefixes])],
+    templateClassTokens: [...new Set(state.entityClassTokens)],
+    templateStylesheetLinks: state.stylesheetLinks,
+    templateStylesheetLinksUnverifiable: state.stylesheetLinksUnverifiable,
     hasOpaqueStyleBlocks: opaqueStyleBlocks,
     styleBlockImports: styleBlockImports.map((entry) => ({
       ...entry,
@@ -699,6 +742,29 @@ export function verifyVueSource(
 function visitTemplateNode(source: string, node: TemplateNode, state: TemplateState): void {
   if (node.type === NODE_ELEMENT) {
     if (node.tagType === TAG_SLOT) state.hasSlot = true;
+    // A rendered stylesheet link loads a sheet like an HTML document
+    // link; a bound rel or href resolves at runtime.
+    if (node.tag === "link" && node.tagType === TAG_ELEMENT) {
+      let rel: string | undefined;
+      let href: string | undefined;
+      let dynamic = false;
+      for (const prop of node.props ?? []) {
+        if (prop.type === PROP_ATTRIBUTE) {
+          if (prop.name === "rel") rel = prop.value?.content ?? "";
+          if (prop.name === "href") href = prop.value?.content ?? "";
+        } else if (prop.type === PROP_DIRECTIVE && prop.name === "bind") {
+          const argument = prop.arg?.isStatic ? prop.arg.content : undefined;
+          if (argument === undefined || argument === "rel" || argument === "href") dynamic = true;
+        }
+      }
+      const relTokens = rel?.toLowerCase().split(/\s+/) ?? [];
+      if (relTokens.includes("stylesheet") || (rel === undefined && dynamic)) {
+        if (href !== undefined && !dynamic) state.stylesheetLinks.push(href);
+        else state.stylesheetLinksUnverifiable = true;
+      } else if (dynamic) {
+        state.stylesheetLinksUnverifiable = true;
+      }
+    }
     const bindingClasses: string[] = [];
     let classOpaque = false;
     let moduleBinding: VueModuleBinding | undefined;
@@ -743,11 +809,15 @@ function visitTemplateNode(source: string, node: TemplateNode, state: TemplateSt
       }
       if (expression?.referencesUseCssModule) state.referencesUseCssModule = true;
       for (const name of expression?.references ?? []) state.expressionReferences.add(name);
+      for (const prefix of expression?.templatePrefixes ?? []) state.templatePrefixes.add(prefix);
       if (prop.arg && !prop.arg.isStatic && prop.arg.content) {
         const argExpression = templateExpression(state.expressionPath, prop.arg.content);
         state.moduleClosureBroken ||= argExpression?.usesCssModule ?? true;
         state.referencesUseCssModule ||= argExpression?.referencesUseCssModule ?? false;
         for (const name of argExpression?.references ?? []) state.expressionReferences.add(name);
+        for (const prefix of argExpression?.templatePrefixes ?? []) {
+          state.templatePrefixes.add(prefix);
+        }
       }
       // Injected markup carries no scope attribute, so scoped proofs are
       // unaffected -- but it can use any class an unscoped rule targets.
@@ -764,6 +834,7 @@ function visitTemplateNode(source: string, node: TemplateNode, state: TemplateSt
     state.moduleClosureBroken ||= interpolation?.usesCssModule ?? true;
     state.referencesUseCssModule ||= interpolation?.referencesUseCssModule ?? false;
     for (const name of interpolation?.references ?? []) state.expressionReferences.add(name);
+    for (const prefix of interpolation?.templatePrefixes ?? []) state.templatePrefixes.add(prefix);
   }
   for (const child of node.children ?? []) visitTemplateNode(source, child, state);
 }
@@ -799,6 +870,7 @@ function templateHandler(source: string): ExpressionAnalysis | undefined {
       // reference is a potential Vue API call the script may not shadow.
       referencesUseCssModule: analysis.hasUnboundUseCssModule,
       references: analysis.unboundReferences,
+      templatePrefixes: analysis.templatePrefixes,
     };
   } catch {
     return undefined;
@@ -812,13 +884,19 @@ function templateSite(
   classOpaque: boolean,
   state: TemplateState,
 ): TemplateSiteAttributes {
-  let classAttribute = literalAttribute(source, node, "class");
-  const idAttribute = literalAttribute(source, node, "id");
-  const hasClassAttr = node.props?.some(
-    (prop) => prop.type === PROP_ATTRIBUTE && prop.name === "class",
-  );
-  const hasIdAttr = node.props?.some((prop) => prop.type === PROP_ATTRIBUTE && prop.name === "id");
-  if ((hasClassAttr && !classAttribute) || (hasIdAttr && !idAttribute)) {
+  const classProp = staticAttribute(node, "class");
+  const idProp = staticAttribute(node, "id");
+  let classAttribute = literalAttribute(source, classProp);
+  const idAttribute = literalAttribute(source, idProp);
+  if ((classProp && !classAttribute) || (idProp && !idAttribute)) {
+    // Vue renders the compiler-decoded value, which the raw-text scan
+    // never sees for an entity-bearing attribute, so the decoded tokens
+    // feed spelling reservations.
+    if (classProp && !classAttribute) {
+      for (const token of classProp.value?.content.split(/[\t\n\f\r ]+/) ?? []) {
+        if (token !== "") state.entityClassTokens.push(token);
+      }
+    }
     state.dynamic = true;
     return { idAttribute };
   }
@@ -839,12 +917,14 @@ function templateSite(
 
 // The inner span of a quoted, entity-free, literal attribute value, or
 // undefined when the attribute is absent or cannot be edited safely.
+function staticAttribute(node: TemplateNode, name: string): TemplateProp | undefined {
+  return node.props?.find((prop) => prop.type === PROP_ATTRIBUTE && prop.name === name);
+}
+
 function literalAttribute(
   source: string,
-  node: TemplateNode,
-  name: string,
+  prop: TemplateProp | undefined,
 ): VueTemplateAttribute | undefined {
-  const prop = node.props?.find((prop) => prop.type === PROP_ATTRIBUTE && prop.name === name);
   if (!prop?.value) return undefined;
   const start = prop.value.loc.start.offset;
   const end = prop.value.loc.end.offset;

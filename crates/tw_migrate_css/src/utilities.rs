@@ -325,6 +325,19 @@ pub fn variant_segments(variants: &str) -> Vec<&str> {
     segments
 }
 
+/// Any cross-product pair of transferred source properties conflicting,
+/// the shared authoritative half of every candidate-conflict gate.
+pub fn css_property_sets_conflict(
+    left: &std::collections::BTreeSet<String>,
+    right: &std::collections::BTreeSet<String>,
+) -> bool {
+    left.iter().any(|left_property| {
+        right
+            .iter()
+            .any(|right_property| css_properties_conflict(left_property, right_property))
+    })
+}
+
 pub fn css_properties_conflict(left: &str, right: &str) -> bool {
     if left == right {
         return true;

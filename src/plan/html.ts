@@ -9,6 +9,7 @@ import {
   isStylesheetModule,
   isStylesheetPath,
   isWithin,
+  localHrefTarget,
   snapshotFile,
 } from "../util/shared.ts";
 import { importsStylesheet } from "./entry.ts";
@@ -334,13 +335,13 @@ function addInferredPreprocessorContext(state: HtmlContextState): boolean {
   return true;
 }
 
-function localHtmlReference(
+export function localHtmlReference(
   packageRoot: string,
   base: string,
   reference: string,
 ): string | undefined {
-  const path = reference.split(/[?#]/, 1)[0];
-  if (!path || path.startsWith("//") || /^[a-z][a-z\d+.-]*:/i.test(path)) return undefined;
+  const path = localHrefTarget(reference);
+  if (path === undefined) return undefined;
   let decoded;
   try {
     decoded = decodeURIComponent(path);

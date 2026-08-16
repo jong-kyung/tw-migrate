@@ -20,11 +20,11 @@ pub use plan::{
     ParseOptions, ParsedCss, Relation, RulePlan, SelectorKey, ShadowIndex, index_shadow_selectors,
     parse_css_rules,
 };
-pub use stylesheet_analysis::stylesheet_analysis_json;
+pub use stylesheet_analysis::{compiled_shape_json, stylesheet_analysis_json};
 pub use syntax::StylesheetSyntax;
 pub use theme::parse_dimension;
 pub use utilities::{
-    css_properties_conflict, declaration_to_candidate, tailwind_utilities_conflict,
+    css_properties_conflict, css_property_sets_conflict, declaration_to_candidate, tailwind_utilities_conflict,
     tailwind_utility_parts, tailwind_variants_match, utility_conflict, variant_segments,
 };
 

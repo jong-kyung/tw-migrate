@@ -124,6 +124,7 @@ pub(super) fn batch_stylesheet_request(
         media_names: batch.media_names.clone(),
         entry_writable: batch.entry_writable,
         global_at_rule_moves: batch.global_at_rule_moves,
+        candidate_aliases: batch.candidate_aliases.clone(),
         files,
     }
 }
@@ -310,6 +311,7 @@ fn parse_request_rules(
     {
         prefix_rule_candidates(&mut parsed.rules, prefix);
     }
+    apply_candidate_aliases(&mut parsed.rules, &request.candidate_aliases, &parsed.keyframes);
     Ok((is_module, parsed, vue_masked))
 }
 
@@ -386,6 +388,64 @@ fn parse_vue_rules(
         keyframes: Vec::new(),
         global_at_rules: Vec::new(),
     })
+}
+
+/// Rewrite planner candidates through the caller-accepted canonical alias
+/// map, keyed by the same rule-level spellings candidateProbes emits.
+/// Source-property metadata transfers with the spelling and merges when
+/// aliases deduplicate candidates, keeping conflict detection authoritative
+/// without inferring properties from the canonical name. A candidate that
+/// references a migrated keyframe keeps its spelling: keyframe movement
+/// selects definitions by scanning final candidates for the migrated name,
+/// so renaming the spelling would strand the moved definition.
+fn apply_candidate_aliases(
+    rules: &mut [RulePlan],
+    aliases: &HashMap<String, String>,
+    keyframes: &[KeyframePlan],
+) {
+    if aliases.is_empty() {
+        return;
+    }
+    let references_keyframe = |candidate: &str| {
+        keyframes
+            .iter()
+            .any(|keyframe| candidate.contains(&keyframe.migrated_name))
+    };
+    for rule in rules {
+        let resolve = |candidate: String| {
+            if references_keyframe(&candidate) {
+                return candidate;
+            }
+            aliases.get(&candidate).cloned().unwrap_or(candidate)
+        };
+        let mut seen = HashSet::new();
+        rule.candidates = rule
+            .candidates
+            .drain(..)
+            .map(resolve)
+            .filter(|candidate| seen.insert(candidate.clone()))
+            .collect();
+        let mut properties: HashMap<String, BTreeSet<String>> = HashMap::new();
+        for (candidate, set) in std::mem::take(&mut rule.candidate_properties) {
+            properties.entry(resolve(candidate)).or_default().extend(set);
+        }
+        rule.candidate_properties = properties;
+    }
+}
+
+/// Union of transferred source properties per candidate spelling, for the
+/// conflict gates that outlive individual rules.
+pub(super) fn candidate_property_union<'a>(
+    entries: impl Iterator<Item = (&'a String, &'a BTreeSet<String>)>,
+) -> HashMap<String, BTreeSet<String>> {
+    let mut union: HashMap<String, BTreeSet<String>> = HashMap::new();
+    for (candidate, properties) in entries {
+        union
+            .entry(candidate.clone())
+            .or_default()
+            .extend(properties.iter().cloned());
+    }
+    union
 }
 
 fn dedup_candidate_map(candidate_map: &mut HashMap<SelectorKey, Vec<String>>) {
@@ -553,6 +613,15 @@ pub(super) fn plan_request(
         );
     }
 
+    // Canonicalization probes: candidates of rules that still rewrite
+    // consumers, collected after retention stamping but before quote-fit
+    // and source-edit checks. Hard-retained rules never reach a rewrite
+    // site, so their spellings must not influence alias or name choices.
+    let candidate_probes = rules
+        .iter()
+        .filter(|rule| rule.warning.is_none() || is_batch_retained(rule.warning))
+        .flat_map(|rule| rule.candidates.iter().cloned())
+        .collect::<BTreeSet<_>>();
     let preserved_module_classes = rules
         .iter()
         .filter(|rule| is_module && is_batch_retained(rule.warning))
@@ -605,12 +674,15 @@ pub(super) fn plan_request(
             .flat_map(|rule| rule.related_classes.iter().cloned())
             .collect::<BTreeSet<_>>()
     });
+    let request_properties =
+        candidate_property_union(rules.iter().flat_map(|rule| rule.candidate_properties.iter()));
     for file in &request.files {
         let mut result = plan_consumer_file(
             file,
             &request.sheet.css_path,
             is_module,
             &candidate_map,
+            &request_properties,
             &preserved_module_classes,
             module_rule_classes.as_ref(),
             request.utility_prefix.as_deref(),
@@ -953,6 +1025,7 @@ pub(super) fn plan_request(
             Vec::new()
         },
         candidates: candidates.into_iter().collect(),
+        candidate_probes: candidate_probes.into_iter().collect(),
         converted_rules,
         retained_rules,
         rules: rule_reports,

@@ -1,7 +1,7 @@
 import type { HtmlElementAttributes } from "./parser/html.ts";
 import type { SourceImportRecord } from "./native.ts";
 import type { SourceMapping } from "./parser/style-compiler.ts";
-import type { VueCompiler, VueStyleBlock, VueTemplateSite } from "./parser/vue.ts";
+import type { VueCompiler, VueStyleBlock, VueStyleRange, VueTemplateSite } from "./parser/vue.ts";
 
 export interface MigrateOptions {
   styleFile?: string;
@@ -84,6 +84,16 @@ export interface PreparedSourceFile extends SourceFile {
   htmlScriptText?: string;
   sourceImports?: SourceImportRecord[];
   sourceImportsUnverifiable?: boolean;
+  /** Static dynamic-class prefixes for canonical spelling reservations. */
+  templatePrefixes?: string[];
+  /** True when the template injects runtime markup through v-html. */
+  templateInjectsMarkup?: boolean;
+  /** Decoded static class tokens invisible to the raw-text scan. */
+  templateClassTokens?: string[];
+  /** Static hrefs of rendered stylesheet links in a Vue template. */
+  templateStylesheetLinks?: string[];
+  /** True when a rendered Vue template link's rel or href is dynamic. */
+  templateStylesheetLinksUnverifiable?: boolean;
 }
 
 export interface PlannedFile extends PreparedSourceFile {
@@ -150,6 +160,9 @@ export interface Plan {
   deletedFiles: string[];
   unlinkedFiles: string[];
   candidates: string[];
+  /** Internal orchestration data: candidates collected before quote-fit
+   * checks, canonicalized between planning passes; never reported. */
+  candidateProbes?: string[];
   rules: PlanRule[];
   warnings: MigrationWarning[];
   convertedRules: number;
@@ -178,7 +191,7 @@ export interface MigrationContext extends Scope {
   styleSources: Map<string, string>;
   sourceFiles: SourceFile[];
   styleDependents: Map<string, string[]>;
-  vueStyleRanges: Map<string, RuleSpan[]>;
+  vueStyleRanges: Map<string, VueStyleRange[]>;
   /** Tailwind entries per owning package, for ancestor-shared resolution. */
   entryCatalog: Map<string, string[]>;
   /** Scanned paths the utility scanner's ignore rules exclude. */
@@ -203,7 +216,7 @@ export interface PreparedHtml {
 export interface PreparedVue {
   files: Map<string, PreparedSourceFile>;
   stylesheets: StylesheetEntry[];
-  styleRanges: Map<string, RuleSpan[]>;
+  styleRanges: Map<string, VueStyleRange[]>;
   stylePaths: Set<string>;
   unscopedPaths: Set<string>;
   warnings: MigrationWarning[];
@@ -220,6 +233,9 @@ export interface ShadowCssEntry {
 export interface DesignSystem {
   theme: { prefix: string | null };
   candidatesToCss: (candidates: string[]) => (string | null)[];
+  /** Tailwind v4's unstable canonical-spelling lookup; feature-detected
+   * because older v4 builds do not expose it. */
+  canonicalizeCandidates?: (candidates: string[]) => string[];
 }
 
 export interface LoadedTailwind {

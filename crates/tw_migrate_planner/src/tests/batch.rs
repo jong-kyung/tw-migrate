@@ -540,6 +540,7 @@ fn batch_preserves_a_direct_module_member_when_appending_independent_candidates(
         "/project/A.module.css",
         true,
         &candidates,
+        &HashMap::new(),
         &preserved,
     )
     .unwrap();
