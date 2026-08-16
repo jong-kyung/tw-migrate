@@ -786,6 +786,17 @@ fn collect_stylesheet_statements(
                                         None => analysis.class_reservations_unbounded = true,
                                     }
                                 }
+                                // A preprocessor variable or interpolation
+                                // compiles to an export token this scan
+                                // cannot read; provably non-class literals
+                                // (numbers, colors, functions) stay inert.
+                                ComponentValue::SassVariable(_)
+                                | ComponentValue::LessVariable(_)
+                                | ComponentValue::LessVariableCall(_)
+                                | ComponentValue::LessVariableVariable(_)
+                                | ComponentValue::InterpolableIdent(_) => {
+                                    analysis.class_reservations_unbounded = true;
+                                }
                                 _ => {}
                             }
                         }
@@ -1251,6 +1262,19 @@ mod tests {
             &super::stylesheet_analysis_json(
                 "/p/main.less",
                 "@plugin \"plugin.js\";\n.card { color: red; }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["classReservationsUnbounded"], true);
+    }
+
+    #[test]
+    fn marks_nonliteral_icss_export_values_unbounded() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/Card.module.scss",
+                "$name: mr-auto;\n:export { legacy: $name; }\n",
             )
             .unwrap(),
         )
