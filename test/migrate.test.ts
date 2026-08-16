@@ -705,6 +705,18 @@ test("prefixed runtime property mentions force the next font suffix", async () =
   assert.deepEqual(report.candidates, ["tw:font-my-font-2"]);
 });
 
+test("inline safelist spellings force the next font suffix", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "My Font", sans-serif; }\n',
+  });
+  await writeFile(
+    join(cwd, "globals.css"),
+    '@import "tailwindcss";\n@source inline("font-my-font");\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["font-my-font-2"]);
+});
+
 test("canonicalizes literal utilities to the target design system's names", async () => {
   const cwd = await fixture({
     css: ".button { margin-right: auto; max-width: 100%; padding: 13px; }\n",

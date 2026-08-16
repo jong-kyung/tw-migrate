@@ -770,8 +770,15 @@ async function planPreparedGroup(
   // or registration would newly emit CSS for an existing class. Utility
   // segments cover variant-wrapped spellings such as hover:font-brand.
   const mentionedSegments = new Set<string>();
-  for (const file of groupFiles.values()) {
-    for (const token of file.source.split(/[\s"'`<>=,;{}()\\]+/)) {
+  // Entry-graph sheets join the scan: an @source inline safelist is part
+  // of the effective corpus even when no group file spells it, matching
+  // the media allocator's inline-source handling.
+  const mentionedSources = [
+    ...[...groupFiles.values()].map((file) => file.source),
+    ...entry.graphSources.map((graphSource) => graphSource.source),
+  ];
+  for (const source of mentionedSources) {
+    for (const token of source.split(/[\s"'`<>=,;{}()\\]+/)) {
       if (token === "") continue;
       // The important modifier spells the same utility.
       const segment = token.split(":").pop()?.replace(/!$/, "");
