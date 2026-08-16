@@ -106,6 +106,20 @@ pub fn parse_font_stack(value: &str) -> Option<(String, String, &'static str)> {
     Some((normalized, first_name, first_kind))
 }
 
+/// JSON view of one parsed stack for the orchestration layer, so
+/// existing theme-token values normalize through the same parser as the
+/// planner's probes. `null` when the value is unreadable.
+pub fn font_family_stack_json(value: &str) -> String {
+    match parse_font_stack(value) {
+        Some((normalized, name, kind)) => serde_json::json!({
+            "value": normalized,
+            "firstFamily": { "name": name, "kind": kind },
+        })
+        .to_string(),
+        None => "null".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_font_stack;

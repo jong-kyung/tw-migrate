@@ -72,6 +72,7 @@ interface Binding {
   sourceAnalysis: (path: string, source: string) => string;
   stylesheetAnalysis: (path: string, source: string) => string;
   compiledShape: (css: string) => string;
+  fontFamilyStack: (value: string) => string;
   collectCssDirectives: (source: string) => string;
   mediaProbeKey: (css: string) => string;
   decodeSourceMap: (sourceMap: string) => string;
@@ -222,6 +223,29 @@ export function sourceAnalysis(path: string, source: string): SourceAnalysis {
   sourceAnalysisCache.set(path, { source, analysis });
   bound(sourceAnalysisCache);
   return analysis;
+}
+
+export interface FontFamilyStack {
+  value: string;
+  firstFamily: { name: string; kind: "name" | "generic" | "css-wide" };
+}
+
+/// The planner's normalized view of one font-family value, or null when
+/// the value is runtime-dependent or unreadable.
+export function fontFamilyStack(value: string): FontFamilyStack | null {
+  return decode(
+    "font family stack",
+    binding.fontFamilyStack(value),
+    (parsed): parsed is FontFamilyStack | null =>
+      parsed === null ||
+      (object(parsed) &&
+        typeof parsed.value === "string" &&
+        object(parsed.firstFamily) &&
+        typeof parsed.firstFamily.name === "string" &&
+        (parsed.firstFamily.kind === "name" ||
+          parsed.firstFamily.kind === "generic" ||
+          parsed.firstFamily.kind === "css-wide")),
+  );
 }
 
 export function compiledShape(css: string): CompiledShape {

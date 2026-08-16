@@ -45,6 +45,11 @@ pub fn stylesheet_analysis(path: String, source: String) -> napi::Result<String>
 }
 
 #[napi]
+pub fn font_family_stack(value: String) -> napi::Result<String> {
+    Ok(tw_migrate_css::font_family_stack_json(&value))
+}
+
+#[napi]
 pub fn compiled_shape(css: String) -> napi::Result<String> {
     tw_migrate_css::compiled_shape_json(&css).map_err(|error| native_error(error, false))
 }
