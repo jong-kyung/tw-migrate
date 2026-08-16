@@ -262,6 +262,10 @@ struct SourceAnalysis {
     /// True when the source renders a `<style>` element (styled-jsx and
     /// similar inline CSS), whose selectors this analysis never reads.
     renders_style_element: bool,
+    /// True when the source injects runtime markup through
+    /// dangerouslySetInnerHTML, whose classes can never join the scan
+    /// corpus.
+    injects_markup: bool,
     /// Custom-property name literals (`--*` strings) appearing anywhere in
     /// the source, for font token name reservations.
     custom_properties: Vec<String>,
@@ -473,6 +477,9 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
                     else {
                         continue;
                     };
+                    if attribute_name.name == "dangerouslySetInnerHTML" {
+                        self.analysis.injects_markup = true;
+                    }
                     if attribute_name.name != "style" {
                         continue;
                     }
@@ -924,6 +931,7 @@ pub fn source_analysis_json(path: &str, source: &str) -> MigrationResult<String>
             stylesheet_links: Vec::new(),
             stylesheet_links_unverifiable: false,
             renders_style_element: false,
+            injects_markup: false,
             custom_properties: Vec::new(),
             custom_properties_unbounded: false,
         },
@@ -1157,6 +1165,19 @@ mod tests {
         // Trailing tokens of pre-expression quasis constrain the dynamic
         // class; static tokens and whitespace-terminated quasis do not.
         assert_eq!(parsed["templatePrefixes"], serde_json::json!(["mr-", "p-", "pt-"]));
+    }
+
+    #[test]
+    fn marks_injected_markup_sources() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.tsx",
+                "export const Card = ({ markup }) => <div dangerouslySetInnerHTML={{ __html: markup }} />;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["injectsMarkup"], true);
     }
 
     #[test]

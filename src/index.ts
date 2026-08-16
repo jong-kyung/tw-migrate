@@ -1014,8 +1014,10 @@ async function planPreparedGroup(
       if (analysis.customPropertiesUnbounded) reservations.propertiesUnbounded = true;
       opaqueStylesheetImports(analysis.imports);
       // A rendered <style> element carries selectors this analysis never
-      // reads, matching the HTML hasStyle rule.
+      // reads, matching the HTML hasStyle rule, and injected markup
+      // carries classes the scan corpus never holds, matching v-html.
       if (analysis.rendersStyleElement) reservations.unbounded = true;
+      if (analysis.injectsMarkup) reservations.unbounded = true;
       // A rendered stylesheet link loads a sheet like an HTML document
       // link: a remote, unresolved, or other-entry target is opaque.
       if (analysis.stylesheetLinksUnverifiable) reservations.unbounded = true;

@@ -45,6 +45,7 @@ export interface SourceAnalysis {
   stylesheetLinks: string[];
   stylesheetLinksUnverifiable: boolean;
   rendersStyleElement: boolean;
+  injectsMarkup: boolean;
   customProperties: string[];
   customPropertiesUnbounded: boolean;
 }
@@ -182,6 +183,7 @@ function sourceAnalysisResult(value: unknown): value is SourceAnalysis {
       value.definesRootUseCssModule,
       value.stylesheetLinksUnverifiable,
       value.rendersStyleElement,
+      value.injectsMarkup,
       value.customPropertiesUnbounded,
     ].every((item) => typeof item === "boolean")
   );

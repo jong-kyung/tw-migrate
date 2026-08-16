@@ -728,6 +728,15 @@ test("inline safelist spellings force the next font suffix", async () => {
   assert.deepEqual(report2.candidates, ["font-my-font-2"]);
 });
 
+test("injected JSX markup keeps group spellings arbitrary", async () => {
+  const cwd = await fixture({
+    css: ".button { margin-right: auto; }\n",
+    tsx: "import styles from './Button.module.css';\nexport const Button = ({ markup }) => <div dangerouslySetInnerHTML={{ __html: markup }} className={styles.button} />;\n",
+  });
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
 test("canonicalizes literal utilities to the target design system's names", async () => {
   const cwd = await fixture({
     css: ".button { margin-right: auto; max-width: 100%; padding: 13px; }\n",
