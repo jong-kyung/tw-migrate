@@ -899,6 +899,12 @@ fn collect_stylesheet_statements(
                     analysis.custom_properties.push(name.name.to_string());
                 }
                 collect_value_references(&declaration.value, &mut analysis.custom_properties);
+                // A var() whose property argument is a preprocessor
+                // variable or interpolation reads a name this scan cannot
+                // see until compilation.
+                if has_computed_var_argument(&declaration.value) {
+                    analysis.custom_properties_unbounded = true;
+                }
                 if name.name != "composes" {
                     continue;
                 }
@@ -1044,6 +1050,32 @@ struct CompiledDeclaration {
     /// ignores it (equivalent spellings such as 0 and 0px differ), while
     /// font reuse requires a bare token dereference.
     value: String,
+}
+
+fn has_computed_var_argument(values: &[ComponentValue<'_>]) -> bool {
+    values.iter().any(|value| match value {
+        ComponentValue::Function(function) => {
+            let is_var = matches!(
+                &function.name,
+                oxc_css_parser::ast::FunctionName::Ident(InterpolableIdent::Literal(name))
+                    if name.name == "var"
+            );
+            if is_var
+                && !matches!(
+                    function.args.first(),
+                    Some(ComponentValue::InterpolableIdent(InterpolableIdent::Literal(_))) | None
+                )
+            {
+                return true;
+            }
+            has_computed_var_argument(&function.args)
+        }
+        ComponentValue::Calc(calc) => {
+            has_computed_var_argument(std::slice::from_ref(&calc.left))
+                || has_computed_var_argument(std::slice::from_ref(&calc.right))
+        }
+        _ => false,
+    })
 }
 
 fn collect_value_references(values: &[ComponentValue<'_>], references: &mut Vec<String>) {
@@ -1386,6 +1418,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed["classReservationsUnbounded"], true);
+    }
+
+    #[test]
+    fn marks_computed_var_arguments_unbounded() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/main.scss",
+                "$property: --font-brand;\n.card { color: var($property); }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["customPropertiesUnbounded"], true);
     }
 
     #[test]
