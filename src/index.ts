@@ -1334,24 +1334,23 @@ async function planPreparedGroup(
           plan.candidateProbes ?? [],
           reservations,
         );
-        // Font registration shares the single bounded replan; an
-        // unwritable entry cannot hold new tokens, and its retention
-        // warnings are planner-side outcomes.
-        if (groupWritable) {
-          const fonts = await registerFontTokens({
-            system: replanSystem,
-            entryCss: augmented,
-            loadWith: entry.loadWith,
-            themeTokens: entry.themeTokens,
-            probes: plan.fontFamilyProbes ?? [],
-            corpus: [...new Set([...plan.candidates, ...(plan.candidateProbes ?? [])])],
-            reservations,
-            existingAliases: aliases,
-          });
-          Object.assign(aliases, fonts.aliases);
-          fontTokens = fonts.tokens;
-          fontFailures = fonts.failures;
-        }
+        // Font registration shares the single bounded replan. An
+        // unwritable entry may still reuse an existing token because
+        // reuse needs no entry edit; only new token generation is gated.
+        const fonts = await registerFontTokens({
+          system: replanSystem,
+          entryCss: augmented,
+          loadWith: entry.loadWith,
+          themeTokens: entry.themeTokens,
+          probes: plan.fontFamilyProbes ?? [],
+          corpus: [...new Set([...plan.candidates, ...(plan.candidateProbes ?? [])])],
+          reservations,
+          existingAliases: aliases,
+          generate: groupWritable,
+        });
+        Object.assign(aliases, fonts.aliases);
+        fontTokens = fonts.tokens;
+        fontFailures = fonts.failures;
         if (Object.keys(aliases).length > 0) {
           candidateAliases = aliases;
           continue planning;
@@ -1373,6 +1372,9 @@ async function planPreparedGroup(
     const warned = new Set<string>();
     for (const probe of plan.fontFamilyProbes ?? []) {
       if (probe.firstFamily.kind !== "name") continue;
+      // A probe that gained an alias was not blocked by registration; its
+      // rule retains for unrelated reasons the existing warnings explain.
+      if (candidateAliases?.[probe.candidate] !== undefined) continue;
       const ruleKey = `${probe.stylesheet}:${probe.ruleId.start}-${probe.ruleId.end}`;
       if (ruleStatus.get(ruleKey) !== "retained" || warned.has(ruleKey)) continue;
       const failed = fontFailures.has(probe.candidate);

@@ -77,6 +77,11 @@ function fontShapesAccept(
   probeCandidate: string,
   aliased: string,
   reservations: SpellingReservations,
+  /// For targeted reuse: the compiled utility must dereference this
+  /// token's runtime property, or a custom utility owning the spelling
+  /// could substitute an unrelated value without a canonicalization
+  /// proof.
+  backingToken?: string,
 ): boolean {
   const [compiledProbe, compiledAliased] = system.candidatesToCss([probeCandidate, aliased]);
   if (compiledProbe == null || compiledAliased == null) return false;
@@ -90,6 +95,14 @@ function fontShapesAccept(
   }
   if (probeShape.referencedProperties.length > 0) return false;
   if (aliasedShape.referencedProperties.some((property) => reservations.properties.has(property))) {
+    return false;
+  }
+  if (
+    backingToken !== undefined &&
+    !aliasedShape.referencedProperties.some(
+      (property) => property === `--${backingToken}` || property.endsWith(`-${backingToken}`),
+    )
+  ) {
     return false;
   }
   return (
@@ -118,6 +131,9 @@ export interface FontRegistrationOptions {
   reservations: SpellingReservations;
   /// Probe candidates the plain canonicalization pass already aliased.
   existingAliases: Record<string, string>;
+  /// False for an unwritable entry: existing tokens may still be reused
+  /// because reuse needs no entry edit, but no new token registers.
+  generate: boolean;
 }
 
 /// Font aliases for one planning group: reuse an existing matching token
@@ -153,16 +169,22 @@ export async function registerFontTokens(
     // stack matches and whose compiled utility passes every proof.
     let reused = false;
     for (const token of matchingFontTokens(options.themeTokens, probe.value)) {
+      // The reused spelling obeys the same reservation rules as ordinary
+      // canonical aliases.
+      const aliased = aliasedCandidate(probe.candidate, token);
+      if (reservedSpelling(reservations, token) || reservedSpelling(reservations, aliased)) {
+        continue;
+      }
       // The probe candidate carries the entry prefix inside its chain, so
       // the segment swap keeps prefix, variants, and importance.
-      const aliased = aliasedCandidate(probe.candidate, token);
-      if (fontShapesAccept(system, probe.candidate, aliased, reservations)) {
+      if (fontShapesAccept(system, probe.candidate, aliased, reservations, token)) {
         aliases[probe.candidate] = aliased;
         reused = true;
         break;
       }
     }
     if (reused) continue;
+    if (!options.generate) continue;
 
     const stackKey = probe.value;
     const shared = allocatedByStack.get(stackKey);
