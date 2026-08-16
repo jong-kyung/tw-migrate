@@ -805,6 +805,24 @@ test("Vue script property writes force the next font suffix", async () => {
   assert.ok(report.candidates.includes("font-my-font-2"), report.candidates.join(" "));
 });
 
+test("tokens activating inert scanned candidates are rejected", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "Open Sans", sans-serif; }\n',
+    tsx: "import styles from './Button.module.css';\nconst planned = 'brand-open-sans';\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+  });
+  // A functional custom utility consumes --font-* under another root;
+  // registering --font-open-sans would make the inert brand-open-sans
+  // candidate compile for the first time. The functional @utility gate
+  // already turns reservations unbounded, so registration never runs;
+  // this pins that existing coverage.
+  await writeFile(
+    join(cwd, "globals.css"),
+    '@import "tailwindcss";\n@utility brand-* {\n  font-family: --value(--font-*);\n}\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.ok(!report.candidates.includes("font-open-sans"), report.candidates.join(" "));
+});
+
 test("canonicalizes literal utilities to the target design system's names", async () => {
   const cwd = await fixture({
     css: ".button { margin-right: auto; max-width: 100%; padding: 13px; }\n",
