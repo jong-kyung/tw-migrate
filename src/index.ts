@@ -777,12 +777,25 @@ async function planPreparedGroup(
     ...[...groupFiles.values()].map((file) => file.source),
     ...entry.graphSources.map((graphSource) => graphSource.source),
   ];
+  const addSegment = (token: string) => {
+    if (token === "") return;
+    // The important modifier spells the same utility.
+    const segment = token.split(":").pop()?.replace(/!$/, "");
+    if (segment) mentionedSegments.add(segment);
+  };
   for (const source of mentionedSources) {
     for (const token of source.split(/[\s"'`<>=,;{}()\\]+/)) {
-      if (token === "") continue;
-      // The important modifier spells the same utility.
-      const segment = token.split(":").pop()?.replace(/!$/, "");
-      if (segment) mentionedSegments.add(segment);
+      addSegment(token);
+    }
+    // Tailwind expands one brace group per inline safelist candidate
+    // (font-{brand,display}), so safelist contents expand before the
+    // general tokenizer splits the group apart.
+    for (const inline of source.matchAll(/inline\(([^)]*)\)/g)) {
+      for (const candidate of inline[1].matchAll(/([^\s"',{}]*)\{([^{}]*)\}([^\s"',{}]*)/g)) {
+        for (const option of candidate[2].split(",")) {
+          addSegment(`${candidate[1]}${option}${candidate[3]}`);
+        }
+      }
     }
   }
   const fileRoots = new Map(
