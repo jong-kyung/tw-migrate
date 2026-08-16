@@ -39,6 +39,10 @@ const GENERIC_FAMILIES: &[&str] = &[
 
 const CSS_WIDE_KEYWORDS: &[&str] = &["initial", "inherit", "unset", "revert", "revert-layer"];
 
+/// CSS whitespace is only these five code points; other Unicode
+/// whitespace such as a non-breaking space is identifier content.
+const CSS_WHITESPACE: &[char] = &[' ', '\t', '\n', '\r', '\u{c}'];
+
 /// The parsed families of one raw `font-family` value: the normalized
 /// stack, the first family's decoded name, and its kind. `None` when the
 /// value is runtime-dependent or otherwise unreadable (functions,
@@ -72,7 +76,7 @@ fn split_families(value: &str) -> Option<Vec<&str>> {
 pub fn parse_font_stack(value: &str) -> Option<(String, String, &'static str)> {
     let mut families = Vec::new();
     for segment in split_families(value)? {
-        let segment = segment.trim();
+        let segment = segment.trim_matches(CSS_WHITESPACE);
         if segment.is_empty() {
             return None;
         }
@@ -97,7 +101,10 @@ pub fn parse_font_stack(value: &str) -> Option<(String, String, &'static str)> {
             families.push((inner.to_string(), "name"));
             continue;
         }
-        let tokens: Vec<&str> = segment.split_whitespace().collect();
+        let tokens: Vec<&str> = segment
+            .split(CSS_WHITESPACE)
+            .filter(|token| !token.is_empty())
+            .collect();
         if tokens.is_empty()
             || tokens.iter().any(|token| {
                 token.chars().any(|character| {
@@ -215,6 +222,16 @@ mod tests {
             Some((
                 "\"ACME, Inc.\", sans-serif".to_string(),
                 "ACME, Inc.".to_string(),
+                "name",
+            )),
+        );
+        // A non-breaking space is identifier content, not CSS whitespace,
+        // so the authored name survives normalization byte-exact.
+        assert_eq!(
+            parse_font_stack("Acme\u{a0}Display, serif"),
+            Some((
+                "\"Acme\u{a0}Display\", serif".to_string(),
+                "Acme\u{a0}Display".to_string(),
                 "name",
             )),
         );
