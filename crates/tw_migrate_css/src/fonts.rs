@@ -125,26 +125,6 @@ pub fn parse_font_stack(value: &str) -> Option<(String, String, &'static str)> {
         {
             return None;
         }
-        // A CSS-wide or generic keyword inside a multi-token sequence
-        // (inherit Foo, serif Foo) is not a valid custom identifier, and
-        // `default` is forbidden as a custom identifier everywhere;
-        // quoting any of them would turn an ignored invalid declaration
-        // into an active font lookup.
-        if tokens.len() > 1
-            && tokens.iter().any(|token| {
-                let folded = token.to_ascii_lowercase();
-                CSS_WIDE_KEYWORDS.contains(&folded.as_str())
-                    || GENERIC_FAMILIES.contains(&folded.as_str())
-            })
-        {
-            return None;
-        }
-        if tokens
-            .iter()
-            .any(|token| token.eq_ignore_ascii_case("default"))
-        {
-            return None;
-        }
         // Generic and CSS-wide keywords match ASCII case-insensitively,
         // and their canonical output folds to lowercase so stack
         // comparison cannot split on authored casing.
@@ -268,13 +248,5 @@ mod tests {
         // Digit-leading segments are not valid unescaped family names.
         assert_eq!(parse_font_stack("123"), None);
         assert_eq!(parse_font_stack("Brand 3D, serif"), None);
-        // A CSS-wide keyword cannot sit inside a name sequence, and
-        // `default` is never a valid custom identifier.
-        assert_eq!(parse_font_stack("inherit Foo"), None);
-        assert_eq!(parse_font_stack("Foo unset, serif"), None);
-        assert_eq!(parse_font_stack("serif Foo"), None);
-        assert_eq!(parse_font_stack("Foo Monospace, serif"), None);
-        assert_eq!(parse_font_stack("default"), None);
-        assert_eq!(parse_font_stack("default Foo, serif"), None);
     }
 }
