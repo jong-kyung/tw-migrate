@@ -662,6 +662,16 @@ test("Vue v-bind spreads hide style overrides from font allocation", async () =>
   );
 });
 
+test("prefixed runtime property mentions force the next font suffix", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "My Font", sans-serif; }\n',
+    tsx: "import styles from './Button.module.css';\nconst token = '--tw-font-my-font';\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+  });
+  await writeFile(join(cwd, "globals.css"), '@import "tailwindcss" prefix(tw);\n');
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["tw:font-my-font-2"]);
+});
+
 test("canonicalizes literal utilities to the target design system's names", async () => {
   const cwd = await fixture({
     css: ".button { margin-right: auto; max-width: 100%; padding: 13px; }\n",

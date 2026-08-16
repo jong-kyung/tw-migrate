@@ -223,7 +223,11 @@ export async function registerFontTokens(
     let allocated = false;
     for (const name of fontNameCandidates(base)) {
       if (claimed.has(name)) continue;
+      // A prefixed entry dereferences the token through the prefixed
+      // runtime property, so both spellings must be free; otherwise the
+      // shape proof rejects terminally where a suffix would have worked.
       if (reservations.properties.has(`--font-${name}`)) continue;
+      if (prefix !== null && reservations.properties.has(`--${prefix}-font-${name}`)) continue;
       if (reservedSpelling(reservations, `font-${name}`)) continue;
       if (options.mentionedSegments.has(`font-${name}`)) continue;
       const global = options.globalAllocations.get(name);
