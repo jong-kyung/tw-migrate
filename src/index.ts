@@ -43,9 +43,9 @@ import {
   scanInlineStyleReservations,
   scanStylesheetReservations,
   spellingReservations,
+  utilitySegment,
 } from "./plan/canonicalize.ts";
 import { appendFontTheme, registerFontTokens } from "./plan/fonts.ts";
-import { utilitySegment } from "./plan/canonicalize.ts";
 import { importsStylesheet, proveSharedEntry, tailwindEntryCatalog } from "./plan/entry.ts";
 import type { SharedEntryProofs } from "./plan/entry.ts";
 import {
@@ -787,7 +787,7 @@ async function planPreparedGroup(
   const addSegment = (token: string) => {
     if (token === "") return;
     // The important modifier spells the same utility.
-    const segment = token.split(":").pop()?.replace(/!$/, "");
+    const segment = utilitySegment(token).replace(/!$/, "");
     if (segment) mentionedSegments.add(segment);
   };
   for (const source of mentionedSources) {
@@ -1411,8 +1411,7 @@ async function planPreparedGroup(
       // A candidate Tailwind refuses to compile retains its owning rule(s)
       // instead of aborting the run: block those rules and replan until
       // every applied candidate compiles.
-      const replanSystem = augmented === entry.css ? entry.designSystem : system;
-      const failing = invalidCandidates(replanSystem, plan.candidates);
+      const failing = invalidCandidates(system, plan.candidates);
       if (failing.length > 0) {
         if (!accumulateBlockedRules(blocked, plan, failing)) {
           throw new Error(`Tailwind did not generate CSS for candidate: ${failing[0]}`);
@@ -1425,16 +1424,12 @@ async function planPreparedGroup(
       // rendered by the planner on the next pass.
       if (!canonicalized) {
         canonicalized = true;
-        const aliases = acceptedCandidateAliases(
-          replanSystem,
-          plan.candidateProbes ?? [],
-          reservations,
-        );
+        const aliases = acceptedCandidateAliases(system, plan.candidateProbes ?? [], reservations);
         // Font registration shares the single bounded replan. An
         // unwritable entry may still reuse an existing token because
         // reuse needs no entry edit; only new token generation is gated.
         const fonts = await registerFontTokens({
-          system: replanSystem,
+          system,
           entryCss: augmented,
           loadWith: entry.loadWith,
           themeTokens: entry.themeTokens,

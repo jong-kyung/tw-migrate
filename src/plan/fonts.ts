@@ -5,7 +5,7 @@
 
 import { compiledShape, fontFamilyStack } from "../native.ts";
 import { isIntegrityError } from "../util/shared.ts";
-import { canonicalCandidate, reservedSpelling, utilitySegment } from "./canonicalize.ts";
+import { canonicalCandidate, reservedSpelling, sameShape, utilitySegment } from "./canonicalize.ts";
 import type { SpellingReservations } from "./canonicalize.ts";
 import type { DesignSystem, FontFamilyProbe } from "../types.ts";
 
@@ -100,14 +100,7 @@ function fontShapesAccept(
     );
     if (!bare) return false;
   }
-  return (
-    probeShape.declarations.length === aliasedShape.declarations.length &&
-    probeShape.declarations.every(
-      (declaration, index) =>
-        declaration.property === aliasedShape.declarations[index].property &&
-        declaration.important === aliasedShape.declarations[index].important,
-    )
-  );
+  return sameShape(probeShape.declarations, aliasedShape.declarations);
 }
 
 export interface FontRegistrationOptions {

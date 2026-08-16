@@ -231,7 +231,7 @@ export function utilitySegment(candidate: string): string {
   return candidate.slice(start);
 }
 
-function sameShape(
+export function sameShape(
   left: { property: string; important: boolean }[],
   right: { property: string; important: boolean }[],
 ): boolean {
