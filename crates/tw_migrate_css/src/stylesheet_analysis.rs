@@ -595,9 +595,10 @@ fn collect_at_rule_metadata(
     }
 }
 
-/// Collect literal `--name` mentions from raw conditional prelude text
-/// into the custom-property inventory.
-fn collect_prelude_custom_properties(text: &str, analysis: &mut StylesheetAnalysis) {
+/// Collect literal `--name` mentions anywhere in raw text into a
+/// custom-property inventory; shared with source analysis for string
+/// literals and template quasis.
+pub fn collect_custom_property_mentions(text: &str, properties: &mut Vec<String>) {
     let bytes = text.as_bytes();
     let mut index = 0;
     while index + 1 < bytes.len() {
@@ -613,7 +614,7 @@ fn collect_prelude_custom_properties(text: &str, analysis: &mut StylesheetAnalys
                 end += 1;
             }
             if end > index + 2 {
-                analysis.custom_properties.push(text[start..end].to_string());
+                properties.push(text[start..end].to_string());
             }
             index = end;
             continue;
@@ -694,9 +695,9 @@ fn collect_stylesheet_statements(
                         .block
                         .as_ref()
                         .map_or(at_rule.span.end, |block| block.span.start);
-                    collect_prelude_custom_properties(
+                    collect_custom_property_mentions(
                         &source[at_rule.span.start..end],
-                        analysis,
+                        &mut analysis.custom_properties,
                     );
                 }
                 match &at_rule.prelude {

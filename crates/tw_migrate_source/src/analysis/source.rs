@@ -76,33 +76,6 @@ fn collect_template_prefixes(
     }
 }
 
-/// Embedded `--name` mentions anywhere in static text, for property
-/// reservations; shared by string literals and template quasis.
-fn collect_embedded_properties(text: &str, properties: &mut Vec<String>) {
-    let bytes = text.as_bytes();
-    let mut index = 0;
-    while index + 1 < bytes.len() {
-        if bytes[index] == b'-' && bytes[index + 1] == b'-' {
-            let start = index;
-            let mut end = index + 2;
-            while end < bytes.len()
-                && (bytes[end].is_ascii_alphanumeric()
-                    || bytes[end] == b'_'
-                    || bytes[end] == b'-'
-                    || !bytes[end].is_ascii())
-            {
-                end += 1;
-            }
-            if end > index + 2 {
-                properties.push(text[start..end].to_string());
-            }
-            index = end;
-            continue;
-        }
-        index += 1;
-    }
-}
-
 /// The trailing whitespace-delimited token of static text preceding a
 /// dynamic part constrains the produced class; whitespace-terminated text
 /// constrains nothing.
@@ -811,7 +784,7 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
         collect_template_prefixes(template, &mut self.analysis.template_prefixes);
         for quasi in &template.quasis {
             if let Some(cooked) = quasi.value.cooked.as_ref() {
-                collect_embedded_properties(cooked, &mut self.analysis.custom_properties);
+                tw_migrate_css::collect_custom_property_mentions(cooked, &mut self.analysis.custom_properties);
             }
         }
         walk::walk_template_literal(self, template);
@@ -828,7 +801,7 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
     /// embedded mention reserves; ownership precision is not worth
     /// chasing call shapes.
     fn visit_string_literal(&mut self, literal: &oxc_ast::ast::StringLiteral<'a>) {
-        collect_embedded_properties(literal.value.as_str(), &mut self.analysis.custom_properties);
+        tw_migrate_css::collect_custom_property_mentions(literal.value.as_str(), &mut self.analysis.custom_properties);
         walk::walk_string_literal(self, literal);
     }
 
