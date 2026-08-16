@@ -800,6 +800,18 @@ async function planPreparedGroup(
     for (const inline of source.matchAll(/inline\(([^)]*)\)/g)) {
       for (const candidate of inline[1].matchAll(/([^\s"',{}]*)\{([^{}]*)\}([^\s"',{}]*)/g)) {
         for (const option of candidate[2].split(",")) {
+          // Tailwind's range syntax expands numerically: {1..3} emits
+          // every step, bounded here like the safelist itself is.
+          const range = /^(\d+)\.\.(\d+)$/.exec(option);
+          if (range !== null) {
+            const from = Number(range[1]);
+            const to = Number(range[2]);
+            for (let step = Math.min(from, to); step <= Math.max(from, to); step += 1) {
+              addSegment(`${candidate[1]}${step}${candidate[3]}`);
+              if (step - Math.min(from, to) >= 1000) break;
+            }
+            continue;
+          }
           addSegment(`${candidate[1]}${option}${candidate[3]}`);
         }
       }
