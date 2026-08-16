@@ -1,6 +1,6 @@
 import { expect, test } from "vite-plus/test";
 
-import { fontTokenName, matchingFontTokens } from "../src/plan/fonts.ts";
+import { fontNameCandidates, fontTokenName, matchingFontTokens } from "../src/plan/fonts.ts";
 
 test("derives deterministic token names from family names", () => {
   expect(fontTokenName("Open Sans")).toBe("open-sans");
@@ -14,6 +14,14 @@ test("derives deterministic token names from family names", () => {
   expect(fontTokenName("3M Circular")).toBe("family-3m-circular");
   // Unicode letters survive NFC-normalized and lowercased.
   expect(fontTokenName("Núnito")).toBe("núnito");
+});
+
+test("bounds the allocation sequence at one hundred spellings", () => {
+  const names = fontNameCandidates("open-sans");
+  expect(names).toHaveLength(100);
+  expect(names[0]).toBe("open-sans");
+  expect(names[1]).toBe("open-sans-2");
+  expect(names[99]).toBe("open-sans-100");
 });
 
 test("matches existing font tokens through the stack parser", () => {

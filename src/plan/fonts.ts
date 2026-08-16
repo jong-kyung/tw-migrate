@@ -18,6 +18,17 @@ export function fontTokenName(family: string): string {
   return /^\p{N}/u.test(collapsed) ? `family-${collapsed}` : collapsed;
 }
 
+/// The RFC's bounded allocation sequence for one base name: the base
+/// spelling, then numeric suffixes from -2, at most 100 spellings total.
+/// Exhaustion is the caller's font-theme-registration-failed outcome.
+export function fontNameCandidates(base: string): string[] {
+  const names = [base];
+  for (let suffix = 2; names.length < 100; suffix += 1) {
+    names.push(`${base}-${suffix}`);
+  }
+  return names;
+}
+
 /// Existing `--font-*` theme tokens whose parsed stack equals the probe's
 /// normalized stack, as utility candidate names sorted lexicographically.
 /// The comparison runs both values through the planner's stack parser, so

@@ -43,6 +43,14 @@ pub(crate) struct StylesheetAnalysis {
     /// literal class selectors plus exact and word-matching class-attribute
     /// selector values. Canonicalization reserves these spellings.
     class_names: Vec<String>,
+    /// Custom property names this sheet declares, registers with
+    /// `@property`, or dereferences through `var()`, for font token name
+    /// reservations. Names keep their `--` prefix.
+    custom_properties: Vec<String>,
+    /// True when a custom property name cannot be read statically (an
+    /// interpolated declaration name), so property-keyed reservations
+    /// cannot be bounded.
+    custom_properties_unbounded: bool,
     /// True when a selector's class match set cannot be bounded: an
     /// interpolated class name, or a class-attribute matcher such as
     /// `[class*=]` whose semantics exceed word equality.
@@ -513,6 +521,15 @@ fn collect_at_rule_metadata(
         let Some(block) = &at_rule.block else {
             continue;
         };
+        if at_rule.name.name == "property" {
+            if let Some(AtRulePrelude::Property(name)) = &at_rule.prelude
+                && let Some(name) = literal_ident(name)
+            {
+                analysis.custom_properties.push(name.to_string());
+            } else {
+                analysis.custom_properties_unbounded = true;
+            }
+        }
         if at_rule.name.name == "theme" {
             for statement in &block.statements {
                 let Statement::Declaration(declaration) = statement else {
@@ -868,8 +885,15 @@ fn collect_stylesheet_statements(
             }
             Statement::Declaration(declaration) => {
                 let InterpolableIdent::Literal(name) = &declaration.name else {
+                    // An interpolated declaration name can resolve to any
+                    // custom property.
+                    analysis.custom_properties_unbounded = true;
                     continue;
                 };
+                if name.name.starts_with("--") {
+                    analysis.custom_properties.push(name.name.to_string());
+                }
+                collect_value_references(&declaration.value, &mut analysis.custom_properties);
                 if name.name != "composes" {
                     continue;
                 }
@@ -979,6 +1003,8 @@ pub fn stylesheet_analysis_json(path: &str, source: &str) -> MigrationResult<Str
         global_at_rule_identities: Vec::new(),
         global_at_rules_unverifiable: false,
         class_names: Vec::new(),
+        custom_properties: Vec::new(),
+        custom_properties_unbounded: false,
         class_reservations_unbounded: false,
     };
     collect_stylesheet_statements(&parsed.statements, source, &[], &mut analysis);
@@ -990,6 +1016,8 @@ pub fn stylesheet_analysis_json(path: &str, source: &str) -> MigrationResult<Str
     analysis.references.dedup();
     analysis.class_names.sort();
     analysis.class_names.dedup();
+    analysis.custom_properties.sort();
+    analysis.custom_properties.dedup();
     serde_json::to_string(&analysis).map_err(|error| MigrationError::Serialization {
         message: error.to_string(),
     })
@@ -1337,6 +1365,33 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed["classReservationsUnbounded"], true);
+    }
+
+    #[test]
+    fn collects_custom_property_inventory() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/legacy.css",
+                ":root { --font-brand: \"Open Sans\", sans-serif; }\n@property --font-angle { syntax: \"<angle>\"; inherits: false; initial-value: 0deg; }\n.card { font-family: var(--font-body, serif); width: calc(var(--gap) * 2); }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            parsed["customProperties"],
+            serde_json::json!(["--font-angle", "--font-body", "--font-brand", "--gap"]),
+        );
+        assert_eq!(parsed["customPropertiesUnbounded"], false);
+
+        let interpolated: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/legacy.scss",
+                "$prop: --font-brand;\n.card { #{$prop}: serif; }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(interpolated["customPropertiesUnbounded"], true);
     }
 
     #[test]

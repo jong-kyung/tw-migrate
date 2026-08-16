@@ -262,6 +262,12 @@ struct SourceAnalysis {
     /// True when the source renders a `<style>` element (styled-jsx and
     /// similar inline CSS), whose selectors this analysis never reads.
     renders_style_element: bool,
+    /// Custom-property name literals (`--*` strings) appearing anywhere in
+    /// the source, for font token name reservations.
+    custom_properties: Vec<String>,
+    /// True when a style property API receives a property name the parser
+    /// cannot read, so property-keyed reservations cannot be bounded.
+    custom_properties_unbounded: bool,
 }
 
 struct SourceCollector<'s, 'a> {
@@ -661,6 +667,17 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
     }
 
     fn visit_call_expression(&mut self, call: &oxc_ast::ast::CallExpression<'a>) {
+        // A style property API taking a computed name can touch any custom
+        // property, so allocation cannot prove a free name.
+        if let Expression::StaticMemberExpression(member) = &call.callee
+            && matches!(
+                member.property.name.as_str(),
+                "setProperty" | "getPropertyValue" | "removeProperty"
+            )
+            && !matches!(call.arguments.first(), Some(Argument::StringLiteral(_)) | None)
+        {
+            self.analysis.custom_properties_unbounded = true;
+        }
         if let Expression::Identifier(callee) = &call.callee {
             if callee.name == "require" {
                 if let Some(Argument::StringLiteral(literal)) = call.arguments.first() {
@@ -721,6 +738,16 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
     fn visit_binary_expression(&mut self, expression: &oxc_ast::ast::BinaryExpression<'a>) {
         collect_concat_prefixes(expression, &mut self.analysis.template_prefixes);
         walk::walk_binary_expression(self, expression);
+    }
+
+    /// Any `--` string literal may name a custom property this run would
+    /// otherwise allocate, so it reserves the spelling wherever it
+    /// appears; ownership precision is not worth chasing call shapes.
+    fn visit_string_literal(&mut self, literal: &oxc_ast::ast::StringLiteral<'a>) {
+        if literal.value.starts_with("--") {
+            self.analysis.custom_properties.push(literal.value.to_string());
+        }
+        walk::walk_string_literal(self, literal);
     }
 
     fn visit_identifier_reference(&mut self, identifier: &IdentifierReference<'a>) {
@@ -854,6 +881,8 @@ pub fn source_analysis_json(path: &str, source: &str) -> MigrationResult<String>
             stylesheet_links: Vec::new(),
             stylesheet_links_unverifiable: false,
             renders_style_element: false,
+            custom_properties: Vec::new(),
+            custom_properties_unbounded: false,
         },
     };
     collector.visit_program(&parsed.program);
@@ -863,6 +892,8 @@ pub fn source_analysis_json(path: &str, source: &str) -> MigrationResult<String>
     collector.analysis.defines_root_use_css_module = scoping
         .get_binding(scoping.root_scope_id(), "useCssModule".into())
         .is_some_and(|symbol| !collector.use_css_module_symbols.contains(&symbol));
+    collector.analysis.custom_properties.sort();
+    collector.analysis.custom_properties.dedup();
     serde_json::to_string(&collector.analysis).map_err(|error| MigrationError::Serialization {
         message: error.to_string(),
     })
@@ -1083,6 +1114,34 @@ mod tests {
         // Trailing tokens of pre-expression quasis constrain the dynamic
         // class; static tokens and whitespace-terminated quasis do not.
         assert_eq!(parsed["templatePrefixes"], serde_json::json!(["mr-", "p-", "pt-"]));
+    }
+
+    #[test]
+    fn collects_custom_property_literals_and_dynamic_property_apis() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Theme.ts",
+                "const token = \"--font-brand\";\ndocument.body.style.setProperty(token, value);\nelement.style.getPropertyValue(\"--gap\");\nconst plain = \"font-brand\";",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            parsed["customProperties"],
+            serde_json::json!(["--font-brand", "--gap"]),
+        );
+        // setProperty received a computed name.
+        assert_eq!(parsed["customPropertiesUnbounded"], true);
+
+        let bounded: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Theme.ts",
+                "element.style.setProperty(\"--font-brand\", value);\nelement.style.removeProperty(\"--font-brand\");",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(bounded["customPropertiesUnbounded"], false);
     }
 
     #[test]

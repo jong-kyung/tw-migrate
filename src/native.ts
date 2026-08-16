@@ -45,6 +45,8 @@ export interface SourceAnalysis {
   stylesheetLinks: string[];
   stylesheetLinksUnverifiable: boolean;
   rendersStyleElement: boolean;
+  customProperties: string[];
+  customPropertiesUnbounded: boolean;
 }
 
 export interface CompiledShape {
@@ -54,6 +56,8 @@ export interface CompiledShape {
 
 export interface StylesheetAnalysis {
   references: string[];
+  customProperties: string[];
+  customPropertiesUnbounded: boolean;
   imports: { href: string; media: string; start: number; end: number }[];
   unverifiable: boolean;
   scopeEscapes: string[];
@@ -167,6 +171,8 @@ function sourceAnalysisResult(value: unknown): value is SourceAnalysis {
     value.unboundReferences.every((item) => typeof item === "string") &&
     Array.isArray(value.stylesheetLinks) &&
     value.stylesheetLinks.every((item) => typeof item === "string") &&
+    Array.isArray(value.customProperties) &&
+    value.customProperties.every((item) => typeof item === "string") &&
     [
       value.vueGlobUnverifiable,
       value.hasDynamicImport,
@@ -176,6 +182,7 @@ function sourceAnalysisResult(value: unknown): value is SourceAnalysis {
       value.definesRootUseCssModule,
       value.stylesheetLinksUnverifiable,
       value.rendersStyleElement,
+      value.customPropertiesUnbounded,
     ].every((item) => typeof item === "boolean")
   );
 }
@@ -297,7 +304,10 @@ export function stylesheetAnalysis(path: string, source: string): StylesheetAnal
       typeof value.globalAtRulesUnverifiable === "boolean" &&
       Array.isArray(value.classNames) &&
       value.classNames.every((item) => typeof item === "string") &&
-      typeof value.classReservationsUnbounded === "boolean",
+      typeof value.classReservationsUnbounded === "boolean" &&
+      Array.isArray(value.customProperties) &&
+      value.customProperties.every((item) => typeof item === "string") &&
+      typeof value.customPropertiesUnbounded === "boolean",
   );
   stylesheetAnalysisCache.set(path, { source, analysis });
   bound(stylesheetAnalysisCache);
