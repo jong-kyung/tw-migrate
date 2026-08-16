@@ -26,8 +26,6 @@ export interface ExpressionAnalysis {
   referencesUseCssModule: boolean;
   references: string[];
   templatePrefixes: string[];
-  customProperties: string[];
-  customPropertiesUnbounded: boolean;
 }
 
 export interface SourceAnalysis {
@@ -219,10 +217,7 @@ export function expressionAnalysis(path: string, source: string): ExpressionAnal
       Array.isArray(value.references) &&
       value.references.every((item) => typeof item === "string") &&
       Array.isArray(value.templatePrefixes) &&
-      value.templatePrefixes.every((item) => typeof item === "string") &&
-      Array.isArray(value.customProperties) &&
-      value.customProperties.every((item) => typeof item === "string") &&
-      typeof value.customPropertiesUnbounded === "boolean",
+      value.templatePrefixes.every((item) => typeof item === "string"),
   );
 }
 
