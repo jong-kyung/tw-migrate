@@ -81,14 +81,18 @@ pub fn parse_font_stack(value: &str) -> Option<(String, String, &'static str)> {
         {
             return None;
         }
-        let joined = tokens.join(" ");
-        let kind = if tokens.len() == 1 && GENERIC_FAMILIES.contains(&tokens[0]) {
+        // Generic and CSS-wide keywords match ASCII case-insensitively,
+        // and their canonical output folds to lowercase so stack
+        // comparison cannot split on authored casing.
+        let folded = tokens[0].to_ascii_lowercase();
+        let kind = if tokens.len() == 1 && GENERIC_FAMILIES.contains(&folded.as_str()) {
             "generic"
-        } else if tokens.len() == 1 && CSS_WIDE_KEYWORDS.contains(&tokens[0]) {
+        } else if tokens.len() == 1 && CSS_WIDE_KEYWORDS.contains(&folded.as_str()) {
             "css-wide"
         } else {
             "name"
         };
+        let joined = if kind == "name" { tokens.join(" ") } else { folded };
         families.push((joined, kind));
     }
     let (first_name, first_kind) = families.first().cloned()?;
@@ -145,6 +149,18 @@ mod tests {
         );
         assert_eq!(
             parse_font_stack("inherit"),
+            Some(("inherit".to_string(), "inherit".to_string(), "css-wide")),
+        );
+    }
+
+    #[test]
+    fn folds_keyword_casing_before_classifying() {
+        assert_eq!(
+            parse_font_stack("Serif"),
+            Some(("serif".to_string(), "serif".to_string(), "generic")),
+        );
+        assert_eq!(
+            parse_font_stack("INHERIT"),
             Some(("inherit".to_string(), "inherit".to_string(), "css-wide")),
         );
     }
