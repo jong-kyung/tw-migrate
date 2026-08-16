@@ -259,6 +259,9 @@ struct SourceAnalysis {
     /// True when a JSX link's rel or href cannot be read statically, so
     /// the loaded target is unknowable.
     stylesheet_links_unverifiable: bool,
+    /// True when the source renders a `<style>` element (styled-jsx and
+    /// similar inline CSS), whose selectors this analysis never reads.
+    renders_style_element: bool,
 }
 
 struct SourceCollector<'s, 'a> {
@@ -443,6 +446,11 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
     /// rel or href the parser cannot read statically, or a spread that may
     /// supply them, leaves the loaded target unknowable.
     fn visit_jsx_opening_element(&mut self, element: &oxc_ast::ast::JSXOpeningElement<'a>) {
+        if let oxc_ast::ast::JSXElementName::Identifier(name) = &element.name
+            && name.name == "style"
+        {
+            self.analysis.renders_style_element = true;
+        }
         if let oxc_ast::ast::JSXElementName::Identifier(name) = &element.name
             && name.name == "link"
         {
@@ -845,6 +853,7 @@ pub fn source_analysis_json(path: &str, source: &str) -> MigrationResult<String>
             unbound_references: Vec::new(),
             stylesheet_links: Vec::new(),
             stylesheet_links_unverifiable: false,
+            renders_style_element: false,
         },
     };
     collector.visit_program(&parsed.program);
@@ -1114,6 +1123,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(overridden["stylesheetLinksUnverifiable"], true);
+
+        let styled: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Page.tsx",
+                "export const Page = () => <style>{`.mr-auto { margin-right: 1px }`}</style>;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(styled["rendersStyleElement"], true);
 
         let repinned: serde_json::Value = serde_json::from_str(
             &super::source_analysis_json(

@@ -44,6 +44,7 @@ export interface SourceAnalysis {
   unboundReferences: string[];
   stylesheetLinks: string[];
   stylesheetLinksUnverifiable: boolean;
+  rendersStyleElement: boolean;
 }
 
 export interface CompiledShape {
@@ -173,6 +174,7 @@ function sourceAnalysisResult(value: unknown): value is SourceAnalysis {
       value.hasUnboundUseCssModule,
       value.definesRootUseCssModule,
       value.stylesheetLinksUnverifiable,
+      value.rendersStyleElement,
     ].every((item) => typeof item === "boolean")
   );
 }

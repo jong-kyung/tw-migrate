@@ -928,6 +928,9 @@ async function planPreparedGroup(
         reservations.prefixes.add(prefix);
       }
       opaqueStylesheetImports(analysis.imports);
+      // A rendered <style> element carries selectors this analysis never
+      // reads, matching the HTML hasStyle rule.
+      if (analysis.rendersStyleElement) reservations.unbounded = true;
       // A rendered stylesheet link loads a sheet like an HTML document
       // link: a remote, unresolved, or other-entry target is opaque.
       if (analysis.stylesheetLinksUnverifiable) reservations.unbounded = true;

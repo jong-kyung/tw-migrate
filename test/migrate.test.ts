@@ -757,6 +757,15 @@ test("entity-encoded HTML class tokens reserve canonical spellings", async () =>
   assert.deepEqual(report.candidates, ["mr-[auto]"]);
 });
 
+test("JSX style elements keep group spellings arbitrary", async () => {
+  const cwd = await fixture({
+    css: ".button { margin-right: auto; }\n",
+    tsx: "import styles from './Button.module.css';\nexport const Button = () => (<div><style>{`.mr-auto { margin-right: 1px }`}</style><button className={styles.button}>B</button></div>);\n",
+  });
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
 test("opaque page style sources keep group spellings arbitrary", async () => {
   const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
   await writeFile(
