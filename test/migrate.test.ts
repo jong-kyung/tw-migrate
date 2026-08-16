@@ -760,6 +760,18 @@ test("inline safelist spellings force the next font suffix", async () => {
   // fontTokenName("My Font 2") is my-font-2, which the range reserves.
   assert.deepEqual(report3.candidates, ["font-my-font-2-2"]);
 
+  // Stepped ranges expand each stride, not the literal endpoints.
+  const stepped = await fixture({
+    css: '.button { font-family: "My Font 200", sans-serif; }\n',
+  });
+  await writeFile(
+    join(stepped, "globals.css"),
+    '@import "tailwindcss";\n@source inline("font-my-font-{100..300..100}");\n',
+  );
+  const report4 = await migrate({ cwd: stepped, styleFile: "Button.module.css" });
+  // fontTokenName("My Font 200") is my-font-200, which the stride reserves.
+  assert.deepEqual(report4.candidates, ["font-my-font-200-2"]);
+
   // Brace-expanded safelists reserve each expanded spelling.
   const braced = await fixture({
     css: '.button { font-family: "My Font", sans-serif; }\n',
