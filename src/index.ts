@@ -244,13 +244,9 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
     for (const [token, value] of Object.entries(preparation.tailwind.themeTokens)) {
       if (!token.startsWith("font-")) continue;
       // A value the stack parser cannot normalize still owns its global
-      // name; the sentinel never equals a probe stack, so allocation
-      // always suffixes past it.
+      // name; null marks that opaque ownership.
       const parsed = fontFamilyStack(value);
-      context.fontAllocations.set(
-        token.replace(/^font-/, ""),
-        parsed !== null ? parsed.value : "\0opaque",
-      );
+      context.fontAllocations.set(token.replace(/^font-/, ""), parsed && parsed.value);
     }
   }
 

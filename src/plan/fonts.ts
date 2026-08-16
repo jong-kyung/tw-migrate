@@ -137,8 +137,9 @@ export interface FontRegistrationOptions {
   /// The run-wide allocation registry (token name to stack value):
   /// emitted @theme variables are global at runtime, so two entry groups
   /// deriving one name from different stacks must not share it, while
-  /// the same stack shares the spelling with per-entry definitions.
-  globalAllocations: Map<string, string>;
+  /// the same stack shares the spelling with per-entry definitions. A
+  /// null value is an opaque owner no probe stack may match.
+  globalAllocations: Map<string, string | null>;
 }
 
 /// Font aliases for one planning group: reuse an existing matching token
@@ -189,7 +190,7 @@ export async function registerFontTokens(
       // must not generate the same global property for a different stack.
       const reuseName = token.replace(/^font-/, "");
       const owner = options.globalAllocations.get(reuseName);
-      if (owner !== undefined && owner !== probe.value) continue;
+      if (owner !== undefined && (owner === null || owner !== probe.value)) continue;
       // The probe candidate carries the entry prefix inside its chain, so
       // the segment swap keeps prefix, variants, and importance.
       if (fontShapesAccept(system, probe.candidate, aliased, reservations, token)) {
@@ -223,7 +224,7 @@ export async function registerFontTokens(
       if (reservedSpelling(reservations, `font-${name}`)) continue;
       if (options.mentionedSegments.has(`font-${name}`)) continue;
       const global = options.globalAllocations.get(name);
-      if (global !== undefined && global !== probe.value) continue;
+      if (global !== undefined && (global === null || global !== probe.value)) continue;
       // A spelling the pre-font system already compiles is owned by an
       // existing utility, such as font-bold.
       const compiled = prefix !== null ? `${prefix}:font-${name}` : `font-${name}`;
