@@ -463,6 +463,18 @@ test("exhausted font allocation warns as a registration failure", async () => {
   assert.ok(warning, JSON.stringify(report.warnings));
 });
 
+test("registers font tokens without media extraction enabled", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "Open Sans", sans-serif; }\n',
+  });
+  const report = await migrate({
+    cwd,
+    styleFile: "Button.module.css",
+    extractMediaQueries: false,
+  });
+  assert.deepEqual(report.candidates, ["font-open-sans"]);
+});
+
 test("canonicalizes literal utilities to the target design system's names", async () => {
   const cwd = await fixture({
     css: ".button { margin-right: auto; max-width: 100%; padding: 13px; }\n",

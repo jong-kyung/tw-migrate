@@ -1303,7 +1303,7 @@ async function planPreparedGroup(
       // A candidate Tailwind refuses to compile retains its owning rule(s)
       // instead of aborting the run: block those rules and replan until
       // every applied candidate compiles.
-      const replanSystem = currentExtraction ? system : entry.designSystem;
+      const replanSystem = augmented === entry.css ? entry.designSystem : system;
       const failing = invalidCandidates(replanSystem, plan.candidates);
       if (failing.length > 0) {
         if (!accumulateBlockedRules(blocked, plan, failing)) {
