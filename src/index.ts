@@ -910,6 +910,20 @@ async function planPreparedGroup(
         // An analyzable script contributes its constrained prefixes and
         // stylesheet imports, and an unanalyzable one turns the group
         // opaque.
+        // Inline event handlers embed script like <script> bodies do; an
+        // unparseable handler leaves its effects unknowable.
+        if (parsed.handlerText.trim() !== "") {
+          try {
+            const handlers = sourceAnalysis(`${file.path}.handlers.js`, parsed.handlerText);
+            for (const prefix of handlers.templatePrefixes) reservations.prefixes.add(prefix);
+            for (const property of handlers.customProperties) {
+              reservations.properties.add(property);
+            }
+            if (handlers.customPropertiesUnbounded) reservations.propertiesUnbounded = true;
+          } catch {
+            reservations.unbounded = true;
+          }
+        }
         if (parsed.scriptText.trim() !== "") {
           try {
             const script = sourceAnalysis(`${file.path}.inline.js`, parsed.scriptText);

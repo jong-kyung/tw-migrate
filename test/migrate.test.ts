@@ -737,6 +737,18 @@ test("injected JSX markup keeps group spellings arbitrary", async () => {
   assert.deepEqual(report.candidates, ["mr-[auto]"]);
 });
 
+test("inline event handlers reserve their property writes", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "My Font", sans-serif; }\n',
+  });
+  await writeFile(
+    join(cwd, "index.html"),
+    "<body onload=\"document.documentElement.style.setProperty('--font-my-font', 'serif')\"><div class=\"card\">T</div></body>\n",
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["font-my-font-2"]);
+});
+
 test("canonicalizes literal utilities to the target design system's names", async () => {
   const cwd = await fixture({
     css: ".button { margin-right: auto; max-width: 100%; padding: 13px; }\n",
