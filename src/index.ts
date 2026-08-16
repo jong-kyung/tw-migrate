@@ -237,11 +237,18 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
     else if (preparation.plan) plans.push(preparation.plan);
     if (preparation.prepared) prepared.push(preparation.prepared);
   }
+  const groups = new Map<string, PreparedPackage[]>();
+  for (const preparation of prepared) {
+    const members = groups.get(preparation.tailwind.path) ?? [];
+    members.push(preparation);
+    groups.set(preparation.tailwind.path, members);
+  }
   // Every entry's existing font tokens seed the run-wide registry:
   // emitted theme variables share one runtime namespace, so another
   // group must not generate an already-owned name for a different stack.
-  for (const preparation of prepared) {
-    for (const [token, value] of Object.entries(preparation.tailwind.themeTokens)) {
+  // Packages sharing an entry share its tokens, so each entry seeds once.
+  for (const [, members] of groups) {
+    for (const [token, value] of Object.entries(members[0].tailwind.themeTokens)) {
       if (!token.startsWith("font-")) continue;
       // A value the stack parser cannot normalize still owns its global
       // name, and two entries owning one name with different stacks
@@ -255,13 +262,6 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
         existing === undefined || existing === stack ? stack : null,
       );
     }
-  }
-
-  const groups = new Map<string, PreparedPackage[]>();
-  for (const preparation of prepared) {
-    const members = groups.get(preparation.tailwind.path) ?? [];
-    members.push(preparation);
-    groups.set(preparation.tailwind.path, members);
   }
   for (const [, members] of [...groups].sort(([left], [right]) =>
     left < right ? -1 : left > right ? 1 : 0,

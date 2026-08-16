@@ -158,6 +158,7 @@ export async function registerFontTokens(
   const allocatedByStack = new Map<string, string>();
   const proposals: { probe: FontFamilyProbe; name: string }[] = [];
   const claimed = new Set<string>();
+  const tokenStacks = fontTokenStacks(options.themeTokens, options.referenceTokens);
 
   for (const probe of options.probes) {
     if (seen.has(probe.candidate)) continue;
@@ -168,11 +169,7 @@ export async function registerFontTokens(
     // Targeted reuse: the lexicographically first existing token whose
     // stack matches and whose compiled utility passes every proof.
     let reused = false;
-    for (const token of matchingFontTokens(
-      options.themeTokens,
-      probe.value,
-      options.referenceTokens,
-    )) {
+    for (const token of matchingFontTokens(tokenStacks, probe.value)) {
       // The reused spelling obeys the same reservation rules as ordinary
       // canonical aliases: the token name, its aliased candidate, and the
       // prefixed-candidate forms must all stay unreserved.
@@ -275,22 +272,27 @@ export async function registerFontTokens(
 /// The comparison runs both values through the planner's stack parser, so
 /// authored spacing and quoting differences cannot defeat reuse, and an
 /// unreadable token value never matches.
-export function matchingFontTokens(
+/// The normalized stack of every parseable font token, computed once so
+/// per-probe matching never reparses theme values.
+export function fontTokenStacks(
   themeTokens: Record<string, string>,
-  normalizedStack: string,
   referenceTokens: Set<string> = new Set(),
-): string[] {
-  const matches: string[] = [];
+): Map<string, string> {
+  const stacks = new Map<string, string>();
   for (const [token, value] of Object.entries(themeTokens)) {
     if (!token.startsWith("font-")) continue;
     // A reference-mode token never emits its custom property at runtime,
     // so a utility dereferencing it would resolve to nothing.
     if (referenceTokens.has(token)) continue;
     const parsed = fontFamilyStack(value);
-    if (parsed !== null && parsed.value === normalizedStack) {
-      matches.push(token);
-    }
+    if (parsed !== null) stacks.set(token, parsed.value);
   }
-  matches.sort();
-  return matches;
+  return stacks;
+}
+
+export function matchingFontTokens(stacks: Map<string, string>, normalizedStack: string): string[] {
+  return [...stacks]
+    .filter(([, stack]) => stack === normalizedStack)
+    .map(([token]) => token)
+    .sort();
 }

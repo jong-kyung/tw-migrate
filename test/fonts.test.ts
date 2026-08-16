@@ -1,6 +1,6 @@
 import { expect, test } from "vite-plus/test";
 
-import { fontTokenName, matchingFontTokens } from "../src/plan/fonts.ts";
+import { fontTokenName, fontTokenStacks, matchingFontTokens } from "../src/plan/fonts.ts";
 
 test("derives deterministic token names from family names", () => {
   expect(fontTokenName("Open Sans")).toBe("open-sans");
@@ -25,9 +25,9 @@ test("matches existing font tokens through the stack parser", () => {
     "font-runtime": "var(--font-body)",
     "color-primary": '"Open Sans", sans-serif',
   };
-  expect(matchingFontTokens(tokens, '"Open Sans", sans-serif')).toEqual([
+  expect(matchingFontTokens(fontTokenStacks(tokens), '"Open Sans", sans-serif')).toEqual([
     "font-brand",
     "font-legacy",
   ]);
-  expect(matchingFontTokens(tokens, '"Nowhere", serif')).toEqual([]);
+  expect(matchingFontTokens(fontTokenStacks(tokens), '"Nowhere", serif')).toEqual([]);
 });
