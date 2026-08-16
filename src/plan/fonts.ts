@@ -185,7 +185,8 @@ export async function registerFontTokens(
       options.referenceTokens,
     )) {
       // The reused spelling obeys the same reservation rules as ordinary
-      // canonical aliases.
+      // canonical aliases: the token name, its aliased candidate, and the
+      // prefixed-candidate forms must all stay unreserved.
       const aliased = aliasedCandidate(probe.candidate, token);
       if (reservedSpelling(reservations, token) || reservedSpelling(reservations, aliased)) {
         continue;

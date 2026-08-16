@@ -520,6 +520,31 @@ test("reserved reuse spellings and inline overrides keep arbitrary fonts", async
   assert.deepEqual(report2.candidates, ["font-my-font-2"]);
 });
 
+test("mentioned inert spellings force the next font suffix", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "My Font", sans-serif; }\n',
+    tsx: "import styles from './Button.module.css';\nconst planned = 'hover:font-my-font';\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+  });
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["font-my-font-2"]);
+});
+
+test("prefixed entries register font tokens under the prefix", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "Open Sans", sans-serif; }\n',
+  });
+  await writeFile(join(cwd, "globals.css"), '@import "tailwindcss" prefix(tw);\n');
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["tw:font-open-sans"]);
+});
+
+test("revert-layer font declarations stay retained", async () => {
+  const cwd = await fixture({ css: ".button { font-family: revert-layer; }\n" });
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.equal(report.retainedRules, 1);
+  assert.deepEqual(report.candidates, []);
+});
+
 test("reuse rejects a custom utility not backed by the matched token", async () => {
   const cwd = await fixture({
     css: '.button { font-family: "My Font", sans-serif; }\n',
@@ -532,15 +557,6 @@ test("reuse rejects a custom utility not backed by the matched token", async () 
   );
   const report = await migrate({ cwd, styleFile: "Button.module.css" });
   assert.ok(!report.candidates.includes("font-brand"), report.candidates.join(" "));
-});
-
-test("mentioned inert spellings force the next font suffix", async () => {
-  const cwd = await fixture({
-    css: '.button { font-family: "My Font", sans-serif; }\n',
-    tsx: "import styles from './Button.module.css';\nconst planned = 'hover:font-my-font';\nexport const Button = () => <button className={styles.button}>B</button>;\n",
-  });
-  const report = await migrate({ cwd, styleFile: "Button.module.css" });
-  assert.deepEqual(report.candidates, ["font-my-font-2"]);
 });
 
 test("workspace groups with distinct stacks never share a token name", async () => {
@@ -568,22 +584,6 @@ test("workspace groups with distinct stacks never share a token name", async () 
   // group takes the next suffix.
   assert.ok(report.candidates.includes("font-brand"), report.candidates.join(" "));
   assert.ok(report.candidates.includes("font-brand-2"), report.candidates.join(" "));
-});
-
-test("revert-layer font declarations stay retained", async () => {
-  const cwd = await fixture({ css: ".button { font-family: revert-layer; }\n" });
-  const report = await migrate({ cwd, styleFile: "Button.module.css" });
-  assert.equal(report.retainedRules, 1);
-  assert.deepEqual(report.candidates, []);
-});
-
-test("prefixed entries register font tokens under the prefix", async () => {
-  const cwd = await fixture({
-    css: '.button { font-family: "Open Sans", sans-serif; }\n',
-  });
-  await writeFile(join(cwd, "globals.css"), '@import "tailwindcss" prefix(tw);\n');
-  const report = await migrate({ cwd, styleFile: "Button.module.css" });
-  assert.deepEqual(report.candidates, ["tw:font-open-sans"]);
 });
 
 test("canonicalizes literal utilities to the target design system's names", async () => {

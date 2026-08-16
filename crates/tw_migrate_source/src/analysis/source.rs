@@ -457,6 +457,42 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
         {
             self.analysis.renders_style_element = true;
         }
+        // A dynamic style attribute can set any custom property at
+        // runtime. A literal object is transparent: its custom-property
+        // keys are string literals the literal visitor already collects,
+        // while spreads or computed keys hide them.
+        for attribute in &element.attributes {
+            let oxc_ast::ast::JSXAttributeItem::Attribute(attribute) = attribute else {
+                continue;
+            };
+            let oxc_ast::ast::JSXAttributeName::Identifier(attribute_name) = &attribute.name
+            else {
+                continue;
+            };
+            if attribute_name.name != "style" {
+                continue;
+            }
+            let Some(oxc_ast::ast::JSXAttributeValue::ExpressionContainer(container)) =
+                &attribute.value
+            else {
+                continue;
+            };
+            let transparent = match container.expression.as_expression() {
+                Some(Expression::ObjectExpression(object)) => {
+                    object.properties.iter().all(|property| {
+                        matches!(
+                            property,
+                            oxc_ast::ast::ObjectPropertyKind::ObjectProperty(entry)
+                                if !entry.computed
+                        )
+                    })
+                }
+                _ => false,
+            };
+            if !transparent {
+                self.analysis.custom_properties_unbounded = true;
+            }
+        }
         if let oxc_ast::ast::JSXElementName::Identifier(name) = &element.name
             && name.name == "link"
         {
@@ -1114,6 +1150,32 @@ mod tests {
         // Trailing tokens of pre-expression quasis constrain the dynamic
         // class; static tokens and whitespace-terminated quasis do not.
         assert_eq!(parsed["templatePrefixes"], serde_json::json!(["mr-", "p-", "pt-"]));
+    }
+
+    #[test]
+    fn treats_dynamic_jsx_styles_as_unbounded_properties() {
+        let dynamic: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.tsx",
+                "export const Card = (props) => <div style={props.style} />;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(dynamic["customPropertiesUnbounded"], true);
+
+        // A literal object is transparent: custom-property keys are
+        // string literals the literal visitor collects.
+        let literal: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.tsx",
+                "export const Card = () => <div style={{ width: 4, \"--font-brand\": \"serif\" }} />;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(literal["customPropertiesUnbounded"], false);
+        assert_eq!(literal["customProperties"], serde_json::json!(["--font-brand"]));
     }
 
     #[test]
