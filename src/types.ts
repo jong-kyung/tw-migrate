@@ -90,6 +90,10 @@ export interface PreparedSourceFile extends SourceFile {
   templateInjectsMarkup?: boolean;
   /** Decoded static class tokens invisible to the raw-text scan. */
   templateClassTokens?: string[];
+  /** Decoded static style attribute values in a Vue template. */
+  templateStyleValues?: string[];
+  /** True when a bound style attribute hides inline declarations. */
+  templateStylesUnverifiable?: boolean;
   /** Static hrefs of rendered stylesheet links in a Vue template. */
   templateStylesheetLinks?: string[];
   /** True when a rendered Vue template link's rel or href is dynamic. */

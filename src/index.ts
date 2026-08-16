@@ -34,6 +34,7 @@ import {
 } from "./tailwind.ts";
 import {
   acceptedCandidateAliases,
+  scanInlineStyleReservations,
   scanStylesheetReservations,
   spellingReservations,
 } from "./plan/canonicalize.ts";
@@ -821,6 +822,16 @@ async function planPreparedGroup(
         for (const link of parsed.links) {
           if (opaqueStylesheetLink(link.href)) reservations.unbounded = true;
         }
+        // Inline style declarations can override custom properties, so
+        // they join property reservations; templated values are dynamic
+        // data.
+        for (const [index, value] of parsed.styleAttributeValues.entries()) {
+          if (TEMPLATE_MARKERS.test(value)) {
+            reservations.propertiesUnbounded = true;
+            continue;
+          }
+          scanInlineStyleReservations(`${file.path}.style.${index}.css`, value, reservations);
+        }
         // These decoded values never reach Tailwind's raw-text scan: a
         // templated token's static lead reserves as a prefix, a token
         // with no static lead can be any spelling, and a complete
@@ -923,6 +934,12 @@ async function planPreparedGroup(
       // Decoded class tokens the raw scan cannot read reserve complete
       // spellings, matching the HTML entity rule.
       for (const token of file.templateClassTokens ?? []) reservations.names.add(token);
+      // Static style attributes join property reservations; a bound
+      // style hides its declarations.
+      if (file.templateStylesUnverifiable === true) reservations.propertiesUnbounded = true;
+      for (const [index, value] of (file.templateStyleValues ?? []).entries()) {
+        scanInlineStyleReservations(`${file.path}.style.${index}.css`, value, reservations);
+      }
       // Rendered template stylesheet links load sheets like HTML links.
       if (file.templateStylesheetLinksUnverifiable === true) reservations.unbounded = true;
       for (const link of file.templateStylesheetLinks ?? []) {

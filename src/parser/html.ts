@@ -61,6 +61,9 @@ interface ParsedHtml {
   /** Decoded values of dynamic class attributes, so spelling
    * reservations can extract template-constrained prefixes. */
   dynamicClassValues: string[];
+  /** Decoded values of style attributes, whose inline declarations can
+   * override custom properties. */
+  styleAttributeValues: string[];
   scriptText: string;
   hasStyle: boolean;
 }
@@ -86,6 +89,7 @@ export function parseHtmlSource(path: string, source: string): ParsedHtml {
   const elements: HtmlElementAttributes[] = [];
   const dynamicAttributes: HtmlSpan[] = [];
   const dynamicClassValues: string[] = [];
+  const styleAttributeValues: string[] = [];
   const scriptTexts: string[] = [];
   let hasStyle = false;
   // The value span of a quoted attribute starts right after its quote, so the
@@ -104,6 +108,8 @@ export function parseHtmlSource(path: string, source: string): ParsedHtml {
       const attributes = new Map(
         (node.attrs ?? []).map((attribute) => [attribute.name, attribute.value]),
       );
+      const style = attributes.get("style");
+      if (style !== undefined && style !== "") styleAttributeValues.push(style);
       const locations = node.sourceCodeLocation?.attrs;
       if (locations) {
         if (
@@ -195,6 +201,7 @@ export function parseHtmlSource(path: string, source: string): ParsedHtml {
   return {
     ...toByteOffsets(source, { links, bases, elements, dynamicAttributes }),
     dynamicClassValues,
+    styleAttributeValues,
     scriptText: scriptTexts.join("\n"),
     hasStyle,
   };
@@ -227,8 +234,11 @@ export function offsetLookup(offsets: Map<number, number>): (index: number) => n
 
 function toByteOffsets(
   source: string,
-  parsed: Omit<ParsedHtml, "dynamicClassValues" | "scriptText" | "hasStyle">,
-): Omit<ParsedHtml, "dynamicClassValues" | "scriptText" | "hasStyle"> {
+  parsed: Omit<
+    ParsedHtml,
+    "dynamicClassValues" | "styleAttributeValues" | "scriptText" | "hasStyle"
+  >,
+): Omit<ParsedHtml, "dynamicClassValues" | "styleAttributeValues" | "scriptText" | "hasStyle"> {
   const offsets = utf8OffsetMap(source, [
     ...parsed.links.flatMap((link) => [link.start, link.end, link.tagStart, link.tagEnd]),
     ...parsed.bases.flatMap((base) => [base.start, base.end]),

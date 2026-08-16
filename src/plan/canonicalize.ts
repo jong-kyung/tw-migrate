@@ -186,6 +186,23 @@ function entryDirectiveHazard(source: string): boolean {
   });
 }
 
+/// Inline style declarations parsed through the real stylesheet parser,
+/// so their custom-property overrides and reads reserve names; an
+/// unparseable value turns property reservations unbounded.
+export function scanInlineStyleReservations(
+  key: string,
+  value: string,
+  reservations: SpellingReservations,
+): void {
+  try {
+    const analysis = stylesheetAnalysis(key, `.x{${value}}`);
+    for (const property of analysis.customProperties) reservations.properties.add(property);
+    if (analysis.customPropertiesUnbounded) reservations.propertiesUnbounded = true;
+  } catch {
+    reservations.propertiesUnbounded = true;
+  }
+}
+
 export function reservedSpelling(reservations: SpellingReservations, spelling: string): boolean {
   if (reservations.names.has(spelling)) return true;
   for (const prefix of reservations.prefixes) {

@@ -813,6 +813,8 @@ export async function preparePackageVue({
       templatePrefixes: analysis.templatePrefixes,
       templateInjectsMarkup: analysis.vHtml,
       templateClassTokens: analysis.templateClassTokens,
+      templateStyleValues: analysis.templateStyleValues,
+      templateStylesUnverifiable: analysis.templateStylesUnverifiable,
       templateStylesheetLinks: analysis.templateStylesheetLinks,
       templateStylesheetLinksUnverifiable: analysis.templateStylesheetLinksUnverifiable,
     });

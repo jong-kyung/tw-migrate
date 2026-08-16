@@ -231,6 +231,10 @@ export type VueAnalysis =
       /// Decoded static class tokens the raw scan cannot read, reserved
       /// as complete spellings.
       templateClassTokens: string[];
+      /// Decoded static style attribute values for custom-property
+      /// reservations; true when a bound style hides them.
+      templateStyleValues: string[];
+      templateStylesUnverifiable: boolean;
       /// Static hrefs of rendered `<link rel="stylesheet">` template
       /// elements, resolved by spelling reservations like HTML links.
       templateStylesheetLinks: string[];
@@ -277,6 +281,10 @@ interface TemplateState {
   /// Decoded tokens of static class values the raw scan cannot read
   /// (entity-bearing or otherwise unwritable attributes).
   entityClassTokens: string[];
+  /// Decoded static style attribute values, whose inline declarations can
+  /// override custom properties. A bound style is dynamic data.
+  styleAttributeValues: string[];
+  styleAttributesUnverifiable: boolean;
   /// Static hrefs of rendered `<link rel="stylesheet">` elements.
   stylesheetLinks: string[];
   /// True when a rendered link's rel or href is dynamic.
@@ -525,6 +533,8 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     expressionReferences: new Set(),
     templatePrefixes: new Set(),
     entityClassTokens: [],
+    styleAttributeValues: [],
+    styleAttributesUnverifiable: false,
     stylesheetLinks: [],
     stylesheetLinksUnverifiable: false,
     expressionPath: scriptLang === "ts" || scriptLang === "tsx" ? "Component.ts" : "Component.js",
@@ -691,6 +701,8 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     scriptVueGlobUnverifiable,
     templatePrefixes: [...new Set([...state.templatePrefixes, ...scriptTemplatePrefixes])],
     templateClassTokens: [...new Set(state.entityClassTokens)],
+    templateStyleValues: state.styleAttributeValues,
+    templateStylesUnverifiable: state.styleAttributesUnverifiable,
     templateStylesheetLinks: state.stylesheetLinks,
     templateStylesheetLinksUnverifiable: state.stylesheetLinksUnverifiable,
     hasOpaqueStyleBlocks: opaqueStyleBlocks,
@@ -742,6 +754,19 @@ export function verifyVueSource(
 function visitTemplateNode(source: string, node: TemplateNode, state: TemplateState): void {
   if (node.type === NODE_ELEMENT) {
     if (node.tagType === TAG_SLOT) state.hasSlot = true;
+    for (const prop of node.props ?? []) {
+      if (prop.type === PROP_ATTRIBUTE && prop.name === "style" && prop.value?.content) {
+        state.styleAttributeValues.push(prop.value.content);
+      }
+      if (
+        prop.type === PROP_DIRECTIVE &&
+        prop.name === "bind" &&
+        prop.arg?.isStatic === true &&
+        prop.arg.content === "style"
+      ) {
+        state.styleAttributesUnverifiable = true;
+      }
+    }
     // A rendered stylesheet link loads a sheet like an HTML document
     // link; a bound rel or href resolves at runtime.
     if (node.tag === "link" && node.tagType === TAG_ELEMENT) {
