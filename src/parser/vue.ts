@@ -863,6 +863,10 @@ function visitTemplateNode(source: string, node: TemplateNode, state: TemplateSt
         for (const prefix of argExpression?.templatePrefixes ?? []) {
           state.templatePrefixes.add(prefix);
         }
+        for (const name of argExpression?.customProperties ?? []) {
+          state.customProperties.add(name);
+        }
+        if (argExpression?.customPropertiesUnbounded) state.customPropertiesUnbounded = true;
       }
       // Injected markup carries no scope attribute, so scoped proofs are
       // unaffected -- but it can use any class an unscoped rule targets.
@@ -880,6 +884,8 @@ function visitTemplateNode(source: string, node: TemplateNode, state: TemplateSt
     state.referencesUseCssModule ||= interpolation?.referencesUseCssModule ?? false;
     for (const name of interpolation?.references ?? []) state.expressionReferences.add(name);
     for (const prefix of interpolation?.templatePrefixes ?? []) state.templatePrefixes.add(prefix);
+    for (const name of interpolation?.customProperties ?? []) state.customProperties.add(name);
+    if (interpolation?.customPropertiesUnbounded) state.customPropertiesUnbounded = true;
   }
   for (const child of node.children ?? []) visitTemplateNode(source, child, state);
 }
@@ -893,12 +899,7 @@ function attributeRemovalStart(source: string, node: TemplateNode, prop: Templat
   return /[\r\n]/.test(source.slice(start, attributeStart)) ? attributeStart : start;
 }
 
-type TemplateExpressionAnalysis = ExpressionAnalysis & {
-  customProperties?: string[];
-  customPropertiesUnbounded?: boolean;
-};
-
-function templateExpression(path: string, source: string): TemplateExpressionAnalysis | undefined {
+function templateExpression(path: string, source: string): ExpressionAnalysis | undefined {
   try {
     return expressionAnalysis(path, source);
   } catch {
@@ -906,7 +907,7 @@ function templateExpression(path: string, source: string): TemplateExpressionAna
   }
 }
 
-function templateHandler(source: string): TemplateExpressionAnalysis | undefined {
+function templateHandler(source: string): ExpressionAnalysis | undefined {
   try {
     const analysis = sourceAnalysis(
       "Component.handler.ts",

@@ -54,6 +54,11 @@ struct ExpressionAnalysis {
     /// Nonempty leading quasis of template literals with expressions, for
     /// dynamic class spelling reservations.
     template_prefixes: Vec<String>,
+    /// Custom properties the expression mentions in string content, so a
+    /// render-time read or write reserves the name like script code does.
+    custom_properties: Vec<String>,
+    /// True when a style property API received a computed name.
+    custom_properties_unbounded: bool,
 }
 
 /// The class token each interpolation continues: the trailing
@@ -124,6 +129,8 @@ struct ExpressionCollector {
     references_use_css_module: bool,
     references: Vec<String>,
     template_prefixes: Vec<String>,
+    custom_properties: Vec<String>,
+    custom_properties_unbounded: bool,
 }
 
 impl ExpressionCollector {
@@ -140,7 +147,35 @@ impl ExpressionCollector {
 impl<'a> Visit<'a> for ExpressionCollector {
     fn visit_template_literal(&mut self, template: &oxc_ast::ast::TemplateLiteral<'a>) {
         collect_template_prefixes(template, &mut self.template_prefixes);
+        for quasi in &template.quasis {
+            if let Some(cooked) = quasi.value.cooked.as_ref() {
+                tw_migrate_css::collect_custom_property_mentions(cooked, &mut self.custom_properties);
+            }
+        }
         walk::walk_template_literal(self, template);
+    }
+
+    fn visit_string_literal(&mut self, literal: &oxc_ast::ast::StringLiteral<'a>) {
+        tw_migrate_css::collect_custom_property_mentions(
+            literal.value.as_str(),
+            &mut self.custom_properties,
+        );
+        walk::walk_string_literal(self, literal);
+    }
+
+    fn visit_call_expression(&mut self, call: &oxc_ast::ast::CallExpression<'a>) {
+        // A style property API taking a computed name can touch any custom
+        // property, so allocation cannot prove a free name.
+        if let Expression::StaticMemberExpression(member) = &call.callee
+            && matches!(
+                member.property.name.as_str(),
+                "setProperty" | "getPropertyValue" | "removeProperty"
+            )
+            && !matches!(call.arguments.first(), Some(Argument::StringLiteral(_)) | None)
+        {
+            self.custom_properties_unbounded = true;
+        }
+        walk::walk_call_expression(self, call);
     }
 
     fn visit_binary_expression(&mut self, expression: &oxc_ast::ast::BinaryExpression<'a>) {
@@ -208,6 +243,8 @@ pub fn expression_analysis_json(path: &str, source: &str) -> MigrationResult<Str
         references_use_css_module: false,
         references: Vec::new(),
         template_prefixes: Vec::new(),
+        custom_properties: Vec::new(),
+        custom_properties_unbounded: false,
     };
     collector.visit_expression(&expression);
     // The proven `$style.member` form is rewritten rather than retained, so
@@ -219,6 +256,8 @@ pub fn expression_analysis_json(path: &str, source: &str) -> MigrationResult<Str
         references_use_css_module: collector.references_use_css_module,
         references: collector.references,
         template_prefixes: collector.template_prefixes,
+        custom_properties: collector.custom_properties,
+        custom_properties_unbounded: collector.custom_properties_unbounded,
     })
     .map_err(|error| MigrationError::Serialization {
         message: error.to_string(),
@@ -1017,6 +1056,27 @@ mod tests {
             assert_eq!(parsed["usesCssModule"], uses_css_module, "{source}");
             assert_eq!(parsed["referencesUseCssModule"], references_api, "{source}");
         }
+    }
+
+    #[test]
+    fn expression_analysis_collects_custom_properties() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::expression_analysis_json(
+                "Component.js",
+                "style.setProperty('--font-brand', `--font-${'display'}`)",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["customProperties"], serde_json::json!(["--font-brand", "--font-"]));
+        assert_eq!(parsed["customPropertiesUnbounded"], false);
+
+        let computed: serde_json::Value = serde_json::from_str(
+            &super::expression_analysis_json("Component.js", "style.setProperty(name, 'serif')")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(computed["customPropertiesUnbounded"], true);
     }
 
     #[test]

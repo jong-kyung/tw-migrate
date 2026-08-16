@@ -829,6 +829,18 @@ test("Vue template handler property writes force the next font suffix", async ()
   assert.ok(report.candidates.includes("font-my-font-2"), report.candidates.join(" "));
 });
 
+test("Vue non-handler expressions reserve their property mentions", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "My Font", sans-serif; }\n',
+  });
+  await writeFile(
+    join(cwd, "Card.vue"),
+    '<template>\n  <div class="card" :data-font="read(\'--font-my-font\')">{{ label }}</div>\n</template>\n',
+  );
+  const report = await migrate({ cwd });
+  assert.ok(report.candidates.includes("font-my-font-2"), report.candidates.join(" "));
+});
+
 test("tokens activating inert scanned candidates are rejected", async () => {
   const cwd = await fixture({
     css: '.button { font-family: "Open Sans", sans-serif; }\n',
