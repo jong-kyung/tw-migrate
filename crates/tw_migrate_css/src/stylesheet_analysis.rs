@@ -765,6 +765,43 @@ fn collect_stylesheet_statements(
                 }
             }
             Statement::QualifiedRule(rule) => {
+                // Raw ICSS `:import("...")` loads another module, so its
+                // target joins reference resolution like a composes
+                // source; an unreadable target is unknowable.
+                for selector in &rule.selector.selectors {
+                    for child in &selector.children {
+                        let ComplexSelectorChild::CompoundSelector(compound) = child else {
+                            continue;
+                        };
+                        for simple in &compound.children {
+                            let SimpleSelector::PseudoClass(pseudo) = simple else {
+                                continue;
+                            };
+                            if !matches!(&pseudo.name, InterpolableIdent::Literal(name) if name.name == "import")
+                            {
+                                continue;
+                            }
+                            let reference = pseudo.arg.as_ref().and_then(|arg| {
+                                let text = source[arg.span.start..arg.span.end]
+                                    .trim()
+                                    .trim_start_matches('(')
+                                    .trim_end_matches(')')
+                                    .trim();
+                                text.strip_prefix('"')
+                                    .and_then(|text| text.strip_suffix('"'))
+                                    .or_else(|| {
+                                        text.strip_prefix('\'')
+                                            .and_then(|text| text.strip_suffix('\''))
+                                    })
+                                    .filter(|reference| !reference.is_empty())
+                            });
+                            match reference {
+                                Some(reference) => analysis.references.push(reference.to_string()),
+                                None => analysis.unverifiable = true,
+                            }
+                        }
+                    }
+                }
                 // ICSS `:export` values surface through the module's JS
                 // object as literal runtime tokens, so ident and string
                 // values reserve their spellings.
@@ -1267,6 +1304,26 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed["classReservationsUnbounded"], true);
+    }
+
+    #[test]
+    fn records_icss_import_targets_as_references() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/Card.module.css",
+                ":import(\"./legacy.css\") { legacy: button; }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            parsed["references"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("./legacy.css")),
+            "{parsed}"
+        );
+        assert_eq!(parsed["unverifiable"], false);
     }
 
     #[test]

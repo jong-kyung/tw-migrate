@@ -608,6 +608,26 @@ test("resolved local stylesheet links keep canonicalization enabled", async () =
   assert.deepEqual(report.candidates, ["mr-auto"]);
 });
 
+test("root-relative stylesheet links keep canonicalization enabled", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(
+    join(cwd, "index.html"),
+    '<link rel="stylesheet" href="/Button.module.css"><div class="button"></div>\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css", tailwindCss: "globals.css" });
+  assert.deepEqual(report.candidates, ["mr-auto"]);
+});
+
+test("ICSS import targets resolve like composes sources", async () => {
+  const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
+  await writeFile(
+    join(cwd, "Legacy.module.css"),
+    ':import("pkg/theme.css") { legacy: button; }\n.card { color: red; }\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
 test("unresolved local stylesheet links keep group spellings arbitrary", async () => {
   const cwd = await fixture({ css: ".button { margin-right: auto; }\n" });
   await writeFile(

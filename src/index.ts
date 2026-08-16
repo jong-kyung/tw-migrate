@@ -4,7 +4,7 @@ import { basename, dirname, extname, join, resolve } from "node:path";
 import { unifiedDiff } from "./util/diff.ts";
 import { collectFiles, resolveScope, scannerIgnoredPaths } from "./discovery.ts";
 import { parseHtmlSource, TEMPLATE_EXPRESSIONS, TEMPLATE_MARKERS } from "./parser/html.ts";
-import { preparePackageHtml } from "./plan/html.ts";
+import { localHtmlReference, preparePackageHtml } from "./plan/html.ts";
 import { planBatchMigration, sourceAnalysis, stylesheetAnalysis, validateCss } from "./native.ts";
 import {
   indexStylesheetDependents,
@@ -15,7 +15,6 @@ import {
   isStylesheetModule,
   isStylesheetPath,
   isWithin,
-  localHrefTarget,
   normalizedRelativePath,
   packageFailure,
   recordSnapshot,
@@ -743,6 +742,11 @@ async function planPreparedGroup(
   const groupFiles = new Map(
     active.flatMap((member) => member.files.map((file) => [file.path, file] as const)),
   );
+  const fileRoots = new Map(
+    active.flatMap((member) =>
+      member.files.map((file) => [file.path, member.packageRoot] as const),
+    ),
+  );
   const workspaceEntries = new Set([...context.entryCatalog.values()].flat());
   for (const file of groupFiles.values()) {
     if (reservations.unbounded) break;
@@ -754,10 +758,15 @@ async function planPreparedGroup(
       break;
     }
     const opaqueStylesheetLink = (link: string) => {
-      const href = localHrefTarget(link);
-      if (href === undefined) return true;
-      const resolved = resolve(dirname(file.path), href);
+      // Root-relative hrefs resolve against the package root, matching
+      // HTML preparation's own link resolution.
+      const resolved = localHtmlReference(
+        fileRoots.get(file.path) ?? context.workspaceRoot,
+        dirname(file.path),
+        link,
+      );
       return (
+        resolved === undefined ||
         !context.styleSources.has(resolved) ||
         (workspaceEntries.has(resolved) && resolved !== entry.path)
       );

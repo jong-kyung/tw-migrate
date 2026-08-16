@@ -335,7 +335,7 @@ function addInferredPreprocessorContext(state: HtmlContextState): boolean {
   return true;
 }
 
-function localHtmlReference(
+export function localHtmlReference(
   packageRoot: string,
   base: string,
   reference: string,
