@@ -109,7 +109,7 @@
         "selector": ".retained",
         "status": "retained",
         "candidates": [
-          "[display:block]"
+          "block"
         ],
         "file": "src/style.sass",
         "ruleId": {

@@ -47,7 +47,7 @@
         "selector": ".retained",
         "status": "retained",
         "candidates": [
-          "[display:block]"
+          "block"
         ],
         "file": "src/Banner.module.css",
         "ruleId": {
@@ -95,7 +95,7 @@
         "selector": ".retained",
         "status": "retained",
         "candidates": [
-          "[display:block]"
+          "block"
         ],
         "file": "src/Card.module.css",
         "ruleId": {
