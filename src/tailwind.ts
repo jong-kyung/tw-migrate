@@ -15,8 +15,8 @@ export function findTailwindEntries(
   return stylePaths.filter(
     (path) =>
       extname(path) === ".css" &&
-      importSpecifiers(styleSources.get(path) ?? "").some(
-        (specifier) => specifier === "tailwindcss" || specifier.startsWith("tailwindcss/"),
+      importEntries(styleSources.get(path) ?? "").some(
+        ({ specifier }) => specifier === "tailwindcss" || specifier.startsWith("tailwindcss/"),
       ),
   );
 }
@@ -126,10 +126,6 @@ function importEntries(css: string): { specifier: string; reference: boolean }[]
         ]
       : [],
   );
-}
-
-function importSpecifiers(css: string): string[] {
-  return importEntries(css).map((entry) => entry.specifier);
 }
 
 async function extractThemeTokensFromGraph(

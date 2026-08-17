@@ -952,13 +952,14 @@ fn collect_stylesheet_statements(
                 if name.name.starts_with("--") && !in_theme {
                     analysis.custom_properties.push(name.name.to_string());
                 }
-                collect_value_references(&declaration.value, &mut analysis.custom_properties);
                 // A var() whose property argument is a preprocessor
                 // variable or interpolation reads a name this scan cannot
                 // see until compilation.
-                if has_computed_var_argument(&declaration.value) {
-                    analysis.custom_properties_unbounded = true;
-                }
+                collect_value_references(
+                    &declaration.value,
+                    &mut analysis.custom_properties,
+                    &mut analysis.custom_properties_unbounded,
+                );
                 if name.name != "composes" {
                     continue;
                 }
@@ -1106,33 +1107,11 @@ struct CompiledDeclaration {
     value: String,
 }
 
-fn has_computed_var_argument(values: &[ComponentValue<'_>]) -> bool {
-    values.iter().any(|value| match value {
-        ComponentValue::Function(function) => {
-            let is_var = matches!(
-                &function.name,
-                oxc_css_parser::ast::FunctionName::Ident(InterpolableIdent::Literal(name))
-                    if name.name == "var"
-            );
-            if is_var
-                && !matches!(
-                    function.args.first(),
-                    Some(ComponentValue::InterpolableIdent(InterpolableIdent::Literal(_))) | None
-                )
-            {
-                return true;
-            }
-            has_computed_var_argument(&function.args)
-        }
-        ComponentValue::Calc(calc) => {
-            has_computed_var_argument(std::slice::from_ref(&calc.left))
-                || has_computed_var_argument(std::slice::from_ref(&calc.right))
-        }
-        _ => false,
-    })
-}
-
-fn collect_value_references(values: &[ComponentValue<'_>], references: &mut Vec<String>) {
+fn collect_value_references(
+    values: &[ComponentValue<'_>],
+    references: &mut Vec<String>,
+    computed: &mut bool,
+) {
     for value in values {
         match value {
             ComponentValue::Function(function) => {
@@ -1140,18 +1119,24 @@ fn collect_value_references(values: &[ComponentValue<'_>], references: &mut Vec<
                     &function.name,
                     oxc_css_parser::ast::FunctionName::Ident(InterpolableIdent::Literal(name))
                         if name.name == "var"
-                ) && let Some(ComponentValue::InterpolableIdent(InterpolableIdent::Literal(
-                    ident,
-                ))) = function.args.first()
-                    && ident.name.starts_with("--")
-                {
-                    references.push(ident.name.to_string());
+                ) {
+                    match function.args.first() {
+                        Some(ComponentValue::InterpolableIdent(InterpolableIdent::Literal(
+                            ident,
+                        ))) => {
+                            if ident.name.starts_with("--") {
+                                references.push(ident.name.to_string());
+                            }
+                        }
+                        None => {}
+                        Some(_) => *computed = true,
+                    }
                 }
-                collect_value_references(&function.args, references);
+                collect_value_references(&function.args, references, computed);
             }
             ComponentValue::Calc(calc) => {
-                collect_value_references(std::slice::from_ref(&calc.left), references);
-                collect_value_references(std::slice::from_ref(&calc.right), references);
+                collect_value_references(std::slice::from_ref(&calc.left), references, computed);
+                collect_value_references(std::slice::from_ref(&calc.right), references, computed);
             }
             _ => {}
         }
@@ -1184,7 +1169,12 @@ fn collect_shape_statements(
                     important: declaration.important.is_some(),
                     value,
                 });
-                collect_value_references(&declaration.value, &mut shape.referenced_properties);
+                let mut computed = false;
+                collect_value_references(
+                    &declaration.value,
+                    &mut shape.referenced_properties,
+                    &mut computed,
+                );
             }
             Statement::QualifiedRule(rule) => {
                 collect_shape_statements(&rule.block.statements, source, shape)?;

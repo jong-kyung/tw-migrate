@@ -267,13 +267,10 @@ export async function registerFontTokens(
   return { aliases, tokens: accepted, failures };
 }
 
-/// Existing `--font-*` theme tokens whose parsed stack equals the probe's
-/// normalized stack, as utility candidate names sorted lexicographically.
-/// The comparison runs both values through the planner's stack parser, so
-/// authored spacing and quoting differences cannot defeat reuse, and an
-/// unreadable token value never matches.
 /// The normalized stack of every parseable font token, computed once so
-/// per-probe matching never reparses theme values.
+/// per-probe matching never reparses theme values; authored spacing and
+/// quoting differences cannot defeat reuse, and an unreadable token
+/// value never matches.
 export function fontTokenStacks(
   themeTokens: Record<string, string>,
   referenceTokens: Set<string> = new Set(),
