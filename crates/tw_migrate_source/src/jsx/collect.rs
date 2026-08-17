@@ -271,7 +271,9 @@ pub(super) fn extract_file(path: &str, source: &str, css_path: &str) -> Option<F
             Statement::TSTypeAliasDeclaration(_)
             | Statement::TSInterfaceDeclaration(_)
             | Statement::TSEnumDeclaration(_)
-            | Statement::TSModuleDeclaration(_)
+            | Statement::TSExternalModuleDeclaration(_)
+            | Statement::TSNamespaceDeclaration(_)
+            | Statement::TSGlobalDeclaration(_)
             | Statement::TSImportEqualsDeclaration(_) => {}
             other => sweeps.push((SweepTarget::Stmt(other), R_BOUNDARY)),
         }
