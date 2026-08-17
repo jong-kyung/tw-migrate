@@ -110,7 +110,7 @@
         "selector": ".retained",
         "status": "retained",
         "candidates": [
-          "[display:block]"
+          "block"
         ],
         "file": "src/App.module.sass",
         "ruleId": {
