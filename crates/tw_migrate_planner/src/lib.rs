@@ -33,7 +33,7 @@ use edit::{
     apply_edits, collect_empty_conditionals, remove_empty_conditionals, validate_stylesheet,
 };
 use request::{BatchPlanRequest, BatchStylesheet, PlanRequest};
-use response::{PlanResponse, PlannedFile, RuleReport};
+use response::{FontFamilyProbeReport, FontFamilyReport, PlanResponse, PlannedFile, RuleReport};
 use rule::{CandidateMaps, RuleConflicts, RuleId, RuleOrigin, rule_id};
 pub use source_map::decode_source_map_json;
 use source_map::{SourceMapping, map_rule_spans, mentions_word};
@@ -72,6 +72,8 @@ const WARNING_CODES: &[&str] = &[
     "dynamic-html-attribute",
     "dynamic-template-class",
     "existing-tailwind-conflict",
+    "font-theme-registration-failed",
+    "font-theme-registration-required",
     "inferred-preprocessor-source",
     "media-query-definition-fallback",
     "module-utilities-conflict",

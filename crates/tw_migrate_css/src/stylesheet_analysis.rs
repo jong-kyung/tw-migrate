@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use tw_migrate_error::{MigrationError, MigrationResult};
 
-use crate::at_rules::parse_css;
+use crate::at_rules::{is_conditional, parse_css};
 use oxc_css_parser::Syntax;
 use oxc_css_parser::ast::{
     AtRulePrelude, AttributeSelectorMatcherKind, AttributeSelectorValue, ColorProfilePrelude,
@@ -43,6 +43,14 @@ pub(crate) struct StylesheetAnalysis {
     /// literal class selectors plus exact and word-matching class-attribute
     /// selector values. Canonicalization reserves these spellings.
     class_names: Vec<String>,
+    /// Custom property names this sheet declares, registers with
+    /// `@property`, or dereferences through `var()`, for font token name
+    /// reservations. Names keep their `--` prefix.
+    custom_properties: Vec<String>,
+    /// True when a custom property name cannot be read statically (an
+    /// interpolated declaration name), so property-keyed reservations
+    /// cannot be bounded.
+    custom_properties_unbounded: bool,
     /// True when a selector's class match set cannot be bounded: an
     /// interpolated class name, or a class-attribute matcher such as
     /// `[class*=]` whose semantics exceed word equality.
@@ -513,6 +521,15 @@ fn collect_at_rule_metadata(
         let Some(block) = &at_rule.block else {
             continue;
         };
+        if at_rule.name.name == "property" {
+            if let Some(AtRulePrelude::Property(name)) = &at_rule.prelude
+                && let Some(name) = literal_ident(name)
+            {
+                analysis.custom_properties.push(name.to_string());
+            } else {
+                analysis.custom_properties_unbounded = true;
+            }
+        }
         if at_rule.name.name == "theme" {
             for statement in &block.statements {
                 let Statement::Declaration(declaration) = statement else {
@@ -578,6 +595,34 @@ fn collect_at_rule_metadata(
     }
 }
 
+/// Collect literal `--name` mentions anywhere in raw text into a
+/// custom-property inventory; shared with source analysis for string
+/// literals and template quasis.
+pub fn collect_custom_property_mentions(text: &str, properties: &mut Vec<String>) {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index + 1 < bytes.len() {
+        if bytes[index] == b'-' && bytes[index + 1] == b'-' {
+            let start = index;
+            let mut end = index + 2;
+            while end < bytes.len()
+                && (bytes[end].is_ascii_alphanumeric()
+                    || bytes[end] == b'_'
+                    || bytes[end] == b'-'
+                    || !bytes[end].is_ascii())
+            {
+                end += 1;
+            }
+            if end > index + 2 {
+                properties.push(text[start..end].to_string());
+            }
+            index = end;
+            continue;
+        }
+        index += 1;
+    }
+}
+
 /// Collect `.name` class tokens from raw selector text. An escape makes
 /// the match set unbounded because the decoded spelling is unknowable to
 /// this scanner.
@@ -633,6 +678,7 @@ fn collect_stylesheet_statements(
     statements: &[Statement<'_>],
     source: &str,
     parent_classes: &[String],
+    in_theme: bool,
     analysis: &mut StylesheetAnalysis,
 ) -> bool {
     let mut has_scope_escape = false;
@@ -640,6 +686,20 @@ fn collect_stylesheet_statements(
         match statement {
             Statement::AtRule(at_rule) => {
                 let mut at_rule_parents: Option<Vec<String>> = None;
+                // Conditional preludes can read custom properties
+                // (@supports (--x: y), @container style(--x: y)); a newly
+                // registered token could flip such a query, so literal
+                // property mentions reserve their names.
+                if is_conditional(at_rule.name.name) {
+                    let end = at_rule
+                        .block
+                        .as_ref()
+                        .map_or(at_rule.span.end, |block| block.span.start);
+                    collect_custom_property_mentions(
+                        &source[at_rule.span.start..end],
+                        &mut analysis.custom_properties,
+                    );
+                }
                 match &at_rule.prelude {
                     // `meta.load-css` executes another stylesheet into the
                     // output, and its target stays invisible to this scan
@@ -760,6 +820,10 @@ fn collect_stylesheet_statements(
                         &block.statements,
                         source,
                         at_rule_parents.as_deref().unwrap_or(parent_classes),
+                        // Only the theme block's direct declarations are
+                        // the theme's own definitions; a nested at-rule
+                        // such as @keyframes declares runtime values.
+                        at_rule.name.name == "theme",
                         analysis,
                     );
                 }
@@ -851,6 +915,7 @@ fn collect_stylesheet_statements(
                     &rule.block.statements,
                     source,
                     &selector_class_names(&rule.selector, parent_classes),
+                    false,
                     analysis,
                 );
                 if nested {
@@ -866,10 +931,35 @@ fn collect_stylesheet_statements(
                 }
                 has_scope_escape |= direct || nested;
             }
+            // Keyframe blocks hold runtime declarations, including custom
+            // property writes that animate over migrated utilities.
+            Statement::KeyframeBlock(block) => {
+                has_scope_escape |= collect_stylesheet_statements(
+                    &block.block.statements,
+                    source,
+                    parent_classes,
+                    false,
+                    analysis,
+                );
+            }
             Statement::Declaration(declaration) => {
                 let InterpolableIdent::Literal(name) = &declaration.name else {
+                    // An interpolated declaration name can resolve to any
+                    // custom property.
+                    analysis.custom_properties_unbounded = true;
                     continue;
                 };
+                if name.name.starts_with("--") && !in_theme {
+                    analysis.custom_properties.push(name.name.to_string());
+                }
+                // A var() whose property argument is a preprocessor
+                // variable or interpolation reads a name this scan cannot
+                // see until compilation.
+                collect_value_references(
+                    &declaration.value,
+                    &mut analysis.custom_properties,
+                    &mut analysis.custom_properties_unbounded,
+                );
                 if name.name != "composes" {
                     continue;
                 }
@@ -979,9 +1069,11 @@ pub fn stylesheet_analysis_json(path: &str, source: &str) -> MigrationResult<Str
         global_at_rule_identities: Vec::new(),
         global_at_rules_unverifiable: false,
         class_names: Vec::new(),
+        custom_properties: Vec::new(),
+        custom_properties_unbounded: false,
         class_reservations_unbounded: false,
     };
-    collect_stylesheet_statements(&parsed.statements, source, &[], &mut analysis);
+    collect_stylesheet_statements(&parsed.statements, source, &[], false, &mut analysis);
     collect_at_rule_metadata(&parsed.statements, source, syntax, &mut analysis);
     if syntax == Syntax::Css {
         collect_loading_imports(&parsed.statements, source, &mut analysis);
@@ -990,6 +1082,8 @@ pub fn stylesheet_analysis_json(path: &str, source: &str) -> MigrationResult<Str
     analysis.references.dedup();
     analysis.class_names.sort();
     analysis.class_names.dedup();
+    analysis.custom_properties.sort();
+    analysis.custom_properties.dedup();
     serde_json::to_string(&analysis).map_err(|error| MigrationError::Serialization {
         message: error.to_string(),
     })
@@ -1007,9 +1101,17 @@ struct CompiledShape {
 struct CompiledDeclaration {
     property: String,
     important: bool,
+    /// The whitespace-collapsed value text. Alias shape comparison
+    /// ignores it (equivalent spellings such as 0 and 0px differ), while
+    /// font reuse requires a bare token dereference.
+    value: String,
 }
 
-fn collect_value_references(values: &[ComponentValue<'_>], references: &mut Vec<String>) {
+fn collect_value_references(
+    values: &[ComponentValue<'_>],
+    references: &mut Vec<String>,
+    computed: &mut bool,
+) {
     for value in values {
         match value {
             ComponentValue::Function(function) => {
@@ -1017,18 +1119,24 @@ fn collect_value_references(values: &[ComponentValue<'_>], references: &mut Vec<
                     &function.name,
                     oxc_css_parser::ast::FunctionName::Ident(InterpolableIdent::Literal(name))
                         if name.name == "var"
-                ) && let Some(ComponentValue::InterpolableIdent(InterpolableIdent::Literal(
-                    ident,
-                ))) = function.args.first()
-                    && ident.name.starts_with("--")
-                {
-                    references.push(ident.name.to_string());
+                ) {
+                    match function.args.first() {
+                        Some(ComponentValue::InterpolableIdent(InterpolableIdent::Literal(
+                            ident,
+                        ))) => {
+                            if ident.name.starts_with("--") {
+                                references.push(ident.name.to_string());
+                            }
+                        }
+                        None => {}
+                        Some(_) => *computed = true,
+                    }
                 }
-                collect_value_references(&function.args, references);
+                collect_value_references(&function.args, references, computed);
             }
             ComponentValue::Calc(calc) => {
-                collect_value_references(std::slice::from_ref(&calc.left), references);
-                collect_value_references(std::slice::from_ref(&calc.right), references);
+                collect_value_references(std::slice::from_ref(&calc.left), references, computed);
+                collect_value_references(std::slice::from_ref(&calc.right), references, computed);
             }
             _ => {}
         }
@@ -1037,6 +1145,7 @@ fn collect_value_references(values: &[ComponentValue<'_>], references: &mut Vec<
 
 fn collect_shape_statements(
     statements: &[Statement<'_>],
+    source: &str,
     shape: &mut CompiledShape,
 ) -> Result<(), String> {
     for statement in statements {
@@ -1045,18 +1154,34 @@ fn collect_shape_statements(
                 let InterpolableIdent::Literal(name) = &declaration.name else {
                     return Err("Nonliteral compiled property".to_string());
                 };
+                let value = source[declaration.span.start..declaration.span.end]
+                    .split_once(':')
+                    .map(|(_, value)| value)
+                    .unwrap_or("")
+                    .trim()
+                    .trim_end_matches("!important")
+                    .trim_end()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 shape.declarations.push(CompiledDeclaration {
                     property: name.name.to_string(),
                     important: declaration.important.is_some(),
+                    value,
                 });
-                collect_value_references(&declaration.value, &mut shape.referenced_properties);
+                let mut computed = false;
+                collect_value_references(
+                    &declaration.value,
+                    &mut shape.referenced_properties,
+                    &mut computed,
+                );
             }
             Statement::QualifiedRule(rule) => {
-                collect_shape_statements(&rule.block.statements, shape)?;
+                collect_shape_statements(&rule.block.statements, source, shape)?;
             }
             Statement::AtRule(at_rule) => {
                 if let Some(block) = &at_rule.block {
-                    collect_shape_statements(&block.statements, shape)?;
+                    collect_shape_statements(&block.statements, source, shape)?;
                 }
             }
             _ => {}
@@ -1081,7 +1206,7 @@ pub fn compiled_shape_json(css: &str) -> MigrationResult<String> {
         declarations: Vec::new(),
         referenced_properties: Vec::new(),
     };
-    collect_shape_statements(&parsed.statements, &mut shape)
+    collect_shape_statements(&parsed.statements, css, &mut shape)
         .map_err(|message| MigrationError::EditedStylesheetParse { message })?;
     shape.declarations.sort();
     shape.referenced_properties.sort();
@@ -1340,6 +1465,77 @@ mod tests {
     }
 
     #[test]
+    fn reserves_style_query_custom_properties() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/legacy.css",
+                "@container card style(--font-brand: \"Brand\") { .x { color: red; } }\n@supports (--font-flag: 1) { .y { color: blue; } }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let properties = parsed["customProperties"].as_array().unwrap();
+        assert!(properties.contains(&serde_json::json!("--font-brand")), "{properties:?}");
+        assert!(properties.contains(&serde_json::json!("--font-flag")), "{properties:?}");
+    }
+
+    #[test]
+    fn marks_computed_var_arguments_unbounded() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/main.scss",
+                "$property: --font-brand;\n.card { color: var($property); }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["customPropertiesUnbounded"], true);
+    }
+
+    #[test]
+    fn reserves_runtime_declarations_nested_under_theme() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/globals.css",
+                "@theme {\n  --font-brand: serif;\n  @keyframes pulse { from { --font-flash: serif; } }\n}\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let properties = parsed["customProperties"].as_array().unwrap();
+        // The direct token stays exempt; the keyframe write reserves.
+        assert!(!properties.contains(&serde_json::json!("--font-brand")), "{properties:?}");
+        assert!(properties.contains(&serde_json::json!("--font-flash")), "{properties:?}");
+    }
+
+    #[test]
+    fn collects_custom_property_inventory() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/legacy.css",
+                ":root { --font-brand: \"Open Sans\", sans-serif; }\n@property --font-angle { syntax: \"<angle>\"; inherits: false; initial-value: 0deg; }\n.card { font-family: var(--font-body, serif); width: calc(var(--gap) * 2); }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            parsed["customProperties"],
+            serde_json::json!(["--font-angle", "--font-body", "--font-brand", "--gap"]),
+        );
+        assert_eq!(parsed["customPropertiesUnbounded"], false);
+
+        let interpolated: serde_json::Value = serde_json::from_str(
+            &super::stylesheet_analysis_json(
+                "/p/legacy.scss",
+                "$prop: --font-brand;\n.card { #{$prop}: serif; }\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(interpolated["customPropertiesUnbounded"], true);
+    }
+
+    #[test]
     fn reserves_icss_export_value_tokens() {
         let parsed: serde_json::Value = serde_json::from_str(
             &super::stylesheet_analysis_json(
@@ -1511,7 +1707,11 @@ mod tests {
         assert_eq!(
             shape,
             serde_json::json!({
-                "declarations": [{ "property": "margin-right", "important": false }],
+                "declarations": [{
+                    "property": "margin-right",
+                    "important": false,
+                    "value": "auto",
+                }],
                 "referencedProperties": [],
             })
         );
@@ -1539,8 +1739,8 @@ mod tests {
         assert_eq!(
             important["declarations"],
             serde_json::json!([
-                { "property": "font-size", "important": true },
-                { "property": "line-height", "important": false },
+                { "property": "font-size", "important": true, "value": "1rem" },
+                { "property": "line-height", "important": false, "value": "1.5" },
             ])
         );
     }

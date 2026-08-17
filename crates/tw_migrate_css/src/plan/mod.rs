@@ -71,6 +71,9 @@ pub struct RulePlan {
     pub relationship: Option<ModuleRelationship>,
     pub candidates: Vec<String>,
     pub candidate_properties: HashMap<String, BTreeSet<String>>,
+    /// Arbitrary font-family candidates with their parsed stacks, for
+    /// theme-token registration; empty unless the rule still rewrites.
+    pub font_family_probes: Vec<crate::fonts::FontFamilyProbe>,
     pub warning: Option<&'static str>,
 }
 
@@ -183,7 +186,8 @@ pub fn parse_css_rules(
         if let Some(variant) = selector_match.and_then(|(_, variant)| variant) {
             variants.push(variant);
         }
-        let (candidate_properties, declaration_warning) = collect_declaration_candidates(
+        let (candidate_properties, font_family_probes, declaration_warning) =
+            collect_declaration_candidates(
             &rule.block.statements,
             &variants,
             source,
@@ -216,6 +220,7 @@ pub fn parse_css_rules(
             relationship,
             candidates,
             candidate_properties,
+            font_family_probes,
             warning,
         });
     }
@@ -286,7 +291,11 @@ fn collect_declaration_candidates(
     keyframes: &HashMap<&str, &str>,
     syntax: Syntax,
     is_module: bool,
-) -> (HashMap<String, BTreeSet<String>>, Option<&'static str>) {
+) -> (
+    HashMap<String, BTreeSet<String>>,
+    Vec<crate::fonts::FontFamilyProbe>,
+    Option<&'static str>,
+) {
     // CSS keeps the last of duplicate same-property declarations, so a later
     // declaration replaces the candidate emitted by an earlier one.
     fn push_last_wins<'p>(
@@ -315,6 +324,10 @@ fn collect_declaration_candidates(
     let mut candidates = HashMap::new();
     let mut local_candidates = Vec::new();
     let mut property_slots = HashMap::new();
+    let mut font_probes: Vec<crate::fonts::FontFamilyProbe> = Vec::new();
+    // Last-wins like the candidate slots: a later font-family declaration
+    // replaces the earlier probe.
+    let mut local_font_probe: Option<crate::fonts::FontFamilyProbe> = None;
     let mut margin = SpacingValues::default();
     let mut padding = SpacingValues::default();
     let mut inset = SpacingValues::default();
@@ -337,19 +350,21 @@ fn collect_declaration_candidates(
             };
             let mut nested_variants = variants.to_vec();
             nested_variants.push(variant);
-            let (nested_candidates, nested_warning) = collect_declaration_candidates(
-                &block.statements,
-                &nested_variants,
-                source,
-                theme_tokens,
-                media_names,
-                keyframes,
-                syntax,
-                is_module,
-            );
+            let (nested_candidates, nested_probes, nested_warning) =
+                collect_declaration_candidates(
+                    &block.statements,
+                    &nested_variants,
+                    source,
+                    theme_tokens,
+                    media_names,
+                    keyframes,
+                    syntax,
+                    is_module,
+                );
             for (candidate, properties) in nested_candidates {
                 merge_candidate(&mut candidates, candidate, properties);
             }
+            font_probes.extend(nested_probes);
             if nested_warning.is_some() {
                 warning = nested_warning;
             }
@@ -453,12 +468,31 @@ fn collect_declaration_candidates(
             Ok(false) => {}
         }
         match declaration_to_candidate(property, value, theme_tokens) {
-            Ok(candidate) => push_last_wins(
-                &mut property_slots,
-                &mut local_candidates,
-                property,
-                candidate,
-            ),
+            Ok(candidate) => {
+                // A font-family that stayed arbitrary is a registration
+                // probe; a runtime-dependent or unreadable stack keeps its
+                // candidate under the existing safety rules without one.
+                if property == "font-family" && candidate.starts_with("[font-family:") {
+                    local_font_probe = crate::fonts::parse_font_stack(value).map(
+                        |(normalized, first_family_name, first_family_kind)| {
+                            crate::fonts::FontFamilyProbe {
+                                candidate: candidate.clone(),
+                                value: normalized,
+                                first_family_name,
+                                first_family_kind,
+                            }
+                        },
+                    );
+                } else if property == "font-family" {
+                    local_font_probe = None;
+                }
+                push_last_wins(
+                    &mut property_slots,
+                    &mut local_candidates,
+                    property,
+                    candidate,
+                );
+            }
             Err(code) => warning = Some(code),
         }
     }
@@ -495,17 +529,23 @@ fn collect_declaration_candidates(
     for (candidate, property) in local_candidates {
         merge_candidate(&mut candidates, candidate, [property]);
     }
+    font_probes.extend(local_font_probe);
     if !variants.is_empty() {
         let variants = variants.join(":");
         candidates = candidates
             .into_iter()
             .map(|(candidate, properties)| (format!("{variants}:{candidate}"), properties))
             .collect();
+        // Probe candidates mirror the candidate map exactly, including
+        // this prefix step, so they stay valid alias keys.
+        for probe in &mut font_probes {
+            probe.candidate = format!("{variants}:{}", probe.candidate);
+        }
     }
     if candidates.is_empty() && warning.is_none() {
         warning = Some("unsupported-declaration");
     }
-    (candidates, warning)
+    (candidates, font_probes, warning)
 }
 
 fn collect_composed_classes(
@@ -632,6 +672,7 @@ fn retained_at_rule(
         relationship: None,
         candidates: Vec::new(),
         candidate_properties: HashMap::new(),
+        font_family_probes: Vec::new(),
         warning: Some(warning),
     }
 }

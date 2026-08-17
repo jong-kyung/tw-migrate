@@ -45,15 +45,20 @@ export interface SourceAnalysis {
   stylesheetLinks: string[];
   stylesheetLinksUnverifiable: boolean;
   rendersStyleElement: boolean;
+  injectsMarkup: boolean;
+  customProperties: string[];
+  customPropertiesUnbounded: boolean;
 }
 
 export interface CompiledShape {
-  declarations: { property: string; important: boolean }[];
+  declarations: { property: string; important: boolean; value: string }[];
   referencedProperties: string[];
 }
 
 export interface StylesheetAnalysis {
   references: string[];
+  customProperties: string[];
+  customPropertiesUnbounded: boolean;
   imports: { href: string; media: string; start: number; end: number }[];
   unverifiable: boolean;
   scopeEscapes: string[];
@@ -72,6 +77,7 @@ interface Binding {
   sourceAnalysis: (path: string, source: string) => string;
   stylesheetAnalysis: (path: string, source: string) => string;
   compiledShape: (css: string) => string;
+  fontFamilyStack: (value: string) => string;
   collectCssDirectives: (source: string) => string;
   mediaProbeKey: (css: string) => string;
   decodeSourceMap: (sourceMap: string) => string;
@@ -166,6 +172,8 @@ function sourceAnalysisResult(value: unknown): value is SourceAnalysis {
     value.unboundReferences.every((item) => typeof item === "string") &&
     Array.isArray(value.stylesheetLinks) &&
     value.stylesheetLinks.every((item) => typeof item === "string") &&
+    Array.isArray(value.customProperties) &&
+    value.customProperties.every((item) => typeof item === "string") &&
     [
       value.vueGlobUnverifiable,
       value.hasDynamicImport,
@@ -175,6 +183,8 @@ function sourceAnalysisResult(value: unknown): value is SourceAnalysis {
       value.definesRootUseCssModule,
       value.stylesheetLinksUnverifiable,
       value.rendersStyleElement,
+      value.injectsMarkup,
+      value.customPropertiesUnbounded,
     ].every((item) => typeof item === "boolean")
   );
 }
@@ -224,6 +234,29 @@ export function sourceAnalysis(path: string, source: string): SourceAnalysis {
   return analysis;
 }
 
+export interface FontFamilyStack {
+  value: string;
+  firstFamily: { name: string; kind: "name" | "generic" | "css-wide" };
+}
+
+/// The planner's normalized view of one font-family value, or null when
+/// the value is runtime-dependent or unreadable.
+export function fontFamilyStack(value: string): FontFamilyStack | null {
+  return decode(
+    "font family stack",
+    binding.fontFamilyStack(value),
+    (parsed): parsed is FontFamilyStack | null =>
+      parsed === null ||
+      (object(parsed) &&
+        typeof parsed.value === "string" &&
+        object(parsed.firstFamily) &&
+        typeof parsed.firstFamily.name === "string" &&
+        (parsed.firstFamily.kind === "name" ||
+          parsed.firstFamily.kind === "generic" ||
+          parsed.firstFamily.kind === "css-wide")),
+  );
+}
+
 export function compiledShape(css: string): CompiledShape {
   return decode(
     "compiled shape",
@@ -233,7 +266,10 @@ export function compiledShape(css: string): CompiledShape {
       Array.isArray(value.declarations) &&
       value.declarations.every(
         (item) =>
-          object(item) && typeof item.property === "string" && typeof item.important === "boolean",
+          object(item) &&
+          typeof item.property === "string" &&
+          typeof item.important === "boolean" &&
+          typeof item.value === "string",
       ) &&
       Array.isArray(value.referencedProperties) &&
       value.referencedProperties.every((item) => typeof item === "string"),
@@ -273,7 +309,10 @@ export function stylesheetAnalysis(path: string, source: string): StylesheetAnal
       typeof value.globalAtRulesUnverifiable === "boolean" &&
       Array.isArray(value.classNames) &&
       value.classNames.every((item) => typeof item === "string") &&
-      typeof value.classReservationsUnbounded === "boolean",
+      typeof value.classReservationsUnbounded === "boolean" &&
+      Array.isArray(value.customProperties) &&
+      value.customProperties.every((item) => typeof item === "string") &&
+      typeof value.customPropertiesUnbounded === "boolean",
   );
   stylesheetAnalysisCache.set(path, { source, analysis });
   bound(stylesheetAnalysisCache);

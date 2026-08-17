@@ -456,6 +456,7 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
     let mut unlinked = HashSet::new();
     let mut candidates = BTreeSet::new();
     let mut candidate_probes = BTreeSet::new();
+    let mut font_family_probes = Vec::new();
     let mut converted_rules = 0;
     let mut retained_rules = 0;
     let mut rules = Vec::new();
@@ -523,6 +524,10 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
         unlinked.extend(response.unlinked_files);
         candidates.extend(response.candidates);
         candidate_probes.extend(response.candidate_probes);
+        font_family_probes.extend(response.font_family_probes.into_iter().map(|mut probe| {
+            probe.stylesheet = index;
+            probe
+        }));
         converted_rules += response.converted_rules;
         retained_rules += response.retained_rules;
         rules.extend(response.rules.into_iter().map(|mut rule| {
@@ -557,6 +562,7 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
         unlinked_files,
         candidates: candidates.into_iter().collect(),
         candidate_probes: candidate_probes.into_iter().collect(),
+        font_family_probes,
         converted_rules,
         retained_rules,
         rules,

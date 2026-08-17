@@ -12,12 +12,34 @@ pub(super) struct PlanResponse {
     /// spellings whose alias may make a rejected rewrite fit on the next
     /// pass. Over-inclusive by design; internal orchestration data only.
     pub(super) candidate_probes: Vec<String>,
+    /// Arbitrary font-family candidates with parsed stacks and rule
+    /// identity, for theme-token registration; internal orchestration
+    /// data stripped from the public report.
+    pub(super) font_family_probes: Vec<FontFamilyProbeReport>,
     pub(super) converted_rules: usize,
     pub(super) retained_rules: usize,
     pub(super) rules: Vec<RuleReport>,
     pub(super) warnings: Vec<Warning>,
     #[serde(skip)]
     pub(super) applied_edits: HashMap<String, Vec<Vec<Edit>>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct FontFamilyProbeReport {
+    pub(super) candidate: String,
+    pub(super) value: String,
+    pub(super) first_family: FontFamilyReport,
+    pub(super) stylesheet: usize,
+    pub(super) rule_id: RuleId,
+    pub(super) authored_span: RuleId,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct FontFamilyReport {
+    pub(super) name: String,
+    pub(super) kind: &'static str,
 }
 
 #[derive(Serialize)]

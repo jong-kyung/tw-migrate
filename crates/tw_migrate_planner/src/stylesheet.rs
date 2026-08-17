@@ -107,6 +107,10 @@ fn prefix_rule_candidates(rules: &mut [RulePlan], prefix: &str) {
             .into_iter()
             .map(|(candidate, properties)| (format!("{prefix}:{candidate}"), properties))
             .collect();
+        // Probe candidates mirror the candidate spellings exactly.
+        for probe in &mut rule.font_family_probes {
+            probe.candidate = format!("{prefix}:{}", probe.candidate);
+        }
     }
 }
 
@@ -770,7 +774,8 @@ pub(super) fn plan_request(
         .map(|file| file.prior_edits.as_slice())
         .unwrap_or_default();
 
-    for rule in rules {
+    let mut font_probe_reports = Vec::new();
+    for mut rule in rules {
         let can_remove = is_module
             && module_references_safe
             && rule.warning.is_none()
@@ -790,6 +795,24 @@ pub(super) fn plan_request(
                     start: original_offset(prior_edits, span.start),
                     end: original_offset(prior_edits, span.end),
                 });
+        // Font probes mirror candidateProbes' rewrite filter: a
+        // hard-retained rule never reaches a rewrite site, so it must not
+        // drive token registration.
+        if rule.warning.is_none() || is_batch_retained(rule.warning) {
+            for probe in std::mem::take(&mut rule.font_family_probes) {
+                font_probe_reports.push(FontFamilyProbeReport {
+                    candidate: probe.candidate,
+                    value: probe.value,
+                    first_family: FontFamilyReport {
+                        name: probe.first_family_name,
+                        kind: probe.first_family_kind,
+                    },
+                    stylesheet: 0,
+                    rule_id,
+                    authored_span: report_authored_span,
+                });
+            }
+        }
         let status = if can_remove {
             converted_rules += 1;
             let authored_span = rule
@@ -1026,6 +1049,7 @@ pub(super) fn plan_request(
         },
         candidates: candidates.into_iter().collect(),
         candidate_probes: candidate_probes.into_iter().collect(),
+        font_family_probes: font_probe_reports,
         converted_rules,
         retained_rules,
         rules: rule_reports,

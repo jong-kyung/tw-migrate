@@ -369,6 +369,484 @@ test("anchors Sass compile-failure warnings to authored offsets", async () => {
   assert.ok(warning.start >= start && warning.end <= end && warning.end > warning.start);
 });
 
+test("registers font theme tokens and emits the generated utility", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "Open Sans", sans-serif; }\n',
+  });
+  const report = await migrate({ cwd, styleFile: "Button.module.css", write: true });
+  assert.deepEqual(report.candidates, ["font-open-sans"]);
+  assert.match(await readFile(join(cwd, "Button.tsx"), "utf8"), /font-open-sans/);
+  const entry = await readFile(join(cwd, "globals.css"), "utf8");
+  assert.match(entry, /@theme \{\n  --font-open-sans: "Open Sans", sans-serif;\n\}/);
+});
+
+test("reuses an existing font token with a matching stack", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "Open Sans", sans-serif; }\n',
+  });
+  await writeFile(
+    join(cwd, "globals.css"),
+    '@import "tailwindcss";\n@theme {\n  --font-brand: "Open Sans", sans-serif;\n}\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css", write: true });
+  assert.deepEqual(report.candidates, ["font-brand"]);
+  const entry = await readFile(join(cwd, "globals.css"), "utf8");
+  assert.ok(!entry.includes("--font-open-sans"), entry);
+});
+
+test("suffixes a font token owned by an existing utility", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "Bold", serif; }\n',
+  });
+  const report = await migrate({ cwd, styleFile: "Button.module.css", write: true });
+  // font-bold is the design system's font-weight utility.
+  assert.deepEqual(report.candidates, ["font-bold-2"]);
+  const entry = await readFile(join(cwd, "globals.css"), "utf8");
+  assert.match(entry, /--font-bold-2: "Bold", serif;/);
+});
+
+test("generic and reserved font stacks keep their arbitrary spellings", async () => {
+  const cwd = await fixture({
+    css: ".button { font-family: monospace; }\n",
+  });
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["[font-family:monospace]"]);
+
+  const reserved = await fixture({
+    css: '.button { font-family: "Open Sans", sans-serif; }\n',
+    tsx: "import styles from './Button.module.css';\nconst token = \"--font-open-sans\";\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+  });
+  const report2 = await migrate({ cwd: reserved, styleFile: "Button.module.css" });
+  // The mentioned property name reserves the base spelling, so the token
+  // allocates the next suffix instead.
+  assert.deepEqual(report2.candidates, ["font-open-sans-2"]);
+});
+
+test("unwritable entries warn when a font stack requires a token", async () => {
+  const cwd = await fixture({ css: ".unused { color: red; }\n" });
+  // The gitignored entry stays discoverable through the HTML link but is
+  // not writable.
+  await Promise.all([
+    writeFile(join(cwd, ".gitignore"), "globals.css\n"),
+    writeFile(join(cwd, "index.html"), '<link rel="stylesheet" href="globals.css">\n'),
+    writeFile(
+      join(cwd, "Card.vue"),
+      '<template>\n  <p class="card">A</p>\n</template>\n<style scoped>\n.card { font-family: "My Font", sans-serif; }\n</style>\n',
+    ),
+  ]);
+  execFileSync("git", ["init", "-q"], { cwd });
+  const report = await migrate({ cwd, styleFile: "Card.vue" });
+  assert.equal(report.retainedRules, 1);
+  const warning = report.warnings.find(
+    (entry) => entry.code === "font-theme-registration-required",
+  );
+  assert.ok(warning, JSON.stringify(report.warnings));
+  assert.ok(!report.candidates.includes("font-my-font"), report.candidates.join(" "));
+});
+
+test("exhausted font allocation warns as a registration failure", async () => {
+  const cwd = await fixture({ css: ".unused { color: red; }\n" });
+  // Every allocation spelling from the base through -100 is owned by an
+  // authored custom property, so allocation exhausts its bounded search.
+  const owned = ["--font-my-font: a;"];
+  for (let suffix = 2; suffix <= 100; suffix += 1) owned.push(`--font-my-font-${suffix}: a;`);
+  await Promise.all([
+    writeFile(join(cwd, "legacy.css"), `:root { ${owned.join(" ")} }\n`),
+    writeFile(
+      join(cwd, "Card.vue"),
+      '<template>\n  <p class="card">A</p>\n</template>\n<style scoped>\n.card { font-family: "My Font", sans-serif; }\n</style>\n',
+    ),
+  ]);
+  const report = await migrate({ cwd, styleFile: "Card.vue" });
+  assert.equal(report.retainedRules, 1);
+  const warning = report.warnings.find((entry) => entry.code === "font-theme-registration-failed");
+  assert.ok(warning, JSON.stringify(report.warnings));
+});
+
+test("registers font tokens without media extraction enabled", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "Open Sans", sans-serif; }\n',
+  });
+  const report = await migrate({
+    cwd,
+    styleFile: "Button.module.css",
+    extractMediaQueries: false,
+  });
+  assert.deepEqual(report.candidates, ["font-open-sans"]);
+});
+
+test("unwritable entries still reuse existing font tokens", async () => {
+  const cwd = await fixture({ css: ".unused { color: red; }\n" });
+  await Promise.all([
+    writeFile(join(cwd, ".gitignore"), "globals.css\n"),
+    writeFile(
+      join(cwd, "globals.css"),
+      '@import "tailwindcss";\n@theme {\n  --font-brand: "My Font", sans-serif;\n}\n',
+    ),
+    writeFile(join(cwd, "index.html"), '<link rel="stylesheet" href="globals.css">\n'),
+    writeFile(
+      join(cwd, "Card.vue"),
+      '<template>\n  <p class="card">A</p>\n</template>\n<style scoped>\n.card { font-family: "My Font", sans-serif; }\n</style>\n',
+    ),
+  ]);
+  execFileSync("git", ["init", "-q"], { cwd });
+  const report = await migrate({ cwd, styleFile: "Card.vue" });
+  assert.deepEqual(report.candidates, ["font-brand"]);
+  assert.ok(!report.warnings.some((entry) => entry.code === "font-theme-registration-required"));
+});
+
+test("reserved reuse spellings and inline overrides keep arbitrary fonts", async () => {
+  // An authored .font-brand selector owns the reused spelling.
+  const cwd = await fixture({
+    css: '.button { font-family: "My Font", sans-serif; }\n',
+  });
+  await Promise.all([
+    writeFile(
+      join(cwd, "globals.css"),
+      '@import "tailwindcss";\n@theme {\n  --font-brand: "My Font", sans-serif;\n}\n',
+    ),
+    writeFile(join(cwd, "legacy.css"), ".font-brand { color: red; }\n"),
+  ]);
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.ok(!report.candidates.includes("font-brand"), report.candidates.join(" "));
+
+  // An inline style attribute overriding the would-be token property
+  // forces the next suffix.
+  const inline = await fixture({
+    css: '.button { font-family: "My Font", sans-serif; }\n',
+  });
+  await writeFile(join(inline, "index.html"), '<div style="--font-my-font: serif">T</div>\n');
+  const report2 = await migrate({ cwd: inline, styleFile: "Button.module.css" });
+  assert.deepEqual(report2.candidates, ["font-my-font-2"]);
+});
+
+test("mentioned inert spellings force the next font suffix", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "My Font", sans-serif; }\n',
+    tsx: "import styles from './Button.module.css';\nconst planned = 'hover:font-my-font';\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+  });
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["font-my-font-2"]);
+
+  // The important modifier spells the same utility.
+  const important = await fixture({
+    css: '.button { font-family: "My Font", sans-serif; }\n',
+    tsx: "import styles from './Button.module.css';\nconst planned = 'font-my-font!';\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+  });
+  const report2 = await migrate({ cwd: important, styleFile: "Button.module.css" });
+  assert.deepEqual(report2.candidates, ["font-my-font-2"]);
+});
+
+test("prefixed entries register font tokens under the prefix", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "Open Sans", sans-serif; }\n',
+  });
+  await writeFile(join(cwd, "globals.css"), '@import "tailwindcss" prefix(tw);\n');
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["tw:font-open-sans"]);
+});
+
+test("revert-layer font declarations stay retained", async () => {
+  const cwd = await fixture({ css: ".button { font-family: revert-layer; }\n" });
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.equal(report.retainedRules, 1);
+  assert.deepEqual(report.candidates, []);
+});
+
+test("reuse rejects a custom utility not backed by the matched token", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "My Font", sans-serif; }\n',
+  });
+  // The token matches the stack, but a custom utility owns the spelling
+  // with an unrelated literal value.
+  await writeFile(
+    join(cwd, "globals.css"),
+    '@import "tailwindcss";\n@theme {\n  --font-brand: "My Font", sans-serif;\n}\n@utility font-brand {\n  font-family: monospace;\n}\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.ok(!report.candidates.includes("font-brand"), report.candidates.join(" "));
+
+  // A utility composing the token with another family is not a bare
+  // dereference either.
+  const composed = await fixture({
+    css: '.button { font-family: "My Font", sans-serif; }\n',
+  });
+  await writeFile(
+    join(composed, "globals.css"),
+    '@import "tailwindcss";\n@theme {\n  --font-brand: "My Font", sans-serif;\n}\n@utility font-brand {\n  font-family: "Other", var(--font-brand);\n}\n',
+  );
+  const report2 = await migrate({ cwd: composed, styleFile: "Button.module.css" });
+  assert.ok(!report2.candidates.includes("font-brand"), report2.candidates.join(" "));
+});
+
+test("workspace groups with distinct stacks never share a token name", async () => {
+  const cwd = await tempDir();
+  const pkg = async (name: string, stack: string) => {
+    await mkdir(join(cwd, "packages", name), { recursive: true });
+    await Promise.all([
+      writeFile(join(cwd, "packages", name, "package.json"), '{"private":true}'),
+      writeFile(join(cwd, "packages", name, "globals.css"), '@import "tailwindcss";\n'),
+      writeFile(
+        join(cwd, "packages", name, "Button.module.css"),
+        `.button { font-family: ${stack}; }\n`,
+      ),
+      writeFile(
+        join(cwd, "packages", name, "Button.tsx"),
+        "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+      ),
+    ]);
+  };
+  await writeFile(join(cwd, "package.json"), '{"private":true,"workspaces":["packages/*"]}');
+  await pkg("app", '"Brand", serif');
+  await pkg("lib", '"Brand", sans-serif');
+  const report = await migrate({ cwd, workspaces: true, write: true });
+  // Emitted theme variables share one runtime namespace, so the second
+  // group takes the next suffix.
+  assert.ok(report.candidates.includes("font-brand"), report.candidates.join(" "));
+  assert.ok(report.candidates.includes("font-brand-2"), report.candidates.join(" "));
+});
+
+test("pre-existing tokens in other entries seed cross-group ownership", async () => {
+  const cwd = await tempDir();
+  await writeFile(join(cwd, "package.json"), '{"private":true,"workspaces":["packages/*"]}');
+  await mkdir(join(cwd, "packages", "app"), { recursive: true });
+  await mkdir(join(cwd, "packages", "lib"), { recursive: true });
+  await Promise.all([
+    writeFile(join(cwd, "packages", "app", "package.json"), '{"private":true}'),
+    // The app entry owns --font-brand but migrates nothing that uses it.
+    writeFile(
+      join(cwd, "packages", "app", "globals.css"),
+      '@import "tailwindcss";\n@theme {\n  --font-brand: "Brand", serif;\n}\n',
+    ),
+    writeFile(join(cwd, "packages", "app", "Button.module.css"), ".button { color: red; }\n"),
+    writeFile(
+      join(cwd, "packages", "app", "Button.tsx"),
+      "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+    ),
+    writeFile(join(cwd, "packages", "lib", "package.json"), '{"private":true}'),
+    writeFile(join(cwd, "packages", "lib", "globals.css"), '@import "tailwindcss";\n'),
+    writeFile(
+      join(cwd, "packages", "lib", "Button.module.css"),
+      '.button { font-family: "Brand", sans-serif; }\n',
+    ),
+    writeFile(
+      join(cwd, "packages", "lib", "Button.tsx"),
+      "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+    ),
+  ]);
+  const report = await migrate({ cwd, workspaces: true, write: true });
+  // The unused foreign token still owns the global property name.
+  assert.ok(report.candidates.includes("font-brand-2"), report.candidates.join(" "));
+});
+
+test("unparseable existing tokens still own their global names", async () => {
+  const cwd = await tempDir();
+  await writeFile(join(cwd, "package.json"), '{"private":true,"workspaces":["packages/*"]}');
+  await mkdir(join(cwd, "packages", "app"), { recursive: true });
+  await mkdir(join(cwd, "packages", "lib"), { recursive: true });
+  await Promise.all([
+    writeFile(join(cwd, "packages", "app", "package.json"), '{"private":true}'),
+    // The app token's value cannot be normalized, but the name is owned.
+    writeFile(
+      join(cwd, "packages", "app", "globals.css"),
+      '@import "tailwindcss";\n@theme {\n  --font-brand: var(--tenant-font);\n}\n',
+    ),
+    writeFile(join(cwd, "packages", "app", "Button.module.css"), ".button { color: red; }\n"),
+    writeFile(
+      join(cwd, "packages", "app", "Button.tsx"),
+      "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+    ),
+    writeFile(join(cwd, "packages", "lib", "package.json"), '{"private":true}'),
+    writeFile(join(cwd, "packages", "lib", "globals.css"), '@import "tailwindcss";\n'),
+    writeFile(
+      join(cwd, "packages", "lib", "Button.module.css"),
+      '.button { font-family: "Brand", sans-serif; }\n',
+    ),
+    writeFile(
+      join(cwd, "packages", "lib", "Button.tsx"),
+      "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+    ),
+  ]);
+  const report = await migrate({ cwd, workspaces: true, write: true });
+  assert.ok(report.candidates.includes("font-brand-2"), report.candidates.join(" "));
+});
+
+test("a reused token blocks another group generating its name", async () => {
+  const cwd = await tempDir();
+  await writeFile(join(cwd, "package.json"), '{"private":true,"workspaces":["packages/*"]}');
+  await mkdir(join(cwd, "packages", "app"), { recursive: true });
+  await mkdir(join(cwd, "packages", "lib"), { recursive: true });
+  await Promise.all([
+    writeFile(join(cwd, "packages", "app", "package.json"), '{"private":true}'),
+    // The app entry already owns --font-brand for stack A, so its group
+    // reuses it.
+    writeFile(
+      join(cwd, "packages", "app", "globals.css"),
+      '@import "tailwindcss";\n@theme {\n  --font-brand: "Brand", serif;\n}\n',
+    ),
+    writeFile(
+      join(cwd, "packages", "app", "Button.module.css"),
+      '.button { font-family: "Brand", serif; }\n',
+    ),
+    writeFile(
+      join(cwd, "packages", "app", "Button.tsx"),
+      "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+    ),
+    writeFile(join(cwd, "packages", "lib", "package.json"), '{"private":true}'),
+    writeFile(join(cwd, "packages", "lib", "globals.css"), '@import "tailwindcss";\n'),
+    // The lib stack differs, so generation must not adopt the reused
+    // global name.
+    writeFile(
+      join(cwd, "packages", "lib", "Button.module.css"),
+      '.button { font-family: "Brand", sans-serif; }\n',
+    ),
+    writeFile(
+      join(cwd, "packages", "lib", "Button.tsx"),
+      "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+    ),
+  ]);
+  const report = await migrate({ cwd, workspaces: true, write: true });
+  assert.ok(report.candidates.includes("font-brand"), report.candidates.join(" "));
+  assert.ok(report.candidates.includes("font-brand-2"), report.candidates.join(" "));
+  const libEntry = await readFile(join(cwd, "packages", "lib", "globals.css"), "utf8");
+  assert.match(libEntry, /--font-brand-2: "Brand", sans-serif;/);
+});
+
+test("Vue v-bind spreads hide style overrides from font allocation", async () => {
+  const cwd = await fixture({ css: '.button { font-family: "My Font", sans-serif; }\n' });
+  await writeFile(
+    join(cwd, "Card.vue"),
+    '<template>\n  <div v-bind="attrs">Card</div>\n</template>\n<script setup>\nconst attrs = {};\n</script>\n',
+  );
+  const report = await migrate({ cwd });
+  // Property reservations are unbounded, so no token registers and the
+  // quoteless module site keeps the arbitrary spelling.
+  assert.ok(
+    !report.candidates.some((c) => c.startsWith("font-my-font")),
+    report.candidates.join(" "),
+  );
+});
+
+test("prefixed runtime property mentions force the next font suffix", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "My Font", sans-serif; }\n',
+    tsx: "import styles from './Button.module.css';\nconst token = '--tw-font-my-font';\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+  });
+  await writeFile(join(cwd, "globals.css"), '@import "tailwindcss" prefix(tw);\n');
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["tw:font-my-font-2"]);
+});
+
+test("inline safelist spellings force the next font suffix", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "My Font", sans-serif; }\n',
+  });
+  await writeFile(
+    join(cwd, "globals.css"),
+    '@import "tailwindcss";\n@source inline("font-my-font");\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["font-my-font-2"]);
+
+  // Range-expanded safelists reserve each numeric step.
+  const ranged = await fixture({
+    css: '.button { font-family: "My Font 2", sans-serif; }\n',
+  });
+  await writeFile(
+    join(ranged, "globals.css"),
+    '@import "tailwindcss";\n@source inline("font-my-font-{1..3}");\n',
+  );
+  const report3 = await migrate({ cwd: ranged, styleFile: "Button.module.css" });
+  // fontTokenName("My Font 2") is my-font-2, which the range reserves.
+  assert.deepEqual(report3.candidates, ["font-my-font-2-2"]);
+
+  // Stepped ranges expand each stride, not the literal endpoints.
+  const stepped = await fixture({
+    css: '.button { font-family: "My Font 200", sans-serif; }\n',
+  });
+  await writeFile(
+    join(stepped, "globals.css"),
+    '@import "tailwindcss";\n@source inline("font-my-font-{100..300..100}");\n',
+  );
+  const report4 = await migrate({ cwd: stepped, styleFile: "Button.module.css" });
+  // fontTokenName("My Font 200") is my-font-200, which the stride reserves.
+  assert.deepEqual(report4.candidates, ["font-my-font-200-2"]);
+
+  // Brace-expanded safelists reserve each expanded spelling.
+  const braced = await fixture({
+    css: '.button { font-family: "My Font", sans-serif; }\n',
+  });
+  await writeFile(
+    join(braced, "globals.css"),
+    '@import "tailwindcss";\n@source inline("font-{other,my-font}");\n',
+  );
+  const report2 = await migrate({ cwd: braced, styleFile: "Button.module.css" });
+  assert.deepEqual(report2.candidates, ["font-my-font-2"]);
+});
+
+test("injected JSX markup keeps group spellings arbitrary", async () => {
+  const cwd = await fixture({
+    css: ".button { margin-right: auto; }\n",
+    tsx: "import styles from './Button.module.css';\nexport const Button = ({ markup }) => <div dangerouslySetInnerHTML={{ __html: markup }} className={styles.button} />;\n",
+  });
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["mr-[auto]"]);
+});
+
+test("inline event handlers reserve their property writes", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "My Font", sans-serif; }\n',
+  });
+  await writeFile(
+    join(cwd, "index.html"),
+    "<body onload=\"document.documentElement.style.setProperty('--font-my-font', 'serif')\"><div class=\"card\">T</div></body>\n",
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.deepEqual(report.candidates, ["font-my-font-2"]);
+});
+
+test("Vue script property writes force the next font suffix", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "My Font", sans-serif; }\n',
+  });
+  await writeFile(
+    join(cwd, "Card.vue"),
+    '<template>\n  <div class="card">Card</div>\n</template>\n<script setup>\ndocument.documentElement.style.setProperty("--font-my-font", "serif");\n</script>\n',
+  );
+  const report = await migrate({ cwd });
+  assert.ok(report.candidates.includes("font-my-font-2"), report.candidates.join(" "));
+});
+
+test("Vue template handler property writes force the next font suffix", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "My Font", sans-serif; }\n',
+  });
+  await writeFile(
+    join(cwd, "Card.vue"),
+    "<template>\n  <button class=\"card\" @click=\"$el.style.setProperty('--font-my-font', 'serif')\">C</button>\n</template>\n",
+  );
+  const report = await migrate({ cwd });
+  assert.ok(report.candidates.includes("font-my-font-2"), report.candidates.join(" "));
+});
+
+test("tokens activating inert scanned candidates are rejected", async () => {
+  const cwd = await fixture({
+    css: '.button { font-family: "Open Sans", sans-serif; }\n',
+    tsx: "import styles from './Button.module.css';\nconst planned = 'brand-open-sans';\nexport const Button = () => <button className={styles.button}>B</button>;\n",
+  });
+  // A functional custom utility consumes --font-* under another root;
+  // registering --font-open-sans would make the inert brand-open-sans
+  // candidate compile for the first time. The functional @utility gate
+  // already turns reservations unbounded, so registration never runs;
+  // this pins that existing coverage.
+  await writeFile(
+    join(cwd, "globals.css"),
+    '@import "tailwindcss";\n@utility brand-* {\n  font-family: --value(--font-*);\n}\n',
+  );
+  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  assert.ok(!report.candidates.includes("font-open-sans"), report.candidates.join(" "));
+});
+
 test("canonicalizes literal utilities to the target design system's names", async () => {
   const cwd = await fixture({
     css: ".button { margin-right: auto; max-width: 100%; padding: 13px; }\n",
@@ -809,11 +1287,17 @@ test("round-trips quoted values and urls through arbitrary candidates", async ()
   const cwd = await fixture({
     css: '.button { background-image: url("a_b.png"); font-family: "My Font", sans-serif; content: "a_b"; width: calc(min(100%, 50vw)); }\n',
   });
-  const report = await migrate({ cwd, styleFile: "Button.module.css" });
+  const report = await migrate({ cwd, styleFile: "Button.module.css", write: true });
+  // The quoted font stack registers a theme token instead of keeping its
+  // arbitrary candidate; the other quoted values round-trip unchanged.
+  assert.ok(report.candidates.includes("font-my-font"), report.candidates.join(" "));
+  const entry = await readFile(join(cwd, "globals.css"), "utf8");
+  assert.match(entry, /--font-my-font: "My Font", sans-serif;/);
   const designSystem = await loadDesignSystem("@tailwind utilities;");
-  const css = designSystem.candidatesToCss(report.candidates).join("");
+  const css = designSystem
+    .candidatesToCss(report.candidates.filter((candidate) => candidate !== "font-my-font"))
+    .join("");
   assert.match(css, /url\("a_b\.png"\)/);
-  assert.match(css, /"My Font", sans-serif/);
   assert.match(css, /content: "a_b"/);
   assert.match(css, /calc\(min\(100%, 50vw\)\)/);
 });
@@ -1066,15 +1550,18 @@ test("a gitignored SFC's unscoped block shadows scoped deletion", async () => {
   assert.equal(report.convertedRules, 0);
 });
 
-test("withholds quote-bearing candidates inside Vue class attributes", async () => {
+test("converts quoted font families in Vue class attributes through the named alias", async () => {
   const cwd = await fixture();
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p class="etc">B</p>\n</template>\n<style scoped>\n.card { font-family: "My Font", sans-serif; }\n</style>\n';
   await writeFile(join(cwd, "Card.vue"), vue);
-  const report = await migrate({ cwd, styleFile: "Card.vue" });
-  assert.deepEqual(report.changedFiles, []);
-  assert.equal(report.retainedRules, 1);
-  assert.ok(report.warnings.some((entry) => entry.code === "unresolved-selector-target"));
+  const report = await migrate({ cwd, styleFile: "Card.vue", write: true });
+  // The arbitrary candidate carries a quote the class attribute cannot
+  // hold; the registered token's named alias removes it, so the rewrite
+  // that was previously withheld now fits.
+  assert.deepEqual(report.changedFiles, ["Card.vue", "globals.css"]);
+  assert.deepEqual(report.candidates, ["font-my-font"]);
+  assert.match(await readFile(join(cwd, "Card.vue"), "utf8"), /class="card font-my-font"/);
 });
 
 test("reports Vue-only warnings without requiring a Tailwind entry", async () => {

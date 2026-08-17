@@ -90,6 +90,14 @@ export interface PreparedSourceFile extends SourceFile {
   templateInjectsMarkup?: boolean;
   /** Decoded static class tokens invisible to the raw-text scan. */
   templateClassTokens?: string[];
+  /** Custom-property mentions from an SFC's script blocks. */
+  sourceCustomProperties?: string[];
+  /** True when a script property API received a computed name. */
+  sourceCustomPropertiesUnbounded?: boolean;
+  /** Decoded static style attribute values in a Vue template. */
+  templateStyleValues?: string[];
+  /** True when a bound style attribute hides inline declarations. */
+  templateStylesUnverifiable?: boolean;
   /** Static hrefs of rendered stylesheet links in a Vue template. */
   templateStylesheetLinks?: string[];
   /** True when a rendered Vue template link's rel or href is dynamic. */
@@ -149,6 +157,16 @@ export interface PlannerRequest {
   files: PlannedFile[];
 }
 
+export interface FontFamilyProbe {
+  candidate: string;
+  /** The normalized family stack: names quoted, generics bare. */
+  value: string;
+  firstFamily: { name: string; kind: "name" | "generic" | "css-wide" };
+  stylesheet: number;
+  ruleId: RuleSpan;
+  authoredSpan: RuleSpan;
+}
+
 // `stylesheet` is the planner's compile-failure attribution index into the
 // request stylesheets; it is stripped from the public RuleReport.
 export interface PlanRule extends RuleReport {
@@ -163,6 +181,9 @@ export interface Plan {
   /** Internal orchestration data: candidates collected before quote-fit
    * checks, canonicalized between planning passes; never reported. */
   candidateProbes?: string[];
+  /** Internal orchestration data: arbitrary font-family candidates with
+   * parsed stacks for theme-token registration; never reported. */
+  fontFamilyProbes?: FontFamilyProbe[];
   rules: PlanRule[];
   warnings: MigrationWarning[];
   convertedRules: number;
@@ -196,6 +217,11 @@ export interface MigrationContext extends Scope {
   entryCatalog: Map<string, string[]>;
   /** Scanned paths the utility scanner's ignore rules exclude. */
   ignoredPaths: Set<string>;
+  /** Run-wide font token allocations (name to stack), because emitted
+   * theme variables share one runtime namespace across entry groups.
+   * `null` marks an owner whose value could not be normalized: the name
+   * is taken, but no probe stack may claim to match it. */
+  fontAllocations: Map<string, string | null>;
 }
 
 export interface RemovableLink {
@@ -243,6 +269,9 @@ export interface LoadedTailwind {
   css: string;
   path: string;
   themeTokens: Record<string, string>;
+  /** Theme tokens loaded in Tailwind reference mode, which never emit
+   * their custom properties at runtime. */
+  referenceTokens: Set<string>;
   /** Stylesheet sources retained from the entry's import graph, parsed for
    * authored custom-variant reservations and content-identity adoption. */
   graphSources: { path: string; source: string }[];

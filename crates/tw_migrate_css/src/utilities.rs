@@ -121,6 +121,12 @@ pub fn declaration_to_candidate(
     if value.is_empty() {
         return Err("unsupported-declaration");
     }
+    // Moving a revert-layer font declaration into Tailwind's utilities
+    // layer changes which cascade layer rolls back, so the rule retains
+    // until a same-layer proof exists.
+    if property == "font-family" && value.trim().eq_ignore_ascii_case("revert-layer") {
+        return Err("unsupported-value");
+    }
     let static_candidate = match (property, value) {
         ("display", "flex") => Some("flex"),
         ("display", "grid") => Some("grid"),

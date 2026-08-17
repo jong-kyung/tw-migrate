@@ -262,6 +262,16 @@ struct SourceAnalysis {
     /// True when the source renders a `<style>` element (styled-jsx and
     /// similar inline CSS), whose selectors this analysis never reads.
     renders_style_element: bool,
+    /// True when the source injects runtime markup through
+    /// dangerouslySetInnerHTML, whose classes can never join the scan
+    /// corpus.
+    injects_markup: bool,
+    /// Custom-property name literals (`--*` strings) appearing anywhere in
+    /// the source, for font token name reservations.
+    custom_properties: Vec<String>,
+    /// True when a style property API receives a property name the parser
+    /// cannot read, so property-keyed reservations cannot be bounded.
+    custom_properties_unbounded: bool,
 }
 
 struct SourceCollector<'s, 'a> {
@@ -451,6 +461,52 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
         {
             self.analysis.renders_style_element = true;
         }
+        // A dynamic style value can set any custom property at runtime,
+        // and a prop spread can supply a style prop the same way. JSX
+        // props apply left to right, so a literal-object style after the
+        // last spread pins the value again; a literal object is
+        // transparent because its custom-property keys are string
+        // literals the literal visitor already collects.
+        let mut style_opaque = false;
+        for attribute in &element.attributes {
+            match attribute {
+                oxc_ast::ast::JSXAttributeItem::SpreadAttribute(_) => style_opaque = true,
+                oxc_ast::ast::JSXAttributeItem::Attribute(attribute) => {
+                    let oxc_ast::ast::JSXAttributeName::Identifier(attribute_name) =
+                        &attribute.name
+                    else {
+                        continue;
+                    };
+                    if attribute_name.name == "dangerouslySetInnerHTML" {
+                        self.analysis.injects_markup = true;
+                    }
+                    if attribute_name.name != "style" {
+                        continue;
+                    }
+                    let transparent = match &attribute.value {
+                        Some(oxc_ast::ast::JSXAttributeValue::ExpressionContainer(container)) => {
+                            match container.expression.as_expression() {
+                                Some(Expression::ObjectExpression(object)) => {
+                                    object.properties.iter().all(|property| {
+                                        matches!(
+                                            property,
+                                            oxc_ast::ast::ObjectPropertyKind::ObjectProperty(entry)
+                                                if !entry.computed
+                                        )
+                                    })
+                                }
+                                _ => false,
+                            }
+                        }
+                        _ => true,
+                    };
+                    style_opaque = !transparent;
+                }
+            }
+        }
+        if style_opaque {
+            self.analysis.custom_properties_unbounded = true;
+        }
         if let oxc_ast::ast::JSXElementName::Identifier(name) = &element.name
             && name.name == "link"
         {
@@ -634,6 +690,15 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
     }
 
     fn visit_assignment_expression(&mut self, assignment: &oxc_ast::ast::AssignmentExpression<'a>) {
+        // A dynamic cssText assignment replaces the whole inline style,
+        // so it can set any custom property; a literal value's mentions
+        // are collected by the string-literal visitor.
+        if let AssignmentTarget::StaticMemberExpression(member) = &assignment.left
+            && member.property.name == "cssText"
+            && !matches!(assignment.right, Expression::StringLiteral(_))
+        {
+            self.analysis.custom_properties_unbounded = true;
+        }
         // Assigning a namespace after declaration carries its identity to
         // the target, matching the declarator alias path.
         if let AssignmentTarget::AssignmentTargetIdentifier(target) = &assignment.left
@@ -661,6 +726,17 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
     }
 
     fn visit_call_expression(&mut self, call: &oxc_ast::ast::CallExpression<'a>) {
+        // A style property API taking a computed name can touch any custom
+        // property, so allocation cannot prove a free name.
+        if let Expression::StaticMemberExpression(member) = &call.callee
+            && matches!(
+                member.property.name.as_str(),
+                "setProperty" | "getPropertyValue" | "removeProperty"
+            )
+            && !matches!(call.arguments.first(), Some(Argument::StringLiteral(_)) | None)
+        {
+            self.analysis.custom_properties_unbounded = true;
+        }
         if let Expression::Identifier(callee) = &call.callee {
             if callee.name == "require" {
                 if let Some(Argument::StringLiteral(literal)) = call.arguments.first() {
@@ -715,12 +791,27 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
 
     fn visit_template_literal(&mut self, template: &oxc_ast::ast::TemplateLiteral<'a>) {
         collect_template_prefixes(template, &mut self.analysis.template_prefixes);
+        for quasi in &template.quasis {
+            if let Some(cooked) = quasi.value.cooked.as_ref() {
+                tw_migrate_css::collect_custom_property_mentions(cooked, &mut self.analysis.custom_properties);
+            }
+        }
         walk::walk_template_literal(self, template);
     }
 
     fn visit_binary_expression(&mut self, expression: &oxc_ast::ast::BinaryExpression<'a>) {
         collect_concat_prefixes(expression, &mut self.analysis.template_prefixes);
         walk::walk_binary_expression(self, expression);
+    }
+
+    /// Any `--name` inside a string literal may name a custom property
+    /// this run would otherwise allocate: a bare property string, or an
+    /// arbitrary-property candidate such as [--font-brand:serif]. Every
+    /// embedded mention reserves; ownership precision is not worth
+    /// chasing call shapes.
+    fn visit_string_literal(&mut self, literal: &oxc_ast::ast::StringLiteral<'a>) {
+        tw_migrate_css::collect_custom_property_mentions(literal.value.as_str(), &mut self.analysis.custom_properties);
+        walk::walk_string_literal(self, literal);
     }
 
     fn visit_identifier_reference(&mut self, identifier: &IdentifierReference<'a>) {
@@ -854,6 +945,9 @@ pub fn source_analysis_json(path: &str, source: &str) -> MigrationResult<String>
             stylesheet_links: Vec::new(),
             stylesheet_links_unverifiable: false,
             renders_style_element: false,
+            injects_markup: false,
+            custom_properties: Vec::new(),
+            custom_properties_unbounded: false,
         },
     };
     collector.visit_program(&parsed.program);
@@ -863,6 +957,8 @@ pub fn source_analysis_json(path: &str, source: &str) -> MigrationResult<String>
     collector.analysis.defines_root_use_css_module = scoping
         .get_binding(scoping.root_scope_id(), "useCssModule".into())
         .is_some_and(|symbol| !collector.use_css_module_symbols.contains(&symbol));
+    collector.analysis.custom_properties.sort();
+    collector.analysis.custom_properties.dedup();
     serde_json::to_string(&collector.analysis).map_err(|error| MigrationError::Serialization {
         message: error.to_string(),
     })
@@ -1083,6 +1179,143 @@ mod tests {
         // Trailing tokens of pre-expression quasis constrain the dynamic
         // class; static tokens and whitespace-terminated quasis do not.
         assert_eq!(parsed["templatePrefixes"], serde_json::json!(["mr-", "p-", "pt-"]));
+    }
+
+    #[test]
+    fn marks_injected_markup_sources() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.tsx",
+                "export const Card = ({ markup }) => <div dangerouslySetInnerHTML={{ __html: markup }} />;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["injectsMarkup"], true);
+    }
+
+    #[test]
+    fn treats_prop_spreads_as_hiding_style_overrides() {
+        let spread: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.tsx",
+                "export const Card = (props) => <div {...props} className=\"x\" />;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(spread["customPropertiesUnbounded"], true);
+
+        // A literal style after the spread pins the value again.
+        let repinned: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.tsx",
+                "export const Card = (props) => <div {...props} style={{ width: 4 }} />;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(repinned["customPropertiesUnbounded"], false);
+    }
+
+    #[test]
+    fn treats_dynamic_css_text_assignments_as_unbounded() {
+        let dynamic: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Theme.ts",
+                "document.documentElement.style.cssText = themeCss;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(dynamic["customPropertiesUnbounded"], true);
+
+        let literal: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Theme.ts",
+                "document.documentElement.style.cssText = \"--font-brand: serif\";",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(literal["customPropertiesUnbounded"], false);
+        assert_eq!(literal["customProperties"], serde_json::json!(["--font-brand"]));
+    }
+
+    #[test]
+    fn treats_dynamic_jsx_styles_as_unbounded_properties() {
+        let dynamic: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.tsx",
+                "export const Card = (props) => <div style={props.style} />;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(dynamic["customPropertiesUnbounded"], true);
+
+        // A literal object is transparent: custom-property keys are
+        // string literals the literal visitor collects.
+        let literal: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.tsx",
+                "export const Card = () => <div style={{ width: 4, \"--font-brand\": \"serif\" }} />;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(literal["customPropertiesUnbounded"], false);
+        assert_eq!(literal["customProperties"], serde_json::json!(["--font-brand"]));
+    }
+
+    #[test]
+    fn collects_custom_property_literals_and_dynamic_property_apis() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Theme.ts",
+                "const token = \"--font-brand\";\ndocument.body.style.setProperty(token, value);\nelement.style.getPropertyValue(\"--gap\");\nconst plain = \"font-brand\";",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            parsed["customProperties"],
+            serde_json::json!(["--font-brand", "--gap"]),
+        );
+
+        // Embedded mentions such as arbitrary-property candidates count.
+        let embedded: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.tsx",
+                "export const Card = () => <div className=\"[--font-brand:serif] p-4\" />;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(embedded["customProperties"], serde_json::json!(["--font-brand"]));
+
+        // Template quasis mention properties the same way.
+        let templated: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Card.tsx",
+                "export const Card = () => <div className={`[--font-other:serif] p-4`} />;",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(templated["customProperties"], serde_json::json!(["--font-other"]));
+        // setProperty received a computed name.
+        assert_eq!(parsed["customPropertiesUnbounded"], true);
+
+        let bounded: serde_json::Value = serde_json::from_str(
+            &super::source_analysis_json(
+                "/p/Theme.ts",
+                "element.style.setProperty(\"--font-brand\", value);\nelement.style.removeProperty(\"--font-brand\");",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(bounded["customPropertiesUnbounded"], false);
     }
 
     #[test]

@@ -231,6 +231,14 @@ export type VueAnalysis =
       /// Decoded static class tokens the raw scan cannot read, reserved
       /// as complete spellings.
       templateClassTokens: string[];
+      /// Decoded static style attribute values for custom-property
+      /// reservations; true when a bound style hides them.
+      templateStyleValues: string[];
+      templateStylesUnverifiable: boolean;
+      /// Custom-property mentions from script blocks, so runtime writes
+      /// reserve names like any other source file's.
+      scriptCustomProperties: string[];
+      scriptCustomPropertiesUnbounded: boolean;
       /// Static hrefs of rendered `<link rel="stylesheet">` template
       /// elements, resolved by spelling reservations like HTML links.
       templateStylesheetLinks: string[];
@@ -277,6 +285,14 @@ interface TemplateState {
   /// Decoded tokens of static class values the raw scan cannot read
   /// (entity-bearing or otherwise unwritable attributes).
   entityClassTokens: string[];
+  /// Decoded static style attribute values, whose inline declarations can
+  /// override custom properties. A bound style is dynamic data.
+  styleAttributeValues: string[];
+  styleAttributesUnverifiable: boolean;
+  /// Custom properties template handler expressions mention or write, so
+  /// allocation cannot claim a name a handler already touches.
+  customProperties: Set<string>;
+  customPropertiesUnbounded: boolean;
   /// Static hrefs of rendered `<link rel="stylesheet">` elements.
   stylesheetLinks: string[];
   /// True when a rendered link's rel or href is dynamic.
@@ -525,6 +541,10 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     expressionReferences: new Set(),
     templatePrefixes: new Set(),
     entityClassTokens: [],
+    styleAttributeValues: [],
+    styleAttributesUnverifiable: false,
+    customProperties: new Set(),
+    customPropertiesUnbounded: false,
     stylesheetLinks: [],
     stylesheetLinksUnverifiable: false,
     expressionPath: scriptLang === "ts" || scriptLang === "tsx" ? "Component.ts" : "Component.js",
@@ -553,6 +573,8 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
   let setupAnalysis: SourceAnalysis | undefined;
   let scriptUsesCssModule = false;
   let scriptHasDynamicImport = false;
+  const scriptCustomProperties: string[] = [];
+  let scriptCustomPropertiesUnbounded = false;
   const scriptVueReferences: string[] = [];
   const scriptVueGlobPatterns: string[] = [];
   const scriptTemplatePrefixes: string[] = [];
@@ -574,6 +596,8 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
       );
       scriptVueGlobPatterns.push(...analysis.vueGlobPatterns);
       scriptTemplatePrefixes.push(...analysis.templatePrefixes);
+      scriptCustomProperties.push(...analysis.customProperties);
+      if (analysis.customPropertiesUnbounded) scriptCustomPropertiesUnbounded = true;
       if (analysis.vueGlobUnverifiable) scriptVueGlobUnverifiable = true;
       return analysis.staticImports;
     } catch {
@@ -691,6 +715,11 @@ export function analyzeVueSource(compiler: VueCompiler, path: string, source: st
     scriptVueGlobUnverifiable,
     templatePrefixes: [...new Set([...state.templatePrefixes, ...scriptTemplatePrefixes])],
     templateClassTokens: [...new Set(state.entityClassTokens)],
+    templateStyleValues: state.styleAttributeValues,
+    templateStylesUnverifiable: state.styleAttributesUnverifiable,
+    scriptCustomProperties: [...scriptCustomProperties, ...state.customProperties],
+    scriptCustomPropertiesUnbounded:
+      scriptCustomPropertiesUnbounded || state.customPropertiesUnbounded,
     templateStylesheetLinks: state.stylesheetLinks,
     templateStylesheetLinksUnverifiable: state.stylesheetLinksUnverifiable,
     hasOpaqueStyleBlocks: opaqueStyleBlocks,
@@ -742,6 +771,20 @@ export function verifyVueSource(
 function visitTemplateNode(source: string, node: TemplateNode, state: TemplateState): void {
   if (node.type === NODE_ELEMENT) {
     if (node.tagType === TAG_SLOT) state.hasSlot = true;
+    // Vue merges class and style from v-bind objects with explicit
+    // attributes instead of replacing them, so a later static style
+    // never pins the value: any spread or bound style stays opaque.
+    for (const prop of node.props ?? []) {
+      if (prop.type === PROP_ATTRIBUTE && prop.name === "style" && prop.value?.content) {
+        state.styleAttributeValues.push(prop.value.content);
+      }
+      if (prop.type === PROP_DIRECTIVE && prop.name === "bind") {
+        const argument = prop.arg?.isStatic === true ? prop.arg.content : undefined;
+        if (prop.arg === undefined || argument === undefined || argument === "style") {
+          state.styleAttributesUnverifiable = true;
+        }
+      }
+    }
     // A rendered stylesheet link loads a sheet like an HTML document
     // link; a bound rel or href resolves at runtime.
     if (node.tag === "link" && node.tagType === TAG_ELEMENT) {
@@ -810,6 +853,8 @@ function visitTemplateNode(source: string, node: TemplateNode, state: TemplateSt
       if (expression?.referencesUseCssModule) state.referencesUseCssModule = true;
       for (const name of expression?.references ?? []) state.expressionReferences.add(name);
       for (const prefix of expression?.templatePrefixes ?? []) state.templatePrefixes.add(prefix);
+      for (const name of expression?.customProperties ?? []) state.customProperties.add(name);
+      if (expression?.customPropertiesUnbounded) state.customPropertiesUnbounded = true;
       if (prop.arg && !prop.arg.isStatic && prop.arg.content) {
         const argExpression = templateExpression(state.expressionPath, prop.arg.content);
         state.moduleClosureBroken ||= argExpression?.usesCssModule ?? true;
@@ -848,7 +893,12 @@ function attributeRemovalStart(source: string, node: TemplateNode, prop: Templat
   return /[\r\n]/.test(source.slice(start, attributeStart)) ? attributeStart : start;
 }
 
-function templateExpression(path: string, source: string): ExpressionAnalysis | undefined {
+type TemplateExpressionAnalysis = ExpressionAnalysis & {
+  customProperties?: string[];
+  customPropertiesUnbounded?: boolean;
+};
+
+function templateExpression(path: string, source: string): TemplateExpressionAnalysis | undefined {
   try {
     return expressionAnalysis(path, source);
   } catch {
@@ -856,7 +906,7 @@ function templateExpression(path: string, source: string): ExpressionAnalysis | 
   }
 }
 
-function templateHandler(source: string): ExpressionAnalysis | undefined {
+function templateHandler(source: string): TemplateExpressionAnalysis | undefined {
   try {
     const analysis = sourceAnalysis(
       "Component.handler.ts",
@@ -871,6 +921,8 @@ function templateHandler(source: string): ExpressionAnalysis | undefined {
       referencesUseCssModule: analysis.hasUnboundUseCssModule,
       references: analysis.unboundReferences,
       templatePrefixes: analysis.templatePrefixes,
+      customProperties: analysis.customProperties,
+      customPropertiesUnbounded: analysis.customPropertiesUnbounded,
     };
   } catch {
     return undefined;

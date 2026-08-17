@@ -5,7 +5,13 @@ import { unifiedDiff } from "./util/diff.ts";
 import { collectFiles, resolveScope, scannerIgnoredPaths } from "./discovery.ts";
 import { parseHtmlSource, TEMPLATE_EXPRESSIONS, TEMPLATE_MARKERS } from "./parser/html.ts";
 import { localHtmlReference, preparePackageHtml } from "./plan/html.ts";
-import { planBatchMigration, sourceAnalysis, stylesheetAnalysis, validateCss } from "./native.ts";
+import {
+  fontFamilyStack,
+  planBatchMigration,
+  sourceAnalysis,
+  stylesheetAnalysis,
+  validateCss,
+} from "./native.ts";
 import {
   indexStylesheetDependents,
   isIntegrityError,
@@ -34,9 +40,12 @@ import {
 } from "./tailwind.ts";
 import {
   acceptedCandidateAliases,
+  scanInlineStyleReservations,
   scanStylesheetReservations,
   spellingReservations,
+  utilitySegment,
 } from "./plan/canonicalize.ts";
+import { appendFontTheme, registerFontTokens } from "./plan/fonts.ts";
 import { importsStylesheet, proveSharedEntry, tailwindEntryCatalog } from "./plan/entry.ts";
 import type { SharedEntryProofs } from "./plan/entry.ts";
 import {
@@ -214,6 +223,7 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
       workspaceRoot,
       sourceFiles.map((file) => file.path),
     ),
+    fontAllocations: new Map(),
   };
   const failures: MigrationFailure[] = [];
   const plans: Plan[] = [];
@@ -232,6 +242,26 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
     const members = groups.get(preparation.tailwind.path) ?? [];
     members.push(preparation);
     groups.set(preparation.tailwind.path, members);
+  }
+  // Every entry's existing font tokens seed the run-wide registry:
+  // emitted theme variables share one runtime namespace, so another
+  // group must not generate an already-owned name for a different stack.
+  // Packages sharing an entry share its tokens, so each entry seeds once.
+  for (const [, members] of groups) {
+    for (const [token, value] of Object.entries(members[0].tailwind.themeTokens)) {
+      if (!token.startsWith("font-")) continue;
+      // A value the stack parser cannot normalize still owns its global
+      // name, and two entries owning one name with different stacks
+      // collapse to opaque ownership; null marks both.
+      const parsed = fontFamilyStack(value);
+      const name = token.replace(/^font-/, "");
+      const stack = parsed && parsed.value;
+      const existing = context.fontAllocations.get(name);
+      context.fontAllocations.set(
+        name,
+        existing === undefined || existing === stack ? stack : null,
+      );
+    }
   }
   for (const [, members] of [...groups].sort(([left], [right]) =>
     left < right ? -1 : left > right ? 1 : 0,
@@ -742,6 +772,54 @@ async function planPreparedGroup(
   const groupFiles = new Map(
     active.flatMap((member) => member.files.map((file) => [file.path, file] as const)),
   );
+  // Inert class-like tokens already present in group sources sit in
+  // Tailwind's scan corpus; a generated font token must never adopt one,
+  // or registration would newly emit CSS for an existing class. Utility
+  // segments cover variant-wrapped spellings such as hover:font-brand.
+  const mentionedSegments = new Set<string>();
+  // Entry-graph sheets join the scan: an @source inline safelist is part
+  // of the effective corpus even when no group file spells it, matching
+  // the media allocator's inline-source handling.
+  const mentionedSources = [
+    ...[...groupFiles.values()].map((file) => file.source),
+    ...entry.graphSources.map((graphSource) => graphSource.source),
+  ];
+  const addSegment = (token: string) => {
+    if (token === "") return;
+    // The important modifier spells the same utility.
+    const segment = utilitySegment(token).replace(/!$/, "");
+    if (segment) mentionedSegments.add(segment);
+  };
+  for (const source of mentionedSources) {
+    for (const token of source.split(/[\s"'`<>=,;{}()\\]+/)) {
+      addSegment(token);
+    }
+    // Tailwind expands one brace group per inline safelist candidate
+    // (font-{brand,display}), so safelist contents expand before the
+    // general tokenizer splits the group apart.
+    for (const inline of source.matchAll(/inline\(([^)]*)\)/g)) {
+      for (const candidate of inline[1].matchAll(/([^\s"',{}]*)\{([^{}]*)\}([^\s"',{}]*)/g)) {
+        for (const option of candidate[2].split(",")) {
+          // Tailwind's range syntax expands numerically: {1..3} emits
+          // every value and {100..300..100} strides by the step, bounded
+          // here like the safelist itself is.
+          const range = /^(\d+)\.\.(\d+)(?:\.\.(\d+))?$/.exec(option);
+          const stride = range === null ? 0 : Number(range[3] ?? "1");
+          if (range !== null && stride > 0) {
+            const from = Number(range[1]);
+            const to = Number(range[2]);
+            let steps = 0;
+            for (let value = Math.min(from, to); value <= Math.max(from, to); value += stride) {
+              addSegment(`${candidate[1]}${value}${candidate[3]}`);
+              if ((steps += 1) >= 1000) break;
+            }
+            continue;
+          }
+          addSegment(`${candidate[1]}${option}${candidate[3]}`);
+        }
+      }
+    }
+  }
   const fileRoots = new Map(
     active.flatMap((member) =>
       member.files.map((file) => [file.path, member.packageRoot] as const),
@@ -819,6 +897,16 @@ async function planPreparedGroup(
         for (const link of parsed.links) {
           if (opaqueStylesheetLink(link.href)) reservations.unbounded = true;
         }
+        // Inline style declarations can override custom properties, so
+        // they join property reservations; templated values are dynamic
+        // data.
+        for (const [index, value] of parsed.styleAttributeValues.entries()) {
+          if (TEMPLATE_MARKERS.test(value)) {
+            reservations.propertiesUnbounded = true;
+            continue;
+          }
+          scanInlineStyleReservations(`${file.path}.style.${index}.css`, value, reservations);
+        }
         // These decoded values never reach Tailwind's raw-text scan: a
         // templated token's static lead reserves as a prefix, a token
         // with no static lead can be any spelling, and a complete
@@ -844,10 +932,26 @@ async function planPreparedGroup(
         // An analyzable script contributes its constrained prefixes and
         // stylesheet imports, and an unanalyzable one turns the group
         // opaque.
+        // Inline event handlers embed script like <script> bodies do; an
+        // unparseable handler leaves its effects unknowable.
+        if (parsed.handlerText.trim() !== "") {
+          try {
+            const handlers = sourceAnalysis(`${file.path}.handlers.js`, parsed.handlerText);
+            for (const prefix of handlers.templatePrefixes) reservations.prefixes.add(prefix);
+            for (const property of handlers.customProperties) {
+              reservations.properties.add(property);
+            }
+            if (handlers.customPropertiesUnbounded) reservations.propertiesUnbounded = true;
+          } catch {
+            reservations.unbounded = true;
+          }
+        }
         if (parsed.scriptText.trim() !== "") {
           try {
             const script = sourceAnalysis(`${file.path}.inline.js`, parsed.scriptText);
             for (const prefix of script.templatePrefixes) reservations.prefixes.add(prefix);
+            for (const property of script.customProperties) reservations.properties.add(property);
+            if (script.customPropertiesUnbounded) reservations.propertiesUnbounded = true;
             opaqueStylesheetImports(script.imports);
           } catch {
             reservations.unbounded = true;
@@ -919,6 +1023,17 @@ async function planPreparedGroup(
       // Decoded class tokens the raw scan cannot read reserve complete
       // spellings, matching the HTML entity rule.
       for (const token of file.templateClassTokens ?? []) reservations.names.add(token);
+      // Script property writes reserve names like any other source, and
+      // static style attributes join property reservations; a bound
+      // style hides its declarations.
+      for (const property of file.sourceCustomProperties ?? []) {
+        reservations.properties.add(property);
+      }
+      if (file.sourceCustomPropertiesUnbounded === true) reservations.propertiesUnbounded = true;
+      if (file.templateStylesUnverifiable === true) reservations.propertiesUnbounded = true;
+      for (const [index, value] of (file.templateStyleValues ?? []).entries()) {
+        scanInlineStyleReservations(`${file.path}.style.${index}.css`, value, reservations);
+      }
       // Rendered template stylesheet links load sheets like HTML links.
       if (file.templateStylesheetLinksUnverifiable === true) reservations.unbounded = true;
       for (const link of file.templateStylesheetLinks ?? []) {
@@ -936,10 +1051,14 @@ async function planPreparedGroup(
       for (const prefix of analysis.templatePrefixes) {
         reservations.prefixes.add(prefix);
       }
+      for (const property of analysis.customProperties) reservations.properties.add(property);
+      if (analysis.customPropertiesUnbounded) reservations.propertiesUnbounded = true;
       opaqueStylesheetImports(analysis.imports);
       // A rendered <style> element carries selectors this analysis never
-      // reads, matching the HTML hasStyle rule.
+      // reads, matching the HTML hasStyle rule, and injected markup
+      // carries classes the scan corpus never holds, matching v-html.
       if (analysis.rendersStyleElement) reservations.unbounded = true;
+      if (analysis.injectsMarkup) reservations.unbounded = true;
       // A rendered stylesheet link loads a sheet like an HTML document
       // link: a remote, unresolved, or other-entry target is opaque.
       if (analysis.stylesheetLinksUnverifiable) reservations.unbounded = true;
@@ -1100,6 +1219,9 @@ async function planPreparedGroup(
   const blocked: BlockedRules = new Map();
   let candidateAliases: Record<string, string> | undefined;
   let canonicalized = false;
+  let fontTokens: Record<string, string> = {};
+  let fontFailures = new Set<string>();
+  let composeEntry: (tokens: Record<string, string>) => string = () => entry.css;
 
   // The whole group plans as one native batch, so cross-member conflicts
   // on shared consumers go through the same analysis as conflicts inside
@@ -1242,7 +1364,15 @@ async function planPreparedGroup(
 
       const currentExtraction = names !== undefined ? { names, generated } : undefined;
       const used = currentExtraction ? usedGeneratedDefinitions(currentExtraction, plan) : [];
-      augmented = currentExtraction ? appendMediaDefinitions(composed, used) : composed;
+      // Entry additions follow the RFC order: planner-owned moved
+      // definitions, the generated font theme block, generated media
+      // custom variants. The composer is kept so post-loop token pruning
+      // can rebuild the entry without another planning pass.
+      composeEntry = (tokens) => {
+        const withFonts = appendFontTheme(composed, tokens);
+        return currentExtraction ? appendMediaDefinitions(withFonts, used) : withFonts;
+      };
+      augmented = composeEntry(fontTokens);
       let system: DesignSystem;
       try {
         system = augmented === entry.css ? entry.designSystem : await entry.loadWith(augmented);
@@ -1281,8 +1411,7 @@ async function planPreparedGroup(
       // A candidate Tailwind refuses to compile retains its owning rule(s)
       // instead of aborting the run: block those rules and replan until
       // every applied candidate compiles.
-      const replanSystem = currentExtraction ? system : entry.designSystem;
-      const failing = invalidCandidates(replanSystem, plan.candidates);
+      const failing = invalidCandidates(system, plan.candidates);
       if (failing.length > 0) {
         if (!accumulateBlockedRules(blocked, plan, failing)) {
           throw new Error(`Tailwind did not generate CSS for candidate: ${failing[0]}`);
@@ -1295,17 +1424,84 @@ async function planPreparedGroup(
       // rendered by the planner on the next pass.
       if (!canonicalized) {
         canonicalized = true;
-        const aliases = acceptedCandidateAliases(
-          replanSystem,
-          plan.candidateProbes ?? [],
+        const aliases = acceptedCandidateAliases(system, plan.candidateProbes ?? [], reservations);
+        // Font registration shares the single bounded replan. An
+        // unwritable entry may still reuse an existing token because
+        // reuse needs no entry edit; only new token generation is gated.
+        const fonts = await registerFontTokens({
+          system,
+          entryCss: augmented,
+          loadWith: entry.loadWith,
+          themeTokens: entry.themeTokens,
+          probes: plan.fontFamilyProbes ?? [],
+          corpus: [...new Set([...plan.candidates, ...(plan.candidateProbes ?? [])])],
           reservations,
-        );
+          existingAliases: aliases,
+          generate: groupWritable,
+          mentionedSegments,
+          referenceTokens: entry.referenceTokens,
+          globalAllocations: context.fontAllocations,
+        });
+        Object.assign(aliases, fonts.aliases);
+        fontTokens = fonts.tokens;
+        fontFailures = fonts.failures;
+        for (const [name, value] of Object.entries(fonts.tokens)) {
+          context.fontAllocations.set(name, value);
+        }
         if (Object.keys(aliases).length > 0) {
           candidateAliases = aliases;
           continue planning;
         }
       }
       break;
+    }
+
+    // Retained rules whose font stacks needed a token explain why: an
+    // unwritable entry cannot hold one, and a failed registration could
+    // not prove one safe. A rule that converted with its arbitrary
+    // spelling needs no explanation.
+    const ruleStatus = new Map(
+      plan.rules.map((rule) => [
+        `${rule.stylesheet}:${rule.ruleId.start}-${rule.ruleId.end}`,
+        rule.status,
+      ]),
+    );
+    const warned = new Set<string>();
+    for (const probe of plan.fontFamilyProbes ?? []) {
+      if (probe.firstFamily.kind !== "name") continue;
+      // A probe that gained an alias was not blocked by registration; its
+      // rule retains for unrelated reasons the existing warnings explain.
+      if (candidateAliases?.[probe.candidate] !== undefined) continue;
+      const ruleKey = `${probe.stylesheet}:${probe.ruleId.start}-${probe.ruleId.end}`;
+      if (ruleStatus.get(ruleKey) !== "retained" || warned.has(ruleKey)) continue;
+      const failed = fontFailures.has(probe.candidate);
+      if (groupWritable && !failed) continue;
+      warned.add(ruleKey);
+      plan.warnings.push({
+        code: groupWritable ? "font-theme-registration-failed" : "font-theme-registration-required",
+        file: sheets[probe.stylesheet].stylesheet.cssPath,
+        start: probe.authoredSpan.start,
+        end: probe.authoredSpan.end,
+        message: groupWritable
+          ? "A safe Tailwind font theme token could not be registered, so the rule is retained."
+          : "The font family requires a Tailwind theme token, but the Tailwind entry cannot be edited, so the rule is retained.",
+      });
+    }
+
+    // A generated token stays in the entry only while an applied
+    // candidate references its utility; removing an unused token cannot
+    // affect an applied candidate, so no further planning pass runs.
+    if (Object.keys(fontTokens).length > 0) {
+      const applied = new Set(
+        plan.candidates.map((candidate) => utilitySegment(candidate).replace(/!$/, "")),
+      );
+      const pruned = Object.fromEntries(
+        Object.entries(fontTokens).filter(([name]) => applied.has(`font-${name}`)),
+      );
+      if (Object.keys(pruned).length !== Object.keys(fontTokens).length) {
+        fontTokens = pruned;
+        augmented = composeEntry(pruned);
+      }
     }
 
     for (const [index, rules] of blocked) {
