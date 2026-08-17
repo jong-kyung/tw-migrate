@@ -16,9 +16,9 @@ license = "MIT"
 
 [workspace.dependencies]
 insta = "=1.48.0"
-napi = { version = "3.12.0", default-features = false, features = ["napi9"] }
-napi-build = "2.4.0"
-napi-derive = "3.6.2"
+napi = { version = "3.12.1", default-features = false, features = ["napi9"] }
+napi-build = "2.4.1"
+napi-derive = "3.6.3"
 oxc-css-parser = "0.0.11"
 oxc_allocator = "0.144.0"
 oxc_ast = "0.144.0"
