@@ -54,7 +54,7 @@ test("native endpoint error routing stays byte-exact", () => {
   );
   assertNativeError(
     () => expressionAnalysis("app.js", "const ="),
-    'Failed to parse app.js: Diagnostics([OxcDiagnostic { inner: OxcDiagnosticInner { message: "Unexpected token", labels: One([LabeledSpan { label: None, span: SourceSpan { offset: SourceOffset(0), length: 5 }, primary: false }]), help: None, note: None, severity: Error, code: OxcCode { scope: None, number: None }, url: None } }])',
+    'Failed to parse app.js: Diagnostics([OxcDiagnostic { inner: OxcDiagnosticInner { message: "Unexpected token", labels: [LabeledSpan { label: None, span: SourceSpan { offset: 0, length: 5 }, primary: false }], help: None, note: None, severity: Error, code: OxcCode { scope: None, number: None }, url: None } }])',
   );
   assertNativeError(() => sourceAnalysis("app.js", "const ="), "Failed to parse app.js");
   assertNativeError(
