@@ -1,10 +1,23 @@
 use super::*;
 
+/// One stylesheet's slice of a batch pass: the shared request is borrowed,
+/// while `sheet`, the evolving Tailwind entry source, and the per-pass file
+/// snapshots are owned because batch planning rewrites them between passes.
+pub(super) struct PlanRequest<'a> {
+    pub(super) batch: &'a BatchPlanRequest,
+    pub(super) sheet: BatchStylesheet,
+    pub(super) tailwind_source: Option<String>,
+    pub(super) files: Vec<SourceFile>,
+}
+
+fn default_entry_writable() -> bool {
+    true
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct PlanRequest {
-    #[serde(flatten)]
-    pub(super) sheet: BatchStylesheet,
+pub(super) struct BatchPlanRequest {
+    pub(super) stylesheets: Vec<BatchStylesheet>,
     #[serde(default)]
     pub(super) tailwind_path: Option<String>,
     #[serde(default)]
@@ -35,33 +48,6 @@ pub(super) struct PlanRequest {
     /// after prefixing and before HTML context variants wrap the spelling,
     /// so conditional contexts render the canonical name inside their
     /// generated variants; empty on the first planning pass.
-    #[serde(default)]
-    pub(super) candidate_aliases: HashMap<String, String>,
-    pub(super) files: Vec<SourceFile>,
-}
-
-fn default_entry_writable() -> bool {
-    true
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct BatchPlanRequest {
-    pub(super) stylesheets: Vec<BatchStylesheet>,
-    #[serde(default)]
-    pub(super) tailwind_path: Option<String>,
-    #[serde(default)]
-    pub(super) tailwind_source: Option<String>,
-    #[serde(default)]
-    pub(super) utility_prefix: Option<String>,
-    #[serde(default)]
-    pub(super) theme_tokens: HashMap<String, String>,
-    #[serde(default)]
-    pub(super) media_names: Option<HashMap<String, String>>,
-    #[serde(default = "default_entry_writable")]
-    pub(super) entry_writable: bool,
-    #[serde(default = "default_entry_writable")]
-    pub(super) global_at_rule_moves: bool,
     #[serde(default)]
     pub(super) candidate_aliases: HashMap<String, String>,
     pub(super) files: Vec<SourceFile>,

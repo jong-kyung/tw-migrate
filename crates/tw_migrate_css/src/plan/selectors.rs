@@ -3,12 +3,14 @@ use std::collections::HashSet;
 use oxc_css_parser::{
     Syntax,
     ast::{
-        CombinatorKind, ComplexSelectorChild, CompoundSelector, InterpolableIdent, SimpleSelector,
-        Statement, TypeSelector,
+        CombinatorKind, ComplexSelectorChild, CompoundSelector, SimpleSelector, Statement,
+        TypeSelector,
     },
 };
 
-use crate::{arbitrary::encode as encode_arbitrary, at_rules::parse_css};
+use crate::{
+    arbitrary::encode as encode_arbitrary, at_rules::parse_css, stylesheet_analysis::literal_ident,
+};
 
 use super::{ModuleRelationship, Relation, RelationshipStep, SelectorKey};
 
@@ -361,11 +363,4 @@ fn arbitrary_selector_variant(
         "&",
     );
     Some(format!("[{}]", encode_arbitrary(&condition)))
-}
-
-pub(super) fn literal_ident<'a>(ident: &'a InterpolableIdent<'a>) -> Option<&'a str> {
-    match ident {
-        InterpolableIdent::Literal(ident) => Some(ident.name),
-        _ => None,
-    }
 }

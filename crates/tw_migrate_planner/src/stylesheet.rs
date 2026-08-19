@@ -114,21 +114,15 @@ fn prefix_rule_candidates(rules: &mut [RulePlan], prefix: &str) {
     }
 }
 
-pub(super) fn batch_stylesheet_request(
-    batch: &BatchPlanRequest,
+pub(super) fn batch_stylesheet_request<'a>(
+    batch: &'a BatchPlanRequest,
     stylesheet: &BatchStylesheet,
     files: Vec<SourceFile>,
-) -> PlanRequest {
+) -> PlanRequest<'a> {
     PlanRequest {
+        batch,
         sheet: stylesheet.clone(),
-        tailwind_path: batch.tailwind_path.clone(),
         tailwind_source: batch.tailwind_source.clone(),
-        utility_prefix: batch.utility_prefix.clone(),
-        theme_tokens: batch.theme_tokens.clone(),
-        media_names: batch.media_names.clone(),
-        entry_writable: batch.entry_writable,
-        global_at_rule_moves: batch.global_at_rule_moves,
-        candidate_aliases: batch.candidate_aliases.clone(),
         files,
     }
 }
@@ -153,15 +147,16 @@ fn parse_request_rules(
     };
     // Vue keyframes and at-rules stay inside their scoped block; moving them
     // to the Tailwind entry would change their scope.
-    let can_move_at_rules = request.entry_writable
+    let can_move_at_rules = request.batch.entry_writable
         && vue_masked.is_none()
         && request.sheet.syntax == StylesheetSyntax::Css
         && request
+            .batch
             .tailwind_path
             .as_ref()
             .zip(request.tailwind_source.as_ref())
             .is_some_and(|(path, _)| path != &request.sheet.css_path);
-    let relative_urls_stable = request.tailwind_path.as_ref().is_some_and(|path| {
+    let relative_urls_stable = request.batch.tailwind_path.as_ref().is_some_and(|path| {
         Path::new(path).parent() == Path::new(&request.sheet.css_path).parent()
     });
     let keyframe_scope = request
@@ -186,8 +181,8 @@ fn parse_request_rules(
             &request.sheet.css_path,
             keyframe_scope,
             analysis_source,
-            &request.theme_tokens,
-            request.media_names.as_ref(),
+            &request.batch.theme_tokens,
+            request.batch.media_names.as_ref(),
             ParseOptions {
                 syntax: analysis_syntax,
                 is_module,
@@ -195,7 +190,7 @@ fn parse_request_rules(
                 can_move_global_at_rules: request
                     .sheet
                     .global_at_rule_moves
-                    .unwrap_or(request.global_at_rule_moves),
+                    .unwrap_or(request.batch.global_at_rule_moves),
                 relative_urls_stable,
             },
         )
@@ -309,13 +304,18 @@ fn parse_request_rules(
         );
     }
     if let Some(prefix) = request
+        .batch
         .utility_prefix
         .as_deref()
         .filter(|prefix| !prefix.is_empty())
     {
         prefix_rule_candidates(&mut parsed.rules, prefix);
     }
-    apply_candidate_aliases(&mut parsed.rules, &request.candidate_aliases, &parsed.keyframes);
+    apply_candidate_aliases(
+        &mut parsed.rules,
+        &request.batch.candidate_aliases,
+        &parsed.keyframes,
+    );
     Ok((is_module, parsed, vue_masked))
 }
 
@@ -339,8 +339,8 @@ fn parse_vue_rules(
             &request.sheet.css_path,
             keyframe_scope,
             analysis,
-            &request.theme_tokens,
-            request.media_names.as_ref(),
+            &request.batch.theme_tokens,
+            request.batch.media_names.as_ref(),
             ParseOptions {
                 syntax: if block.analysis_source.is_some() {
                     Syntax::Css
@@ -689,7 +689,7 @@ pub(super) fn plan_request(
             &request_properties,
             &preserved_module_classes,
             module_rule_classes.as_ref(),
-            request.utility_prefix.as_deref(),
+            request.batch.utility_prefix.as_deref(),
             request.sheet.vue_unscoped,
             request.sheet.vue_module,
         )?;
@@ -939,6 +939,7 @@ pub(super) fn plan_request(
     }
     if (!moved_keyframes.is_empty() || !moved_global_at_rules.is_empty())
         && let Some((tailwind_path, tailwind_source)) = request
+            .batch
             .tailwind_path
             .as_ref()
             .zip(request.tailwind_source.as_ref())

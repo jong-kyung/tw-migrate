@@ -363,7 +363,12 @@ fn authored_media_wrapper_key(at_rule: &AtRule<'_>, source: &str) -> Option<Stri
     if slot.name.name != "slot" || slot.block.is_some() {
         return None;
     }
-    let query = at_rule_query(media, source, "media")?;
+    single_unit_key(at_rule_query(media, source, "media")?)
+}
+
+/// The normalized key of a query that is exactly one generated-variant unit:
+/// a whole-condition component, or a component list with a single entry.
+fn single_unit_key(query: &str) -> Option<String> {
     match parse_media_condition(query)? {
         ParsedMediaCondition::Whole(component) => Some(component.key),
         ParsedMediaCondition::Components(components) => {
@@ -387,51 +392,31 @@ pub fn media_probe_key_json(css: &str) -> MigrationResult<String> {
             message: format!("Failed to parse probe CSS: {error}"),
         }
     })?;
-    let mut media_query: Option<&str> = None;
-    for statement in &parsed.statements {
-        let Statement::AtRule(at_rule) = statement else {
-            // A top-level style rule means the expansion is not a pure
-            // media wrapper.
-            return serde_json::to_string(&Option::<String>::None).map_err(|error| {
-                MigrationError::Serialization {
-                    message: error.to_string(),
-                }
-            });
-        };
-        let Some(block) = &at_rule.block else {
-            return serde_json::to_string(&Option::<String>::None).map_err(|error| {
-                MigrationError::Serialization {
-                    message: error.to_string(),
-                }
-            });
-        };
-        // The wrapper must contain exactly the probe rule with its selector
-        // untouched: a nested at-rule means more than one media level, and
-        // any qualified or combined selector means the variant re-scopes the
-        // utility beyond the media condition, so reusing it for a plain
-        // condition would change when the style applies.
-        let pure_wrapper = match block.statements.as_slice() {
-            [Statement::QualifiedRule(rule)] => is_bare_class_rule(rule),
-            _ => false,
-        };
-        if at_rule.name.name != "media" || media_query.is_some() || !pure_wrapper {
-            return serde_json::to_string(&Option::<String>::None).map_err(|error| {
-                MigrationError::Serialization {
-                    message: error.to_string(),
-                }
-            });
-        }
-        media_query = at_rule_query(at_rule, css, "media");
-    }
-    let key = media_query.and_then(|query| match parse_media_condition(query)? {
-        ParsedMediaCondition::Whole(component) => Some(component.key),
-        ParsedMediaCondition::Components(components) => {
-            let [component] = components.as_slice() else {
+    let key = (|| {
+        let mut media_query: Option<&str> = None;
+        for statement in &parsed.statements {
+            let Statement::AtRule(at_rule) = statement else {
+                // A top-level style rule means the expansion is not a pure
+                // media wrapper.
                 return None;
             };
-            Some(component.key.clone())
+            let block = at_rule.block.as_ref()?;
+            // The wrapper must contain exactly the probe rule with its
+            // selector untouched: a nested at-rule means more than one media
+            // level, and any qualified or combined selector means the variant
+            // re-scopes the utility beyond the media condition, so reusing it
+            // for a plain condition would change when the style applies.
+            let pure_wrapper = match block.statements.as_slice() {
+                [Statement::QualifiedRule(rule)] => is_bare_class_rule(rule),
+                _ => false,
+            };
+            if at_rule.name.name != "media" || media_query.is_some() || !pure_wrapper {
+                return None;
+            }
+            media_query = at_rule_query(at_rule, css, "media");
         }
-    });
+        single_unit_key(media_query?)
+    })();
     serde_json::to_string(&key).map_err(|error| MigrationError::Serialization {
         message: error.to_string(),
     })

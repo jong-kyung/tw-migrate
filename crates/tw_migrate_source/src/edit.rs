@@ -1,6 +1,4 @@
-use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone)]
 pub struct Edit {
     pub start: usize,
     pub end: usize,

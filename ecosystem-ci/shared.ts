@@ -1,10 +1,13 @@
 import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { hash } from "node:crypto";
+import { once } from "node:events";
 import { closeSync, openSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import net from "node:net";
 import { isAbsolute, relative } from "node:path";
+
+import type { RunningServer } from "./types.ts";
 
 // Windows resolves bare `npm`/`pnpm`/`npx`/`corepack` to a `.cmd` shim that
 // spawn() can only execute through a shell.
@@ -71,32 +74,18 @@ export async function waitForChild(
   child: ChildProcess,
   { timeoutMs }: { timeoutMs: number },
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  const timedOut = Symbol("timed out");
-  let timer: NodeJS.Timeout | undefined;
-  const outcome = new Promise<{
-    error?: Error;
-    code?: number | null;
-    signal?: NodeJS.Signals | null;
-  }>((resolveRun) => {
-    child.once("error", (error) => resolveRun({ error }));
-    child.once("exit", (code, signal) => resolveRun({ code, signal }));
-  });
-  const result = await Promise.race([
-    outcome,
-    new Promise<typeof timedOut>((resolveTimeout) => {
-      timer = setTimeout(() => resolveTimeout(timedOut), timeoutMs);
-    }),
-  ]);
-  clearTimeout(timer);
-  if (result !== timedOut) {
-    if (result.error) throw result.error;
-    return { code: result.code ?? null, signal: result.signal ?? null };
+  try {
+    const [code = null, signal = null] = await once(child, "exit", {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    return { code, signal };
+  } catch (error) {
+    if (!(error instanceof Error && error.name === "AbortError")) throw error;
+    // terminateTree is internally bounded (two 3-second waits) and always
+    // settles, so no extra teardown timeout is needed here.
+    await terminateTree(child);
+    throw new Error(`command timed out after ${timeoutMs}ms`);
   }
-
-  // terminateTree is internally bounded (two 3-second waits) and always
-  // settles, so no extra teardown timeout is needed here.
-  await terminateTree(child);
-  throw new Error(`command timed out after ${timeoutMs}ms`);
 }
 
 export async function run(
@@ -146,4 +135,57 @@ export async function waitForHttpOk(
     await new Promise((resolveWait) => setTimeout(resolveWait, 200));
   }
   throw new Error(`${description} readiness timed out`);
+}
+
+/// Spawn an HTTP server child with output appended to `logPath`, wait until
+/// `readyUrl` answers OK, and return the server with an idempotent stop that
+/// terminates the process tree and closes the log. Readiness failure tears
+/// the child down before rethrowing.
+export async function startHttpServerProcess(
+  command: string,
+  args: string[],
+  {
+    cwd,
+    env,
+    logPath,
+    url,
+    readyUrl = url,
+    timeoutMs,
+    description,
+  }: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    logPath: string;
+    url: string;
+    readyUrl?: string;
+    timeoutMs: number;
+    description: string;
+  },
+): Promise<RunningServer> {
+  const log = openSync(logPath, "a");
+  const child = spawn(command, args, {
+    cwd,
+    detached: process.platform !== "win32",
+    env,
+    shell: command.endsWith(".cmd"),
+    windowsHide: true,
+    stdio: ["ignore", log, log],
+  });
+  try {
+    await waitForHttpOk(readyUrl, child, timeoutMs, description);
+  } catch (error) {
+    await terminateTree(child);
+    closeSync(log);
+    throw error;
+  }
+  let stopped = false;
+  return {
+    url,
+    async stop() {
+      if (stopped) return;
+      stopped = true;
+      await terminateTree(child);
+      closeSync(log);
+    },
+  };
 }

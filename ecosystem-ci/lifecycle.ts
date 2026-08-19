@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
-import type { ChildProcess } from "node:child_process";
-import { closeSync, openSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import type { Stats } from "node:fs";
 import {
   appendFile,
@@ -33,8 +31,7 @@ import {
   platformCommand,
   run,
   sha256,
-  terminateTree,
-  waitForHttpOk,
+  startHttpServerProcess,
 } from "./shared.ts";
 import type {
   CaptureArtifact,
@@ -100,15 +97,12 @@ export const externalLifecycleTimeoutMs = 10 * 60_000;
 
 // Windows runners expose TEMP as an 8.3 short path, which crashes libuv
 // fs-event watchers (dev servers) with a prefix assertion; watch long paths.
-export async function temporaryDirectory(prefix: string): Promise<string> {
+async function temporaryDirectory(prefix: string): Promise<string> {
   return mkdtemp(join(await realpath(tmpdir()), prefix));
 }
 
-export async function artifactAllowlist(
-  root: string,
-  entries: string[],
-  maxBytes = 100 * 1024 * 1024,
-): Promise<string[]> {
+export async function artifactAllowlist(root: string, entries: string[]): Promise<string[]> {
+  const maxBytes = 100 * 1024 * 1024;
   root = resolve(root);
   const canonicalRoot = await realpath(root);
   const paths: string[] = [];
@@ -154,7 +148,7 @@ export function assertExpectedChangedFiles(
 // emptied whole as before. The comment keeps each block non-empty because
 // @vue/compiler-sfc drops empty blocks from the descriptor, which would strip
 // the `$style` injection a `<style module>` template binding depends on.
-export function withheldStyles(project: ControlledProject, source: string): string {
+function withheldStyles(project: ControlledProject, source: string): string {
   if (project.runtime !== "vue-vite") return "";
   return source.replace(/(<style\b[^>]*>)[\s\S]*?(<\/style>)/g, "$1/* withheld */$2");
 }
@@ -196,30 +190,6 @@ function packageManagerInvocation(
   return { command: platformCommand("corepack"), args: [`${manager}@${version}`, ...args] };
 }
 
-async function waitForServer(
-  child: ChildProcess,
-  log: number,
-  port: number,
-  description: string,
-  timeoutMs: number,
-): Promise<RunningServer> {
-  const url = `http://127.0.0.1:${port}`;
-  try {
-    await waitForHttpOk(url, child, timeoutMs, description);
-  } catch (error) {
-    await terminateTree(child);
-    closeSync(log);
-    throw error;
-  }
-  return {
-    url,
-    async stop() {
-      await terminateTree(child);
-      closeSync(log);
-    },
-  };
-}
-
 async function startServer(
   project: ProbedProject,
   cwd: string,
@@ -228,23 +198,19 @@ async function startServer(
   mode: "dev" | "preview" = "dev",
 ): Promise<RunningServer> {
   const port = await availablePort();
-  const npm = platformCommand("npm");
   const args =
     mode === "preview"
       ? ["run", "preview", "--", "--host", "127.0.0.1", "--port", String(port), "--strictPort"]
       : "runtime" in project && project.runtime === "next"
         ? ["run", "dev", "--", "--hostname", "127.0.0.1", "--port", String(port)]
         : ["run", "dev", "--", "--host", "127.0.0.1", "--port", String(port), "--strictPort"];
-  const logPath = join(artifactRoot, `${phase}-server.log`);
-  const log = openSync(logPath, "a");
-  const child = spawn(npm, args, {
+  return startHttpServerProcess(platformCommand("npm"), args, {
     cwd,
-    detached: process.platform !== "win32",
-    shell: npm.endsWith(".cmd"),
-    windowsHide: true,
-    stdio: ["ignore", log, log],
+    logPath: join(artifactRoot, `${phase}-server.log`),
+    url: `http://127.0.0.1:${port}`,
+    timeoutMs: 60_000,
+    description: `${phase} server`,
   });
-  return waitForServer(child, log, port, `${phase} server`, 60_000);
 }
 
 export function externalEnvironment(): NodeJS.ProcessEnv {
@@ -283,17 +249,14 @@ async function startExternalServer(
     ...separator,
     ...serverArgs,
   ]);
-  const logPath = join(artifactRoot, `${phase}-server.log`);
-  const log = openSync(logPath, "a");
-  const child = spawn(invocation.command, invocation.args, {
+  return startHttpServerProcess(invocation.command, invocation.args, {
     cwd,
-    detached: process.platform !== "win32",
     env: externalEnvironment(),
-    shell: invocation.command.endsWith(".cmd"),
-    windowsHide: true,
-    stdio: ["ignore", log, log],
+    logPath: join(artifactRoot, `${phase}-server.log`),
+    url: `http://127.0.0.1:${port}`,
+    timeoutMs: 90_000,
+    description: `${phase} external server`,
   });
-  return waitForServer(child, log, port, `${phase} external server`, 90_000);
 }
 
 async function checkoutExternalProject(
@@ -461,7 +424,7 @@ async function readMigrationPaths(root: string, paths: string[]): Promise<Record
   );
 }
 
-export async function clearGeneratedCaches(root: string): Promise<void> {
+async function clearGeneratedCaches(root: string): Promise<void> {
   await Promise.all(
     caches.map((path) =>
       rm(join(root, path), {
@@ -700,10 +663,7 @@ function caseArtifactNames(project: ProbedProject): string[] {
   return [
     "phase-ledger.json",
     "failure.log",
-    "install.log",
-    "publish.log",
-    "registry-bootstrap.log",
-    "registry-install.log",
+    ...installLogNames,
     "first-report.json",
     "second-report.json",
     "source.diff",
@@ -919,13 +879,15 @@ export async function runLifecycle({
       const module = await import(
         `${pathToFileURL(await installedEntrypoint(installedRoot, "main")).href}?case=${Date.now()}`
       );
-      const first = await module.migrate({
-        cwd: driverRoot,
-        ...(project.scope === "workspaces"
+      const scopeOptions =
+        project.scope === "workspaces"
           ? { workspaces: true }
           : project.scope === "package"
             ? {}
-            : { styleFile: project.source.path }),
+            : { styleFile: project.source.path };
+      const first = await module.migrate({
+        cwd: driverRoot,
+        ...scopeOptions,
         write: true,
       });
       await writeFile(
@@ -939,11 +901,7 @@ export async function runLifecycle({
       const treeBeforeSecond = await snapshotMigrationSources(driverRoot);
       const second = await module.migrate({
         cwd: driverRoot,
-        ...(project.scope === "workspaces"
-          ? { workspaces: true }
-          : project.scope === "package"
-            ? {}
-            : { styleFile: project.source.path }),
+        ...scopeOptions,
         write: true,
       });
       const treeAfterSecond = await snapshotMigrationSources(driverRoot);

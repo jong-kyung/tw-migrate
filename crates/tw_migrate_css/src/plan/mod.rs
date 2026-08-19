@@ -21,7 +21,8 @@ use crate::{
 mod selectors;
 
 pub use selectors::{ShadowIndex, index_shadow_selectors};
-use selectors::{declaration_value, literal_ident, module_relationship_match, selector_match};
+use crate::stylesheet_analysis::literal_ident;
+use selectors::{declaration_value, module_relationship_match, selector_match};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Relation {
