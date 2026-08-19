@@ -480,7 +480,7 @@ fn static_ident_text(value: &InterpolableIdent<'_>) -> Option<String> {
     }
 }
 
-fn literal_ident<'a>(value: &'a InterpolableIdent<'a>) -> Option<&'a str> {
+pub(crate) fn literal_ident<'a>(value: &'a InterpolableIdent<'a>) -> Option<&'a str> {
     let InterpolableIdent::Literal(value) = value else {
         return None;
     };

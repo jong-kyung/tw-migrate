@@ -1,10 +1,8 @@
-import { spawn } from "node:child_process";
-import { closeSync, openSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
 
-import { availablePort, terminateTree, waitForHttpOk } from "./shared.ts";
+import { availablePort, startHttpServerProcess } from "./shared.ts";
 import type { RunningServer } from "./types.ts";
 
 const require = createRequire(import.meta.url);
@@ -72,35 +70,15 @@ export async function startRegistry({
   await writeFile(configPath, registryConfig({ storage, allowPublish }));
   const port = await availablePort();
   const url = `http://127.0.0.1:${port}`;
-  const log = openSync(logPath, "a");
-  const child = spawn(
-    process.execPath,
-    [verdaccioBin, "--config", configPath, "--listen", `127.0.0.1:${port}`],
-    {
-      detached: process.platform !== "win32",
-      stdio: ["ignore", log, log],
-      windowsHide: true,
-    },
-  );
-
   try {
-    await waitForHttpOk(`${url}/-/ping`, child, timeoutMs, "registry");
+    return await startHttpServerProcess(
+      process.execPath,
+      [verdaccioBin, "--config", configPath, "--listen", `127.0.0.1:${port}`],
+      { logPath, url, readyUrl: `${url}/-/ping`, timeoutMs, description: "registry" },
+    );
   } catch (error) {
-    await terminateTree(child);
-    closeSync(log);
     const output = await readFile(logPath, "utf8").catch(() => "");
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`${message}\nregistry log: ${logPath}\n${output}`);
   }
-
-  let stopped = false;
-  return {
-    url,
-    async stop() {
-      if (stopped) return;
-      stopped = true;
-      await terminateTree(child);
-      closeSync(log);
-    },
-  };
 }

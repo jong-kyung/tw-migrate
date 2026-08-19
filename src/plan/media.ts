@@ -3,8 +3,7 @@
 // The native collection pass reports deduplicated generated-variant units
 // per package; this module combines every package collection of one entry
 // group into a single fixed key-to-name map before any consumer candidate
-// is produced. Extraction stays disabled until entry augmentation lands, so
-// nothing calls this from the live planning flow yet.
+// is produced.
 
 import { collectMediaConditions, mediaProbeKey } from "../native.ts";
 import type { LoadedTailwind, Plan, StylesheetEntry } from "../types.ts";
@@ -50,17 +49,11 @@ export interface ResolvedMediaName {
   kind: "builtin" | "breakpoint" | "adopted" | "generated";
 }
 
-export interface MediaNameResolution {
-  /// Key to resolved name, in sorted key order. Only `generated` entries
-  /// emit a definition.
-  names: Map<string, ResolvedMediaName>;
-  /// Keys whose names could not escape existing owners; these conditions
-  /// keep the arbitrary-variant fallback.
-  fallbacks: Set<string>;
-}
-
 /**
- * Resolve one fixed name per key across a complete entry group.
+ * Resolve one fixed name per key across a complete entry group: key to
+ * resolved name, in sorted key order. Only `generated` entries emit a
+ * definition; a key absent from the map could not escape existing owners
+ * and keeps the arbitrary-variant fallback.
  *
  * Resolution follows the RFC order: a built-in candidate with a verified
  * effective expansion, an existing breakpoint matched by exact value and
@@ -77,7 +70,7 @@ export function resolveMediaNames(
   themeTokens: Record<string, string>,
   probes: MediaProbes,
   reservedNames: Iterable<string> = [],
-): MediaNameResolution {
+): Map<string, ResolvedMediaName> {
   const components = mergeComponents(collections);
   const authoredKeysByName = mergeAuthoredVariants(collections);
 
@@ -105,7 +98,6 @@ export function resolveMediaNames(
     probes.resolves(name);
 
   const names = new Map<string, ResolvedMediaName>();
-  const fallbacks = new Set<string>();
   for (const component of components) {
     const resolved = (name: string, kind: ResolvedMediaName["kind"]): void => {
       claimed.add(name);
@@ -130,7 +122,6 @@ export function resolveMediaNames(
     const digestName = `${GENERATED_NAMESPACE}-${component.digest}`;
     const candidates =
       component.readableName === null ? [digestName] : [component.readableName, digestName];
-    let done = false;
     for (const candidate of candidates) {
       // Adoption is decided by content rather than authorship: an existing
       // definition whose name and normalized meaning equal what the
@@ -145,18 +136,15 @@ export function resolveMediaNames(
         probes.expansionMatches(candidate, component.key)
       ) {
         resolved(candidate, "adopted");
-        done = true;
         break;
       }
       if (!taken(candidate)) {
         resolved(candidate, "generated");
-        done = true;
         break;
       }
     }
-    if (!done) fallbacks.add(component.key);
   }
-  return { names, fallbacks };
+  return names;
 }
 
 /// Deduplicate components by key across package collections, keeping the
@@ -215,7 +203,7 @@ export interface MediaExtraction {
  * proves that compiling the name yields exactly one `@media` wrapper whose
  * normalized query equals the key.
  */
-export function buildMediaProbes(tailwind: LoadedTailwind): MediaProbes {
+function buildMediaProbes(tailwind: LoadedTailwind): MediaProbes {
   const compiled = new Map<string, string | null>();
   const prefix = tailwind.designSystem.theme.prefix;
   const compile = (name: string): string | null => {
@@ -245,7 +233,7 @@ export function buildMediaProbes(tailwind: LoadedTailwind): MediaProbes {
  * form, and content-identity adoption bypasses these reservations, so
  * reruns stay idempotent.
  */
-export function scannedVariantReservations(sources: Iterable<string>): Set<string> {
+function scannedVariantReservations(sources: Iterable<string>): Set<string> {
   const reserved = new Set<string>();
   for (const source of sources) {
     for (const match of source.matchAll(/[A-Za-z][\w-]*(?::[^\s"'`{}]+)+/g)) {
@@ -300,7 +288,7 @@ export function planMediaExtraction(options: {
   );
   const names: Record<string, string> = {};
   const generated: { key: string; name: string }[] = [];
-  for (const [key, resolved] of resolution.names) {
+  for (const [key, resolved] of resolution) {
     names[key] = resolved.name;
     if (resolved.kind === "generated") generated.push({ key, name: resolved.name });
   }

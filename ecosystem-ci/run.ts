@@ -266,40 +266,22 @@ function validateProject(value: unknown, index: number): void {
     exactKeys(project, ["id", "kind", "fixture"], ["id", "kind", "fixture"], label);
     nonempty(project.fixture, `${label}.fixture`);
   } else if (project.kind === "external") {
-    exactKeys(
-      project,
-      [
-        "id",
-        "kind",
-        "repository",
-        "revision",
-        "packageManager",
-        "lockfile",
-        "packageRoot",
-        "installs",
-        "runtimeWrites",
-        "start",
-        "tailwindCss",
-        "source",
-        "probes",
-      ],
-      [
-        "id",
-        "kind",
-        "repository",
-        "revision",
-        "packageManager",
-        "lockfile",
-        "packageRoot",
-        "installs",
-        "runtimeWrites",
-        "start",
-        "tailwindCss",
-        "source",
-        "probes",
-      ],
-      label,
-    );
+    const externalKeys = [
+      "id",
+      "kind",
+      "repository",
+      "revision",
+      "packageManager",
+      "lockfile",
+      "packageRoot",
+      "installs",
+      "runtimeWrites",
+      "start",
+      "tailwindCss",
+      "source",
+      "probes",
+    ];
+    exactKeys(project, externalKeys, externalKeys, label);
     nonempty(project.repository, `${label}.repository`);
     let repository: URL;
     try {
