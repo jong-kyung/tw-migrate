@@ -112,7 +112,7 @@ tw-migrate/
 Use the repository-pinned tool versions when possible:
 
 - **Node.js 22.23.2** from `.node-version`; the repository targets `>=22.23.2` so Node runs the `.ts` harness sources directly through type stripping.
-- **Vite+ (`vp`)** as the toolchain entrypoint; it resolves and downloads the pinned package manager itself.
+- **Vite+ (`vp`)** as the toolchain entrypoint; it resolves and downloads the pinned package manager itself. When upgrading `vite-plus`, rerun `vp migrate` so the `vitest` catalog pin is re-aligned to the bundled version; Renovate deliberately does not update `vitest` or `@vitest/*`.
 - **pnpm 11.20.0** from the `packageManager` field in `package.json`; `vp` runs it, and the `pnpm` shim stays available for scripts that call it directly.
 - **Rust 1.97.1** from `rust-toolchain.toml`; CI uses the same version, while the workspace minimum remains `rust-version = "1.95"`.
 - **Git and npm**; runtime discovery uses Git and the packaged snapshot runner calls `npm pack` and `npm install` directly.

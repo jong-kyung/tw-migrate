@@ -108,6 +108,14 @@
       "addLabels": [
         "cargo-major"
       ]
+    },
+    {
+      "description": "vitest and @vitest/* must stay pinned to the version bundled by vite-plus. Rerun `vp migrate` after a vite-plus upgrade to re-align the catalog pin instead of letting Renovate bump them independently.",
+      "matchPackageNames": [
+        "vitest",
+        "/^@vitest\\//"
+      ],
+      "enabled": false
     }
   ],
   "customManagers": [
