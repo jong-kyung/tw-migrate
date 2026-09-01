@@ -7,6 +7,6 @@ case: style_malformed_source
 --- step: write ---
 status: 1
 stdout: ""
-stderr: "tw-migrate: TW_MIGRATE_RECOVERABLE_INPUT:Failed to parse [WORKSPACE]/Button.tsx: Diagnostics([OxcDiagnostic { inner: OxcDiagnosticInner { message: \"Unexpected token\", labels: [LabeledSpan { label: None, span: SourceSpan { offset: 24, length: 2 }, primary: false }], help: None, note: None, severity: Error, code: OxcCode { scope: None, number: None }, url: None } }])\n"
+stderr: "tw-migrate: TW_MIGRATE_RECOVERABLE_INPUT:Failed to parse [WORKSPACE]/Button.tsx: Diagnostics([OxcDiagnostic { inner: OxcDiagnosticInner { message: \"Unexpected token\", labels: [LabeledSpan { label: None, span: Span { start: 24, end: 26 }, primary: false }], help: None, note: None, severity: Error, code: OxcCode { scope: None, number: None }, url: None } }])\n"
 workspace delta:
   unchanged
