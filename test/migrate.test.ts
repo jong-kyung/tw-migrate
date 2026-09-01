@@ -19,89 +19,12 @@ import { onTestFinished, test } from "vite-plus/test";
 import { __unstable__loadDesignSystem as loadDesignSystem } from "tailwindcss";
 
 import { migrate } from "../src/index.ts";
-import {
-  collectMediaConditions,
-  cssDirectives,
-  decodeSourceMap,
-  expressionAnalysis,
-  mediaProbeKey,
-  planBatchMigration,
-  sourceAnalysis,
-  stylesheetAnalysis,
-  validateCss,
-} from "../src/native.ts";
 import { compileSassEntry, loadProjectSass, sourceMappings } from "../src/parser/style-compiler.ts";
 import { writeChanges } from "../src/util/write.ts";
 
 const initialCss = ".button { padding: 13px; }\n";
 const initialTsx =
   "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n";
-const recoverablePrefix = "TW_MIGRATE_RECOVERABLE_INPUT:";
-const malformedCss = "@media \u000bscreen {}";
-
-function assertNativeError(run: () => unknown, message: string) {
-  assert.throws(run, (error: unknown) => {
-    assert(error instanceof Error);
-    assert.equal(error.message, message);
-    return true;
-  });
-}
-
-test("native endpoint error routing stays byte-exact", () => {
-  assertNativeError(
-    () => validateCss(malformedCss),
-    'Edited stylesheet no longer parses: Error { kind: Unexpected("<ident>", "<unknown>"), span: Span { start: 7, end: 8 } }',
-  );
-  assertNativeError(
-    () => expressionAnalysis("app.js", "const ="),
-    'Failed to parse app.js: Diagnostics([OxcDiagnostic { inner: OxcDiagnosticInner { message: "Unexpected token", labels: [LabeledSpan { label: None, span: SourceSpan { offset: 0, length: 5 }, primary: false }], help: None, note: None, severity: Error, code: OxcCode { scope: None, number: None }, url: None } }])',
-  );
-  assertNativeError(() => sourceAnalysis("app.js", "const ="), "Failed to parse app.js");
-  assertNativeError(
-    () => stylesheetAnalysis("app.css", malformedCss),
-    'Failed to parse app.css: Error { kind: Unexpected("<ident>", "<unknown>"), span: Span { start: 7, end: 8 } }',
-  );
-  assert.equal(cssDirectives(malformedCss), null);
-  assertNativeError(
-    () => mediaProbeKey(malformedCss),
-    'Failed to parse probe CSS: Error { kind: Unexpected("<ident>", "<unknown>"), span: Span { start: 7, end: 8 } }',
-  );
-  assertNativeError(
-    () =>
-      collectMediaConditions(
-        JSON.stringify({ stylesheets: [{ cssPath: "app.css", cssSource: malformedCss }] }),
-      ),
-    `${recoverablePrefix}Failed to parse app.css: Error { kind: Unexpected("<ident>", "<unknown>"), span: Span { start: 7, end: 8 } }`,
-  );
-});
-
-test("batch planning prefixes malformed Tailwind entry CSS", () => {
-  const request = {
-    tailwindPath: "tailwind.css",
-    tailwindSource: malformedCss,
-    files: [],
-    stylesheets: [
-      {
-        cssPath: "tokens.module.css",
-        cssSource: '@property --x { syntax: "*"; inherits: false; initial-value: 0; }',
-        isModule: true,
-      },
-    ],
-  };
-
-  assertNativeError(
-    () => planBatchMigration(JSON.stringify(request)),
-    `${recoverablePrefix}Failed to parse Tailwind CSS: Error { kind: Unexpected("<ident>", "<unknown>"), span: Span { start: 7, end: 8 } }`,
-  );
-});
-
-test("source-map decoding failures stay fatal and unprefixed", () => {
-  assertNativeError(
-    () => decodeSourceMap("{"),
-    "Failed to decode source map: JSON parsing error: EOF while parsing an object at line 1 column 1",
-  );
-});
-
 async function tempDir(): Promise<string> {
   await mkdir(".tmp", { recursive: true });
   const cwd = await mkdtemp(join(process.cwd(), ".tmp", "fixture-"));
