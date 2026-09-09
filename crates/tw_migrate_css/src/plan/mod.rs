@@ -389,6 +389,12 @@ fn collect_declaration_candidates(
             continue;
         };
         let value = declaration_value(source, declaration);
+        // Moving revert-layer into Tailwind's utilities layer changes its
+        // rollback target. Check before the animation and shorthand paths too.
+        if value.trim().eq_ignore_ascii_case("revert-layer") {
+            warning = Some("unsupported-value");
+            continue;
+        }
         // Vue rewrites `v-bind()` only while compiling SFC styles; a value
         // moved into global Tailwind output would lose its reactive custom
         // property, so such declarations are never converted.

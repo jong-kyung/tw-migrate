@@ -49,6 +49,7 @@ snapshot_cases! {
     style_pseudo_argument => default_setup,
     style_quoted_global_rerun => default_setup,
     style_quoted_values => default_setup,
+    style_revert_layer => default_setup,
     style_sass_compile_error => default_setup,
     style_sass_functions_nesting => default_setup,
     style_sass_global_values => default_setup,
