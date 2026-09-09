@@ -204,12 +204,10 @@ export async function captureAll(
   artifactFor?: (name: string, attempt: number) => CaptureArtifact | undefined,
 ): Promise<CaptureSet> {
   const captures = await Promise.allSettled(
-    Object.entries(probes).map(
-      async ([name, probe]): Promise<[string, ProbeCapture]> => [
-        name,
-        await captureProbe(browser, baseUrl, probe, (attempt) => artifactFor?.(name, attempt)),
-      ],
-    ),
+    Object.entries(probes).map(async ([name, probe]): Promise<[string, ProbeCapture]> => [
+      name,
+      await captureProbe(browser, baseUrl, probe, (attempt) => artifactFor?.(name, attempt)),
+    ]),
   );
   const failure = captures.find((capture) => capture.status === "rejected");
   if (failure) throw failure.reason;

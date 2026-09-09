@@ -26,4 +26,5 @@ snapshot_cases! {
     multi_module_merged => default_setup,
     multi_module_conflict => default_setup,
     tailwind_override_discovery => default_setup,
+    tailwind_layer_discovery => default_setup,
 }

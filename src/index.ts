@@ -166,9 +166,10 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
   const sourcePaths = scope.scannedPaths.filter((path) => SOURCE_EXTENSIONS.has(extname(path)));
   const [styleSources, sourceCandidates] = await Promise.all([
     Promise.all(
-      stylePaths.map(
-        async (path): Promise<[string, string]> => [path, await snapshotFile(snapshots, path)],
-      ),
+      stylePaths.map(async (path): Promise<[string, string]> => [
+        path,
+        await snapshotFile(snapshots, path),
+      ]),
     ).then((entries) => new Map(entries)),
     Promise.all(
       sourcePaths.map(async (path) => {
