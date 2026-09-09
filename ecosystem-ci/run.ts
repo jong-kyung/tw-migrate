@@ -485,21 +485,6 @@ export function resolveFixture(manifest: Manifest, project: Project): ProbedProj
     : project;
 }
 
-function runHarness(
-  args: string[],
-  manifest: Manifest,
-  execute: (args: string[]) => void = executeVitest,
-): Project[] {
-  const selected = selectProjects(args, manifest);
-  execute([
-    "run",
-    "--config",
-    "ecosystem-ci/vite.config.ts",
-    ...selected.flatMap(({ id }) => ["--project", id]),
-  ]);
-  return selected;
-}
-
 function executeVitest(args: string[]): void {
   const pnpm = platformCommand("pnpm");
   const result = spawnSync(pnpm, ["exec", "vitest", ...args], {
@@ -551,8 +536,15 @@ async function main() {
       console.log(JSON.stringify(ciMatrix(manifest, args[1] === "full")));
       return;
     }
-    selectProjects(args, manifest);
-    await withLocalPackageArtifacts(() => runHarness(args, manifest));
+    const selected = selectProjects(args, manifest);
+    await withLocalPackageArtifacts(() =>
+      executeVitest([
+        "run",
+        "--config",
+        "ecosystem-ci/vite.config.ts",
+        ...selected.flatMap(({ id }) => ["--project", id]),
+      ]),
+    );
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

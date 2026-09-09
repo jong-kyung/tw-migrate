@@ -153,21 +153,6 @@ function withheldStyles(project: ControlledProject, source: string): string {
   return source.replace(/(<style\b[^>]*>)[\s\S]*?(<\/style>)/g, "$1/* withheld */$2");
 }
 
-function assertMigrationContract({
-  first,
-  expectedFirst,
-  actualSource,
-  expectedSource,
-}: {
-  first: MigrationReport;
-  expectedFirst: MigrationReport;
-  actualSource: string | null;
-  expectedSource: string;
-}): void {
-  assert.deepEqual(first, expectedFirst, "exact first MigrationReport");
-  assert.equal(actualSource, expectedSource, "exact migration-owned source");
-}
-
 function packageManagerInvocation(
   project: ExternalProject,
   args: string[],
@@ -889,12 +874,8 @@ export async function runLifecycle({
       const actualChangedFiles = await readMigrationPaths(driverRoot, first.changedFiles);
       await mark("migration-output", ["first-report.json", "source.diff"]);
       assertExpectedChangedFiles(first.changedFiles, expected.changedFiles, actualChangedFiles);
-      assertMigrationContract({
-        first,
-        expectedFirst: expected.first,
-        actualSource,
-        expectedSource: expected.source,
-      });
+      assert.deepEqual(first, expected.first, "exact first MigrationReport");
+      assert.equal(actualSource, expected.source, "exact migration-owned source");
       if (project.idempotency) {
         const treeBeforeSecond = await snapshotMigrationSources(driverRoot);
         const second = await module.migrate({
