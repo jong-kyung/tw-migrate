@@ -8,6 +8,8 @@ import { loadProjectModule } from "./parser/style-compiler.ts";
 import { isProjectInput, snapshotFile } from "./util/shared.ts";
 import type { DesignSystem, LoadedTailwind, StylesheetLoader } from "./types.ts";
 
+// Only the full package and utilities layer emit utility CSS. Theme and
+// preflight imports alone do not make a stylesheet a migration entry.
 export function findTailwindEntries(
   stylePaths: string[],
   styleSources: Map<string, string>,
@@ -16,7 +18,12 @@ export function findTailwindEntries(
     (path) =>
       extname(path) === ".css" &&
       importEntries(styleSources.get(path) ?? "").some(
-        ({ specifier }) => specifier === "tailwindcss" || specifier.startsWith("tailwindcss/"),
+        ({ specifier }) =>
+          specifier === "tailwindcss" ||
+          specifier === "tailwindcss/index" ||
+          specifier === "tailwindcss/index.css" ||
+          specifier === "tailwindcss/utilities" ||
+          specifier === "tailwindcss/utilities.css",
       ),
   );
 }

@@ -150,6 +150,37 @@ export const Button = () => (
   assert.equal(new Set(warnings.map((warning) => warning.message)).size, 2);
 });
 
+test.each(["tailwindcss", "tailwindcss/index", "tailwindcss/index.css"])(
+  "discovers %s alongside theme and preflight sheets",
+  async (specifier) => {
+    const cwd = await fixture();
+    const layers = '@import "tailwindcss/theme.css";\n@import "tailwindcss/preflight.css";\n';
+    const entry = `@import "${specifier}";\n`;
+    await writeFile(join(cwd, "layers.css"), layers);
+    await writeFile(join(cwd, "globals.css"), entry);
+
+    const report = await migrate({ cwd });
+
+    assert.deepEqual(report.changedFiles, ["Button.module.css", "Button.tsx"]);
+    assert.deepEqual(report.candidates, ["p-[13px]"]);
+    assert.deepEqual(report.failures, []);
+    assert.equal(await readFile(join(cwd, "layers.css"), "utf8"), layers);
+    assert.equal(await readFile(join(cwd, "globals.css"), "utf8"), entry);
+  },
+);
+
+test("rejects automatic entry selection without a utilities import", async () => {
+  const cwd = await fixture();
+  await writeFile(
+    join(cwd, "globals.css"),
+    '@import "tailwindcss/theme";\n@import "tailwindcss/preflight";\n',
+  );
+
+  await assert.rejects(migrate({ cwd }), /No Tailwind v4 CSS entry was found/);
+  assert.equal(await readFile(join(cwd, "Button.module.css"), "utf8"), initialCss);
+  assert.equal(await readFile(join(cwd, "Button.tsx"), "utf8"), initialTsx);
+});
+
 test("validates API-only migration options", async () => {
   const cwd = await fixture();
   await assert.rejects(

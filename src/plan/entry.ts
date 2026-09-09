@@ -16,35 +16,9 @@ import { basename, dirname, extname, join, resolve } from "node:path";
 import { cssDirectives as decodeCssDirectives, sourceAnalysis } from "../native.ts";
 import type { SourceImportRecord } from "../native.ts";
 import { parseHtmlSource } from "../parser/html.ts";
+import { findTailwindEntries } from "../tailwind.ts";
 import { isWithin, localHrefTarget } from "../util/shared.ts";
 import type { PreparedSourceFile } from "../types.ts";
-
-/// True for a specifier whose import actually emits utilities: the full
-/// package or its utilities layer. A sheet importing only
-/// `tailwindcss/theme` or `tailwindcss/preflight` produces no utility
-/// CSS, so selecting it as an entry would migrate classes that never
-/// compile into styles.
-function emitsUtilities(specifier: string): boolean {
-  return (
-    specifier === "tailwindcss" ||
-    specifier === "tailwindcss/utilities" ||
-    specifier === "tailwindcss/utilities.css"
-  );
-}
-
-/// A structurally parsed top-level Tailwind import that includes the
-/// utilities layer.
-function hasTailwindImport(source: string): boolean {
-  const directives = cssDirectives(source);
-  return (
-    directives?.some(
-      (directive) =>
-        directive.kind === "import" &&
-        directive.specifier !== null &&
-        emitsUtilities(directive.specifier),
-    ) ?? false
-  );
-}
 
 /// Tailwind entries per owning package, from the scanned stylesheet corpus.
 export function tailwindEntryCatalog(
@@ -52,9 +26,7 @@ export function tailwindEntryCatalog(
   pathOwners: Map<string, string | undefined>,
 ): Map<string, string[]> {
   const catalog = new Map<string, string[]>();
-  for (const [path, source] of styleSources) {
-    if (extname(path) !== ".css") continue;
-    if (!hasTailwindImport(source)) continue;
+  for (const path of findTailwindEntries([...styleSources.keys()], styleSources)) {
     const owner = pathOwners.get(path);
     if (owner === undefined) continue;
     const entries = catalog.get(owner) ?? [];

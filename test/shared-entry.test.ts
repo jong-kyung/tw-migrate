@@ -9,6 +9,7 @@ import {
   scanProof,
   tailwindEntryCatalog,
 } from "../src/plan/entry.ts";
+import { findTailwindEntries } from "../src/tailwind.ts";
 import { indexStylesheetDependents } from "../src/util/shared.ts";
 import type { PreparedSourceFile } from "../src/types.ts";
 
@@ -478,21 +479,29 @@ test("a css module-script import is not a loader", () => {
   expect(prove({ packageSources: [moduleScript, consumer] })).toBe(null);
 });
 
-test("a sheet without the utilities layer is not an entry", () => {
+test("local and shared entries require the utilities layer", () => {
   const styleSources = new Map([
     [entry, '@import "tailwindcss";\n'],
     [join(root, "tokens.css"), '@import "tailwindcss/theme";\n'],
+    [join(root, "theme.css"), '@import "tailwindcss/theme.css";\n'],
+    [join(root, "reset.css"), '@import "tailwindcss/preflight";\n'],
+    [join(root, "preflight.css"), '@import "tailwindcss/preflight.css";\n'],
     [join(root, "split.css"), '@import "tailwindcss/theme";\n@import "tailwindcss/utilities";\n'],
+    [join(root, "utilities.css"), '@import "tailwindcss/utilities.css";\n'],
+    [join(root, "index-alias.css"), '@import "tailwindcss/index";\n'],
+    [join(root, "index-css-alias.css"), '@import "tailwindcss/index.css";\n'],
   ]);
-  const owners = new Map<string, string | undefined>([
-    [entry, root],
-    [join(root, "tokens.css"), root],
-    [join(root, "split.css"), root],
-  ]);
+  const owners = new Map([...styleSources.keys()].map((path) => [path, root]));
+  const expected = [
+    entry,
+    join(root, "split.css"),
+    join(root, "utilities.css"),
+    join(root, "index-alias.css"),
+    join(root, "index-css-alias.css"),
+  ].sort();
 
-  expect(tailwindEntryCatalog(styleSources, owners)).toEqual(
-    new Map([[root, [entry, join(root, "split.css")].sort()]]),
-  );
+  expect(findTailwindEntries([...styleSources.keys()], styleSources).sort()).toEqual(expected);
+  expect(tailwindEntryCatalog(styleSources, owners)).toEqual(new Map([[root, expected]]));
 });
 
 test("string content never catalogs a tailwind entry", () => {
