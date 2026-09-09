@@ -37,6 +37,7 @@ import {
 } from "../ecosystem-ci/lifecycle.ts";
 import { waitForChild } from "../ecosystem-ci/shared.ts";
 import { loadManifest, runHarness, validateManifest, vitestProjects } from "../ecosystem-ci/run.ts";
+import { unifiedDiff } from "../src/util/diff.ts";
 import type { AddressInfo } from "node:net";
 import type { Browser } from "playwright";
 
@@ -826,26 +827,31 @@ test("exact changed-file validation requires complete paths and bytes", () => {
   );
 });
 
-test("controlled expectations cover every reported changed file with exact bytes", async () => {
-  for (const runtime of ["react-vite", "next", "vite-html"]) {
-    for (const style of ["css", "scss", "sass", "less"]) {
-      const expected = JSON.parse(
-        await readFile(
-          new URL(
-            `../ecosystem-ci/fixtures/controlled/${runtime}/${style}/expected.json`,
-            import.meta.url,
-          ),
-          "utf8",
+test("controlled expectations cover every reported changed file with exact bytes and preview", async () => {
+  const manifest = await loadManifest();
+  for (const project of manifest.projects.filter(isControlled)) {
+    const fixture = new URL(
+      `../ecosystem-ci/fixtures/controlled/${project.fixture ?? `${project.runtime}/${project.style}`}/`,
+      import.meta.url,
+    );
+    const expected = JSON.parse(await readFile(new URL("expected.json", fixture), "utf8"));
+    assert.deepEqual(
+      Object.keys(expected.changedFiles).sort(),
+      [...expected.first.changedFiles].sort((left, right) => left.localeCompare(right)),
+    );
+    assert.ok(
+      Object.values(expected.changedFiles).every((contents) => typeof contents === "string"),
+    );
+    const diffs = await Promise.all(
+      expected.first.changedFiles.map(async (path: string) =>
+        unifiedDiff(
+          path,
+          await readFile(new URL(path, fixture), "utf8"),
+          expected.changedFiles[path],
         ),
-      );
-      assert.deepEqual(
-        Object.keys(expected.changedFiles).sort(),
-        [...expected.first.changedFiles].sort((left, right) => left.localeCompare(right)),
-      );
-      assert.ok(
-        Object.values(expected.changedFiles).every((contents) => typeof contents === "string"),
-      );
-    }
+      ),
+    );
+    assert.equal(diffs.join(""), expected.first.diff, `expected preview for ${project.id}`);
   }
 });
 
