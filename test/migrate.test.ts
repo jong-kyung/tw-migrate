@@ -1254,7 +1254,7 @@ test("retains a single-root Vue SFC scoped rule while appending its utilities", 
   const vue =
     '<template>\n  <div class="panel">A</div>\n</template>\n<style scoped>\n.panel { margin: 7px; }\n</style>\n';
   await writeFile(join(cwd, "Panel.vue"), vue);
-  const report = await migrate({ cwd, styleFile: "Panel.vue" });
+  const report = await migrate({ cwd, styleFile: "Panel.vue", write: true });
   const warning = report.warnings.find((entry) => entry.code === "open-root-fallthrough")!;
   const ruleStart = Buffer.byteLength(vue.slice(0, vue.indexOf(".panel {")));
   assert.deepEqual(
@@ -1262,7 +1262,10 @@ test("retains a single-root Vue SFC scoped rule while appending its utilities", 
     ["Panel.vue", ruleStart, ruleStart + ".panel { margin: 7px; }".length],
   );
   assert.match(report.diff, /class="panel m-\[7px\]"/);
-  assert.match(report.diff, /\+<style scoped>/);
+  assert.equal(
+    await readFile(join(cwd, "Panel.vue"), "utf8"),
+    vue.replace('class="panel"', 'class="panel m-[7px]"'),
+  );
   assert.equal(report.retainedRules, 1);
   assert.deepEqual(report.changedFiles, ["Panel.vue"]);
 });
@@ -1332,12 +1335,15 @@ test("treats a dynamic v-bind argument as an open class surface", async () => {
   const vue =
     '<template>\n  <p class="card">A</p>\n  <p v-bind:[key]="v" class="etc">B</p>\n</template>\n<script setup>\nconst key = "class";\nconst v = "x";\n</script>\n<style scoped>\n.card { padding: 13px; }\n</style>\n';
   await writeFile(join(cwd, "Card.vue"), vue);
-  const report = await migrate({ cwd, styleFile: "Card.vue" });
+  const report = await migrate({ cwd, styleFile: "Card.vue", write: true });
   const warning = report.warnings.find((entry) => entry.code === "dynamic-template-class")!;
   assert.equal(warning.file, "Card.vue");
   assert.equal(report.convertedRules, 0);
   assert.equal(report.retainedRules, 1);
-  assert.match(report.diff, /\+<style scoped>/);
+  assert.equal(
+    await readFile(join(cwd, "Card.vue"), "utf8"),
+    vue.replace('class="card"', 'class="card p-[13px]"'),
+  );
 });
 
 test("migrates static Vue class bindings on hosts and component calls", async () => {
@@ -1419,14 +1425,17 @@ test("retains a scoped rule whose class other package CSS also targets", async (
     writeFile(join(cwd, "Card.vue"), vue),
     writeFile(join(cwd, "site.css"), ".card { padding: 20px; }\n"),
   ]);
-  const report = await migrate({ cwd, styleFile: "Card.vue" });
+  const report = await migrate({ cwd, styleFile: "Card.vue", write: true });
   const warning = report.warnings.find((entry) => entry.code === "shadowed-scoped-rule")!;
   assert.equal(warning.file, "Card.vue");
   // The unshadowed rule in the same block still migrates.
   assert.equal(report.convertedRules, 1);
   assert.equal(report.retainedRules, 1);
   assert.match(report.diff, /class="only m-\[3px\]"/);
-  assert.match(report.diff, /\+\.card \{ padding: 13px; \}/);
+  assert.equal(
+    await readFile(join(cwd, "Card.vue"), "utf8"),
+    vue.replace('class="only"', 'class="only m-[3px]"').replace(".only { margin: 3px; }", ""),
+  );
 });
 
 test("appends utilities to a literal class site beside a dynamic binding", async () => {
@@ -1640,8 +1649,10 @@ test("migrates a stylesheet statically imported by a Vue script", async () => {
   assert.equal(report.convertedRules, 0);
   assert.equal(report.retainedRules, 1);
   assert.match(report.diff, /class="card p-\[13px\]"/);
-  assert.match(report.diff, /import "\.\/card\.css";/);
-  assert.match(await readFile(join(cwd, "Card.vue"), "utf8"), /class="card p-\[13px\]"/);
+  assert.equal(
+    await readFile(join(cwd, "Card.vue"), "utf8"),
+    vue.replace('class="card"', 'class="card p-[13px]"'),
+  );
   const second = await migrate({ cwd, styleFile: "Card.vue", write: true });
   assert.deepEqual(second.changedFiles, []);
 });
