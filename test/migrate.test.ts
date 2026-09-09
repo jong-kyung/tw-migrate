@@ -469,12 +469,20 @@ test("prefixed entries register font tokens under the prefix", async () => {
   assert.deepEqual(report.candidates, ["tw:font-open-sans"]);
 });
 
-test("revert-layer font declarations stay retained", async () => {
-  const cwd = await fixture({ css: ".button { font-family: revert-layer; }\n" });
-  const report = await migrate({ cwd, styleFile: "Button.module.css" });
-  assert.equal(report.retainedRules, 1);
-  assert.deepEqual(report.candidates, []);
-});
+for (const property of ["font-family", "display", "padding", "overflow"]) {
+  test(`revert-layer ${property} declarations stay retained`, async () => {
+    const css = `.button { ${property}: revert-layer; opacity: 0.5; }\n`;
+    const cwd = await fixture({ css });
+    const report = await migrate({ cwd, styleFile: "Button.module.css", write: true });
+    assert.equal(report.convertedRules, 0);
+    assert.equal(report.retainedRules, 1);
+    assert.deepEqual(report.candidates, []);
+    assert.deepEqual(report.changedFiles, []);
+    assert.ok(report.warnings.some((warning) => warning.code === "unsupported-value"));
+    assert.equal(await readFile(join(cwd, "Button.module.css"), "utf8"), css);
+    assert.equal(await readFile(join(cwd, "Button.tsx"), "utf8"), initialTsx);
+  });
+}
 
 test("reuse rejects a custom utility not backed by the matched token", async () => {
   const cwd = await fixture({

@@ -56,6 +56,43 @@ fn keeps_only_the_last_duplicate_declaration() {
 }
 
 #[test]
+fn retains_revert_layer_declarations_across_property_families() {
+    for declaration in [
+        "font-family: revert-layer",
+        "display: revert-layer",
+        "color: revert-layer",
+        "margin: revert-layer",
+        "padding: revert-layer",
+        "inset: revert-layer",
+        "overflow: revert-layer",
+        "animation: revert-layer",
+        "--custom: revert-layer",
+        "display:  ReVeRt-LaYeR  ",
+    ] {
+        for body in [
+            format!("{declaration}; opacity: 0.5;"),
+            format!("@media print {{ {declaration}; opacity: 0.5; }}"),
+        ] {
+            let response = plan(serde_json::json!({
+                "cssPath": "/project/Card.module.css",
+                "cssSource": format!(".card {{ {body} }}\n"),
+                "files": [{
+                    "path": "/project/Card.tsx",
+                    "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={styles.card} />;\n"
+                }]
+            }));
+
+            assert_eq!(response["convertedRules"], 0, "{body}: {response}");
+            assert_eq!(response["retainedRules"], 1, "{body}: {response}");
+            assert_eq!(response["candidates"], serde_json::json!([]));
+            assert_eq!(response["files"], serde_json::json!([]));
+            assert_eq!(response["deletedFiles"], serde_json::json!([]));
+            assert_eq!(response["warnings"][0]["code"], "unsupported-value");
+        }
+    }
+}
+
+#[test]
 fn arbitrary_properties_conflict_with_named_utilities() {
     assert!(tailwind_utilities_conflict("[display:block]", "hidden"));
     assert!(tailwind_utilities_conflict("[padding:8px]", "p-2"));
