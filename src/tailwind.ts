@@ -28,6 +28,11 @@ export function findTailwindEntries(
   );
 }
 
+// Match Tailwind's import loader: these imports stay in CSS for the browser.
+export function isExternalStylesheet(specifier: string): boolean {
+  return /^(?:https?:\/\/|data:)/.test(specifier);
+}
+
 export function selectTailwindEntry(entries: string[], configuredPath?: string): string {
   if (configuredPath) return configuredPath;
   if (entries.length === 0)
@@ -147,6 +152,7 @@ async function extractThemeTokensFromGraph(
 ): Promise<Record<string, string>> {
   const tokens: Record<string, string> = {};
   for (const { specifier: spec, reference } of importEntries(css)) {
+    if (isExternalStylesheet(spec)) continue;
     const key = `${base}\0${spec}`;
     if (seen.has(key)) continue;
     seen.add(key);

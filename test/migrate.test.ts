@@ -181,6 +181,36 @@ test("rejects automatic entry selection without a utilities import", async () =>
   assert.equal(await readFile(join(cwd, "Button.tsx"), "utf8"), initialTsx);
 });
 
+test.each([
+  '@import "https://fonts.googleapis.com/css2?family=Inter&display=swap";',
+  '@import url("https://fonts.googleapis.com/css2?family=Inter&display=swap");',
+  '@import url("http://example.invalid/fonts.css");',
+  '@import "data:text/css,.remote%7Bcolor:red%7D";',
+])("preserves external imports without loading them: %s", async (externalImport) => {
+  const cwd = await fixture();
+  const entry = `${externalImport}\n@import "tailwindcss";\n@import "./theme.css";\n`;
+  const theme = `${externalImport}\n@theme { --spacing-gutter: 13px; }\n`;
+  await writeFile(join(cwd, "globals.css"), entry);
+  await writeFile(join(cwd, "theme.css"), theme);
+
+  const report = await migrate({ cwd });
+
+  assert.deepEqual(report.candidates, ["p-gutter"]);
+  assert.deepEqual(report.changedFiles, ["Button.module.css", "Button.tsx"]);
+  assert.deepEqual(report.failures, []);
+  assert.equal(await readFile(join(cwd, "globals.css"), "utf8"), entry);
+  assert.equal(await readFile(join(cwd, "theme.css"), "utf8"), theme);
+});
+
+test("still rejects missing local imports in the Tailwind entry", async () => {
+  const cwd = await fixture();
+  await writeFile(join(cwd, "globals.css"), '@import "tailwindcss";\n@import "./missing.css";\n');
+
+  await assert.rejects(migrate({ cwd }), /ENOENT.*missing\.css/);
+  assert.equal(await readFile(join(cwd, "Button.module.css"), "utf8"), initialCss);
+  assert.equal(await readFile(join(cwd, "Button.tsx"), "utf8"), initialTsx);
+});
+
 test("validates API-only migration options", async () => {
   const cwd = await fixture();
   await assert.rejects(

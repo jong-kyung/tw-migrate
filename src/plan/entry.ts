@@ -16,7 +16,7 @@ import { basename, dirname, extname, join, resolve } from "node:path";
 import { cssDirectives as decodeCssDirectives, sourceAnalysis } from "../native.ts";
 import type { SourceImportRecord } from "../native.ts";
 import { parseHtmlSource } from "../parser/html.ts";
-import { findTailwindEntries } from "../tailwind.ts";
+import { findTailwindEntries, isExternalStylesheet } from "../tailwind.ts";
 import { isWithin, localHrefTarget } from "../util/shared.ts";
 import type { PreparedSourceFile } from "../types.ts";
 
@@ -91,7 +91,7 @@ function entryGraphSheets(
       if (directive.kind !== "import") continue;
       if (directive.specifier === null) return null;
       const spec = directive.specifier;
-      if (directive.tailwind) continue;
+      if (directive.tailwind || isExternalStylesheet(spec)) continue;
       if (!spec.startsWith(".") && !spec.startsWith("/")) {
         // Bare package imports load through the same resolver as the
         // Tailwind loader. A workspace-internal target joins the graph; a
