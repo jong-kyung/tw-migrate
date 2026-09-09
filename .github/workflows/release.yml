@@ -87,10 +87,28 @@ jobs:
             echo 'changed=true' >> "$GITHUB_OUTPUT"
           fi
 
+  # Full coverage is deferred from regular CI, never from publication.
+  ci:
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+    with:
+      full: true
+
+  ecosystem:
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ecosystem.yml
+    with:
+      full: true
+
   # Built from the release commit rather than reused from the CI run, so the
   # provenance of the published binaries does not depend on artifact retention.
-  # Tests are not repeated here -- CI runs them on this same commit, and the
-  # publish job below waits for a human who can see that result.
+  # The full CI and ecosystem jobs above gate publication on this same commit.
   build:
     name: Build ${{ matrix.runner }}
     needs: check
@@ -144,7 +162,7 @@ jobs:
   # hours, and one pre-publish call pushes all five platform packages.
   publish:
     name: Publish
-    needs: [check, build]
+    needs: [check, build, ci, ecosystem]
     if: needs.check.outputs.changed == 'true'
     runs-on: ubuntu-latest
     environment: release

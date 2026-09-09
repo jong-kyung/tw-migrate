@@ -6,8 +6,8 @@ import { defineConfig } from "vite-plus";
 //   exercises the migrator's error paths, so formatting it fails outright.
 // - `ecosystem-ci/fixtures` holds apps whose post-migration bytes are pinned
 //   in `expected.json`, so formatting it rewrites the assertions.
-// - `.github` holds CI contracts whose literal layout is asserted by
-//   `test/ecosystem-harness.test.ts` (reflowing a matrix array breaks it).
+// - `.github` keeps pinned action references and embedded shell scripts out
+//   of automatic formatting and lint fixes.
 const pinnedPatterns = ["crates/snapshots/fixtures/**", "ecosystem-ci/fixtures/**", ".github/**"];
 
 // `dist/` is the generated vp pack bundle; the formatter and linter own sources only.

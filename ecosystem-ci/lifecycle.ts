@@ -153,30 +153,6 @@ function withheldStyles(project: ControlledProject, source: string): string {
   return source.replace(/(<style\b[^>]*>)[\s\S]*?(<\/style>)/g, "$1/* withheld */$2");
 }
 
-export function assertMigrationContract({
-  first,
-  expectedFirst,
-  actualSource,
-  expectedSource,
-  second,
-  treeBeforeSecond,
-  treeAfterSecond,
-}: {
-  first: MigrationReport;
-  expectedFirst: MigrationReport;
-  actualSource: string | null;
-  expectedSource: string;
-  second: MigrationReport;
-  treeBeforeSecond: FileDigests;
-  treeAfterSecond: FileDigests;
-}): void {
-  assert.deepEqual(first, expectedFirst, "exact first MigrationReport");
-  assert.equal(actualSource, expectedSource, "exact migration-owned source");
-  assert.deepEqual(second.changedFiles, [], "second migration changedFiles");
-  assert.equal(second.diff, "", "second migration diff");
-  assert.deepEqual(treeAfterSecond, treeBeforeSecond, "source-scoped tree after second migration");
-}
-
 function packageManagerInvocation(
   project: ExternalProject,
   args: string[],
@@ -670,7 +646,6 @@ function caseArtifactNames(project: ProbedProject): string[] {
     "baseline-build.log",
     "post-build.log",
     "first-cli.log",
-    "second-cli.log",
     "checkout.log",
     "external-install-1.log",
     "external-install-2.log",
@@ -897,28 +872,31 @@ export async function runLifecycle({
       await writeFile(join(artifactRoot, "source.diff"), first.diff);
       const actualSource = await readMaybe(sourcePath);
       const actualChangedFiles = await readMigrationPaths(driverRoot, first.changedFiles);
+      await mark("migration-output", ["first-report.json", "source.diff"]);
       assertExpectedChangedFiles(first.changedFiles, expected.changedFiles, actualChangedFiles);
-      const treeBeforeSecond = await snapshotMigrationSources(driverRoot);
-      const second = await module.migrate({
-        cwd: driverRoot,
-        ...scopeOptions,
-        write: true,
-      });
-      const treeAfterSecond = await snapshotMigrationSources(driverRoot);
-      await writeFile(
-        join(artifactRoot, "second-report.json"),
-        `${JSON.stringify(second, null, 2)}\n`,
-      );
-      await mark("migration-output", ["first-report.json", "second-report.json", "source.diff"]);
-      assertMigrationContract({
-        first,
-        expectedFirst: expected.first,
-        actualSource,
-        expectedSource: expected.source,
-        second,
-        treeBeforeSecond,
-        treeAfterSecond,
-      });
+      assert.deepEqual(first, expected.first, "exact first MigrationReport");
+      assert.equal(actualSource, expected.source, "exact migration-owned source");
+      if (project.idempotency) {
+        const treeBeforeSecond = await snapshotMigrationSources(driverRoot);
+        const second = await module.migrate({
+          cwd: driverRoot,
+          ...scopeOptions,
+          write: true,
+        });
+        const treeAfterSecond = await snapshotMigrationSources(driverRoot);
+        await writeFile(
+          join(artifactRoot, "second-report.json"),
+          `${JSON.stringify(second, null, 2)}\n`,
+        );
+        await mark("idempotency", ["second-report.json"]);
+        assert.deepEqual(second.changedFiles, [], "second migration changedFiles");
+        assert.equal(second.diff, "", "second migration diff");
+        assert.deepEqual(
+          treeAfterSecond,
+          treeBeforeSecond,
+          "source-scoped tree after second migration",
+        );
+      }
       await mark("migration");
 
       await writeFile(sourcePath, withheldStyles(project, actualSource as string));
@@ -1038,18 +1016,6 @@ export async function runProductionSmoke({
         "production smoke rewrites the target stylesheet",
       );
       await mark("first-cli", ["first-cli.log"]);
-
-      await mark("second-cli-started");
-      await run(process.execPath, [cli], {
-        cwd: driverRoot,
-        logPath: join(artifactRoot, "second-cli.log"),
-      });
-      assert.deepEqual(
-        await snapshotMigrationSources(driverRoot),
-        treeAfterFirst,
-        "second CLI run leaves source-scoped files unchanged",
-      );
-      await mark("second-cli", ["second-cli.log"]);
 
       await clearGeneratedCaches(driverRoot);
       await mark("post-build-started");

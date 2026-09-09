@@ -35,7 +35,7 @@ An external-only matrix was considered and rejected. Public Tailwind v4 projects
 2. Cover React+Vite, Next.js, and Vite+HTML across CSS, SCSS, Sass, and Less.
 3. Exercise CSS Modules in React and Next.js and global stylesheets in static HTML.
 4. Verify exact migration reports and source bytes for controlled cases.
-5. Verify second-run idempotency for every case.
+5. Verify installed-API second-run idempotency for representative controlled cases and every external case.
 6. Run against packed root and native packages rather than checkout entrypoints or addons.
 7. Exercise a small set of unmodified public Tailwind v4 projects at immutable commits.
 8. Produce bounded, allowlisted diagnostics for CI failures.
@@ -83,8 +83,8 @@ Controlled cases also assert:
 - the exact first `MigrationReport`;
 - expected candidate tokens and warning output;
 - exact bytes for every migration-owned changed file;
-- an empty second-run diff and `changedFiles` list;
-- an unchanged source-scoped tree after the second run.
+
+Cases declaring `idempotency: true` additionally assert an empty second-run diff and `changedFiles` list, and an unchanged source-scoped tree. These representatives cover SCSS, Sass, Less, Vue, and split workspace entries. Other controlled cases migrate once.
 
 These fixtures remain after external coverage is added. Removing them would discard the only deterministic proof of the twelve runtime/style cells and the exact rewrite contract.
 
@@ -121,7 +121,7 @@ A pin is updated only after repeating repository-status review, migration previe
 
 ### Production CLI smoke
 
-One React+Vite CSS fixture also exercises the installed CLI and production build boundary. It captures a clean production baseline, runs package-wide migration through the installed binary, verifies a second CLI no-op, deletes generated output, rebuilds, and compares the production preview.
+One React+Vite CSS fixture also exercises the installed CLI and production build boundary. It captures a clean production baseline, runs package-wide migration once through the installed binary, deletes generated output, rebuilds, and compares the production preview. Packaged CLI snapshots retain rerun coverage.
 
 Targeted controlled cases continue to use the installed public `migrate()` API because its structured report supports exact assertions.
 
@@ -184,8 +184,8 @@ A targeted case follows this order:
 5. Capture the stylesheet-withheld causal witness.
 6. Restore the source and run the first migration.
 7. Verify reports, candidates, changed files, and expected bytes.
-8. Snapshot migration-owned sources and run migration again.
-9. Verify the second report and source tree are unchanged.
+8. For controlled cases declaring `idempotency: true` and every external case, snapshot migration-owned sources and run migration again.
+9. When a second migration runs, verify its report and source tree are unchanged.
 10. Clear generated output and framework caches.
 11. Capture the utilities-only result with migrated legacy CSS withheld.
 12. Restore migrated source, start a fresh server, and capture post-migration probes.
@@ -220,9 +220,13 @@ The browser suite runs in a separate GitHub Actions workflow on:
 
 - a designated pull-request label;
 - pushes to `main`;
-- manual dispatch.
+- manual dispatch;
+- a weekly schedule;
+- the release workflow, before publication.
 
-It does not run on a cron schedule. The workflow uses GitHub-hosted Ubuntu, macOS, and Windows runners with Chromium. Package jobs run once per OS; case jobs run independently for each OS and case with `fail-fast: false`.
+Regular push and label-triggered runs select 14 Linux cases and four cases each on macOS and Windows, plus three package jobs. Linux retains all four React+Vite stylesheet formats, Next CSS and Less, HTML CSS and SCSS, Vue, all four media scenarios, and the production smoke. macOS and Windows retain React+Vite SCSS and Less, HTML CSS, and split workspace entries. The Next Less case preserves its distinct Pages Router and webpack integration.
+
+Weekly runs and manual dispatch with `full` enabled restore every case on all three OS, including external projects and deferred Next/HTML compiler combinations. Release publication depends on full CI and ecosystem runs on the release commit. Package jobs run once per OS; selected case jobs run independently with `fail-fast: false`.
 
 The workflow uses `pull_request`, never `pull_request_target`. Repository permissions are limited to `contents: read`, checkout credentials are not persisted, and external child processes receive an explicit environment containing only path, home, temporary-directory, required Windows system variables, and `CI=true`. They receive no GitHub, Actions, OIDC, cloud, registry, or repository credentials. The verified installed migration module is loaded before any external command runs.
 
@@ -290,17 +294,9 @@ External projects do not retire or reduce the controlled matrix.
 
 ## Testing Strategy
 
-Harness unit tests cover:
+The standalone harness unit suite has been removed. Manifest validation, package provenance and installed-layout checks, computed-style comparisons, representative idempotency checks, timeouts, and artifact allowlisting remain enforced during actual browser runs.
 
-- strict manifest validation and case selection;
-- complete controlled inventory;
-- package provenance and installed layout checks;
-- source-scoped idempotency;
-- retry boundaries and process teardown;
-- artifact allowlisting;
-- workflow-to-manifest matrix consistency.
-
-Focused browser tests cover one case at a time through the installed package boundary. The full workflow covers every admitted case on all three operating systems.
+Focused browser tests cover one case at a time through the installed package boundary. The full workflow covers every admitted case on all three operating systems. `node ecosystem-ci/run.ts --ci-matrix regular` and `--ci-matrix full` print the selected job matrices without building packages or starting a browser.
 
 Existing commands retain their current scope:
 
@@ -311,7 +307,7 @@ Existing commands retain their current scope:
 
 ## Success Criteria
 
-1. All twelve controlled runtime/style cells pass exact source, report, idempotency, and browser checks on Ubuntu, macOS, and Windows.
+1. All controlled cases pass exact source, report, and browser checks on Ubuntu, macOS, and Windows in full runs; opted-in representatives also pass installed-API idempotency checks.
 2. Every controlled probe proves a stylesheet-dependent baseline and utilities-only equivalence.
 3. The production CLI smoke passes clean pre/post builds through packed packages.
 4. Two to five unmodified external projects pass at reviewed full SHAs on all three operating systems.

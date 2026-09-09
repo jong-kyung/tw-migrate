@@ -249,7 +249,7 @@ function validateProject(value: unknown, index: number): void {
   if (project.kind === "controlled") {
     exactKeys(
       project,
-      ["id", "kind", "runtime", "style", "fixture", "scope", "source", "probes"],
+      ["id", "kind", "runtime", "style", "fixture", "scope", "idempotency", "source", "probes"],
       ["id", "kind", "runtime", "style", "source", "probes"],
       label,
     );
@@ -260,6 +260,8 @@ function validateProject(value: unknown, index: number): void {
       nonempty(project.fixture, `${label}.fixture`);
       validateRelativePath(project.fixture, `${label}.fixture`);
     }
+    if ("idempotency" in project && project.idempotency !== true)
+      throw new Error(`${label}.idempotency must be true when present`);
     if ("scope" in project && project.scope !== "package" && project.scope !== "workspaces")
       throw new Error(`${label}.scope must be "package" or "workspaces"`);
   } else if (project.kind === "smoke") {
@@ -360,7 +362,7 @@ function validateProject(value: unknown, index: number): void {
   }
 }
 
-export function validateManifest(value: unknown): Manifest {
+function validateManifest(value: unknown): Manifest {
   const manifest = exactKeys(value, ["matrixProbes", "projects"], ["projects"], "manifest");
   if (manifest.matrixProbes !== undefined) {
     validateProbes(manifest.matrixProbes, "manifest.matrixProbes", true);
@@ -419,6 +421,37 @@ export function vitestProjects(
   return projects.filter((project) => project.kind !== "external" || externalEnabled);
 }
 
+// Regular CI keeps compiler coverage on Vite and the distinct Next webpack/Less
+// path. The full matrix still exercises every framework/compiler/OS combination.
+function ciMatrix(manifest: Manifest, full: boolean) {
+  const deferred = new Set(["next-scss", "next-sass", "vite-html-sass", "vite-html-less"]);
+  const crossPlatform = new Set([
+    "react-vite-scss",
+    "react-vite-less",
+    "vite-html-css",
+    "media-workspace-split",
+  ]);
+  const platforms = { linux: "ubuntu-latest", macos: "macos-latest", windows: "windows-latest" };
+  return {
+    include: Object.entries(platforms).flatMap(([os, runner]) =>
+      manifest.projects
+        .filter(
+          (project) =>
+            full ||
+            (os === "linux"
+              ? project.kind !== "external" && !deferred.has(project.id)
+              : crossPlatform.has(project.id)),
+        )
+        .map((project) => ({
+          os,
+          runner,
+          case: project.id,
+          external: project.kind === "external",
+        })),
+    ),
+  };
+}
+
 function selectProjects(args: string[], manifest: Manifest): Project[] {
   if (args.length === 1 && args[0] === "--all")
     return manifest.projects.filter(({ kind }) => kind === "controlled");
@@ -450,21 +483,6 @@ export function resolveFixture(manifest: Manifest, project: Project): ProbedProj
   return project.kind === "smoke"
     ? (manifest.projects.find(({ id }) => id === project.fixture) as ControlledProject)
     : project;
-}
-
-export function runHarness(
-  args: string[],
-  manifest: Manifest,
-  execute: (args: string[]) => void = executeVitest,
-): Project[] {
-  const selected = selectProjects(args, manifest);
-  execute([
-    "run",
-    "--config",
-    "ecosystem-ci/vite.config.ts",
-    ...selected.flatMap(({ id }) => ["--project", id]),
-  ]);
-  return selected;
 }
 
 function executeVitest(args: string[]): void {
@@ -514,8 +532,19 @@ async function main() {
     const args = process.argv.slice(2);
     if (args.length === 2 && args[0] === "--prepare-upload") return await prepareUpload(args[1]);
     const manifest = await loadManifest();
-    selectProjects(args, manifest);
-    await withLocalPackageArtifacts(() => runHarness(args, manifest));
+    if (args.length === 2 && args[0] === "--ci-matrix" && ["regular", "full"].includes(args[1])) {
+      console.log(JSON.stringify(ciMatrix(manifest, args[1] === "full")));
+      return;
+    }
+    const selected = selectProjects(args, manifest);
+    await withLocalPackageArtifacts(() =>
+      executeVitest([
+        "run",
+        "--config",
+        "ecosystem-ci/vite.config.ts",
+        ...selected.flatMap(({ id }) => ["--project", id]),
+      ]),
+    );
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

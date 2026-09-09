@@ -48,6 +48,8 @@ export interface ControlledProject {
   /** How the migration runs: one stylesheet by default, the whole
    * package, or the workspace. */
   scope?: "package" | "workspaces";
+  /** Representative installed-API rerun coverage; other cases migrate once. */
+  idempotency?: true;
   source: ProjectSource;
   probes: Record<string, Probe>;
 }

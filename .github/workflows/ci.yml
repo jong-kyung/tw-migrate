@@ -4,6 +4,22 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+    inputs:
+      full:
+        description: Run the full API suite on all five platforms
+        type: boolean
+        default: true
+  workflow_call:
+    inputs:
+      full:
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
 
 jobs:
   cargo-shear:
@@ -38,7 +54,17 @@ jobs:
           toolchain: 1.97.1
       - run: vp install --frozen-lockfile
       - run: vp run typecheck
-      - run: vp run test
+      - name: Run full tests
+        if: matrix.runner == 'ubuntu-latest' || github.event_name == 'schedule' || inputs.full
+        run: vp run test
+      - name: Run platform contracts
+        if: matrix.runner != 'ubuntu-latest' && github.event_name != 'schedule' && !inputs.full
+        shell: bash
+        run: |
+          cargo test
+          vp run build:debug
+          vp test --exclude test/migrate.test.ts
+          vp test test/migrate.test.ts -t 'aliased cwd|separators|symlink|staging failure|CRLF|authored bytes|byte-exactly|fatal integrity|vanishing during Vue'
       - run: vp run build
       - run: vp run artifacts
       # Runs on every supported target, not a subset: packaging mistakes are
