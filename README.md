@@ -137,8 +137,14 @@ vp exec playwright install chromium
 vp run test:ecosystem --case react-vite-css
 ```
 
-Use `--case production-react-vite-css` for the installed CLI production-build smoke, or `--all` for all twelve controlled runtime/stylesheet cells. The default `vp run test` and packaged snapshots remain browser-free.
+Use `--case production-react-vite-css` for the installed CLI production-build smoke, or `--all` for all 17 controlled cases. The default `vp run test` and packaged snapshots remain browser-free.
 
-Pinned external projects run only in the **Ecosystem browser** GitHub Actions workflow on `main`, manual dispatch, or a pull request carrying the `test:e2e` label. The workflow checks them out under the runner's temporary directory without credentials or secrets; there is intentionally no contributor-facing local external command.
+Regular CI runs the full API suite on Linux x64. Other supported targets run the remaining Node suites and focused API path, integrity, byte-preservation, and staging checks. Native builds, Rust tests, npm/pnpm installation checks, and the three-OS packaged snapshot matrix remain enabled. Weekly and full manual runs restore the complete API suite on all five targets.
+
+The **Ecosystem browser** workflow runs 14 Linux cases and four representative cases each on macOS and Windows on `main` pushes and when the `test:e2e` PR label is added. Weekly runs and manual dispatch with `full` enabled run all 20 cases on all three OS, including pinned external projects. Release publication requires successful full CI and ecosystem runs on the release commit.
+
+Controlled cases retain exact reports, source bytes, and all browser probes. Five representative compiler, Vue, and workspace cases also check installed-API idempotency. The production smoke migrates once before rebuilding; packaged snapshots cover CLI reruns.
+
+External checkouts stay under the runner's temporary directory without credentials or secrets. There is intentionally no contributor-facing local external command.
 
 On failure, each OS/case job uploads only its bounded phase ledger, computed-style captures, screenshots, migration output, source diff, and registry/install/build/server logs. See the [browser ecosystem RFC](./rfcs/browser-ecosystem-e2e.md) for immutable external evidence and the manifest, isolation, and oracle contracts.
