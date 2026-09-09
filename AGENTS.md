@@ -71,7 +71,6 @@ tw-migrate/
 │   ├── types.ts               # Manifest, provenance, and capture shapes
 │   └── projects.json          # Controlled, smoke, and external case manifest
 ├── test/migrate.test.ts       # Public API, internal, and byte-exact Node tests
-├── test/ecosystem-harness.test.ts  # Harness contracts, incl. asserted workflow content
 ├── vite.config.ts             # Vite+ fmt/lint/staged config and ignore scope
 ├── tsconfig.json              # Type-stripping-safe options for the .ts harness
 ├── npm/*                      # Platform-specific published native packages
