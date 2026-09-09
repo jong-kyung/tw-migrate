@@ -20,4 +20,9 @@ test("preserves the fixture through the installed migration lifecycle", async ()
   const result = await commands.runEcosystemCase(project.id);
   expect(result.phases.at(-1)).toBe("complete");
   if (project.kind !== "smoke") expect(result.report!.candidates).toContain(project.source.after);
+  if (project.kind === "controlled") {
+    expect(result.phases.includes("idempotency")).toBe(project.idempotency === true);
+  } else if (project.kind === "smoke") {
+    expect(result.phases).not.toContain("second-cli-started");
+  }
 });

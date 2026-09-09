@@ -162,6 +162,7 @@
     },
     {
       "id": "react-vite-scss",
+      "idempotency": true,
       "kind": "controlled",
       "runtime": "react-vite",
       "style": "scss",
@@ -173,6 +174,7 @@
     },
     {
       "id": "react-vite-sass",
+      "idempotency": true,
       "kind": "controlled",
       "runtime": "react-vite",
       "style": "sass",
@@ -184,6 +186,7 @@
     },
     {
       "id": "react-vite-less",
+      "idempotency": true,
       "kind": "controlled",
       "runtime": "react-vite",
       "style": "less",
@@ -283,6 +286,7 @@
     },
     {
       "id": "vue-vite-css",
+      "idempotency": true,
       "kind": "controlled",
       "runtime": "vue-vite",
       "style": "css",
@@ -806,6 +810,7 @@
     },
     {
       "id": "media-workspace-split",
+      "idempotency": true,
       "kind": "controlled",
       "runtime": "react-vite",
       "style": "css",
