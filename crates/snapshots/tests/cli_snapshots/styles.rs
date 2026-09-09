@@ -46,6 +46,7 @@ snapshot_cases! {
     style_nested_conditions => default_setup,
     style_partial_idempotent => default_setup,
     style_preserved_candidate_rerun => default_setup,
+    style_preview_context => default_setup,
     style_pseudo_argument => default_setup,
     style_quoted_global_rerun => default_setup,
     style_quoted_values => default_setup,

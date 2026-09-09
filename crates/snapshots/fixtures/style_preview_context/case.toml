@@ -1,0 +1,14 @@
+[[steps]]
+name = "preview"
+args = ["Button.css", "--dry-run"]
+status = 0
+
+[[steps]]
+name = "write"
+args = ["Button.css"]
+status = 0
+
+[[steps]]
+name = "second run"
+args = ["Button.css"]
+status = 0

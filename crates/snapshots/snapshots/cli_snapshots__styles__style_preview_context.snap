@@ -1,0 +1,28 @@
+---
+source: crates/snapshots/tests/cli_snapshots/styles.rs
+expression: document
+---
+case: style_preview_context
+
+--- step: preview ---
+status: 0
+stdout: "--- a/Button.tsx\n+++ b/Button.tsx\n@@ -6,7 +6,7 @@\n       <h1>Preview context</h1>\n       <p>Before first button</p>\n       <p>First description</p>\n-      <button className=\"button\">First</button>\n+      <button className=\"button p-[13px]\">First</button>\n       <p>After first button</p>\n       <p>Second description</p>\n       <p>Third description</p>\n@@ -14,7 +14,7 @@\n       <p>Fourth description</p>\n       <p>Fifth description</p>\n       <p>Before second button</p>\n-      <button className=\"button\">Second</button>\n+      <button className=\"button p-[13px]\">Second</button>\n       <p>After second button</p>\n       <p>Final description</p>\n     </section>\nPreviewed 1 file(s); 0 rule(s) converted, 1 retained.\n"
+stderr: "warning[retained-global-rule] Button.css:1:1-1:27 Global CSS is never deleted automatically.\n"
+workspace delta:
+  unchanged
+
+--- step: write ---
+status: 0
+stdout: "--- a/Button.tsx\n+++ b/Button.tsx\n@@ -6,7 +6,7 @@\n       <h1>Preview context</h1>\n       <p>Before first button</p>\n       <p>First description</p>\n-      <button className=\"button\">First</button>\n+      <button className=\"button p-[13px]\">First</button>\n       <p>After first button</p>\n       <p>Second description</p>\n       <p>Third description</p>\n@@ -14,7 +14,7 @@\n       <p>Fourth description</p>\n       <p>Fifth description</p>\n       <p>Before second button</p>\n-      <button className=\"button\">Second</button>\n+      <button className=\"button p-[13px]\">Second</button>\n       <p>After second button</p>\n       <p>Final description</p>\n     </section>\nApplied 1 file(s); 0 rule(s) converted, 1 retained.\n"
+stderr: "warning[retained-global-rule] Button.css:1:1-1:27 Global CSS is never deleted automatically.\n"
+workspace delta:
+  modified Button.tsx
+    before: "import './Button.css';\n\nexport function Button() {\n  return (\n    <section>\n      <h1>Preview context</h1>\n      <p>Before first button</p>\n      <p>First description</p>\n      <button className=\"button\">First</button>\n      <p>After first button</p>\n      <p>Second description</p>\n      <p>Third description</p>\n      <p>Omitted middle context</p>\n      <p>Fourth description</p>\n      <p>Fifth description</p>\n      <p>Before second button</p>\n      <button className=\"button\">Second</button>\n      <p>After second button</p>\n      <p>Final description</p>\n    </section>\n  );\n}\n"
+    after: "import './Button.css';\n\nexport function Button() {\n  return (\n    <section>\n      <h1>Preview context</h1>\n      <p>Before first button</p>\n      <p>First description</p>\n      <button className=\"button p-[13px]\">First</button>\n      <p>After first button</p>\n      <p>Second description</p>\n      <p>Third description</p>\n      <p>Omitted middle context</p>\n      <p>Fourth description</p>\n      <p>Fifth description</p>\n      <p>Before second button</p>\n      <button className=\"button p-[13px]\">Second</button>\n      <p>After second button</p>\n      <p>Final description</p>\n    </section>\n  );\n}\n"
+
+--- step: second run ---
+status: 0
+stdout: "Applied 0 file(s); 0 rule(s) converted, 1 retained.\n"
+stderr: "warning[retained-global-rule] Button.css:1:1-1:27 Global CSS is never deleted automatically.\n"
+workspace delta:
+  unchanged

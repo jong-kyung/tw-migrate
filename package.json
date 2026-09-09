@@ -44,6 +44,7 @@
     "prepare": "vp config"
   },
   "dependencies": {
+    "diff": "9.0.0",
     "parse5": "8.0.1"
   },
   "devDependencies": {

@@ -13,7 +13,7 @@ workspace delta:
 
 --- step: with force ---
 status: 0
-stdout: "--- a/good/Good.tsx\n+++ b/good/Good.tsx\n@@ -1,3 +1,3 @@\n-import styles from './Good.module.css';\n-export const Good = () => <div className={styles.good} />;\n \n+import styles from './Good.module.css';\n+export const Good = () => <div className=\"grid\" />;\n \nApplied 1 file(s); 0 rule(s) converted, 1 retained.\n"
+stdout: "--- a/good/Good.tsx\n+++ b/good/Good.tsx\n@@ -1,2 +1,2 @@\n import styles from './Good.module.css';\n-export const Good = () => <div className={styles.good} />;\n+export const Good = () => <div className=\"grid\" />;\nApplied 1 file(s); 0 rule(s) converted, 1 retained.\n"
 stderr: "warning[unsupported-css-module-reference] broken/Broken.module.css Another stylesheet references the CSS Module, so it is retained.\nwarning[unresolved-selector-target] good/Good.module.css:1:1-1:25 No exclusively supported className references were found.\nskipped[broken] Failed to parse [WORKSPACE]/broken/Broken.module.css: Error { kind: Unexpected(\"<eof>\", \"}\"), span: Span { start: 0, end: 1 } }\n"
 workspace delta:
   modified good/Good.tsx
