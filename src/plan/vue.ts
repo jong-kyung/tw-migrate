@@ -11,6 +11,7 @@ import {
   isProjectInput,
   isStylesheetModule,
   normalizedRelativePath,
+  projectPackageSchema,
   rejectSymlinkTarget,
   snapshotFile,
   snapshotLoadedSource,
@@ -466,7 +467,9 @@ export async function preparePackageVue({
   }
 
   const packageIsPrivate =
-    JSON.parse(await snapshotFile(snapshots, join(packageRoot, "package.json"))).private === true;
+    projectPackageSchema.parse(
+      JSON.parse(await snapshotFile(snapshots, join(packageRoot, "package.json"))),
+    ).private === true;
   const files = new Map<string, PreparedSourceFile>();
   const stylesheets: StylesheetEntry[] = [];
   const stylePaths = new Set<string>();

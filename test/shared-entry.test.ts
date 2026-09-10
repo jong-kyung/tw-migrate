@@ -10,7 +10,7 @@ import {
   tailwindEntryCatalog,
 } from "../src/plan/entry.ts";
 import { findTailwindEntries } from "../src/tailwind.ts";
-import { indexStylesheetDependents } from "../src/util/shared.ts";
+import { indexStylesheetDependents, projectPackageSchema } from "../src/util/shared.ts";
 import type { PreparedSourceFile } from "../src/types.ts";
 
 // Platform-resolved so separators and drive letters match what the proof
@@ -18,6 +18,34 @@ import type { PreparedSourceFile } from "../src/types.ts";
 const root = resolve("/repo");
 const child = join(root, "packages", "app");
 const entry = join(root, "globals.css");
+
+test("validates consumed package metadata without narrowing export patterns", () => {
+  const metadata = {
+    name: "@example/app",
+    private: true,
+    main: "./index.js",
+    module: "./index.mjs",
+    exports: { ".": { import: ["./index.mjs", null], require: "./index.cjs" }, "./*": "./src/*" },
+    browser: { "./server.js": false },
+    workspaces: ["packages/*"],
+    scripts: { build: "some-tool" },
+    customTool: { arbitrary: true },
+  };
+  expect(projectPackageSchema.parse(metadata)).toEqual(metadata);
+  expect(projectPackageSchema.parse({})).toEqual({});
+  for (const value of [
+    null,
+    [],
+    1,
+    "package",
+    { private: "true" },
+    { private: null },
+    { name: false },
+    { name: null },
+  ]) {
+    expect(projectPackageSchema.safeParse(value).success).toBe(false);
+  }
+});
 
 test("catalogs Tailwind entries by owning package", () => {
   const styleSources = new Map([
@@ -107,6 +135,9 @@ test("proves scan coverage through literal scopes and automatic bases", () => {
     "http://example.invalid/fonts.css",
     "//example.invalid/fonts.css",
     "data:text/css,@source%20none;",
+    "HTTPS://example.invalid/fonts.css",
+    "hTtP://example.invalid/fonts.css",
+    "DATA:text/css,@source%20none;",
   ]) {
     expect(prove(`@import "${specifier}";\n@import "tailwindcss";\n`)).toBe("automatic");
     expect(prove(`@import url("${specifier}");\n@import "tailwindcss" source(none);\n`)).toBe(null);

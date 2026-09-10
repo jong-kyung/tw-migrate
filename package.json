@@ -45,7 +45,8 @@
   },
   "dependencies": {
     "diff": "9.0.0",
-    "parse5": "8.0.1"
+    "parse5": "8.0.1",
+    "zod": "4.5.4"
   },
   "devDependencies": {
     "@napi-rs/cli": "catalog:",

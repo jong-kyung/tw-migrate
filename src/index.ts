@@ -1,6 +1,8 @@
 import { lstat, readFile } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
 
+import * as z from "zod/mini";
+
 import { unifiedDiff } from "./util/diff.ts";
 import { collectFiles, resolveScope, scannerIgnoredPaths } from "./discovery.ts";
 import { parseHtmlSource, TEMPLATE_EXPRESSIONS, TEMPLATE_MARKERS } from "./parser/html.ts";
@@ -23,6 +25,7 @@ import {
   isWithin,
   normalizedRelativePath,
   packageFailure,
+  projectPackageSchema,
   recordSnapshot,
   rejectSymlinkTarget,
   snapshotFile,
@@ -133,7 +136,28 @@ function indexWarningPositions(
   return positions;
 }
 
+// Keep the public interface (and its JSDoc) independent of schema internals.
+// Paths are checked, not normalized: authored whitespace is meaningful.
+const optionPath = z.string().check(
+  z.minLength(1),
+  z.refine((path) => !path.includes("\0")),
+);
+const migrateOptionsSchema = z.strictObject({
+  styleFile: z.optional(optionPath),
+  cwd: z.optional(optionPath),
+  write: z.optional(z.boolean()),
+  tailwindCss: z.optional(optionPath),
+  workspaces: z.optional(z.boolean()),
+  force: z.optional(z.boolean()),
+  extractMediaQueries: z.optional(z.boolean()),
+} satisfies { [Key in keyof Required<MigrateOptions>]: z.ZodMiniType<MigrateOptions[Key]> });
+
 export async function migrate(options: MigrateOptions = {}): Promise<MigrationReport> {
+  const parsedOptions = migrateOptionsSchema.safeParse(options);
+  if (!parsedOptions.success) {
+    throw new TypeError(`Invalid migrate options: ${parsedOptions.error.message}`);
+  }
+  options = parsedOptions.data;
   if (options.styleFile && options.workspaces) {
     throw new TypeError("styleFile cannot be combined with workspaces");
   }
@@ -521,10 +545,7 @@ async function preparePackage(
     try {
       const rawPackageJson = snapshots.get(join(packageRoot, "package.json"));
       if (rawPackageJson !== undefined) {
-        const parsed: unknown = JSON.parse(rawPackageJson);
-        if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-          packageJson = { ...parsed };
-        }
+        packageJson = projectPackageSchema.parse(JSON.parse(rawPackageJson));
       }
     } catch (error) {
       return recover(error);
