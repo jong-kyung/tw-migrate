@@ -286,6 +286,8 @@
     },
     {
       "id": "vue-vite-css",
+      "fixture": "vue-vite/css",
+      "scope": "package",
       "idempotency": true,
       "kind": "controlled",
       "runtime": "vue-vite",
@@ -463,6 +465,47 @@
           },
           "cardinality": 1,
           "identity": ["panel"]
+        },
+        "child-root": {
+          "route": "/",
+          "viewport": {
+            "width": 1280,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "data",
+              "value": "child-root"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "data",
+            "value": "child-root"
+          },
+          "cardinality": 1,
+          "identity": ["child-root"]
+        },
+        "child-interior": {
+          "route": "/",
+          "viewport": {
+            "width": 1280,
+            "height": 720
+          },
+          "readiness": {
+            "selector": {
+              "type": "data",
+              "value": "child-interior"
+            },
+            "cardinality": 1
+          },
+          "selector": {
+            "type": "data",
+            "value": "child-interior"
+          },
+          "cardinality": 1,
+          "identity": ["child-interior"],
+          "witness": false
         }
       }
     },

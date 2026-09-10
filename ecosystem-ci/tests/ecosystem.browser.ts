@@ -21,6 +21,10 @@ test("preserves the fixture through the installed migration lifecycle", async ()
   expect(result.phases.at(-1)).toBe("complete");
   if (project.kind !== "smoke") expect(result.report!.candidates).toContain(project.source.after);
   if (project.kind === "controlled") {
+    if (project.id === "vue-vite-css") {
+      expect(result.report!.candidates).toContain("p-[17px]");
+      expect(result.report!.changedFiles).not.toContain("src/Child.vue");
+    }
     expect(result.phases.includes("idempotency")).toBe(project.idempotency === true);
   } else if (project.kind === "smoke") {
     expect(result.phases).not.toContain("second-cli-started");
