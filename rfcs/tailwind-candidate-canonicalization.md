@@ -365,7 +365,7 @@ Update the quoted-value fixtures that currently assert `[font-family:...]`. Add 
 3. Add declaration-shape comparison, runtime custom-property and `@property` reservations, reference-token metadata, and the bounded canonicalization replan to package-entry group planning.
 4. Add structured font probes, targeted existing-token reuse, scan-corpus compilation comparison, token allocation, and provisional entry augmentation.
 5. Add unwritable-entry retention and font diagnostics.
-6. Document the new warning codes in [docs/warnings.md](../docs/warnings.md), which the planner's pinned warning-code test enforces.
+6. Document the new warning codes in [docs/warnings.md](../docs/warnings.md).
 7. Update public API tests and packaged CLI snapshots.
 8. Run focused Rust and Node suites, then `vp check`, `vp run test`, and `vp run test:snapshots`.
 

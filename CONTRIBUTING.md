@@ -73,7 +73,7 @@ The [CI workflow](.github/workflows/ci.yml) and [Ecosystem browser workflow](.gi
 - Keep each change focused and include a reproducer for bugs.
 - Put Rust parser/planner tests beside their implementation, API and byte-preservation assertions in `test/`, and CLI status/output/write cases in packaged snapshots.
 - Update CLI fixtures and snapshots together. Preserve exact reports, source bytes, causal witnesses, and browser probes when changing the ecosystem harness.
-- Document new warning codes in [`docs/warnings.md`](docs/warnings.md) and update `WARNING_CODES` in `crates/tw_migrate_planner/src/lib.rs`; its test checks the list against emitted codes.
+- Update [`docs/warnings.md`](docs/warnings.md) when adding, changing, or removing warning codes.
 - Leave generated `dist/`, native `.node` files, temporary workspaces, and logs out of commits.
 
 For code ownership and migration safety invariants, see [`AGENTS.md`](AGENTS.md). Design decisions and supported scope live in [`rfcs/`](rfcs/).

@@ -1,6 +1,6 @@
 # Warning codes
 
-The CLI reports warnings with a code, source location, and explanation. Unsupported or ambiguous rules stay in place. This table lists the emitted codes; the planner test checks it against the implementation.
+The CLI reports warnings with a code, source location, and explanation. Unsupported or ambiguous rules stay in place.
 
 | Code                                 | Meaning                                                                                                                                                                             |
 | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

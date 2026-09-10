@@ -46,7 +46,7 @@ The TypeScript layer discovers projects, loads project-local compilers and Tailw
 - Choose focused checks from [CONTRIBUTING.md](CONTRIBUTING.md#validation), then run the owning suite. For CLI-visible changes, test the installed package rather than relying only on source-level tests.
 - Read the [snapshot guide](crates/snapshots/README.md) before editing the runner or fixtures. Keep workspaces outside the repository to prevent dependency leakage, and do not broaden normalization to hide product-visible differences.
 - Keep ecosystem assertions in the existing lifecycle/browser tests; do not recreate the deleted standalone harness unit suite. Preserve exact reports/bytes, rendering probes, causal witnesses, and selection before artifact preparation.
-- Update [warning documentation](docs/warnings.md) and the planner's `WARNING_CODES` list together. `warning_codes_are_pinned_to_the_docs` checks both the table and emitted codes.
+- Update [warning documentation](docs/warnings.md) when adding, changing, or removing warning codes.
 - Published JavaScript comes from `dist/`; local tests run `src/` with a debug addon. `src/native.ts` checks the local addon before the installed platform package. Do not commit generated `.node` files.
 
 ## Design references
