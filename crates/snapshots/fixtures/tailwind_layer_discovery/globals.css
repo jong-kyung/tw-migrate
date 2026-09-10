@@ -1,1 +1,4 @@
+@import "HTTPS://example.invalid/fonts.css";
+@import url("hTtP://example.invalid/theme.css");
 @import "tailwindcss/index.css";
+@import "./layers.css";

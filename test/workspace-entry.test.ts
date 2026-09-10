@@ -29,6 +29,18 @@ function app(name: string, css: string = mediaCss): Record<string, string> {
   };
 }
 
+test("rejects malformed shared-entry metadata without guessing package privacy", async () => {
+  const css = ".button { padding: 13px; }\n";
+  const cwd = await workspace({
+    "package.json": '{"private":true}',
+    "globals.css": '@import "tailwindcss";\n',
+    ...app("app", css),
+    "packages/app/package.json": '{"private":"true","exports":{".":["./main.tsx",null]}}',
+  });
+  await expect(migrate({ cwd, workspaces: true, write: true })).rejects.toThrow(/private/);
+  expect(await readFile(join(cwd, "packages/app/Button.module.css"), "utf8")).toBe(css);
+});
+
 test("an entry group shares one allocation and one composed entry edit", async () => {
   const cwd = await workspace({
     "package.json": '{"private":true}',
@@ -63,6 +75,9 @@ test("an entry group shares one allocation and one composed entry edit", async (
 test.each([
   "https://fonts.googleapis.com/css2?family=Inter&display=swap",
   "//fonts.googleapis.com/css2?family=Inter&display=swap",
+  "HTTPS://example.invalid/fonts.css",
+  "hTtP://example.invalid/fonts.css",
+  "DATA:text/css,@source%20none;",
 ])("resolves a shared Tailwind entry with external imports: %s", async (url) => {
   const entry = `@import url("${url}");\n@import "tailwindcss";\n`;
   const cwd = await workspace({

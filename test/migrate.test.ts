@@ -18,7 +18,8 @@ import { onTestFinished, test } from "vite-plus/test";
 
 import { __unstable__loadDesignSystem as loadDesignSystem } from "tailwindcss";
 
-import { migrate } from "../src/index.ts";
+import { migrate, type MigrateOptions } from "../src/index.ts";
+import { isExternalStylesheet } from "../src/tailwind.ts";
 import { compileSassEntry, loadProjectSass, sourceMappings } from "../src/parser/style-compiler.ts";
 import { writeChanges } from "../src/util/write.ts";
 
@@ -42,6 +43,73 @@ async function fixture({ css = initialCss, tsx = initialTsx } = {}) {
   ]);
   return cwd;
 }
+
+test("rejects invalid public options before filesystem discovery", async () => {
+  const invalid: unknown[] = [null, false, 1, "", [], { typo: true }, { write: "false" }];
+  for (const key of ["write", "workspaces", "force", "extractMediaQueries"]) {
+    for (const value of [null, 0, "true", {}, []]) invalid.push({ [key]: value });
+  }
+  for (const key of ["cwd", "styleFile", "tailwindCss"]) {
+    for (const value of [null, false, 1, {}, [], "", "bad\0path"]) invalid.push({ [key]: value });
+  }
+  for (const options of invalid) {
+    // A missing cwd makes discovery observable without touching a real project.
+    const input =
+      options && typeof options === "object" && !Array.isArray(options)
+        ? { cwd: join(tmpdir(), "tw-migrate-does-not-exist", "missing"), ...options }
+        : options;
+    await assert.rejects(migrate(input as MigrateOptions), {
+      name: "TypeError",
+      message: /Invalid migrate options/,
+    });
+  }
+  for (const key of ["styleFile", "tailwindCss"]) {
+    await assert.rejects(migrate({ [key]: "input.css", workspaces: true }), {
+      name: "TypeError",
+      message: `${key} cannot be combined with workspaces`,
+    });
+  }
+});
+
+test("keeps undefined public options and preview defaults", async () => {
+  const cwd = await fixture();
+  const report = await migrate({
+    cwd,
+    styleFile: undefined,
+    tailwindCss: undefined,
+    write: undefined,
+    workspaces: undefined,
+    force: undefined,
+    extractMediaQueries: undefined,
+  });
+  assert.deepEqual(report.changedFiles, ["Button.module.css", "Button.tsx"]);
+  assert.equal(await readFile(join(cwd, "Button.module.css"), "utf8"), initialCss);
+  assert.equal(await readFile(join(cwd, "Button.tsx"), "utf8"), initialTsx);
+});
+
+test("classifies only authored external CSS URL schemes", () => {
+  for (const value of [
+    "HTTPS://example.invalid/a.css",
+    "hTtP://example.invalid/a.css",
+    "DATA:text/css,.a%7B%7D",
+    "//example.invalid/a.css",
+  ]) {
+    assert.equal(isExternalStylesheet(value), true, value);
+  }
+  for (const value of [
+    "./HTTPS://local.css",
+    "https:local.css",
+    "https:/local.css",
+    "file:///tmp/a.css",
+    "ftp://example.invalid/a.css",
+    "C:\\styles.css",
+    " https://example.invalid/a.css",
+    "https://",
+    "./theme.css",
+  ]) {
+    assert.equal(isExternalStylesheet(value), false, value);
+  }
+});
 
 test("canonicalizes aliased cwd paths before Git discovery", async () => {
   const cwd = await fixture();
@@ -188,6 +256,9 @@ test.each([
   '@import "//fonts.googleapis.com/css2?family=Inter&display=swap";',
   '@import url("//fonts.googleapis.com/css2?family=Inter&display=swap");',
   '@import "data:text/css,.remote%7Bcolor:red%7D";',
+  '@import "HTTPS://example.invalid/fonts.css";',
+  '@import url("hTtP://example.invalid/fonts.css");',
+  '@import "DATA:text/css,.remote%7Bcolor:red%7D";',
 ])("preserves external imports without loading them: %s", async (externalImport) => {
   const cwd = await fixture();
   const entry = `${externalImport}\n@import "tailwindcss";\n@import "./theme.css";\n`;
@@ -202,6 +273,15 @@ test.each([
   assert.deepEqual(report.failures, []);
   assert.equal(await readFile(join(cwd, "globals.css"), "utf8"), entry);
   assert.equal(await readFile(join(cwd, "theme.css"), "utf8"), theme);
+});
+
+test("rejects malformed installed Tailwind version metadata", async () => {
+  const cwd = await fixture();
+  const packageRoot = join(cwd, "node_modules", "tailwindcss");
+  await mkdir(packageRoot, { recursive: true });
+  await writeFile(join(packageRoot, "package.json"), '{"version":["4.0.0"],"otherTool":true}');
+  await assert.rejects(migrate({ cwd, write: true }), /version/);
+  assert.equal(await readFile(join(cwd, "Button.module.css"), "utf8"), initialCss);
 });
 
 test("still rejects missing local imports in the Tailwind entry", async () => {

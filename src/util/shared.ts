@@ -1,9 +1,18 @@
 import { lstat, readFile } from "node:fs/promises";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 
+import * as z from "zod/mini";
+
 import { errorCode, stylesheetAnalysis } from "../native.ts";
 import { MISSING_STYLE_COMPILER_MESSAGES, isPreprocessorPath } from "../parser/style-compiler.ts";
 import type { CssImport, MigrationFailure } from "../types.ts";
+
+// Validate only consumed scalar metadata. Exports/browser can contain nested
+// conditions, arrays, nulls, and false; keep them intact for conservative proof.
+export const projectPackageSchema = z.looseObject({
+  name: z.optional(z.string()),
+  private: z.optional(z.boolean()),
+});
 
 export const SOURCE_EXTENSIONS = new Set([
   ".html",

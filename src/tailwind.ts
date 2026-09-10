@@ -3,6 +3,8 @@ import { createRequire } from "node:module";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import * as z from "zod/mini";
+
 import { cssDirectives, stylesheetAnalysis } from "./native.ts";
 import { loadProjectModule } from "./parser/style-compiler.ts";
 import { isProjectInput, snapshotFile } from "./util/shared.ts";
@@ -28,9 +30,18 @@ export function findTailwindEntries(
   );
 }
 
+const externalStylesheetUrl = z.url({ protocol: /^(https?|data)$/ });
+const tailwindPackageSchema = z.object({ version: z.string() });
+
 // External imports stay in CSS for the browser, outside the local stylesheet graph.
 export function isExternalStylesheet(specifier: string): boolean {
-  return specifier.startsWith("//") || /^(?:https?:\/\/|data:)/.test(specifier);
+  // URL accepts shorthand HTTP paths and leading whitespace. Neither is proof
+  // that an authored CSS specifier is external rather than a local filename.
+  return (
+    specifier.startsWith("//") ||
+    (/^(?:https?:\/\/|data:)/i.test(specifier) &&
+      externalStylesheetUrl.safeParse(specifier).success)
+  );
 }
 
 export function selectTailwindEntry(entries: string[], configuredPath?: string): string {
@@ -55,8 +66,8 @@ export async function loadTailwind(
   } catch {
     throw new Error("Tailwind v4 must be installed in the target project.");
   }
-  const packageJson = JSON.parse(await readFile(packagePath, "utf8"));
-  if (!String(packageJson.version).startsWith("4."))
+  const packageJson = tailwindPackageSchema.parse(JSON.parse(await readFile(packagePath, "utf8")));
+  if (!packageJson.version.startsWith("4."))
     throw new Error(`Tailwind v4 is required; found ${packageJson.version}.`);
 
   const { __unstable__loadDesignSystem: loadDesignSystem } = await loadProjectModule<{

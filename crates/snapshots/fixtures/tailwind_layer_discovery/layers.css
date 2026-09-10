@@ -1,2 +1,4 @@
+@import "DATA:text/css,.remote%7Bcolor:red%7D";
+@import "//example.invalid/fonts.css";
 @import "tailwindcss/theme.css";
 @import "tailwindcss/preflight.css";
