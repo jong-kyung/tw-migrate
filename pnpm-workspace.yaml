@@ -6,6 +6,7 @@ catalog:
   "@napi-rs/cli": 3.9.0
   "@types/node": 24.13.3
   "@vitest/browser-playwright": 4.1.10
+  knip: 6.35.0
   less: 4.8.1
   playwright: 1.62.1
   sass: 1.102.0
