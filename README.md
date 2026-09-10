@@ -18,9 +18,9 @@ npx tw-migrate --help                     # See all options
 
 `pnpm dlx tw-migrate` and `yarn dlx tw-migrate` accept the same arguments.
 
-**The CLI writes files by default.** Review the preview before applying. Unsupported or ambiguous rules stay in place with [warnings](docs/warnings.md). Use `--tailwind-css path/to/globals.css` to select an entry when discovery is ambiguous.
+**The CLI writes files by default.** Review the preview before applying. Unsupported or ambiguous rules stay in place with [warnings](https://github.com/jong-kyung/tw-migrate/blob/main/docs/warnings.md). Use `--tailwind-css path/to/globals.css` to select an entry when discovery is ambiguous.
 
 ## More
 
-- [Supported behavior and design](rfcs/)
-- [Contributing and local development](CONTRIBUTING.md)
+- [Supported behavior and design](https://github.com/jong-kyung/tw-migrate/tree/main/rfcs/)
+- [Contributing and local development](https://github.com/jong-kyung/tw-migrate/blob/main/CONTRIBUTING.md)
