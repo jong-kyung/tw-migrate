@@ -6,6 +6,7 @@ import { closeSync, openSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import net from "node:net";
 import { isAbsolute, relative } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 import type { RunningServer } from "./types.ts";
 
@@ -42,25 +43,38 @@ export async function sha256(path: string): Promise<string> {
 }
 
 export async function terminateTree(child: ChildProcess): Promise<void> {
-  if (!child || child.exitCode !== null) return;
-  const exited = new Promise<void>((resolveExit) => child.once("exit", () => resolveExit()));
-  const pid = child.pid as number;
-  if (process.platform === "win32") {
-    spawnSync("taskkill.exe", ["/pid", String(pid), "/t", "/f"], { windowsHide: true });
-  } else {
-    try {
-      process.kill(-pid, "SIGTERM");
-    } catch {}
+  if (!child?.pid) return;
+  const pid = child.pid;
+  if (process.platform !== "win32") {
+    // Detached children lead an owned process group. The leader's exit does
+    // not mean its descendants exited, so probe the group through escalation.
+    for (const signal of ["SIGTERM", "SIGKILL"] as const) {
+      try {
+        process.kill(-pid, signal);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+        throw error;
+      }
+      const deadline = Date.now() + 3_000;
+      while (Date.now() < deadline) {
+        try {
+          process.kill(-pid, 0);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+          throw error;
+        }
+        await delay(50);
+      }
+    }
+    throw new Error(`child process group ${pid} did not exit`);
   }
+  if (child.exitCode !== null) return;
+  const exited = new Promise<void>((resolveExit) => child.once("exit", () => resolveExit()));
+  spawnSync("taskkill.exe", ["/pid", String(pid), "/t", "/f"], { windowsHide: true });
   const stopped = await Promise.race([
     exited.then(() => true),
     new Promise<boolean>((resolveWait) => setTimeout(() => resolveWait(false), 3_000)),
   ]);
-  if (!stopped && process.platform !== "win32") {
-    try {
-      process.kill(-pid, "SIGKILL");
-    } catch {}
-  }
   if (!stopped) {
     const forced: boolean = await Promise.race([
       exited.then(() => true),
@@ -174,8 +188,7 @@ export async function startHttpServerProcess(
   try {
     await waitForHttpOk(readyUrl, child, timeoutMs, description);
   } catch (error) {
-    await terminateTree(child);
-    closeSync(log);
+    await terminateTree(child).finally(() => closeSync(log));
     throw error;
   }
   let stopped = false;
@@ -184,8 +197,7 @@ export async function startHttpServerProcess(
     async stop() {
       if (stopped) return;
       stopped = true;
-      await terminateTree(child);
-      closeSync(log);
+      await terminateTree(child).finally(() => closeSync(log));
     },
   };
 }

@@ -11,9 +11,17 @@ declare module "vitest" {
 
 declare module "vitest/browser" {
   interface BrowserCommands {
+    assertProcessTreeTeardown: () => Promise<void>;
     runEcosystemCase: (id: string) => Promise<{ report: MigrationReport | null; phases: string[] }>;
   }
 }
+
+test.skipIf(inject("ecosystemProject").id !== "react-vite-css")(
+  "stops descendants after parent exit and command timeout on POSIX",
+  async () => {
+    await commands.assertProcessTreeTeardown();
+  },
+);
 
 test("preserves the fixture through the installed migration lifecycle", async () => {
   const project = inject("ecosystemProject");
