@@ -185,6 +185,8 @@ test.each([
   '@import "https://fonts.googleapis.com/css2?family=Inter&display=swap";',
   '@import url("https://fonts.googleapis.com/css2?family=Inter&display=swap");',
   '@import url("http://example.invalid/fonts.css");',
+  '@import "//fonts.googleapis.com/css2?family=Inter&display=swap";',
+  '@import url("//fonts.googleapis.com/css2?family=Inter&display=swap");',
   '@import "data:text/css,.remote%7Bcolor:red%7D";',
 ])("preserves external imports without loading them: %s", async (externalImport) => {
   const cwd = await fixture();

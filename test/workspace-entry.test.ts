@@ -60,9 +60,11 @@ test("an entry group shares one allocation and one composed entry edit", async (
   expect(again.changedFiles).toEqual([]);
 });
 
-test("resolves a shared Tailwind entry with external imports", async () => {
-  const entry =
-    '@import url("https://fonts.googleapis.com/css2?family=Inter&display=swap");\n@import "tailwindcss";\n';
+test.each([
+  "https://fonts.googleapis.com/css2?family=Inter&display=swap",
+  "//fonts.googleapis.com/css2?family=Inter&display=swap",
+])("resolves a shared Tailwind entry with external imports: %s", async (url) => {
+  const entry = `@import url("${url}");\n@import "tailwindcss";\n`;
   const cwd = await workspace({
     "package.json": '{"private":true}',
     "globals.css": entry,

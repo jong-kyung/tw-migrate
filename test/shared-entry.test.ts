@@ -105,6 +105,7 @@ test("proves scan coverage through literal scopes and automatic bases", () => {
   for (const specifier of [
     "https://example.invalid/fonts.css",
     "http://example.invalid/fonts.css",
+    "//example.invalid/fonts.css",
     "data:text/css,@source%20none;",
   ]) {
     expect(prove(`@import "${specifier}";\n@import "tailwindcss";\n`)).toBe("automatic");

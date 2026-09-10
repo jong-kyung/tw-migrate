@@ -28,9 +28,9 @@ export function findTailwindEntries(
   );
 }
 
-// Match Tailwind's import loader: these imports stay in CSS for the browser.
+// External imports stay in CSS for the browser, outside the local stylesheet graph.
 export function isExternalStylesheet(specifier: string): boolean {
-  return /^(?:https?:\/\/|data:)/.test(specifier);
+  return specifier.startsWith("//") || /^(?:https?:\/\/|data:)/.test(specifier);
 }
 
 export function selectTailwindEntry(entries: string[], configuredPath?: string): string {
@@ -72,6 +72,7 @@ export async function loadTailwind(
     return { path, base: dirname(path), module: imported.default ?? imported };
   };
   const loadStylesheet: StylesheetLoader = async (id, sheetBase) => {
+    if (isExternalStylesheet(id)) return { content: "", base: sheetBase };
     let path;
     if (id === "tailwindcss") path = join(tailwindRoot, "index.css");
     else if (id.startsWith("tailwindcss/")) {
