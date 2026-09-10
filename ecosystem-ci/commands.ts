@@ -14,6 +14,21 @@ import { terminateTree, waitForChild } from "./shared.ts";
 export const commands = {
   async assertProcessTreeTeardown() {
     if (process.platform === "win32") return;
+    const assertDescendantStopped = async (url: string) => {
+      const deadline = Date.now() + 3_000;
+      while (Date.now() < deadline) {
+        try {
+          await (await fetch(url, { signal: AbortSignal.timeout(500) })).text();
+        } catch (error) {
+          // A timeout is not proof of teardown: require a closed listener.
+          const code = ((error as Error).cause as NodeJS.ErrnoException)?.code;
+          if (code === "ECONNREFUSED") return;
+          if (code !== "ECONNRESET") throw error;
+        }
+        await delay(50);
+      }
+      assert.fail("descendant server must stop after teardown");
+    };
     // The descendant ignores TERM and serves only loopback. Both processes
     // self-expire as a backstop if the test runner itself is interrupted.
     const descendantSource = `
@@ -45,11 +60,12 @@ export const commands = {
         { detached: true, stdio: ["ignore", "ignore", "ignore", "ipc"] },
       );
       const exited = once(parent, "exit", { signal: AbortSignal.timeout(10_000) });
+      let url: string | undefined;
       try {
         const [port] = await once(parent, "message", { signal: AbortSignal.timeout(5_000) });
         if (mode === "already-exited") await exited;
         assert.equal(parent.exitCode, mode === "already-exited" ? 0 : null);
-        const url = `http://127.0.0.1:${port}`;
+        url = `http://127.0.0.1:${port}`;
         assert.equal(
           await (await fetch(url, { signal: AbortSignal.timeout(1_000) })).text(),
           "descendant",
@@ -63,8 +79,7 @@ export const commands = {
           await terminateTree(parent);
         }
         await exited;
-        assert.throws(() => process.kill(-parent.pid!, 0), { code: "ESRCH" });
-        await assert.rejects(fetch(url, { signal: AbortSignal.timeout(1_000) }));
+        await assertDescendantStopped(url);
         await terminateTree(parent);
       } finally {
         // Never target anything except this test's detached process group.
@@ -74,17 +89,7 @@ export const commands = {
           assert.equal((error as NodeJS.ErrnoException).code, "ESRCH");
         }
         await exited;
-        const deadline = Date.now() + 3_000;
-        while (Date.now() < deadline) {
-          try {
-            process.kill(-parent.pid!, 0);
-          } catch (error) {
-            assert.equal((error as NodeJS.ErrnoException).code, "ESRCH");
-            break;
-          }
-          await delay(50);
-        }
-        assert.throws(() => process.kill(-parent.pid!, 0), { code: "ESRCH" });
+        if (url) await assertDescendantStopped(url);
       }
     }
   },

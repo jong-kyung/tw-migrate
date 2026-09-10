@@ -55,6 +55,9 @@ export async function terminateTree(child: ChildProcess): Promise<void> {
         if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
         throw error;
       }
+      // SIGKILL delivery is best-effort, not synchronous proof of exit.
+      // Zombie-only groups may persist until reaped, so do not wait for ESRCH.
+      if (signal === "SIGKILL") return;
       const deadline = Date.now() + 3_000;
       while (Date.now() < deadline) {
         try {
@@ -66,7 +69,6 @@ export async function terminateTree(child: ChildProcess): Promise<void> {
         await delay(50);
       }
     }
-    throw new Error(`child process group ${pid} did not exit`);
   }
   if (child.exitCode !== null) return;
   const exited = new Promise<void>((resolveExit) => child.once("exit", () => resolveExit()));
@@ -95,8 +97,8 @@ export async function waitForChild(
     return { code, signal };
   } catch (error) {
     if (!(error instanceof Error && error.name === "AbortError")) throw error;
-    // terminateTree is internally bounded (two 3-second waits) and always
-    // settles, so no extra teardown timeout is needed here.
+    // terminateTree is internally bounded, so no extra teardown timeout is
+    // needed here. POSIX teardown returns after escalation, not confirmed exit.
     await terminateTree(child);
     throw new Error(`command timed out after ${timeoutMs}ms`);
   }
