@@ -102,6 +102,15 @@ test("proves scan coverage through literal scopes and automatic bases", () => {
     scanProof({ entry: entryPath, entrySource, packageRoot: child });
 
   expect(prove('@import "tailwindcss";\n')).toBe("automatic");
+  for (const specifier of [
+    "https://example.invalid/fonts.css",
+    "http://example.invalid/fonts.css",
+    "//example.invalid/fonts.css",
+    "data:text/css,@source%20none;",
+  ]) {
+    expect(prove(`@import "${specifier}";\n@import "tailwindcss";\n`)).toBe("automatic");
+    expect(prove(`@import url("${specifier}");\n@import "tailwindcss" source(none);\n`)).toBe(null);
+  }
   expect(prove('@import "tailwindcss";\n@source "./packages/app";\n')).toBe("literal");
   expect(prove('@import "tailwindcss";\n@source "./packages";\n')).toBe("literal");
   expect(prove('@import "tailwindcss" source(none);\n')).toBe(null);

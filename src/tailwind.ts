@@ -28,6 +28,11 @@ export function findTailwindEntries(
   );
 }
 
+// External imports stay in CSS for the browser, outside the local stylesheet graph.
+export function isExternalStylesheet(specifier: string): boolean {
+  return specifier.startsWith("//") || /^(?:https?:\/\/|data:)/.test(specifier);
+}
+
 export function selectTailwindEntry(entries: string[], configuredPath?: string): string {
   if (configuredPath) return configuredPath;
   if (entries.length === 0)
@@ -67,6 +72,7 @@ export async function loadTailwind(
     return { path, base: dirname(path), module: imported.default ?? imported };
   };
   const loadStylesheet: StylesheetLoader = async (id, sheetBase) => {
+    if (isExternalStylesheet(id)) return { content: "", base: sheetBase };
     let path;
     if (id === "tailwindcss") path = join(tailwindRoot, "index.css");
     else if (id.startsWith("tailwindcss/")) {
@@ -147,6 +153,7 @@ async function extractThemeTokensFromGraph(
 ): Promise<Record<string, string>> {
   const tokens: Record<string, string> = {};
   for (const { specifier: spec, reference } of importEntries(css)) {
+    if (isExternalStylesheet(spec)) continue;
     const key = `${base}\0${spec}`;
     if (seen.has(key)) continue;
     seen.add(key);

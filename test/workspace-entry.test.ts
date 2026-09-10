@@ -60,6 +60,28 @@ test("an entry group shares one allocation and one composed entry edit", async (
   expect(again.changedFiles).toEqual([]);
 });
 
+test.each([
+  "https://fonts.googleapis.com/css2?family=Inter&display=swap",
+  "//fonts.googleapis.com/css2?family=Inter&display=swap",
+])("resolves a shared Tailwind entry with external imports: %s", async (url) => {
+  const entry = `@import url("${url}");\n@import "tailwindcss";\n`;
+  const cwd = await workspace({
+    "package.json": '{"private":true}',
+    "globals.css": entry,
+    ...app("app", ".button { padding: 13px; }\n"),
+  });
+
+  const report = await migrate({ cwd, workspaces: true });
+
+  expect(report.failures).toEqual([]);
+  expect(report.changedFiles).toEqual([
+    "packages/app/Button.module.css",
+    "packages/app/Button.tsx",
+  ]);
+  expect(report.candidates).toEqual(["p-[13px]"]);
+  expect(await readFile(join(cwd, "globals.css"), "utf8")).toBe(entry);
+});
+
 test("composes moved keyframes from group members into the shared entry", async () => {
   const cwd = await workspace({
     "package.json": '{"private":true}',
