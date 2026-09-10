@@ -1,0 +1,20 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignoreDependencies": ["vue"],
+  "ignoreBinaries": ["taskkill.exe", "tw-migrate"],
+  "ignoreExportsUsedInFile": true,
+  "workspaces": {
+    ".": {
+      "entry": [
+        "src/{bin,index}.ts",
+        "test/**/*.test.ts",
+        "ecosystem-ci/{packages,vite.config}.ts",
+        "ecosystem-ci/tests/**/*.ts"
+      ],
+      "project": [
+        "{src,test,ecosystem-ci}/**/*.{ts,tsx,js,jsx,vue,css,scss,sass,less}",
+        "!ecosystem-ci/fixtures/**"
+      ]
+    }
+  }
+}
