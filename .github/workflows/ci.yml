@@ -22,6 +22,22 @@ permissions:
   contents: read
 
 jobs:
+  duplication:
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: kucherenko/jscpd@b4cdcc250df0aaa9c3a8d2ba57f26e4c6510a909 # v5.2.0
+        with:
+          version: 5.2.0
+          path: src crates ecosystem-ci test
+          ignore: '**/fixtures/**,crates/snapshots/snapshots/**'
+          baseline-from-ref: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
+          fail-on-new-clones: true
+          upload-sarif: false
+
   cargo-shear:
     runs-on: ubuntu-latest
     steps:
