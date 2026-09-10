@@ -22,4 +22,5 @@ jobs:
           run-install: false
       - run: vp install --frozen-lockfile
       - run: vp check --fix
-      - uses: autofix-ci/action@c5b2d67aa2274e7b5a18224e8171550871fc7e4a
+      - if: ${{ !cancelled() }}
+        uses: autofix-ci/action@c5b2d67aa2274e7b5a18224e8171550871fc7e4a
