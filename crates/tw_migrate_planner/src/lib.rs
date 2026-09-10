@@ -56,8 +56,8 @@ use vue::{
 
 /// Every warning code the migration can emit, including reason strings that
 /// flow through `rule.warning` and the JS-side `candidate-compilation-failure`
-/// stamped in index.js. Adding or removing a code requires updating this list
-/// and the README warning table; `tests::warning_codes_are_pinned_to_the_readme`
+/// stamped in src/index.ts. Adding or removing a code requires updating this list
+/// and docs/warnings.md; `tests::warning_codes_are_pinned_to_the_docs`
 /// enforces both.
 #[cfg(test)]
 const WARNING_CODES: &[&str] = &[
@@ -142,16 +142,16 @@ mod tests {
     mod vue;
 
     #[test]
-    fn warning_codes_are_pinned_to_the_readme() {
-        let readme = include_str!("../../../README.md");
-        let documented = readme
+    fn warning_codes_are_pinned_to_the_docs() {
+        let docs = include_str!("../../../docs/warnings.md");
+        let documented = docs
             .lines()
             .filter_map(|line| line.strip_prefix("| `")?.split('`').next())
             .collect::<Vec<_>>();
         assert_eq!(
             documented,
             super::WARNING_CODES,
-            "the README warning table must list exactly the emitted codes, sorted"
+            "docs/warnings.md must list exactly the emitted codes, sorted"
         );
 
         // Strip the canonical list itself so it cannot satisfy its own check.
@@ -214,7 +214,7 @@ mod tests {
                 let code = site[1..].split(quote).next().unwrap();
                 assert!(
                     super::WARNING_CODES.contains(&code),
-                    "emitted warning code `{code}` is missing from WARNING_CODES and the README"
+                    "emitted warning code `{code}` is missing from WARNING_CODES and docs/warnings.md"
                 );
             }
         }
