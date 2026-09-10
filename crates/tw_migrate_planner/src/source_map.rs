@@ -67,10 +67,14 @@ pub(super) fn map_rule_spans(
         .map(|mapping| ((mapping.generated_line, mapping.generated_column), mapping))
         .collect::<HashMap<_, _>>();
 
+    let analysis_lines = line_starts(analysis_source);
+    let authored_lines = line_starts(authored_source);
     for rule in rules.iter_mut() {
         let mut original_offsets = Vec::new();
         for generated_offset in &rule.provenance_offsets {
-            let Some(position) = offset_to_line_column(analysis_source, *generated_offset) else {
+            let Some(position) =
+                offset_to_line_column(analysis_source, &analysis_lines, *generated_offset)
+            else {
                 original_offsets.clear();
                 break;
             };
@@ -84,6 +88,7 @@ pub(super) fn map_rule_spans(
             }
             let Some(offset) = line_column_to_offset(
                 authored_source,
+                &authored_lines,
                 mapping.original_line,
                 mapping.original_column,
             ) else {
@@ -180,41 +185,48 @@ fn collect_qualified_rule_spans(
     }
 }
 
-fn offset_to_line_column(source: &str, offset: usize) -> Option<(usize, usize)> {
+// ponytail: columns still scan within one line; add per-line checkpoints only
+// if very long single-line stylesheets become a measured bottleneck.
+fn line_starts(source: &str) -> Vec<usize> {
+    std::iter::once(0)
+        .chain(source.match_indices('\n').map(|(offset, _)| offset + 1))
+        .collect()
+}
+
+fn offset_to_line_column(source: &str, lines: &[usize], offset: usize) -> Option<(usize, usize)> {
     if offset > source.len() || !source.is_char_boundary(offset) {
         return None;
     }
-    let mut line = 0;
-    let mut column = 0;
-    for character in source[..offset].chars() {
-        if character == '\n' {
-            line += 1;
-            column = 0;
-        } else {
-            column += character.len_utf16();
-        }
-    }
+    let line = lines.partition_point(|start| *start <= offset) - 1;
+    let column = source[lines[line]..offset]
+        .chars()
+        .map(char::len_utf16)
+        .sum();
     Some((line, column))
 }
 
-fn line_column_to_offset(source: &str, target_line: usize, target_column: usize) -> Option<usize> {
-    let mut line = 0;
+fn line_column_to_offset(
+    source: &str,
+    lines: &[usize],
+    target_line: usize,
+    target_column: usize,
+) -> Option<usize> {
+    let start = *lines.get(target_line)?;
+    // Exclude LF, but keep CR as a UTF-16 column just like the source map.
+    let end = lines
+        .get(target_line + 1)
+        .map_or(source.len(), |next| next - 1);
     let mut column = 0;
-    for (offset, character) in source.char_indices() {
-        if line == target_line && column == target_column {
-            return Some(offset);
+    for (offset, character) in source[start..end].char_indices() {
+        if column == target_column {
+            return Some(start + offset);
         }
-        if character == '\n' {
-            line += 1;
-            column = 0;
-        } else {
-            column += character.len_utf16();
-            if line == target_line && column > target_column {
-                return None;
-            }
+        column += character.len_utf16();
+        if column > target_column {
+            return None;
         }
     }
-    (line == target_line && column == target_column).then_some(source.len())
+    (column == target_column).then_some(end)
 }
 
 pub(super) fn mentions_word(text: &str, word: &str) -> bool {
@@ -236,6 +248,41 @@ fn is_ident_byte(byte: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn source_positions_preserve_character_and_line_boundaries() {
+        use super::{line_column_to_offset, line_starts, offset_to_line_column};
+
+        let empty = line_starts("");
+        assert_eq!(offset_to_line_column("", &empty, 0), Some((0, 0)));
+        assert_eq!(line_column_to_offset("", &empty, 0, 0), Some(0));
+
+        let source = "A한😀\r\nB\n";
+        let lines = line_starts(source);
+        for (offset, line, column) in [
+            (4, 0, 2),
+            (8, 0, 4),
+            (9, 0, 5),
+            (10, 1, 0),
+            (11, 1, 1),
+            (12, 2, 0),
+        ] {
+            assert_eq!(
+                offset_to_line_column(source, &lines, offset),
+                Some((line, column))
+            );
+            assert_eq!(
+                line_column_to_offset(source, &lines, line, column),
+                Some(offset)
+            );
+        }
+        for offset in [2, 5, usize::MAX] {
+            assert_eq!(offset_to_line_column(source, &lines, offset), None);
+        }
+        for (line, column) in [(0, 3), (0, 6), (2, 1), (usize::MAX, 0)] {
+            assert_eq!(line_column_to_offset(source, &lines, line, column), None);
+        }
+    }
+
     #[test]
     fn decodes_source_map_mappings() {
         let decoded = super::decode_source_map_json(
