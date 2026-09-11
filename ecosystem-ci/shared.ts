@@ -6,6 +6,7 @@ import { closeSync, openSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import net from "node:net";
 import { isAbsolute, relative } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 import type { RunningServer } from "./types.ts";
 
@@ -42,25 +43,43 @@ export async function sha256(path: string): Promise<string> {
 }
 
 export async function terminateTree(child: ChildProcess): Promise<void> {
-  if (!child || child.exitCode !== null) return;
-  const exited = new Promise<void>((resolveExit) => child.once("exit", () => resolveExit()));
-  const pid = child.pid as number;
-  if (process.platform === "win32") {
-    spawnSync("taskkill.exe", ["/pid", String(pid), "/t", "/f"], { windowsHide: true });
-  } else {
-    try {
-      process.kill(-pid, "SIGTERM");
-    } catch {}
+  if (!child?.pid) return;
+  const pid = child.pid;
+  if (process.platform !== "win32") {
+    // Detached children lead an owned process group. The leader's exit does
+    // not mean its descendants exited, so probe the group through escalation.
+    for (const signal of ["SIGTERM", "SIGKILL"] as const) {
+      try {
+        process.kill(-pid, signal);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+        throw error;
+      }
+      // SIGKILL delivery is best-effort, not synchronous proof of exit.
+      // Zombie-only groups may persist until reaped, so do not wait for ESRCH.
+      if (signal === "SIGKILL") return;
+      const deadline = Date.now() + 3_000;
+      while (Date.now() < deadline) {
+        try {
+          process.kill(-pid, 0);
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code === "ESRCH") return;
+          // macOS can report EPERM while a zombie-only group awaits reaping.
+          // A denied probe is not proof of exit; keep the bounded wait.
+          if (code !== "EPERM") throw error;
+        }
+        await delay(50);
+      }
+    }
   }
+  if (child.exitCode !== null) return;
+  const exited = new Promise<void>((resolveExit) => child.once("exit", () => resolveExit()));
+  spawnSync("taskkill.exe", ["/pid", String(pid), "/t", "/f"], { windowsHide: true });
   const stopped = await Promise.race([
     exited.then(() => true),
     new Promise<boolean>((resolveWait) => setTimeout(() => resolveWait(false), 3_000)),
   ]);
-  if (!stopped && process.platform !== "win32") {
-    try {
-      process.kill(-pid, "SIGKILL");
-    } catch {}
-  }
   if (!stopped) {
     const forced: boolean = await Promise.race([
       exited.then(() => true),
@@ -81,8 +100,8 @@ export async function waitForChild(
     return { code, signal };
   } catch (error) {
     if (!(error instanceof Error && error.name === "AbortError")) throw error;
-    // terminateTree is internally bounded (two 3-second waits) and always
-    // settles, so no extra teardown timeout is needed here.
+    // terminateTree is internally bounded, so no extra teardown timeout is
+    // needed here. POSIX teardown returns after escalation, not confirmed exit.
     await terminateTree(child);
     throw new Error(`command timed out after ${timeoutMs}ms`);
   }
@@ -174,8 +193,7 @@ export async function startHttpServerProcess(
   try {
     await waitForHttpOk(readyUrl, child, timeoutMs, description);
   } catch (error) {
-    await terminateTree(child);
-    closeSync(log);
+    await terminateTree(child).finally(() => closeSync(log));
     throw error;
   }
   let stopped = false;
@@ -184,8 +202,7 @@ export async function startHttpServerProcess(
     async stop() {
       if (stopped) return;
       stopped = true;
-      await terminateTree(child);
-      closeSync(log);
+      await terminateTree(child).finally(() => closeSync(log));
     },
   };
 }
