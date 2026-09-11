@@ -574,10 +574,7 @@ fn capture_directory(root: &Path, directory: &Path, tree: &mut Tree) -> Result<(
         } else if file_type.is_file() {
             let content = fs::read_to_string(&path)
                 .map_err(|error| format!("read fixture text file {}: {error}", path.display()))?;
-            tree.insert(
-                normalized_relative(relative),
-                content.replace("\r\n", "\n").replace('\r', "\n"),
-            );
+            tree.insert(normalized_relative(relative), content);
         } else if file_type.is_symlink() {
             let target = fs::read_link(&path)
                 .map_err(|error| format!("read symlink {}: {error}", path.display()))?;
@@ -593,21 +590,24 @@ fn capture_directory(root: &Path, directory: &Path, tree: &mut Tree) -> Result<(
 }
 
 fn render_delta(before: &Tree, after: &Tree) -> String {
+    // Normalize display only, so newline-only writes still count as modifications.
+    let quoted_content = |content: &str| quoted(&content.replace("\r\n", "\n").replace('\r', "\n"));
     let paths = before.keys().chain(after.keys()).collect::<BTreeSet<_>>();
     let mut rendered = String::new();
     for path in paths {
         match (before.get(path), after.get(path)) {
-            (None, Some(content)) => {
-                rendered.push_str(&format!("  added {path}\n    after: {}\n", quoted(content)))
-            }
+            (None, Some(content)) => rendered.push_str(&format!(
+                "  added {path}\n    after: {}\n",
+                quoted_content(content)
+            )),
             (Some(content), None) => rendered.push_str(&format!(
                 "  deleted {path}\n    before: {}\n",
-                quoted(content)
+                quoted_content(content)
             )),
             (Some(old), Some(new)) if old != new => rendered.push_str(&format!(
                 "  modified {path}\n    before: {}\n    after: {}\n",
-                quoted(old),
-                quoted(new)
+                quoted_content(old),
+                quoted_content(new)
             )),
             _ => {}
         }
@@ -680,19 +680,67 @@ mod tests {
     use super::*;
 
     #[test]
-    fn delta_is_ordered_and_preserves_full_contents() {
+    fn delta_is_ordered_and_normalizes_only_displayed_line_endings() {
         let before = Tree::from([
-            ("b.txt".to_string(), "old\n".to_string()),
-            ("c.txt".to_string(), "gone\n".to_string()),
+            ("b.txt".to_string(), "old\r\n".to_string()),
+            ("c.txt".to_string(), "gone\r".to_string()),
         ]);
         let after = Tree::from([
-            ("a.txt".to_string(), "new\n".to_string()),
-            ("b.txt".to_string(), "changed\n".to_string()),
+            ("a.txt".to_string(), "new\r\n".to_string()),
+            ("b.txt".to_string(), "changed\r".to_string()),
         ]);
         assert_eq!(
             render_delta(&before, &after),
             "  added a.txt\n    after: \"new\\n\"\n  modified b.txt\n    before: \"old\\n\"\n    after: \"changed\\n\"\n  deleted c.txt\n    before: \"gone\\n\"\n"
         );
+    }
+
+    #[test]
+    fn captured_delta_detects_raw_text_changes() {
+        for (old, new, displayed_old, displayed_new) in [
+            ("a\n", "a\r\n", "a\n", "a\n"),
+            ("a\r\n", "a\n", "a\n", "a\n"),
+            ("a\r", "a\n", "a\n", "a\n"),
+            ("a\r\n", "a\r\n", "a\n", "a\n"),
+            ("", "", "", ""),
+            ("a\n", "a", "a\n", "a"),
+            ("", "\n", "", "\n"),
+            ("\u{feff}a", "a", "\u{feff}a", "a"),
+            ("한글", "변경", "한글", "변경"),
+            (
+                "\u{feff}한글\n끝",
+                "\u{feff}한글\r\n끝",
+                "\u{feff}한글\n끝",
+                "\u{feff}한글\n끝",
+            ),
+            (
+                "\u{feff}한글",
+                "\u{feff}한글",
+                "\u{feff}한글",
+                "\u{feff}한글",
+            ),
+        ] {
+            let root = unique_dir(&env::temp_dir(), "tw-migrate-raw-delta").unwrap();
+            let path = root.join("input.txt");
+            fs::write(&path, old).unwrap();
+            let before = capture_tree(&root).unwrap();
+            fs::write(&path, new).unwrap();
+            let after = capture_tree(&root).unwrap();
+            fs::remove_dir_all(&root).unwrap();
+
+            assert_eq!(before["input.txt"], old);
+            assert_eq!(after["input.txt"], new);
+            let expected = if old == new {
+                "  unchanged\n".to_string()
+            } else {
+                format!(
+                    "  modified input.txt\n    before: {}\n    after: {}\n",
+                    quoted(displayed_old),
+                    quoted(displayed_new)
+                )
+            };
+            assert_eq!(render_delta(&before, &after), expected);
+        }
     }
 
     #[test]
