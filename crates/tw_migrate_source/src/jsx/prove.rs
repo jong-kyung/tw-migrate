@@ -5,25 +5,31 @@ use tw_migrate_css::{Relation, SelectorKey};
 use super::link::{Linked, resolve_tag};
 use super::{CompId, Forward, NodeKind, R_ANCESTRY, R_BOUNDARY, R_RECURSIVE, TagRef, World};
 
+#[cfg(test)]
+thread_local! {
+    pub(super) static RENDER_EXPANSIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[derive(Clone)]
 pub(super) struct Frame {
     comp: CompId,
     node: usize,
 }
 
-/// Recursion-invariant inputs shared by every step of one proof.
+/// Inputs and completed successful expansions for one relationship query.
 pub(super) struct ProofQuery<'a> {
     pub(super) linked: &'a Linked,
     pub(super) world: &'a World,
     pub(super) relation: Relation,
     pub(super) ancestor: &'a SelectorKey,
+    pub(super) proven_expansions: BTreeSet<(CompId, BTreeSet<CompId>, u32)>,
 }
 
 /// Walk up from `node` inside `comp` looking for the ancestor key. At a
 /// component-use ancestor, interpose the wrapper's children-slot chains; at a
 /// tree root, resume via `cont` or expand every render site of `comp`.
 pub(super) fn prove_up(
-    query: &ProofQuery<'_>,
+    query: &mut ProofQuery<'_>,
     comp: CompId,
     node: usize,
     cont: &[Frame],
@@ -95,9 +101,18 @@ pub(super) fn prove_up(
     }
     let mut expanded = visited.clone();
     expanded.insert(comp);
-    for (site_comp, site_node) in sites {
-        prove_up(query, *site_comp, *site_node, &[], &expanded, depth + 1)?;
+    // Only continuation-free expansions can be shared. History and depth keep
+    // cycle detection and the remaining depth budget specific to each path.
+    let state = (comp, expanded, depth);
+    if query.proven_expansions.contains(&state) {
+        return Ok(());
     }
+    #[cfg(test)]
+    RENDER_EXPANSIONS.with(|count| count.set(count.get() + 1));
+    for (site_comp, site_node) in sites {
+        prove_up(query, *site_comp, *site_node, &[], &state.1, depth + 1)?;
+    }
+    query.proven_expansions.insert(state);
     Ok(())
 }
 
@@ -105,7 +120,7 @@ pub(super) fn prove_up(
 /// effective element is the wrapper's forward target, and its ancestry
 /// continues at this invocation site.
 pub(super) fn prove_forward(
-    query: &ProofQuery<'_>,
+    query: &mut ProofQuery<'_>,
     comp: CompId,
     node: usize,
     tag: &TagRef,

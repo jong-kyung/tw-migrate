@@ -1,4 +1,8 @@
-use super::{ProofOutcome, prepare, prove_prepared};
+use std::collections::BTreeSet;
+
+use super::{
+    ProofOutcome, ProofQuery, R_ANCESTRY, R_RECURSIVE, prepare, prove, prove_prepared, prove_up,
+};
 use tw_migrate_css::{Relation, SelectorKey};
 
 const CSS: &str = "src/App.module.css";
@@ -69,6 +73,94 @@ export function App() {
         let outcome = run(&files, relation, "parent", "child");
         assert!(outcome.aggregate_proven, "{relation:?}: {outcome:?}");
         assert_eq!(outcome.usages.len(), 1);
+    }
+}
+
+#[test]
+fn render_site_expansion_reuses_identical_states() {
+    let depth = 8;
+    let mut source = String::from(
+        "import styles from './App.module.css';\nfunction C0() { return <span className={styles.child} />; }\n",
+    );
+    for level in 1..=depth {
+        source.push_str(&format!(
+            "function C{level}() {{ return <><C{previous} /><C{previous} /></>; }}\n",
+            previous = level - 1,
+        ));
+    }
+    source.push_str(&format!(
+        "export function App() {{ return <div className={{styles.parent}}><C{depth} /></div>; }}\n",
+    ));
+    for relation in [Relation::Child, Relation::Descendant] {
+        prove::RENDER_EXPANSIONS.set(0);
+        let outcome = run(&[("src/App.tsx", &source)], relation, "parent", "child");
+        assert!(outcome.aggregate_proven, "{outcome:?}");
+        assert_eq!(outcome.usages.len(), 1);
+        assert_eq!(outcome.reason, None);
+        assert_eq!(prove::RENDER_EXPANSIONS.get(), depth + 1);
+    }
+}
+
+#[test]
+fn render_site_results_keep_visited_and_depth_context() {
+    let prepared = prepare(
+        &[(
+            "src/App.tsx",
+            r#"import styles from "./App.module.css";
+function Leaf() { return <span className={styles.child} />; }
+function Bridge() { return <Leaf />; }
+export function App() { return <div className={styles.parent}><Bridge /></div>; }
+"#,
+        )],
+        CSS,
+    );
+    let ancestor = class("parent");
+    let mut query = ProofQuery {
+        linked: &prepared.linked,
+        world: &prepared.world,
+        relation: Relation::Descendant,
+        ancestor: &ancestor,
+        proven_expansions: Default::default(),
+    };
+    // Component IDs follow declaration order: Leaf is (0, 0), Bridge is (0, 1).
+    for (visited, depth, expected) in [
+        (BTreeSet::new(), 0, Ok(())),
+        (BTreeSet::from([(0, 1)]), 0, Err(R_RECURSIVE)),
+        (BTreeSet::from([(0, 1)]), 0, Err(R_RECURSIVE)),
+        (BTreeSet::new(), 64, Err(R_RECURSIVE)),
+        (BTreeSet::new(), 64, Err(R_RECURSIVE)),
+        (BTreeSet::new(), 0, Ok(())),
+    ] {
+        assert_eq!(
+            prove_up(&mut query, (0, 0), 0, &[], &visited, depth),
+            expected,
+        );
+    }
+}
+
+#[test]
+fn children_passthrough_keeps_distinct_continuations() {
+    let files = [(
+        "src/App.tsx",
+        r#"import styles from "./App.module.css";
+function Wrapper(props) { return <>{props.children}</>; }
+export function App() {
+  return <>
+    <div className={styles.parent}><Wrapper><span className={styles.child} /></Wrapper></div>
+    <section><Wrapper><span className={styles.child} /></Wrapper></section>
+  </>;
+}
+"#,
+    )];
+    for relation in [Relation::Child, Relation::Descendant] {
+        let outcome = run(&files, relation, "parent", "child");
+        assert!(!outcome.aggregate_proven, "{outcome:?}");
+        assert_eq!(outcome.usages.len(), 2);
+        assert!(outcome.usages[0].proven);
+        assert_eq!(outcome.usages[0].reason, None);
+        assert!(!outcome.usages[1].proven);
+        assert_eq!(outcome.usages[1].reason, Some(R_ANCESTRY));
+        assert_eq!(outcome.reason, Some(R_ANCESTRY));
     }
 }
 

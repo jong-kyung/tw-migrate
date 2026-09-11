@@ -81,11 +81,12 @@ pub fn prove_prepared(
     let target_name = match target {
         SelectorKey::Class(name) | SelectorKey::Id(name) => name.as_str(),
     };
-    let query = ProofQuery {
+    let mut query = ProofQuery {
         linked,
         world,
         relation,
         ancestor,
+        proven_expansions: Default::default(),
     };
     let mut usages = Vec::new();
     for (file_ix, file) in world.files.iter().enumerate() {
@@ -107,7 +108,7 @@ pub fn prove_prepared(
                         for (key, span) in keys {
                             if key == target {
                                 let result = prove_up(
-                                    &query,
+                                    &mut query,
                                     (file_ix, comp_ix),
                                     node_ix,
                                     &[],
@@ -125,7 +126,7 @@ pub fn prove_prepared(
                         for (name, span) in class_keys {
                             if name == target_name {
                                 let result =
-                                    prove_forward(&query, (file_ix, comp_ix), node_ix, tag);
+                                    prove_forward(&mut query, (file_ix, comp_ix), node_ix, tag);
                                 usages.push(usage_proof(&file.path, *span, result));
                             }
                         }
