@@ -431,7 +431,7 @@ impl UsageCollector<'_> {
 
     /// Append this stylesheet's candidates for `value`'s class tokens (plus
     /// `extra_candidates`), recording matches at `span`. Returns the new
-    /// class value, or `None` when nothing changes.
+    /// class value, or `None` when no candidate is added.
     fn appended_class_value(
         &mut self,
         span: Span,
@@ -456,14 +456,14 @@ impl UsageCollector<'_> {
                     .map(move |candidate| (key.clone(), candidate))
             })
             .collect::<Vec<_>>();
+        let original_len = classes.len();
         for (key, candidate) in class_candidates.iter().chain(extra_candidates) {
             self.record_match((span.start as usize, span.end as usize), key, candidate);
             if !classes.contains(candidate) {
                 classes.push(candidate.clone());
             }
         }
-        let replacement_value = classes.join(" ");
-        (replacement_value != value).then_some(replacement_value)
+        (classes.len() > original_len).then(|| classes.join(" "))
     }
 
     /// Append candidates to a string-like leaf and rewrite it as a JS string
