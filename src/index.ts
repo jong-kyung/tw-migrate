@@ -1,4 +1,4 @@
-import { lstat, readFile } from "node:fs/promises";
+import { lstat } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
 
 import * as z from "zod/mini";
@@ -26,6 +26,7 @@ import {
   normalizedRelativePath,
   packageFailure,
   projectPackageSchema,
+  readInBatches,
   recordSnapshot,
   rejectSymlinkTarget,
   snapshotFile,
@@ -186,42 +187,40 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
   }
 
   const snapshots = new Map<string, string>();
-  const stylePaths = scope.scannedPaths.filter(isStylesheetPath);
-  const sourcePaths = scope.scannedPaths.filter((path) => SOURCE_EXTENSIONS.has(extname(path)));
-  const [styleSources, sourceCandidates] = await Promise.all([
-    Promise.all(
-      stylePaths.map(async (path): Promise<[string, string]> => [
-        path,
-        await snapshotFile(snapshots, path),
-      ]),
-    ).then((entries) => new Map(entries)),
-    Promise.all(
-      sourcePaths.map(async (path) => {
-        const source = await readFile(path, "utf8");
-        // Scan-only scripts are always retained as reference-only inputs: even
-        // without a ".module." mention they can render components whose trees
-        // the closed-world relationship proofs must see. Scan-only HTML matters
-        // solely as a potential stylesheet consumer, and HTML entities can
-        // encode any part of a linked filename, so retain ignored HTML
-        // containing a link for parse5 to classify safely.
-        const mayReferenceModule =
-          extname(path) !== ".html" ||
-          (() => {
-            try {
-              return parseHtmlSource(path, source).links.length > 0;
-            } catch {
-              return /<link\b/i.test(source);
-            }
-          })();
-        if (!scope.targetable.has(path) && !mayReferenceModule) return undefined;
-        return { path, source: recordSnapshot(snapshots, path, source) };
-      }),
+  const styleSources = new Map<string, string>();
+  const sourceFiles: SourceFile[] = [];
+  const inputPaths = [
+    ...scope.scannedPaths.filter(
+      (path) => isStylesheetPath(path) || SOURCE_EXTENSIONS.has(extname(path)),
     ),
-    ...selectedPackages.map((packageRoot) =>
-      snapshotFile(snapshots, join(packageRoot, "package.json")),
-    ),
-  ]);
-  const sourceFiles = sourceCandidates.flatMap((file) => (file ? [file] : []));
+    ...selectedPackages.map((packageRoot) => join(packageRoot, "package.json")),
+  ];
+  for await (const { path, read } of readInBatches(inputPaths)) {
+    if (read.status === "rejected") throw read.reason;
+    const source = read.value;
+    if (!SOURCE_EXTENSIONS.has(extname(path))) {
+      recordSnapshot(snapshots, path, source);
+      if (isStylesheetPath(path)) styleSources.set(path, source);
+      continue;
+    }
+    // Scan-only scripts are always retained as reference-only inputs: even
+    // without a ".module." mention they can render components whose trees
+    // the closed-world relationship proofs must see. Scan-only HTML matters
+    // solely as a potential stylesheet consumer, and HTML entities can
+    // encode any part of a linked filename, so retain ignored HTML
+    // containing a link for parse5 to classify safely.
+    const mayReferenceModule =
+      extname(path) !== ".html" ||
+      (() => {
+        try {
+          return parseHtmlSource(path, source).links.length > 0;
+        } catch {
+          return /<link\b/i.test(source);
+        }
+      })();
+    if (!scope.targetable.has(path) && !mayReferenceModule) continue;
+    sourceFiles.push({ path, source: recordSnapshot(snapshots, path, source) });
+  }
   // An explicit .vue selection is a source file, not a stylesheet input; only
   // real stylesheets may enter the stylesheet maps.
   if (explicitStyle && isStylesheetPath(explicitStyle) && !styleSources.has(explicitStyle)) {
