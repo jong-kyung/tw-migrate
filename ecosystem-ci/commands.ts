@@ -39,7 +39,7 @@ export const commands = {
           process.send(this.address().port);
         });
     `;
-    for (const mode of ["already-exited", "exits-on-TERM", "timeout"]) {
+    for (const mode of ["already-exited", "exits-on-TERM", "timeout", "probe-EPERM"]) {
       const parent = spawn(
         process.execPath,
         [
@@ -61,6 +61,9 @@ export const commands = {
       );
       const exited = once(parent, "exit", { signal: AbortSignal.timeout(10_000) });
       let url: string | undefined;
+      // oxlint-disable-next-line typescript/unbound-method -- Restore the original method after fault injection.
+      const kill = process.kill;
+      let probeDenied = false;
       try {
         const [port] = await once(parent, "message", { signal: AbortSignal.timeout(5_000) });
         if (mode === "already-exited") await exited;
@@ -70,6 +73,15 @@ export const commands = {
           await (await fetch(url, { signal: AbortSignal.timeout(1_000) })).text(),
           "descendant",
         );
+        if (mode === "probe-EPERM") {
+          process.kill = (pid, signal) => {
+            if (pid === -parent.pid! && signal === 0 && !probeDenied) {
+              probeDenied = true;
+              throw Object.assign(new Error("process group probe denied"), { code: "EPERM" });
+            }
+            return kill.call(process, pid, signal);
+          };
+        }
         if (mode === "timeout") {
           await assert.rejects(
             waitForChild(parent, { timeoutMs: 100 }),
@@ -78,10 +90,12 @@ export const commands = {
         } else {
           await terminateTree(parent);
         }
+        if (mode === "probe-EPERM") assert.ok(probeDenied, "exercise a denied group probe");
         await exited;
         await assertDescendantStopped(url);
         await terminateTree(parent);
       } finally {
+        process.kill = kill;
         // Never target anything except this test's detached process group.
         try {
           process.kill(-parent.pid!, "SIGKILL");

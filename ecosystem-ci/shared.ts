@@ -63,8 +63,11 @@ export async function terminateTree(child: ChildProcess): Promise<void> {
         try {
           process.kill(-pid, 0);
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
-          throw error;
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code === "ESRCH") return;
+          // macOS can report EPERM while a zombie-only group awaits reaping.
+          // A denied probe is not proof of exit; keep the bounded wait.
+          if (code !== "EPERM") throw error;
         }
         await delay(50);
       }
