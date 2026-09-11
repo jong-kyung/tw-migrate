@@ -75,7 +75,7 @@ pub(super) fn vue_module_request(source: &str, bindings: &[(&str, &str)]) -> ser
 
 #[test]
 fn vue_module_bindings_rewrite_and_delete_the_emptied_block() {
-    let source = "<template>\n  <p :class=\"$style.card\">A</p>\n</template>\n<style module>\n.card { padding: 13px; }\n</style>\n";
+    let source = "<template>\n  <p :class=\"$style.card\">A</p>\n</template>\n<style module>\n@media print { /* authored note */ }\n.card { padding: 13px; }\n</style>\n";
     let request = vue_module_request(source, &[("p", "card")]);
     let response = plan_batch(request);
     assert_eq!(response["convertedRules"], 1);
@@ -522,17 +522,35 @@ fn vue_unverifiable_shadow_corpus_retains_every_closed_rule() {
 }
 
 #[test]
-fn vue_preserves_conditionals_that_were_already_empty() {
-    let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n@media print {\n}\n.card { padding: 13px; }\n</style>\n";
-    let request = vue_batch_request(source, true, None);
+fn vue_removes_preexisting_empty_and_comment_only_conditionals() {
+    for conditional in [
+        "@media print {}",
+        "@supports (display: grid) { /* authored note */ }",
+        "@container (width > 100px) { /* authored note */ }",
+        "@starting-style { /* authored note */ }",
+        "@media print { @supports (display: grid) { /* nested note */ } }",
+    ] {
+        let source = format!(
+            "<template>\n  <p class=\"card\">가</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n{conditional}\n.card {{ padding: 13px; }}\n</style>\n"
+        );
+        let response = plan_batch(vue_batch_request(&source, true, None));
 
-    let response = plan_batch(request);
+        assert_eq!(response["convertedRules"], 1, "{conditional}");
+        assert_eq!(
+            response["files"][0]["source"],
+            "<template>\n  <p class=\"card p-[13px]\">가</p>\n  <p class=\"note\">B</p>\n</template>\n",
+            "{conditional}"
+        );
+    }
+}
 
-    assert_eq!(response["convertedRules"], 1);
-    let migrated = response["files"][0]["source"].as_str().unwrap();
-    assert!(migrated.contains("@media print {"));
-    assert!(migrated.contains("<style scoped>"));
-    assert!(!migrated.contains(".card {"));
+#[test]
+fn vue_keeps_empty_conditionals_without_migration_edits() {
+    let source = "<template>\n  <p class=\"card\">A</p>\n</template>\n<style scoped>\n@media print { /* authored note */ }\n</style>\n";
+    let response = plan_batch(vue_batch_request(source, true, None));
+
+    assert_eq!(response["convertedRules"], 0);
+    assert_eq!(response["files"], serde_json::json!([]));
 }
 
 #[test]

@@ -216,7 +216,7 @@ pub(super) fn stamp_in_file_shadow(
 }
 
 /// Apply the merged template and scoped-block edits to a `.vue` source, drop
-/// conditional at-rules emptied by rule removal, delete blocks whose CSS is
+/// empty conditional at-rules, delete blocks whose CSS is
 /// gone entirely, and validate that the remaining scoped CSS still parses.
 /// The masked copy stays byte-aligned with the real source throughout so
 /// masked-domain spans remain valid for both.
@@ -259,28 +259,6 @@ pub(super) fn finish_vue_stylesheet(
     for block in &mut blocks {
         block.shift(&edits);
     }
-    // Conditionals that were already empty in the authored source are
-    // untouched user bytes (often comment-only) and must survive; only
-    // conditionals the migration itself empties may be removed.
-    let mut preexisting_empty = {
-        let allocator = oxc_css_parser::Allocator::default();
-        let stylesheet = parse_css(&allocator, masked, Syntax::Css).map_err(|error| {
-            MigrationError::EditedStylesheetParse {
-                message: format!("Failed to parse edited CSS: {error}"),
-            }
-        })?;
-        let mut already_empty = Vec::new();
-        collect_empty_conditionals(&stylesheet.statements, &mut already_empty);
-        already_empty
-            .into_iter()
-            .map(|edit| {
-                (
-                    shift_offset(&edits, edit.start),
-                    shift_offset(&edits, edit.end),
-                )
-            })
-            .collect::<Vec<_>>()
-    };
     let mut source = apply_edits(&request.sheet.css_source, edits)?;
     let mut masked = apply_edits(masked, masked_edits)?;
 
@@ -293,17 +271,12 @@ pub(super) fn finish_vue_stylesheet(
         })?;
         let mut conditional_edits = Vec::new();
         collect_empty_conditionals(&stylesheet.statements, &mut conditional_edits);
-        conditional_edits.retain(|edit| !preexisting_empty.contains(&(edit.start, edit.end)));
         if conditional_edits.is_empty() {
             break;
         }
         conditional_edits.sort_by_key(|edit| (edit.start, edit.end));
         for block in &mut blocks {
             block.shift(&conditional_edits);
-        }
-        for span in &mut preexisting_empty {
-            span.0 = shift_offset(&conditional_edits, span.0);
-            span.1 = shift_offset(&conditional_edits, span.1);
         }
         source = apply_edits(&source, conditional_edits.clone())?;
         masked = apply_edits(&masked, conditional_edits.clone())?;

@@ -6,6 +6,10 @@
 const answer = 42
 </script>
 <style scoped>
+@media print {}
+@supports (display: grid) {
+  /* authored note */
+}
 .card {
   padding: 13px;
 }

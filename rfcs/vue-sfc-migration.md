@@ -251,12 +251,7 @@ and a second run produces no diff.
 
 ### Blocks
 
-- A supported `<style scoped>` block whose authored content becomes empty is
-  deleted whole, including its tags, mirroring fully migrated stylesheet
-  deletion.
-  A partially migrated block keeps its remaining rules byte-exactly, and
-  conditionals that were already empty in the authored source (often
-  comment-only) are never removed.
+- A supported `<style scoped>` block whose authored content becomes empty is deleted whole, including its tags, mirroring fully migrated stylesheet deletion. A partially migrated block keeps its remaining rules byte-exactly. When an entry with plain-CSS blocks is edited, empty `@media`, `@supports`, `@container`, and `@starting-style` blocks are removed, including nested blocks and those that were already empty or comment-only in the authored source. This cleanup does not run for entries using preprocessors or entries with no migration edits.
 - `<style>` without `scoped` migrates only in a private package whose SFC is
   the package's sole source; broader global reach retains with
   `unscoped-style-block` until co-loading can be proven.
