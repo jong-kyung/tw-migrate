@@ -169,17 +169,21 @@ fn collect_candidates(
 }
 
 /// Merge the missing additions into a class attribute value, materializing a
-/// synthetic attribute, and return the edit when the value changes.
+/// synthetic attribute, and return the edit only when a candidate is added.
 fn merge_class_attribute(attribute: &HtmlAttribute, additions: &[String]) -> Option<Edit> {
     let mut classes = attribute
         .value
         .split_whitespace()
         .map(str::to_string)
         .collect::<Vec<_>>();
+    let original_len = classes.len();
     for candidate in additions {
         if !classes.contains(candidate) {
             classes.push(candidate.clone());
         }
+    }
+    if classes.len() == original_len {
+        return None;
     }
     let value = classes.join(" ");
     let replacement = if attribute.synthetic {
@@ -187,13 +191,11 @@ fn merge_class_attribute(attribute: &HtmlAttribute, additions: &[String]) -> Opt
     } else {
         value
     };
-    ((!attribute.synthetic || !classes.is_empty()) && replacement != attribute.value).then_some(
-        Edit {
-            start: attribute.start,
-            end: attribute.end,
-            replacement,
-        },
-    )
+    Some(Edit {
+        start: attribute.start,
+        end: attribute.end,
+        replacement,
+    })
 }
 
 /// The first (generated, existing) utility conflict on a record whose
@@ -727,6 +729,30 @@ mod tests {
         assert_eq!(plan.edits.len(), 1);
         assert_eq!(plan.edits[0].replacement, "card [font-family:\"My_Font\"]");
         assert_eq!(plan.matched_module_refs.get("card"), Some(&1));
+    }
+
+    #[test]
+    fn preserves_class_whitespace_when_no_utility_is_added() {
+        let candidates = HashMap::from([(
+            SelectorKey::Class("card".to_string()),
+            vec!["p-[13px]".to_string()],
+        )]);
+        for value in ["unrelated   untouched", " card\t p-[13px] ", "   "] {
+            let source = format!("<div class=\"{value}\"></div>");
+            let file = quoted_fixture(&source, source.find('"').unwrap() + 1, value);
+            let plan = plan_html_file(&file, "/project/site.css", &candidates, None);
+
+            assert!(plan.edits.is_empty(), "{value:?}");
+            if value.contains("card") {
+                assert_eq!(plan.matches.len(), 1);
+                assert_eq!(plan.candidates, vec!["p-[13px]".to_string()]);
+                assert_eq!(plan.module_refs.get("card"), Some(&1));
+                assert_eq!(plan.matched_module_refs.get("card"), Some(&1));
+            } else {
+                assert!(plan.matches.is_empty());
+                assert!(plan.candidates.is_empty());
+            }
+        }
     }
 
     #[test]

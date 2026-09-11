@@ -740,19 +740,33 @@ fn quotes_a_global_candidate_containing_double_quotes() {
 }
 
 #[test]
-fn a_second_run_over_a_migrated_global_expression_literal_is_a_no_op() {
-    let request = serde_json::json!({
-        "cssPath": "/project/global.css",
-        "cssSource": ".card { padding: 13px; }\n",
-        "files": [{
-            "path": "/project/Card.tsx",
-            "source": "export const Card = () => <div className=\"card p-[13px]\" />;\n"
-        }]
-    });
+fn preserves_global_class_whitespace_when_no_utility_is_added() {
+    for attribute in [
+        r#""unrelated   untouched""#,
+        r#"{' unrelated   untouched '}"#,
+        r#"{`unrelated   untouched`}"#,
+        r#""card p-[13px]""#,
+        r#""card   p-[13px]""#,
+        r#"{active ? 'card   p-[13px]' : null}"#,
+        r#"{active && `card   p-[13px]`}"#,
+    ] {
+        let response = plan(serde_json::json!({
+            "cssPath": "/project/global.css",
+            "cssSource": ".card { padding: 13px; }\n",
+            "files": [{
+                "path": "/project/Card.tsx",
+                "source": format!("export const Card = () => <div className={attribute} />;\n"),
+            }],
+        }));
 
-    let response = plan(request);
-
-    assert_eq!(response["files"], serde_json::json!([]));
+        assert_eq!(response["files"], serde_json::json!([]), "{attribute}");
+        let expected = if attribute.contains("card") {
+            serde_json::json!(["p-[13px]"])
+        } else {
+            serde_json::json!([])
+        };
+        assert_eq!(response["candidates"], expected, "{attribute}");
+    }
 }
 
 #[test]

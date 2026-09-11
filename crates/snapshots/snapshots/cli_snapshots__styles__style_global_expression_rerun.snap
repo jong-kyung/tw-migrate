@@ -6,12 +6,12 @@ case: style_global_expression_rerun
 
 --- step: migrate ---
 status: 0
-stdout: "--- a/Card.tsx\n+++ b/Card.tsx\n@@ -1,1 +1,1 @@\n-export const Card = () => <div className={'card'} />;\n+export const Card = () => <div className=\"card p-[13px]\" />;\nApplied 1 file(s); 0 rule(s) converted, 1 retained.\n"
+stdout: "--- a/Card.tsx\n+++ b/Card.tsx\n@@ -1,3 +1,3 @@\n-export const Card = () => <div className={'card'} />;\n+export const Card = () => <div className=\"card p-[13px]\" />;\n export const Unrelated = () => <div className=\"unrelated   untouched\" />;\n export const Existing = () => <div className=\"card   p-[13px]\" />;\nApplied 1 file(s); 0 rule(s) converted, 1 retained.\n"
 stderr: "warning[retained-global-rule] legacy.css:1:1-1:25 Global CSS is never deleted automatically.\n"
 workspace delta:
   modified Card.tsx
-    before: "export const Card = () => <div className={'card'} />;\n"
-    after: "export const Card = () => <div className=\"card p-[13px]\" />;\n"
+    before: "export const Card = () => <div className={'card'} />;\nexport const Unrelated = () => <div className=\"unrelated   untouched\" />;\nexport const Existing = () => <div className=\"card   p-[13px]\" />;\n"
+    after: "export const Card = () => <div className=\"card p-[13px]\" />;\nexport const Unrelated = () => <div className=\"unrelated   untouched\" />;\nexport const Existing = () => <div className=\"card   p-[13px]\" />;\n"
 
 --- step: second run ---
 status: 0
