@@ -1,22 +1,23 @@
-import { chmod, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
-import { errorCode, errorMessage } from "./shared.ts";
+import { errorCode, errorMessage, readInBatches } from "./shared.ts";
 import type { SourceFile } from "../types.ts";
 
 export async function verifySnapshots(snapshots: Map<string, string>): Promise<void> {
-  const entries = [...snapshots].sort(([left], [right]) => left.localeCompare(right));
+  const expected = new Map(snapshots);
   // Reads run concurrently, but failures are reported in sorted path order so
   // the surfaced integrity error stays deterministic.
-  const reads = await Promise.allSettled(entries.map(([path]) => readFile(path, "utf8")));
-  for (const [index, [path, before]] of entries.entries()) {
-    const read = reads[index];
+  const paths = [...expected.keys()].sort((left, right) => left.localeCompare(right));
+  for await (const { path, read } of readInBatches(paths)) {
     if (read.status === "rejected") {
       const error: unknown = read.reason;
       const detail = errorCode(error) ?? errorMessage(error);
       throw new Error(`Source changed after planning: ${path} (${detail})`);
     }
-    if (read.value !== before) throw new Error(`Source changed after planning: ${path}`);
+    if (read.value !== expected.get(path)) {
+      throw new Error(`Source changed after planning: ${path}`);
+    }
   }
 }
 

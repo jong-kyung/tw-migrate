@@ -79,6 +79,18 @@ export async function rejectSymlinkTarget(path: string, root: string): Promise<v
   }
 }
 
+// Settle the whole batch before yielding so an early exit leaves no reads running.
+// ponytail: slow files hold their batch; use workers if profiling shows a bottleneck.
+export async function* readInBatches(paths: string[]) {
+  for (let offset = 0; offset < paths.length; offset += 32) {
+    const batch = paths.slice(offset, offset + 32);
+    const reads = await Promise.allSettled(batch.map((path) => readFile(path, "utf8")));
+    for (const [index, path] of batch.entries()) {
+      yield { path, read: reads[index] };
+    }
+  }
+}
+
 export async function snapshotFile(snapshots: Map<string, string>, path: string): Promise<string> {
   return recordSnapshot(snapshots, path, await readFile(path, "utf8"));
 }
