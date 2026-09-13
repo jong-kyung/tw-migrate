@@ -349,19 +349,18 @@ fn collect_declaration_candidates(
                 warning = Some("unsupported-rule-content");
                 continue;
             };
-            let mut nested_variants = variants.to_vec();
-            nested_variants.push(variant);
-            let (nested_candidates, nested_probes, nested_warning) =
-                collect_declaration_candidates(
-                    &block.statements,
-                    &nested_variants,
-                    source,
-                    theme_tokens,
-                    media_names,
-                    keyframes,
-                    syntax,
-                    is_module,
-                );
+            // Ancestors add their prefixes on return, so the child adds only
+            // this condition to its candidates and font probes.
+            let (nested_candidates, nested_probes, nested_warning) = collect_declaration_candidates(
+                &block.statements,
+                &[variant],
+                source,
+                theme_tokens,
+                media_names,
+                keyframes,
+                syntax,
+                is_module,
+            );
             for (candidate, properties) in nested_candidates {
                 merge_candidate(&mut candidates, candidate, properties);
             }
@@ -724,4 +723,90 @@ fn selector_classes(rule: &oxc_css_parser::ast::QualifiedRule<'_>) -> Vec<String
             _ => None,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_rule(source: &str) -> RulePlan {
+        parse_css_rules(
+            "card.css",
+            "card",
+            source,
+            &HashMap::from([("breakpoint-md".into(), "48rem".into())]),
+            None,
+            ParseOptions {
+                syntax: Syntax::Css,
+                is_module: false,
+                can_move_at_rules: false,
+                can_move_global_at_rules: false,
+                relative_urls_stable: false,
+            },
+        )
+        .unwrap()
+        .rules
+        .remove(0)
+    }
+
+    #[test]
+    fn nested_variants_keep_candidate_properties_and_font_probes_aligned() {
+        let rule = parse_rule(
+            "@media (min-width: 48rem) { .card:hover { font-family: Inter; padding: 13px; @media print { font-family: Georgia; @supports (display: grid) { font-family: Arial; display: grid; } } } }",
+        );
+        let expected = HashMap::from([
+            ("md:hover:[font-family:Inter]", "font-family"),
+            ("md:hover:p-[13px]", "padding"),
+            ("md:hover:print:[font-family:Georgia]", "font-family"),
+            (
+                "md:hover:print:supports-[display:grid]:[font-family:Arial]",
+                "font-family",
+            ),
+            ("md:hover:print:supports-[display:grid]:grid", "display"),
+        ]);
+        assert_eq!(rule.warning, None);
+        assert_eq!(rule.candidate_properties.len(), expected.len());
+        for (candidate, property) in &expected {
+            assert_eq!(
+                rule.candidate_properties.get(*candidate),
+                Some(&BTreeSet::from([property.to_string()])),
+                "{candidate}",
+            );
+        }
+        let probes = rule
+            .font_family_probes
+            .iter()
+            .map(|probe| (probe.candidate.as_str(), probe.value.as_str()))
+            .collect::<HashMap<_, _>>();
+        assert_eq!(
+            probes,
+            HashMap::from([
+                ("md:hover:[font-family:Inter]", "\"Inter\""),
+                ("md:hover:print:[font-family:Georgia]", "\"Georgia\""),
+                (
+                    "md:hover:print:supports-[display:grid]:[font-family:Arial]",
+                    "\"Arial\""
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn nested_variants_apply_each_authored_condition_once() {
+        for depth in [1, 2, 4, 8] {
+            let source = format!(
+                ".card {{ {} color: red; {} }}",
+                "@media print {".repeat(depth),
+                "}".repeat(depth),
+            );
+            let rule = parse_rule(&source);
+            // Repeated authored conditions stay repeated, but recursion
+            // must not introduce additional copies.
+            assert_eq!(
+                rule.candidates,
+                [format!("{}text-[red]", "print:".repeat(depth))]
+            );
+            assert_eq!(rule.warning, None);
+        }
+    }
 }

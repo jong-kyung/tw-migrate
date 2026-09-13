@@ -448,7 +448,8 @@ fn retains_unrepresentable_values_with_an_unsupported_value_warning() {
 fn converts_conditions_nested_inside_style_rules() {
     let request = serde_json::json!({
         "cssPath": "/project/Button.module.css",
-        "cssSource": ".button { opacity: 1; @starting-style { opacity: 0; } @media (prefers-reduced-motion: reduce) { display: none; } }\n",
+        "cssSource": "@media (min-width: 48rem) { .button:hover { opacity: 1; @starting-style { opacity: 0; } @media print { display: grid; @supports (display: grid) { padding: 13px; } } } }\n",
+        "themeTokens": { "breakpoint-md": "48rem" },
         "files": [{
             "path": "/project/Button.tsx",
             "source": "import styles from './Button.module.css';\nexport const Button = () => <button className={styles.button}>Save</button>;\n"
@@ -460,9 +461,10 @@ fn converts_conditions_nested_inside_style_rules() {
     assert_eq!(
         response["candidates"],
         serde_json::json!([
-            "motion-reduce:hidden",
-            "opacity-[1]",
-            "starting:opacity-[0]"
+            "md:hover:opacity-[1]",
+            "md:hover:print:grid",
+            "md:hover:print:supports-[display:grid]:p-[13px]",
+            "md:hover:starting:opacity-[0]"
         ])
     );
     assert_eq!(response["convertedRules"], 1);

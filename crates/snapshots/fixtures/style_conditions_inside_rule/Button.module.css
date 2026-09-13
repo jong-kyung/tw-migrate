@@ -1,1 +1,13 @@
-.button { opacity: 1; @starting-style { opacity: 0; } @media (prefers-reduced-motion: reduce) { display: none; } }
+@media (min-width: 48rem) {
+  .button:hover {
+    opacity: 1;
+    font-family: "Base Font", serif;
+    @starting-style { opacity: 0; }
+    @media print {
+      @supports (display: grid) {
+        display: grid;
+        font-family: "Print Font", serif;
+      }
+    }
+  }
+}

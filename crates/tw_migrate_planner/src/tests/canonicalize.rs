@@ -162,8 +162,9 @@ fn identical_candidates_across_stylesheets_do_not_conflict() {
 fn aliased_member_spellings_conflict_by_properties_not_prefix() {
     let request = serde_json::json!({
         "cssPath": "/project/Card.module.css",
-        "cssSource": ".title { font-family: \"My Font\", sans-serif; }\n.strong { font-weight: 700; }\n",
-        "candidateAliases": { "[font-family:\"My_Font\",_sans-serif]": "font-my-font" },
+        "cssSource": ".title:hover { @media print { font-family: \"My Font\", sans-serif; } }\n.strong:hover { @media print { font-weight: 700; } }\n",
+        "utilityPrefix": "tw",
+        "candidateAliases": { "tw:hover:print:[font-family:\"My_Font\",_sans-serif]": "tw:hover:print:font-my-font" },
         "files": [{
             "path": "/project/Card.tsx",
             "source": "import styles from './Card.module.css';\nexport const Card = () => <div className={`${styles.title} ${styles.strong}`} />;\n"
@@ -180,7 +181,7 @@ fn aliased_member_spellings_conflict_by_properties_not_prefix() {
         response["files"][0]["source"]
             .as_str()
             .unwrap()
-            .contains("font-my-font font-[700]")
+            .contains("tw:hover:print:font-my-font tw:hover:print:font-[700]")
     );
 }
 

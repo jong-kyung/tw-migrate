@@ -19,7 +19,7 @@ import { onTestFinished, test } from "vite-plus/test";
 import { __unstable__loadDesignSystem as loadDesignSystem } from "tailwindcss";
 
 import { migrate, type MigrateOptions } from "../src/index.ts";
-import { isExternalStylesheet } from "../src/tailwind.ts";
+import { isExternalStylesheet, loadTailwind } from "../src/tailwind.ts";
 import { compileSassEntry, loadProjectSass, sourceMappings } from "../src/parser/style-compiler.ts";
 import { writeChanges } from "../src/util/write.ts";
 
@@ -1374,6 +1374,74 @@ test("round-trips quoted values and urls through arbitrary candidates", async ()
   assert.match(css, /url\("a_b\.png"\)/);
   assert.match(css, /content: "a_b"/);
   assert.match(css, /calc\(min\(100%, 50vw\)\)/);
+});
+
+for (const kind of ["css", "module", "vue-scoped", "vue-module"] as const) {
+  test(`applies nested variants once in ${kind} consumer bytes`, async () => {
+    const cwd = await tempDir();
+    const css =
+      '@media (min-width: 48rem) { .card:hover { font-family: "Base Font", serif; @media print { color: red; @supports (display: grid) { display: grid; font-family: "Print Font", serif; } } } }\n';
+    const candidates = [
+      "md:hover:font-base-font",
+      "md:hover:print:supports-[display:grid]:font-print-font",
+      "md:hover:print:supports-[display:grid]:grid",
+      "md:hover:print:text-[red]",
+    ];
+    const classes = candidates.join(" ");
+    const entryPath = join(cwd, "globals.css");
+    await writeFile(join(cwd, "package.json"), '{"private":true}');
+    await writeFile(entryPath, '@import "tailwindcss";\n');
+    let original: string;
+    let expected: string;
+    const isVue = kind.startsWith("vue-");
+    if (isVue) {
+      const template =
+        "<template>\r\n  <p CLASS>한글</p>\r\n  <span>Leaf</span>\r\n</template>\r\n";
+      original =
+        template.replace("CLASS", kind === "vue-module" ? ':class="$style.card"' : 'class="card"') +
+        `<style ${kind === "vue-module" ? "module" : "scoped"}>\r\n${css}</style>\r\n`;
+      expected = template.replace(
+        "CLASS",
+        `class="${kind === "vue-scoped" ? "card " : ""}${classes}"`,
+      );
+    } else {
+      const stylePath = kind === "module" ? "Card.module.css" : "card.css";
+      await writeFile(join(cwd, stylePath), css);
+      original =
+        kind === "module"
+          ? 'import styles from "./Card.module.css";\r\nexport const Card = () => <p className={styles.card}>한글</p>;\r\n'
+          : 'import "./card.css";\r\nexport const Card = () => <p className="card">한글</p>;\r\n';
+      expected =
+        kind === "module"
+          ? `export const Card = () => <p className="${classes}">한글</p>;\r\n`
+          : `import "./card.css";\r\nexport const Card = () => <p className="card ${classes}">한글</p>;\r\n`;
+    }
+    const consumerPath = join(cwd, isVue ? "Card.vue" : "Card.tsx");
+    await writeFile(consumerPath, original);
+    const preview = await migrate({ cwd });
+    assert.deepEqual(preview.candidates, candidates, JSON.stringify(preview));
+    assert.deepEqual(await readFile(consumerPath), Buffer.from(original));
+    const report = await migrate({ cwd, write: true });
+    assert.deepEqual(report.candidates, candidates);
+    assert.deepEqual(await readFile(consumerPath), Buffer.from(expected));
+    const { designSystem } = await loadTailwind(cwd, entryPath, new Map(), cwd);
+    assert.ok(designSystem.candidatesToCss(candidates).every((css) => css !== null));
+  });
+}
+
+test("retains nested media overrides with unproven ordering after variant composition", async () => {
+  const css =
+    '.button:hover { font-family: "Base Font", serif; @media print { font-family: "Print Font", serif; } }\n';
+  const cwd = await fixture({ css });
+  const report = await migrate({ cwd, write: true });
+  assert.deepEqual(report.changedFiles, []);
+  assert.ok(report.warnings.some(({ code }) => code === "batch-stylesheet-conflict"));
+  assert.deepEqual(report.rules[0].candidates, [
+    "hover:font-base-font",
+    "hover:print:font-print-font",
+  ]);
+  assert.deepEqual(await readFile(join(cwd, "Button.module.css")), Buffer.from(css));
+  assert.deepEqual(await readFile(join(cwd, "Button.tsx")), Buffer.from(initialTsx));
 });
 
 test("migrates a closed Vue SFC byte-exactly and removes the emptied scoped block", async () => {
