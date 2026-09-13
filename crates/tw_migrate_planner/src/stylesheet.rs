@@ -132,6 +132,7 @@ pub(super) fn batch_stylesheet_request<'a>(
 /// rule-selection behavior cannot silently diverge between the two paths.
 fn parse_request_rules(
     request: &PlanRequest,
+    shadow_cache: &mut ShadowSelectorCache,
 ) -> MigrationResult<(bool, ParsedCss, Option<String>)> {
     let is_module = request
         .sheet
@@ -228,7 +229,7 @@ fn parse_request_rules(
     // layered Tailwind utility would lose to. Retain any rule whose reachable
     // template site the package's non-scoped corpus can also target.
     if vue_masked.is_some() && is_module {
-        let shadow = index_shadow_selectors(
+        let shadow = shadow_cache.index(
             &request.sheet.vue_shadow_css,
             &request.sheet.vue_shadow_module_css,
         );
@@ -301,6 +302,7 @@ fn parse_request_rules(
             &request.sheet.css_path,
             request.sheet.vue_module,
             &HashSet::new(),
+            shadow_cache,
         );
     }
     if let Some(prefix) = request
@@ -462,8 +464,9 @@ fn dedup_candidate_map(candidate_map: &mut HashMap<SelectorKey, Vec<String>>) {
 pub(super) fn candidate_map_for_request(
     request: &PlanRequest,
     externally_blocked: &HashSet<RuleId>,
+    shadow_cache: &mut ShadowSelectorCache,
 ) -> MigrationResult<CandidateMaps> {
-    let (_, ParsedCss { mut rules, .. }, _) = parse_request_rules(request)?;
+    let (_, ParsedCss { mut rules, .. }, _) = parse_request_rules(request, shadow_cache)?;
     let unproven = unproven_relationship_rules(&rules, &request.sheet.css_path, &request.files);
     stamp_unproven_rules(&mut rules, &unproven);
     let blocked_classes = rules
@@ -543,6 +546,7 @@ pub(super) fn plan_request(
     blocked_rules: &RuleConflicts,
     externally_blocked: &HashSet<RuleId>,
     unproven_rules: &HashMap<RuleId, String>,
+    shadow_cache: &mut ShadowSelectorCache,
 ) -> MigrationResult<PlanResponse> {
     let (
         is_module,
@@ -552,7 +556,7 @@ pub(super) fn plan_request(
             global_at_rules,
         },
         vue_masked,
-    ) = parse_request_rules(&request)?;
+    ) = parse_request_rules(&request, shadow_cache)?;
     let vue_mode = vue_masked.is_some();
     let vue_retention = request
         .sheet
@@ -614,6 +618,7 @@ pub(super) fn plan_request(
             &request.sheet.css_path,
             request.sheet.vue_module,
             &quote_blocked,
+            shadow_cache,
         );
     }
 

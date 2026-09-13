@@ -288,6 +288,7 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
         });
     }
 
+    let mut shadow_cache = ShadowSelectorCache::default();
     let mut match_groups: HashMap<(String, usize, usize), Vec<BatchMatch>> = HashMap::new();
     // Relationship proofs run here against the request's immutable file set,
     // so every stylesheet is proven on the same snapshot regardless of the
@@ -309,7 +310,11 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
         .collect::<Vec<_>>();
     for (index, stylesheet) in request.stylesheets.iter().enumerate() {
         let plan_request = batch_stylesheet_request(&request, stylesheet, snapshot_files);
-        let maps = candidate_map_for_request(&plan_request, &externally_blocked[index])?;
+        let maps = candidate_map_for_request(
+            &plan_request,
+            &externally_blocked[index],
+            &mut shadow_cache,
+        )?;
         let map_properties = candidate_property_union(maps.origins.iter().flat_map(
             |((_, candidate), origins)| {
                 origins
@@ -412,7 +417,11 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
             }
         }
         let plan_request = batch_stylesheet_request(&request, stylesheet, snapshot_files);
-        let maps = candidate_map_for_request(&plan_request, &externally_blocked[index])?;
+        let maps = candidate_map_for_request(
+            &plan_request,
+            &externally_blocked[index],
+            &mut shadow_cache,
+        )?;
         snapshot_files = plan_request.files;
         for (file_index, element_index, binding) in hidden_bindings {
             snapshot_files[file_index].html_elements[element_index].module_binding = Some(binding);
@@ -508,6 +517,7 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
             &blocked_rules[index],
             &externally_blocked[index],
             &candidate_maps[index].unproven,
+            &mut shadow_cache,
         )?;
 
         for (path, batches) in response.applied_edits {
