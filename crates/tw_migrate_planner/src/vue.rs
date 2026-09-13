@@ -159,6 +159,7 @@ pub(super) fn stamp_in_file_shadow(
     css_path: &str,
     vue_module: bool,
     additionally_retained: &HashSet<RuleId>,
+    shadow_cache: &mut ShadowSelectorCache,
 ) {
     loop {
         // Retained conditionals may contain selectors that are no longer
@@ -176,7 +177,7 @@ pub(super) fn stamp_in_file_shadow(
             })
             .map(|rule| format!("{} {{}}", rule.selector))
             .collect::<Vec<_>>();
-        let retained = index_shadow_selectors(&retained_selectors, &[]);
+        let retained = shadow_cache.index(&retained_selectors, &[]);
         let mut changed = false;
         for rule in rules.iter_mut() {
             if rule.warning.is_some() || additionally_retained.contains(&rule_id(rule)) {

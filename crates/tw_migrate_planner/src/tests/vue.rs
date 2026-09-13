@@ -173,6 +173,77 @@ fn vue_batch_request(
 }
 
 #[test]
+fn vue_shadow_pieces_parse_once_per_batch_across_all_passes() {
+    use crate::shadow::PARSED_PIECES;
+
+    for count in [10, 20, 40] {
+        let pieces = (0..count)
+            .map(|i| format!(".card{i} {{ padding: 13px; }}"))
+            .collect::<Vec<_>>();
+        let mut sheets = Vec::new();
+        let mut files = Vec::new();
+        for (i, piece) in pieces.iter().enumerate() {
+            let path = format!("/project/Card{i}.vue");
+            let class = format!("card{i}");
+            let source = format!(
+                "<template><p class=\"{class}\">가</p><p>B</p></template>\r\n<style scoped>{piece}</style>\r\n"
+            );
+            let outer_start = source.find("<style scoped>").unwrap();
+            let content_start = outer_start + "<style scoped>".len();
+            let value_start = source.find(&class).unwrap();
+            sheets.push(serde_json::json!({
+                "cssPath": path,
+                "cssSource": source,
+                "isModule": true,
+                "vueBlocks": [{
+                    "outerStart": outer_start,
+                    "outerEnd": content_start + piece.len() + "</style>".len(),
+                    "contentStart": content_start,
+                    "contentEnd": content_start + piece.len(),
+                }],
+                "vueShadowCss": pieces.iter().enumerate()
+                    .filter(|(other, _)| *other != i).map(|(_, piece)| piece).collect::<Vec<_>>(),
+            }));
+            files.push(serde_json::json!({
+                "path": path,
+                "source": source,
+                "htmlElements": [{
+                    "tag": "p",
+                    "classAttribute": { "value": class, "start": value_start, "end": value_start + class.len() },
+                }],
+                "htmlStylesheets": [{ "cssPath": path, "variants": [], "direct": true, "analyzable": true }],
+                "htmlReferencesSafe": true,
+            }));
+        }
+        let request = serde_json::json!({ "stylesheets": sheets, "files": files });
+        // Each call owns a fresh cache, but all passes within it share the pieces.
+        for _ in 0..2 {
+            let before = PARSED_PIECES.get();
+            let response = plan_batch(request.clone());
+            assert_eq!(PARSED_PIECES.get() - before, count);
+            assert_eq!(response["convertedRules"], count);
+            assert_eq!(response["retainedRules"], 0);
+            assert_eq!(response["warnings"], serde_json::json!([]));
+            for i in 0..count {
+                let path = format!("/project/Card{i}.vue");
+                let file = response["files"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|file| file["path"] == path)
+                    .unwrap();
+                assert_eq!(
+                    file["source"],
+                    format!(
+                        "<template><p class=\"card{i} p-[13px]\">가</p><p>B</p></template>\r\n"
+                    )
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn vue_closed_sfc_migrates_template_and_removes_the_emptied_scoped_block() {
     let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n";
     let request = vue_batch_request(source, true, None);

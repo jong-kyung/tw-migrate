@@ -10,9 +10,9 @@ use tw_migrate_error::{MigrationError, MigrationResult};
 use tw_migrate_css::{
     KeyframePlan, MediaComponent, ParseOptions, ParsedCss, ParsedMediaCondition, RulePlan,
     SelectorKey, append_global_at_rules, append_keyframes, css_property_sets_conflict,
-    index_shadow_selectors, is_conditional, parse_css, parse_css_rules, parse_dimension,
-    parse_media_condition, tailwind_utilities_conflict, tailwind_utility_parts,
-    tailwind_variants_match, validate_css, variant_segments,
+    is_conditional, parse_css, parse_css_rules, parse_dimension, parse_media_condition,
+    tailwind_utilities_conflict, tailwind_utility_parts, tailwind_variants_match, validate_css,
+    variant_segments,
 };
 
 mod batch;
@@ -21,6 +21,7 @@ mod edit;
 mod request;
 mod response;
 mod rule;
+mod shadow;
 mod source_map;
 mod stylesheet;
 mod vue;
@@ -35,6 +36,7 @@ use edit::{
 use request::{BatchPlanRequest, BatchStylesheet, PlanRequest};
 use response::{FontFamilyProbeReport, FontFamilyReport, PlanResponse, PlannedFile, RuleReport};
 use rule::{CandidateMaps, RuleConflicts, RuleId, RuleOrigin, rule_id};
+use shadow::ShadowSelectorCache;
 pub use source_map::decode_source_map_json;
 use source_map::{SourceMapping, map_rule_spans, mentions_word};
 use stylesheet::{
