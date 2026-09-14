@@ -294,6 +294,8 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
     // so every stylesheet is proven on the same snapshot regardless of the
     // edits earlier stylesheets make during the main pass.
     let mut candidate_maps = Vec::new();
+    let mut map_properties = Vec::new();
+    let mut map_error = None;
     // The snapshot passes below never edit the corpus, so one clone travels
     // through every per-stylesheet request instead of a clone per stylesheet.
     let mut snapshot_files = request.files.clone();
@@ -310,55 +312,89 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
         .collect::<Vec<_>>();
     for (index, stylesheet) in request.stylesheets.iter().enumerate() {
         let plan_request = batch_stylesheet_request(&request, stylesheet, snapshot_files);
-        let maps = candidate_map_for_request(
-            &plan_request,
-            &externally_blocked[index],
-            &mut shadow_cache,
-        )?;
-        let map_properties = candidate_property_union(maps.origins.iter().flat_map(
+        let maps =
+            candidate_map_for_request(&plan_request, &externally_blocked[index], &mut shadow_cache);
+        snapshot_files = plan_request.files;
+        let maps = match maps {
+            Ok(maps) => maps,
+            Err(error) => {
+                // Earlier stylesheets' consumer errors used to precede this
+                // map error. Collect only their matches before returning it.
+                map_error = Some(error);
+                break;
+            }
+        };
+        map_properties.push(candidate_property_union(maps.origins.iter().flat_map(
             |((_, candidate), origins)| {
                 origins
                     .iter()
                     .map(move |origin| (candidate, &origin.properties))
             },
-        ));
-        snapshot_files = plan_request.files;
-        for file in request.files.iter().filter(|file| file.writable) {
-            let result = plan_consumer_file(
-                file,
-                &stylesheet.css_path,
-                stylesheet
-                    .is_module
-                    .unwrap_or_else(|| is_stylesheet_module(&stylesheet.css_path)),
-                &maps.candidates,
-                &map_properties,
-                &BTreeSet::new(),
-                // The conflict pass must keep collecting matches; the main
-                // pass applies the unresolved-member retention itself.
-                None,
-                request.utility_prefix.as_deref(),
-                stylesheet.vue_unscoped,
-                stylesheet.vue_module,
-            )?;
-            for matched in result.matches {
-                if let Some(origins) = maps
-                    .origins
-                    .get(&(matched.key, matched.origin_candidate.clone()))
-                {
-                    match_groups
-                        .entry((file.path.clone(), matched.start, matched.end))
-                        .or_default()
-                        .extend(origins.iter().map(|origin| BatchMatch {
-                            stylesheet: index,
-                            candidate: matched.candidate.clone(),
-                            rule: origin.rule,
-                            properties: origin.properties.clone(),
-                        }));
-                }
-            }
-        }
+        )));
         candidate_maps.push(maps);
     }
+
+    let mut consumer_error = None;
+    for file in request.files.iter().filter(|file| file.writable) {
+        // Only earlier stylesheets can outrank an error from an earlier file.
+        let limit = consumer_error
+            .as_ref()
+            .map_or(candidate_maps.len(), |(index, _)| *index);
+        if limit == 0 {
+            break;
+        }
+        with_source_file(file, |source| {
+            for (index, maps) in candidate_maps.iter().take(limit).enumerate() {
+                let stylesheet = &request.stylesheets[index];
+                let result = plan_consumer_file_with(
+                    source,
+                    &stylesheet.css_path,
+                    stylesheet
+                        .is_module
+                        .unwrap_or_else(|| is_stylesheet_module(&stylesheet.css_path)),
+                    &maps.candidates,
+                    &map_properties[index],
+                    &BTreeSet::new(),
+                    // The conflict pass must keep collecting matches; the main
+                    // pass applies the unresolved-member retention itself.
+                    None,
+                    request.utility_prefix.as_deref(),
+                    stylesheet.vue_unscoped,
+                    stylesheet.vue_module,
+                );
+                let result = match result {
+                    Ok(result) => result,
+                    Err(error) => {
+                        consumer_error = Some((index, error));
+                        break;
+                    }
+                };
+                for matched in result.matches {
+                    if let Some(origins) = maps
+                        .origins
+                        .get(&(matched.key, matched.origin_candidate.clone()))
+                    {
+                        match_groups
+                            .entry((file.path.clone(), matched.start, matched.end))
+                            .or_default()
+                            .extend(origins.iter().map(|origin| BatchMatch {
+                                stylesheet: index,
+                                candidate: matched.candidate.clone(),
+                                rule: origin.rule,
+                                properties: origin.properties.clone(),
+                            }));
+                    }
+                }
+            }
+        });
+    }
+    if let Some((_, error)) = consumer_error {
+        return Err(error);
+    }
+    if let Some(error) = map_error {
+        return Err(error);
+    }
+    drop(map_properties);
 
     let media_context = MediaVariantContext::new(&request);
     let mut blocked_rules: Vec<RuleConflicts> = vec![HashMap::new(); request.stylesheets.len()];

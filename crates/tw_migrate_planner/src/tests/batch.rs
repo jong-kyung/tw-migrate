@@ -1,6 +1,60 @@
 use super::*;
 
 #[test]
+fn batch_preserves_prepass_error_priority() {
+    use crate::consumer::CONSUMER_VISITS;
+    use tw_migrate_error::MigrationError;
+
+    let mut request = serde_json::json!({
+        "stylesheets": [
+            { "cssPath": "/project/a.css", "cssSource": ".a { padding: 8px; }" },
+            { "cssPath": "/project/b.css", "cssSource": "@media \u{b}screen {}" },
+        ],
+        "files": [
+            { "path": "/project/First.tsx", "source": "const =" },
+            { "path": "/project/Second.tsx", "source": "const =" },
+        ],
+    });
+    let before = CONSUMER_VISITS.get();
+    let error = plan_batch_json(&request.to_string()).unwrap_err();
+    assert!(matches!(error, MigrationError::SourceParse { .. }));
+    assert!(error.to_string().contains("/project/First.tsx"));
+    assert_eq!(CONSUMER_VISITS.get() - before, 1);
+
+    request["files"][0]["source"] = "export {};".into();
+    let error = plan_batch_json(&request.to_string()).unwrap_err();
+    assert!(matches!(error, MigrationError::SourceParse { .. }));
+    assert!(error.to_string().contains("/project/Second.tsx"));
+
+    request["files"][1]["source"] = "export {};".into();
+    let error = plan_batch_json(&request.to_string()).unwrap_err();
+    assert!(matches!(
+        error,
+        MigrationError::AuthoredStylesheetParse { .. }
+    ));
+    assert!(error.to_string().contains("/project/b.css"));
+
+    // A scoped Vue sheet never parses unrelated JS. Its successor's CSS
+    // error therefore precedes even the first file's invalid JS.
+    request["stylesheets"][0]["cssPath"] = "/project/Card.vue".into();
+    request["files"][0]["source"] = "const =".into();
+    let error = plan_batch_json(&request.to_string()).unwrap_err();
+    assert!(matches!(
+        error,
+        MigrationError::AuthoredStylesheetParse { .. }
+    ));
+    assert!(error.to_string().contains("/project/b.css"));
+
+    request["stylesheets"][0]["cssSource"] = "@media \u{b}screen {}".into();
+    let error = plan_batch_json(&request.to_string()).unwrap_err();
+    assert!(matches!(
+        error,
+        MigrationError::AuthoredStylesheetParse { .. }
+    ));
+    assert!(error.to_string().contains("/project/Card.vue"));
+}
+
+#[test]
 fn batch_ignores_an_unparseable_unwritable_file_without_a_reference() {
     let request = serde_json::json!({
         "stylesheets": [{

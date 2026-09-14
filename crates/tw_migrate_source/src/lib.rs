@@ -15,7 +15,8 @@ pub use html_rewrite::{
     candidates_fit_attribute, plan_html_file, plan_vue_module_file, rebase_span,
 };
 pub use js_rewrite::{
-    CandidateMatch, SourcePlan, opaque_reference_plan, plan_batch_source_file, validate_js,
+    CandidateMatch, SourceFilePlanner, SourcePlan, opaque_reference_plan, plan_batch_source_file,
+    validate_js, with_source_file,
 };
 pub use jsx::{PreparedWorld, ProofOutcome, UsageProof, prepare, prove_prepared};
 pub use model::{

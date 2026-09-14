@@ -1,5 +1,10 @@
 use super::*;
 
+#[cfg(test)]
+thread_local! {
+    pub(super) static CONSUMER_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub(super) fn plan_consumer_file(
     file: &SourceFile,
     css_path: &str,
@@ -12,6 +17,37 @@ pub(super) fn plan_consumer_file(
     vue_unscoped: bool,
     vue_module: bool,
 ) -> MigrationResult<SourcePlan> {
+    with_source_file(file, |source| {
+        plan_consumer_file_with(
+            source,
+            css_path,
+            is_module,
+            candidates,
+            candidate_properties,
+            preserved_module_classes,
+            module_rule_classes,
+            utility_prefix,
+            vue_unscoped,
+            vue_module,
+        )
+    })
+}
+
+pub(super) fn plan_consumer_file_with(
+    source: &SourceFilePlanner<'_>,
+    css_path: &str,
+    is_module: bool,
+    candidates: &HashMap<SelectorKey, Vec<String>>,
+    candidate_properties: &HashMap<String, BTreeSet<String>>,
+    preserved_module_classes: &BTreeSet<String>,
+    module_rule_classes: Option<&BTreeSet<String>>,
+    utility_prefix: Option<&str>,
+    vue_unscoped: bool,
+    vue_module: bool,
+) -> MigrationResult<SourcePlan> {
+    #[cfg(test)]
+    CONSUMER_VISITS.set(CONSUMER_VISITS.get() + 1);
+    let file = source.file();
     // Vue scoped styles never apply outside their own SFC, and a `.vue` file
     // is not parseable JS: the only live pairing is an SFC consuming its own
     // scoped blocks through the HTML contract. A `.vue` consumer of any other
@@ -38,8 +74,7 @@ pub(super) fn plan_consumer_file(
         {
             return Ok(plan_html_file(file, css_path, candidates, utility_prefix));
         }
-        return plan_batch_source_file(
-            file,
+        return source.plan(
             css_path,
             false,
             candidates,
@@ -62,8 +97,7 @@ pub(super) fn plan_consumer_file(
     {
         return Ok(plan_html_file(file, css_path, candidates, utility_prefix));
     }
-    plan_batch_source_file(
-        file,
+    source.plan(
         css_path,
         is_module,
         candidates,

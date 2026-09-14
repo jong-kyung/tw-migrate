@@ -29,7 +29,7 @@ mod vue;
 pub use batch::plan_batch_json;
 #[cfg(test)]
 use batch::plan_json;
-use consumer::plan_consumer_file;
+use consumer::{plan_consumer_file, plan_consumer_file_with};
 use edit::{
     apply_edits, collect_empty_conditionals, remove_empty_conditionals, validate_stylesheet,
 };
@@ -47,9 +47,9 @@ use tw_migrate_css::StylesheetSyntax;
 use tw_migrate_source as jsx_graph;
 use tw_migrate_source::{Edit, HtmlElement, SourceFile, Warning, original_offset};
 use tw_migrate_source::{
-    SourcePlan, candidates_fit_attribute, element_classes, element_has_context, element_ids,
-    element_tag, opaque_reference_plan, plan_batch_source_file, plan_html_file,
-    plan_vue_module_file, rebase_span, shift_offset, validate_js,
+    SourceFilePlanner, SourcePlan, candidates_fit_attribute, element_classes, element_has_context,
+    element_ids, element_tag, opaque_reference_plan, plan_html_file, plan_vue_module_file,
+    rebase_span, shift_offset, validate_js, with_source_file,
 };
 use vue::{
     VueBlock, finish_vue_stylesheet, is_vue_path, mask_vue_source, rebase_vue_blocks,
