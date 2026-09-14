@@ -1,6 +1,7 @@
 //! JS/JSX-side rewriting: locate CSS Module references and plan span edits.
 
 use std::{
+    cell::OnceCell,
     collections::{BTreeSet, HashMap},
     path::{Component, Path, PathBuf},
 };
@@ -8,11 +9,11 @@ use std::{
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     Argument, CallExpression, ExportAllDeclaration, ExportFromDeclaration, Expression,
-    ImportDeclaration, ImportDeclarationSpecifier, ImportExpression,
+    ImportDeclaration, ImportDeclarationSpecifier, ImportExpression, Program,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::Parser;
-use oxc_semantic::SemanticBuilder;
+use oxc_semantic::{Scoping, SemanticBuilder};
 use oxc_span::{SourceType, Span};
 use oxc_syntax::symbol::SymbolId;
 use tw_migrate_css::SelectorKey;
@@ -97,6 +98,94 @@ pub fn opaque_reference_plan(file: &SourceFile, css_path: &str, is_module: bool)
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static SOURCE_BUILDS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// Lazily analyzed, immutable source shared only within one file's planning scope.
+/// HTML/Vue dispatch can use the scope without ever requesting a JS parse.
+pub struct SourceFilePlanner<'a> {
+    file: &'a SourceFile,
+    allocator: &'a Allocator,
+    parsed: OnceCell<MigrationResult<(Program<'a>, Scoping)>>,
+}
+
+/// Drop the arena, AST, and scoping before proceeding to the next file.
+pub fn with_source_file<T>(file: &SourceFile, plan: impl FnOnce(&SourceFilePlanner<'_>) -> T) -> T {
+    let allocator = Allocator::default();
+    plan(&SourceFilePlanner {
+        file,
+        allocator: &allocator,
+        parsed: OnceCell::new(),
+    })
+}
+
+impl<'a> SourceFilePlanner<'a> {
+    pub fn file(&self) -> &SourceFile {
+        self.file
+    }
+
+    fn parse(&self) -> MigrationResult<(Program<'a>, Scoping)> {
+        let file = self.file;
+        let source_type = source_type_for_path(&file.path).map_err(|error| {
+            MigrationError::UnsupportedSource {
+                message: format!("Unsupported source file {}: {error}", file.path),
+            }
+        })?;
+        #[cfg(test)]
+        SOURCE_BUILDS.set((SOURCE_BUILDS.get().0 + 1, SOURCE_BUILDS.get().1));
+        let parsed = Parser::new(self.allocator, &file.source, source_type).parse();
+        if !parsed.diagnostics.is_empty() {
+            return Err(MigrationError::SourceParse {
+                message: format!("Failed to parse {}: {:?}", file.path, parsed.diagnostics),
+            });
+        }
+        #[cfg(test)]
+        SOURCE_BUILDS.set((SOURCE_BUILDS.get().0, SOURCE_BUILDS.get().1 + 1));
+        let semantic = SemanticBuilder::new_compiler().build(&parsed.program);
+        if !semantic.diagnostics.is_empty() {
+            return Err(MigrationError::SourceAnalysis {
+                message: format!(
+                    "Failed to analyze {}: {:?}",
+                    file.path, semantic.diagnostics
+                ),
+            });
+        }
+        let scoping = semantic.semantic.into_scoping();
+        Ok((parsed.program, scoping))
+    }
+
+    pub fn plan(
+        &self,
+        css_path: &str,
+        is_module: bool,
+        candidates: &HashMap<SelectorKey, Vec<String>>,
+        candidate_properties: &HashMap<String, BTreeSet<String>>,
+        preserved_module_classes: &BTreeSet<String>,
+    ) -> MigrationResult<SourcePlan> {
+        let (program, scoping) = match self.parsed.get_or_init(|| self.parse()) {
+            Ok(parsed) => parsed,
+            Err(MigrationError::SourceParse { .. } | MigrationError::SourceAnalysis { .. })
+                if !self.file.writable =>
+            {
+                return Ok(opaque_reference_plan(self.file, css_path, is_module));
+            }
+            Err(error) => return Err(error.clone()),
+        };
+        Ok(plan_parsed_source_file(
+            self.file,
+            program,
+            scoping,
+            css_path,
+            is_module,
+            candidates,
+            candidate_properties,
+            preserved_module_classes,
+        ))
+    }
+}
+
 pub fn plan_batch_source_file(
     file: &SourceFile,
     css_path: &str,
@@ -105,33 +194,27 @@ pub fn plan_batch_source_file(
     candidate_properties: &HashMap<String, BTreeSet<String>>,
     preserved_module_classes: &BTreeSet<String>,
 ) -> MigrationResult<SourcePlan> {
-    let allocator = Allocator::default();
-    let source_type =
-        source_type_for_path(&file.path).map_err(|error| MigrationError::UnsupportedSource {
-            message: format!("Unsupported source file {}: {error}", file.path),
-        })?;
-    let parsed = Parser::new(&allocator, &file.source, source_type).parse();
-    if !parsed.diagnostics.is_empty() {
-        if !file.writable {
-            return Ok(opaque_reference_plan(file, css_path, is_module));
-        }
-        return Err(MigrationError::SourceParse {
-            message: format!("Failed to parse {}: {:?}", file.path, parsed.diagnostics),
-        });
-    }
-    let semantic = SemanticBuilder::new_compiler().build(&parsed.program);
-    if !semantic.diagnostics.is_empty() {
-        if !file.writable {
-            return Ok(opaque_reference_plan(file, css_path, is_module));
-        }
-        return Err(MigrationError::SourceAnalysis {
-            message: format!(
-                "Failed to analyze {}: {:?}",
-                file.path, semantic.diagnostics
-            ),
-        });
-    }
+    with_source_file(file, |source| {
+        source.plan(
+            css_path,
+            is_module,
+            candidates,
+            candidate_properties,
+            preserved_module_classes,
+        )
+    })
+}
 
+fn plan_parsed_source_file(
+    file: &SourceFile,
+    program: &Program<'_>,
+    scoping: &Scoping,
+    css_path: &str,
+    is_module: bool,
+    candidates: &HashMap<SelectorKey, Vec<String>>,
+    candidate_properties: &HashMap<String, BTreeSet<String>>,
+    preserved_module_classes: &BTreeSet<String>,
+) -> SourcePlan {
     let mut imports = ImportCollector {
         file_path: &file.path,
         css_target: normalize_path(Path::new(css_path)),
@@ -140,14 +223,14 @@ pub fn plan_batch_source_file(
         warning_span: None,
     };
     if is_module {
-        imports.visit_program(&parsed.program);
+        imports.visit_program(program);
     }
     // On the global path, members of CSS Module imports can never match a
     // global class: they are module references handled by the module's own
     // plan, not dynamic class names.
     let mut global_module_symbols = Vec::new();
     if !is_module {
-        for statement in &parsed.program.body {
+        for statement in &program.body {
             let oxc_ast::ast::Statement::ImportDeclaration(declaration) = statement else {
                 continue;
             };
@@ -164,7 +247,6 @@ pub fn plan_batch_source_file(
         }
     }
 
-    let scoping = semantic.semantic.scoping();
     let total_import_refs = imports
         .bindings
         .iter()
@@ -191,7 +273,7 @@ pub fn plan_batch_source_file(
         unsafe_reference: false,
         warnings: Vec::new(),
     };
-    collector.visit_program(&parsed.program);
+    collector.visit_program(program);
 
     let classified_import_refs =
         collector.module_refs.values().sum::<usize>() + collector.computed_refs;
@@ -237,7 +319,7 @@ pub fn plan_batch_source_file(
         }
     }
 
-    Ok(SourcePlan {
+    SourcePlan {
         edits: collector.edits,
         removable_import_edits,
         candidates: collector.emitted_candidates.into_iter().collect(),
@@ -246,7 +328,7 @@ pub fn plan_batch_source_file(
         matched_module_refs: collector.matched_module_refs,
         module_references_safe,
         warnings: collector.warnings,
-    })
+    }
 }
 
 struct ImportBinding {
@@ -331,6 +413,9 @@ impl<'a> Visit<'a> for ImportCollector<'_> {
 }
 
 mod usage;
+
+#[cfg(test)]
+mod tests;
 
 use usage::UsageCollector;
 
