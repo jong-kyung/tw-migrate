@@ -34,8 +34,8 @@ catalogs:
       specifier: 7.0.2
       version: 7.0.2
     verdaccio:
-      specifier: 6.10.2
-      version: 6.10.2
+      specifier: 6.10.3
+      version: 6.10.3
     vite-plus:
       specifier: 0.2.9
       version: 0.2.9
@@ -90,7 +90,7 @@ importers:
         version: 7.0.2
       verdaccio:
         specifier: 'catalog:'
-        version: 6.10.2(typanion@3.14.0)
+        version: 6.10.3(typanion@3.14.0)
       vite:
         specifier: npm:@voidzero-dev/vite-plus-core@0.2.9
         version: '@voidzero-dev/vite-plus-core@0.2.9(@types/node@24.13.4)(jiti@2.7.0)(less@4.8.1)(sass@1.102.0)(typescript@7.0.2)(yaml@2.9.0)'
@@ -3388,8 +3388,8 @@ packages:
     resolution: {integrity: sha512-q2od2foCPblMasnUdKPLcNYXN5iXW0Q9Imh58qTpNsvCeYGtlfMqyC+aO+/0wtTGkD+H+mWfbqtb/8G9TMc0DQ==}
     engines: {node: '>=22'}
 
-  verdaccio@6.10.2:
-    resolution: {integrity: sha512-avuvgx9EN9PQUg33e0ea+ltTs6CKffJVjS0h2odtULgIrHMqCdb7DHN6hg3qBou7OFdPiJG3sgtCc5VcrYj85A==}
+  verdaccio@6.10.3:
+    resolution: {integrity: sha512-hFr1rarjoKz3kA/42vPqRmueFuuk70y/22qZqNlOc/VNszUUqPJewtyroEZ8Tp7XtaIqoXuCfRq12j3igFGgyg==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -6426,7 +6426,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  verdaccio@6.10.2(typanion@3.14.0):
+  verdaccio@6.10.3(typanion@3.14.0):
     dependencies:
       '@cypress/request': 4.0.1
       '@verdaccio/auth': 8.1.3
