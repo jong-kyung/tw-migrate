@@ -4,7 +4,7 @@ allowBuilds:
   "@parcel/watcher": false
 catalog:
   "@napi-rs/cli": 3.9.0
-  "@types/node": 24.13.4
+  "@types/node": 24.13.6
   "@vitest/browser-playwright": 4.1.10
   knip: 6.35.1
   less: 4.8.1
