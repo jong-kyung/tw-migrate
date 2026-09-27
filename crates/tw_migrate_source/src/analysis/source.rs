@@ -878,7 +878,7 @@ pub fn source_analysis_json(path: &str, source: &str) -> MigrationResult<String>
         .map_err(|message| MigrationError::UnsupportedSource { message })?;
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, source, source_type).parse();
-    if parsed.panicked || !parsed.diagnostics.is_empty() {
+    if parsed.fatal_error || !parsed.diagnostics.is_empty() {
         return Err(MigrationError::SourceParse {
             message: format!("Failed to parse {path}"),
         });
