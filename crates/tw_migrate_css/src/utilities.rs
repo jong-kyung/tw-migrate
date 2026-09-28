@@ -287,20 +287,34 @@ pub fn tailwind_utilities_conflict(generated: &str, existing: &str) -> bool {
         return false;
     }
 
-    let generated_properties = utility_property_mask(generated_utility)
-        | arbitrary_utility_property(generated_utility).map_or(0, arbitrary_property_mask);
-    let existing_properties = utility_property_mask(existing_utility)
-        | arbitrary_utility_property(existing_utility).map_or(0, arbitrary_property_mask);
-    if generated_properties & existing_properties != 0 {
-        return true;
+    UtilityConflictSignature::new(generated_utility)
+        .intersects(&UtilityConflictSignature::new(existing_utility))
+}
+
+/// Utility-only conflict information. Callers must still enforce exact variant
+/// equality and exclude identical candidate spellings.
+pub(crate) struct UtilityConflictSignature<'a> {
+    pub property_mask: u64,
+    pub arbitrary_property: Option<&'a str>,
+}
+
+impl<'a> UtilityConflictSignature<'a> {
+    pub fn new(utility: &'a str) -> Self {
+        let arbitrary_property = arbitrary_utility_property(utility);
+        Self {
+            property_mask: utility_property_mask(utility)
+                | arbitrary_property.map_or(0, arbitrary_property_mask),
+            arbitrary_property,
+        }
     }
-    matches!(
-        (
-            arbitrary_utility_property(generated_utility),
-            arbitrary_utility_property(existing_utility)
-        ),
-        (Some(generated), Some(existing)) if generated == existing
-    )
+
+    fn intersects(&self, other: &Self) -> bool {
+        self.property_mask & other.property_mask != 0
+            || matches!(
+                (self.arbitrary_property, other.arbitrary_property),
+                (Some(left), Some(right)) if left == right
+            )
+    }
 }
 
 pub fn tailwind_variants_match(left: &str, right: &str) -> bool {

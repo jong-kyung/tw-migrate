@@ -13,11 +13,10 @@ use crate::{
         GlobalAtRulePlan, conditional_variant, global_at_rule_plan, is_conditional, parse_css,
         unsupported_warning,
     },
-    utilities::{
-        OverflowValues, SpacingValues, declaration_to_candidate, tailwind_utilities_conflict,
-    },
+    utilities::{OverflowValues, SpacingValues, declaration_to_candidate},
 };
 
+mod overlap;
 mod selectors;
 
 pub use selectors::{ShadowIndex, index_shadow_selectors};
@@ -225,28 +224,11 @@ pub fn parse_css_rules(
             warning,
         });
     }
-    let mut overlapping_rules = BTreeSet::new();
-    let mut rules_by_key: HashMap<&SelectorKey, Vec<usize>> = HashMap::new();
-    for (index, rule) in rules.iter().enumerate() {
-        if let Some(key) = &rule.key {
-            rules_by_key.entry(key).or_default().push(index);
+    let overlapping = overlap::overlapping_rules(&rules);
+    for (rule, overlaps) in rules.iter_mut().zip(overlapping) {
+        if overlaps {
+            rule.warning = Some("unsupported-overlap");
         }
-    }
-    for indices in rules_by_key.values() {
-        for (position, &left) in indices.iter().enumerate() {
-            for &right in &indices[position + 1..] {
-                if rules[left].candidates.iter().any(|left_candidate| {
-                    rules[right].candidates.iter().any(|right_candidate| {
-                        tailwind_utilities_conflict(left_candidate, right_candidate)
-                    })
-                }) {
-                    overlapping_rules.extend([left, right]);
-                }
-            }
-        }
-    }
-    for index in overlapping_rules {
-        rules[index].warning = Some("unsupported-overlap");
     }
 
     Ok(ParsedCss {
