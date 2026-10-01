@@ -29,7 +29,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: kucherenko/jscpd@e90cf5e17ecd3a835ebd65cb5355a2a6444549f9 # v5.3.1
+      - uses: kucherenko/jscpd@beb552864d3342241fbcca0f2c46c6248b0426df # v5.3.2
         with:
           version: 5.2.0
           path: src crates ecosystem-ci test
@@ -54,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
+      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
           tool: cargo-shear
       - run: cargo shear
