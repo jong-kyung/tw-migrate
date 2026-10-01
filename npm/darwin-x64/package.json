@@ -1,6 +1,6 @@
 {
   "name": "tw-migrate-darwin-x64",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Preview and migrate React, Vue, and HTML CSS to Tailwind utilities",
   "license": "MIT",
   "repository": {
