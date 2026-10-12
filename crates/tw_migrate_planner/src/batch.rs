@@ -351,8 +351,14 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
         candidate_maps.push(maps);
     }
 
+    let mut unreferenced_files = vec![vec![false; request.files.len()]; request.stylesheets.len()];
     let mut consumer_error = None;
-    for file in request.files.iter().filter(|file| file.writable) {
+    for (file_index, file) in request
+        .files
+        .iter()
+        .enumerate()
+        .filter(|(_, file)| file.writable)
+    {
         // Only earlier stylesheets can outrank an error from an earlier file.
         let limit = consumer_error
             .as_ref()
@@ -386,6 +392,7 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
                         break;
                     }
                 };
+                unreferenced_files[index][file_index] = result.unreferenced_module;
                 for matched in result.matches {
                     if let Some(origins) = maps
                         .origins
@@ -567,6 +574,7 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
             &blocked_rules[index],
             &externally_blocked[index],
             &candidate_maps[index].unproven,
+            &unreferenced_files[index],
             &mut shadow_cache,
         )?;
 
