@@ -1,4 +1,3 @@
-import { stat } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
 
 import * as z from "zod/mini";
@@ -1165,8 +1164,6 @@ async function planPreparedGroup(
 
   // Entry safety gates every entry mutation, not only media extraction.
   const groupWritable = targetable.has(entry.path) && isProjectInput(workspaceRoot, entry.path);
-  // Tailwind plugins can remove the entry after it was snapshotted.
-  if (groupWritable) await stat(entry.path);
   const mediaWarnings: MigrationWarning[] = [];
   let extraction: MediaExtraction | undefined;
   // Malformed member inputs must stay attributable to their member even

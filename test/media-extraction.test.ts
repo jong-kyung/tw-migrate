@@ -114,29 +114,6 @@ test("does not augment a gitignored Tailwind entry discovered through HTML", asy
   );
 });
 
-test.each([false, true])(
-  "rejects preview when a Tailwind plugin deletes the entry, even with force=%s",
-  async (force) => {
-    const cwd = await fixture({
-      entry: '@import "tailwindcss";\n@plugin "./delete-entry.cjs";\n',
-    });
-    await writeFile(
-      join(cwd, "delete-entry.cjs"),
-      `const fs = require("node:fs");
-const path = require("node:path");
-module.exports = () => fs.rmSync(path.join(__dirname, "globals.css"), { force: true });
-`,
-    );
-
-    await expect(migrate({ cwd, force })).rejects.toThrow(/ENOENT.*globals\.css/);
-    await expect(readFile(join(cwd, "globals.css"), "utf8")).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    expect(await readFile(join(cwd, "Button.module.css"), "utf8")).toBe(mediaCss);
-    expect(await readFile(join(cwd, "Button.tsx"), "utf8")).toBe(consumerTsx);
-  },
-);
-
 test("an unsafe entry falls back to arbitrary variants, not legacy names", async () => {
   const cwd = await tempDir();
   execFileSync("git", ["init", "-q"], { cwd });
