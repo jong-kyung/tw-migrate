@@ -140,7 +140,11 @@ export interface StylesheetEntry {
 }
 
 export interface PlannerRequest {
-  stylesheets: StylesheetEntry[];
+  stylesheets: (Omit<StylesheetEntry, "vueShadowCss" | "vueShadowModuleCss"> & {
+    vueShadowCss?: number[];
+    vueShadowModuleCss?: number[];
+  })[];
+  vueShadowSources: string[];
   tailwindPath: string;
   tailwindSource: string;
   utilityPrefix: string | null;

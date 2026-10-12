@@ -1331,13 +1331,32 @@ async function planPreparedGroup(
       })
       .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
 
+    // Keep each shadow source once across all sheets and replanning passes.
+    const shadowSourceIds = new Map<string, number>();
+    const shadowRefs = (sources: string[] | undefined): number[] | undefined =>
+      sources?.map((source) => {
+        let id = shadowSourceIds.get(source);
+        if (id === undefined) {
+          id = shadowSourceIds.size;
+          shadowSourceIds.set(source, id);
+        }
+        return id;
+      });
+    const pooledSheets = sheets.map(({ stylesheet }) => ({
+      ...stylesheet,
+      vueShadowCss: shadowRefs(stylesheet.vueShadowCss),
+      vueShadowModuleCss: shadowRefs(stylesheet.vueShadowModuleCss),
+    }));
+    const vueShadowSources = [...shadowSourceIds.keys()];
+
     planning: for (;;) {
       const request: PlannerRequest = {
-        stylesheets: sheets.map(({ member, stylesheet }, index) => {
+        vueShadowSources,
+        stylesheets: sheets.map(({ member }, index) => {
           const rules = blocked.get(index);
           const movesOff = member.sharedProofs !== undefined || movesDisabled.has(index);
           return {
-            ...stylesheet,
+            ...pooledSheets[index],
             ...(rules
               ? { blockedRules: [...rules.values()].map((blockedRule) => blockedRule.ruleId) }
               : {}),

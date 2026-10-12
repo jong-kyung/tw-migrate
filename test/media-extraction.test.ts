@@ -6,7 +6,7 @@ import { expect, onTestFinished, test, vi } from "vite-plus/test";
 import { migrate } from "../src/index.ts";
 import * as native from "../src/native.ts";
 import { usedGeneratedDefinitions } from "../src/plan/media.ts";
-import type { Plan, PlanRule } from "../src/types.ts";
+import type { Plan, PlannerRequest, PlanRule } from "../src/types.ts";
 const mediaCss =
   ".button { padding: 13px; }\n@media screen and (max-width: 700px) { .button { margin: 7px; } }\n";
 const consumerTsx =
@@ -52,7 +52,7 @@ test("extracts media components into entry definitions and stacked variants", as
   expect(report.warnings.length).toBe(0);
 });
 
-test("omits Vue shadow CSS from media collection without changing the migration", async () => {
+test("shares Vue shadow CSS only with the planner without changing the migration", async () => {
   const cwd = await tempDir();
   await Promise.all([
     writeFile(join(cwd, "package.json"), '{"private":true}'),
@@ -67,7 +67,11 @@ test("omits Vue shadow CSS from media collection without changing the migration"
     ),
   ]);
   const collect = vi.spyOn(native, "collectMediaConditions");
-  onTestFinished(() => collect.mockRestore());
+  const plan = vi.spyOn(native, "planBatchMigration");
+  onTestFinished(() => {
+    collect.mockRestore();
+    plan.mockRestore();
+  });
 
   const report = await migrate({ cwd, extractMediaQueries: true, write: true });
 
@@ -85,6 +89,30 @@ test("omits Vue shadow CSS from media collection without changing the migration"
   for (const stylesheet of request.stylesheets) {
     expect(stylesheet).not.toHaveProperty("vueShadowCss");
     expect(stylesheet).not.toHaveProperty("vueShadowModuleCss");
+  }
+  expect(plan).toHaveBeenCalled();
+  for (const [json] of plan.mock.calls) {
+    const request: PlannerRequest = JSON.parse(json);
+    expect(request.vueShadowSources).toBeInstanceOf(Array);
+    expect(request.vueShadowSources).toEqual([...new Set(request.vueShadowSources)]);
+    const button = request.stylesheets.find((sheet) => sheet.cssPath.endsWith("Button.vue"))!;
+    const other = request.stylesheets.find((sheet) => sheet.cssPath.endsWith("Other.vue"))!;
+    expect(button.vueShadowCss?.map((id) => request.vueShadowSources[id])).not.toContain(
+      `\n${mediaCss}`,
+    );
+    expect(other.vueShadowCss?.map((id) => request.vueShadowSources[id])).toContain(
+      `\n${mediaCss}`,
+    );
+    expect(button.vueShadowModuleCss).toEqual(other.vueShadowModuleCss);
+    expect(button.vueShadowModuleCss?.map((id) => request.vueShadowSources[id])).toEqual([
+      "\n.other { display: flex; }\n",
+    ]);
+    for (const sheet of request.stylesheets) {
+      for (const id of [...(sheet.vueShadowCss ?? []), ...(sheet.vueShadowModuleCss ?? [])]) {
+        expect(Number.isInteger(id)).toBe(true);
+        expect(request.vueShadowSources[id]).toBeTypeOf("string");
+      }
+    }
   }
 });
 
