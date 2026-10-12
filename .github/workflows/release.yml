@@ -142,7 +142,7 @@ jobs:
       # roots an artifact at the common ancestor of the matched files, so a
       # single-file glob would drop the npm/<platform>/ prefix the publish job
       # needs to put each addon back where napi expects it.
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: native-${{ matrix.runner }}
           path: npm
@@ -150,7 +150,7 @@ jobs:
       # The publish job checks out fresh and installs nothing, so the bundled
       # dist/ the root package points main and bin at must arrive as an
       # artifact too. The bundle is platform-independent; one leg uploads it.
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: matrix.runner == 'ubuntu-latest'
         with:
           name: dist
@@ -193,7 +193,7 @@ jobs:
       # npm token to leak or rotate.
       #
       # setup-node still runs -- it is what points npm at the public registry.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
           registry-url: 'https://registry.npmjs.org'
@@ -206,14 +206,14 @@ jobs:
         run: npm install --global npm@11.13.0
 
       - name: Download native addons
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: native-*
           merge-multiple: true
           path: npm
 
       - name: Download the bundled JavaScript
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
           path: dist
@@ -363,7 +363,7 @@ jobs:
       VERSION: ${{ needs.check.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 # for .node-version only
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
       - run: npm install --global pnpm@11.15.1
