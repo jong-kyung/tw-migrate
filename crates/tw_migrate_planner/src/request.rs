@@ -8,6 +8,8 @@ pub(super) struct PlanRequest<'a> {
     pub(super) sheet: BatchStylesheet,
     pub(super) tailwind_source: Option<String>,
     pub(super) files: Vec<SourceFile>,
+    /// Retained co-located selectors belong to this pass, not the shared corpus.
+    pub(super) vue_shadow_overlay: &'a [String],
 }
 
 fn default_entry_writable() -> bool {
@@ -18,6 +20,9 @@ fn default_entry_writable() -> bool {
 #[serde(rename_all = "camelCase")]
 pub(super) struct BatchPlanRequest {
     pub(super) stylesheets: Vec<BatchStylesheet>,
+    /// Shared shadow sources, referenced by stylesheet-local index lists.
+    #[serde(default)]
+    pub(super) vue_shadow_sources: Vec<String>,
     #[serde(default)]
     pub(super) tailwind_path: Option<String>,
     #[serde(default)]
@@ -93,16 +98,16 @@ pub(super) struct BatchStylesheet {
     #[serde(default)]
     pub(super) vue_unscoped: bool,
     /// Present only for closed Vue SFC stylesheets: the package's non-scoped
-    /// CSS corpus as parseable pieces (other stylesheets, retained SFC
-    /// blocks, scope-escape selector fragments). Their parsed selector
+    /// CSS corpus as indices into `vue_shadow_sources` (other stylesheets,
+    /// retained SFC blocks, scope-escape selector fragments). Their parsed selector
     /// surface decides which scoped rules may be deleted without handing the
     /// cascade to an unlayered competitor.
     #[serde(default)]
-    pub(super) vue_shadow_css: Vec<String>,
-    /// CSS Module sources: their class and id names are localized at build
-    /// time, so only their bare type and attribute selectors join the index.
+    pub(super) vue_shadow_css: Vec<usize>,
+    /// CSS Module source indices: their class and id names are localized at
+    /// build time, so only their bare type and attribute selectors join the index.
     #[serde(default)]
-    pub(super) vue_shadow_module_css: Vec<String>,
+    pub(super) vue_shadow_module_css: Vec<usize>,
     /// True when the shadow corpus contains selectors that cannot be proven
     /// (preprocessor interpolation or concatenation, inline HTML styles,
     /// unextractable escapes); every closed rule is then retained.

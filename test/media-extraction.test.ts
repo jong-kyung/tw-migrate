@@ -1,11 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { expect, onTestFinished, test } from "vite-plus/test";
+import { expect, onTestFinished, test, vi } from "vite-plus/test";
 
 import { migrate } from "../src/index.ts";
+import * as native from "../src/native.ts";
 import { usedGeneratedDefinitions } from "../src/plan/media.ts";
-import type { Plan, PlanRule } from "../src/types.ts";
+import type { Plan, PlannerRequest, PlanRule } from "../src/types.ts";
 const mediaCss =
   ".button { padding: 13px; }\n@media screen and (max-width: 700px) { .button { margin: 7px; } }\n";
 const consumerTsx =
@@ -49,6 +50,70 @@ test("extracts media components into entry definitions and stacked variants", as
     /className="p-\[13px\] screen:width-lte-700px:m-\[7px\]"/,
   );
   expect(report.warnings.length).toBe(0);
+});
+
+test("shares Vue shadow CSS only with the planner without changing the migration", async () => {
+  const cwd = await tempDir();
+  await Promise.all([
+    writeFile(join(cwd, "package.json"), '{"private":true}'),
+    writeFile(join(cwd, "globals.css"), '@import "tailwindcss";\n'),
+    writeFile(
+      join(cwd, "Button.vue"),
+      `<template><button class="button">Save</button><span /></template>\n<style scoped>\n${mediaCss}</style>\n`,
+    ),
+    writeFile(
+      join(cwd, "Other.vue"),
+      '<template><div :class="$style.other">Other</div><span /></template>\n<style module>\n.other { display: flex; }\n</style>\n',
+    ),
+  ]);
+  const collect = vi.spyOn(native, "collectMediaConditions");
+  const plan = vi.spyOn(native, "planBatchMigration");
+  onTestFinished(() => {
+    collect.mockRestore();
+    plan.mockRestore();
+  });
+
+  const report = await migrate({ cwd, extractMediaQueries: true, write: true });
+
+  expect(report.candidates).toEqual(["flex", "p-[13px]", "screen:width-lte-700px:m-[7px]"]);
+  expect(report.warnings).toEqual([]);
+  expect(await readFile(join(cwd, "globals.css"), "utf8")).toBe(
+    `@import "tailwindcss";\n\n${screenDefinition}\n${widthDefinition}`,
+  );
+  expect(await readFile(join(cwd, "Button.vue"), "utf8")).toContain(
+    'class="button p-[13px] screen:width-lte-700px:m-[7px]"',
+  );
+  expect(collect).toHaveBeenCalledOnce();
+  const request = JSON.parse(collect.mock.calls[0][0]);
+  expect(request.stylesheets).toHaveLength(2);
+  for (const stylesheet of request.stylesheets) {
+    expect(stylesheet).not.toHaveProperty("vueShadowCss");
+    expect(stylesheet).not.toHaveProperty("vueShadowModuleCss");
+  }
+  expect(plan).toHaveBeenCalled();
+  for (const [json] of plan.mock.calls) {
+    const request: PlannerRequest = JSON.parse(json);
+    expect(request.vueShadowSources).toBeInstanceOf(Array);
+    expect(request.vueShadowSources).toEqual([...new Set(request.vueShadowSources)]);
+    const button = request.stylesheets.find((sheet) => sheet.cssPath.endsWith("Button.vue"))!;
+    const other = request.stylesheets.find((sheet) => sheet.cssPath.endsWith("Other.vue"))!;
+    expect(button.vueShadowCss?.map((id) => request.vueShadowSources[id])).not.toContain(
+      `\n${mediaCss}`,
+    );
+    expect(other.vueShadowCss?.map((id) => request.vueShadowSources[id])).toContain(
+      `\n${mediaCss}`,
+    );
+    expect(button.vueShadowModuleCss).toEqual(other.vueShadowModuleCss);
+    expect(button.vueShadowModuleCss?.map((id) => request.vueShadowSources[id])).toEqual([
+      "\n.other { display: flex; }\n",
+    ]);
+    for (const sheet of request.stylesheets) {
+      for (const id of [...(sheet.vueShadowCss ?? []), ...(sheet.vueShadowModuleCss ?? [])]) {
+        expect(Number.isInteger(id)).toBe(true);
+        expect(request.vueShadowSources[id]).toBeTypeOf("string");
+      }
+    }
+  }
 });
 
 test("adopts identical authored definitions without duplicating them", async () => {

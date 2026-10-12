@@ -31,6 +31,7 @@ pub(super) fn plan_json(request: &str) -> MigrationResult<String> {
         "tailwindSource",
         "utilityPrefix",
         "themeTokens",
+        "vueShadowSources",
     ] {
         if let Some(value) = stylesheet.remove(field) {
             batch.insert(field.to_string(), value);
@@ -288,6 +289,22 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
         });
     }
 
+    for sheet in &request.stylesheets {
+        if let Some(id) = sheet
+            .vue_shadow_css
+            .iter()
+            .chain(&sheet.vue_shadow_module_css)
+            .find(|&&id| id >= request.vue_shadow_sources.len())
+        {
+            return Err(MigrationError::InvalidRequest {
+                message: format!(
+                    "Invalid Vue shadow CSS reference {id} in {}",
+                    sheet.css_path
+                ),
+            });
+        }
+    }
+
     let mut shadow_cache = ShadowSelectorCache::default();
     let mut match_groups: HashMap<(String, usize, usize), Vec<BatchMatch>> = HashMap::new();
     // Relationship proofs run here against the request's immutable file set,
@@ -526,10 +543,7 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
         if stylesheet.vue_module
             && let Some(css) = co_located_retained_css.get(&stylesheet.css_path)
         {
-            stylesheet_request
-                .sheet
-                .vue_shadow_css
-                .extend(css.iter().cloned());
+            stylesheet_request.vue_shadow_overlay = css;
         }
         stylesheet_request.sheet.css_source = current
             .get(&stylesheet.css_path)

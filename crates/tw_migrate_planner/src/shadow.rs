@@ -17,30 +17,36 @@ pub(super) struct ShadowSelectorCache {
 }
 
 impl ShadowSelectorCache {
-    pub(super) fn index(&mut self, pieces: &[String], module_pieces: &[String]) -> ShadowIndex {
+    pub(super) fn index<'a>(
+        &mut self,
+        pieces: impl IntoIterator<Item = &'a String>,
+        module_pieces: impl IntoIterator<Item = &'a String>,
+    ) -> ShadowIndex {
         let mut index = ShadowIndex::default();
-        for (module, pieces) in [pieces, module_pieces].into_iter().enumerate() {
+        for (module, piece) in pieces
+            .into_iter()
+            .map(|piece| (0, piece))
+            .chain(module_pieces.into_iter().map(|piece| (1, piece)))
+        {
             let cache = &mut self.pieces[module];
-            for piece in pieces {
-                let parsed = match cache.get(piece) {
-                    Some(parsed) => parsed,
-                    None => {
-                        #[cfg(test)]
-                        PARSED_PIECES.set(PARSED_PIECES.get() + 1);
-                        let piece_slice = std::slice::from_ref(piece);
-                        let parsed = if module == 0 {
-                            index_shadow_selectors(piece_slice, &[])
-                        } else {
-                            index_shadow_selectors(&[], piece_slice)
-                        };
-                        cache.entry(piece.clone()).or_insert(parsed)
-                    }
-                };
-                index.classes.extend(parsed.classes.iter().cloned());
-                index.ids.extend(parsed.ids.iter().cloned());
-                index.types.extend(parsed.types.iter().cloned());
-                index.unverifiable |= parsed.unverifiable;
-            }
+            let parsed = match cache.get(piece) {
+                Some(parsed) => parsed,
+                None => {
+                    #[cfg(test)]
+                    PARSED_PIECES.set(PARSED_PIECES.get() + 1);
+                    let piece_slice = std::slice::from_ref(piece);
+                    let parsed = if module == 0 {
+                        index_shadow_selectors(piece_slice, &[])
+                    } else {
+                        index_shadow_selectors(&[], piece_slice)
+                    };
+                    cache.entry(piece.clone()).or_insert(parsed)
+                }
+            };
+            index.classes.extend(parsed.classes.iter().cloned());
+            index.ids.extend(parsed.ids.iter().cloned());
+            index.types.extend(parsed.types.iter().cloned());
+            index.unverifiable |= parsed.unverifiable;
         }
         index
     }

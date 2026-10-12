@@ -90,13 +90,15 @@ fn vue_module_rules_ignore_same_named_corpus_classes_but_respect_site_tags() {
     let source = "<template>\n  <p :class=\"$style.card\">A</p>\n</template>\n<style module>\n.card { padding: 13px; }\n</style>\n";
     // A corpus `.card` cannot match the hashed runtime class.
     let mut hashed = vue_module_request(source, &[("p", "card")]);
-    hashed["stylesheets"][0]["vueShadowCss"] = serde_json::json!([".card { padding: 20px; }"]);
+    hashed["vueShadowSources"] = serde_json::json!([".card { padding: 20px; }"]);
+    hashed["stylesheets"][0]["vueShadowCss"] = serde_json::json!([0]);
     let response = plan_batch(hashed);
     assert_eq!(response["convertedRules"], 1);
 
     // A corpus type selector still reaches the binding's element.
     let mut typed = vue_module_request(source, &[("p", "card")]);
-    typed["stylesheets"][0]["vueShadowCss"] = serde_json::json!(["p { padding: 20px; }"]);
+    typed["vueShadowSources"] = serde_json::json!(["p { padding: 20px; }"]);
+    typed["stylesheets"][0]["vueShadowCss"] = serde_json::json!([0]);
     let response = plan_batch(typed);
     assert_eq!(response["convertedRules"], 0);
     assert_eq!(response["warnings"][0]["code"], "shadowed-scoped-rule");
@@ -173,6 +175,26 @@ fn vue_batch_request(
 }
 
 #[test]
+fn vue_shadow_references_must_resolve_in_the_shared_sources() {
+    use tw_migrate_error::MigrationError;
+
+    let source = "<template><p class=\"card\">A</p><p>B</p></template><style scoped>.card { padding: 13px; }</style>";
+    for field in ["vueShadowCss", "vueShadowModuleCss"] {
+        for sources in [vec![], vec!["p { padding: 20px; }"]] {
+            let mut request = vue_batch_request(source, true, None);
+            request["vueShadowSources"] = serde_json::json!(sources);
+            request["stylesheets"][0][field] = serde_json::json!([sources.len()]);
+            let error = plan_batch_json(&request.to_string()).unwrap_err();
+            assert!(matches!(&error, MigrationError::InvalidRequest { .. }));
+            assert!(error.to_string().contains(&format!(
+                "Invalid Vue shadow CSS reference {} in /project/Card.vue",
+                sources.len()
+            )));
+        }
+    }
+}
+
+#[test]
 fn vue_shadow_pieces_parse_once_per_batch_across_all_passes() {
     use crate::shadow::PARSED_PIECES;
 
@@ -201,8 +223,7 @@ fn vue_shadow_pieces_parse_once_per_batch_across_all_passes() {
                     "contentStart": content_start,
                     "contentEnd": content_start + piece.len(),
                 }],
-                "vueShadowCss": pieces.iter().enumerate()
-                    .filter(|(other, _)| *other != i).map(|(_, piece)| piece).collect::<Vec<_>>(),
+                "vueShadowCss": (0..count).filter(|other| *other != i).collect::<Vec<_>>(),
             }));
             files.push(serde_json::json!({
                 "path": path,
@@ -215,7 +236,11 @@ fn vue_shadow_pieces_parse_once_per_batch_across_all_passes() {
                 "htmlReferencesSafe": true,
             }));
         }
-        let request = serde_json::json!({ "stylesheets": sheets, "files": files });
+        let request = serde_json::json!({
+            "stylesheets": sheets,
+            "vueShadowSources": pieces,
+            "files": files,
+        });
         // Each call owns a fresh cache, but all passes within it share the pieces.
         for _ in 0..2 {
             let before = PARSED_PIECES.get();
@@ -267,8 +292,9 @@ fn vue_closed_sfc_migrates_template_and_removes_the_emptied_scoped_block() {
 fn vue_shadowed_scoped_rule_is_retained_without_template_edits() {
     let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n";
     let mut request = vue_batch_request(source, true, None);
-    request["stylesheets"][0]["vueShadowCss"] =
+    request["vueShadowSources"] =
         serde_json::json!(["div.card { padding: 20px; } .cardio { top: 0; }"]);
+    request["stylesheets"][0]["vueShadowCss"] = serde_json::json!([0]);
 
     let response = plan_batch(request);
 
@@ -281,7 +307,8 @@ fn vue_shadowed_scoped_rule_is_retained_without_template_edits() {
 
     // A different class like `.cardio` must not shadow `.card`.
     let mut clear = vue_batch_request(source, true, None);
-    clear["stylesheets"][0]["vueShadowCss"] = serde_json::json!([".cardio { top: 0; }"]);
+    clear["vueShadowSources"] = serde_json::json!([".cardio { top: 0; }"]);
+    clear["stylesheets"][0]["vueShadowCss"] = serde_json::json!([0]);
     let response = plan_batch(clear);
     assert_eq!(response["convertedRules"], 1);
 }
@@ -291,6 +318,7 @@ fn vue_cooccurring_site_class_shadow_retains_the_rule() {
     let source = "<template>\n  <p class=\"card foo\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n";
     let value_start = source.find("card foo").unwrap();
     let request = serde_json::json!({
+        "vueShadowSources": [".foo { padding: 20px; }"],
         "stylesheets": [{
             "cssPath": "/project/Card.vue",
             "cssSource": source,
@@ -302,7 +330,7 @@ fn vue_cooccurring_site_class_shadow_retains_the_rule() {
                 "contentStart": source.find("<style scoped>").unwrap() + "<style scoped>".len(),
                 "contentEnd": source.find("</style>").unwrap(),
             }],
-            "vueShadowCss": [".foo { padding: 20px; }"],
+            "vueShadowCss": [0],
         }],
         "files": [{
             "path": "/project/Card.vue",
@@ -486,14 +514,15 @@ fn vue_module_shadow_indexes_only_global_selectors() {
     let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n";
     // A localized module class cannot match template elements.
     let mut localized = vue_batch_request(source, true, None);
-    localized["stylesheets"][0]["vueShadowModuleCss"] =
-        serde_json::json!([".card { padding: 20px; }"]);
+    localized["vueShadowSources"] = serde_json::json!([".card { padding: 20px; }"]);
+    localized["stylesheets"][0]["vueShadowModuleCss"] = serde_json::json!([0]);
     let response = plan_batch(localized);
     assert_eq!(response["convertedRules"], 1);
 
     // A bare type selector in a module stays global and shadows the site.
     let mut typed = vue_batch_request(source, true, None);
-    typed["stylesheets"][0]["vueShadowModuleCss"] = serde_json::json!(["p { padding: 20px; }"]);
+    typed["vueShadowSources"] = serde_json::json!(["p { padding: 20px; }"]);
+    typed["stylesheets"][0]["vueShadowModuleCss"] = serde_json::json!([0]);
     let response = plan_batch(typed);
     assert_eq!(response["convertedRules"], 0);
     assert_eq!(response["warnings"][0]["code"], "shadowed-scoped-rule");
@@ -522,15 +551,15 @@ fn vue_module_global_escapes_are_indexed_or_retained_conservatively() {
     let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n";
     // An unrelated `:global` escape must not disable the whole index.
     let mut unrelated = vue_batch_request(source, true, None);
-    unrelated["stylesheets"][0]["vueShadowModuleCss"] =
-        serde_json::json!([":global(.unrelated) { padding: 20px; }"]);
+    unrelated["vueShadowSources"] = serde_json::json!([":global(.unrelated) { padding: 20px; }"]);
+    unrelated["stylesheets"][0]["vueShadowModuleCss"] = serde_json::json!([0]);
     let response = plan_batch(unrelated);
     assert_eq!(response["convertedRules"], 1);
 
     // A matching `:global` escape shadows precisely.
     let mut matching = vue_batch_request(source, true, None);
-    matching["stylesheets"][0]["vueShadowModuleCss"] =
-        serde_json::json!([":global(.card) { padding: 20px; }"]);
+    matching["vueShadowSources"] = serde_json::json!([":global(.card) { padding: 20px; }"]);
+    matching["stylesheets"][0]["vueShadowModuleCss"] = serde_json::json!([0]);
     let response = plan_batch(matching);
     assert_eq!(response["convertedRules"], 0);
     assert_eq!(response["warnings"][0]["code"], "shadowed-scoped-rule");
@@ -539,8 +568,8 @@ fn vue_module_global_escapes_are_indexed_or_retained_conservatively() {
     // argument, so conservatively retain rather than treating `.card` as
     // a localized module class.
     let mut selector_mode = vue_batch_request(source, true, None);
-    selector_mode["stylesheets"][0]["vueShadowModuleCss"] =
-        serde_json::json!([":global .card { padding: 20px; }"]);
+    selector_mode["vueShadowSources"] = serde_json::json!([":global .card { padding: 20px; }"]);
+    selector_mode["stylesheets"][0]["vueShadowModuleCss"] = serde_json::json!([0]);
     let response = plan_batch(selector_mode);
     assert_eq!(response["convertedRules"], 0);
     assert_eq!(response["warnings"][0]["code"], "shadowed-scoped-rule");
@@ -561,20 +590,23 @@ fn vue_type_selector_shadow_matches_by_site_tag() {
     let source = "<template>\n  <p class=\"card\">A</p>\n  <p class=\"note\">B</p>\n</template>\n<style scoped>\n.card { padding: 13px; }\n</style>\n";
     // A type selector for another tag cannot match the `p` sites.
     let mut clear = vue_batch_request(source, true, None);
-    clear["stylesheets"][0]["vueShadowCss"] = serde_json::json!(["article { padding: 20px; }"]);
+    clear["vueShadowSources"] = serde_json::json!(["article { padding: 20px; }"]);
+    clear["stylesheets"][0]["vueShadowCss"] = serde_json::json!([0]);
     let response = plan_batch(clear);
     assert_eq!(response["convertedRules"], 1);
 
     // A `p` type selector reaches the rule's site, so the rule retains.
     let mut shadowed = vue_batch_request(source, true, None);
-    shadowed["stylesheets"][0]["vueShadowCss"] = serde_json::json!(["p { padding: 20px; }"]);
+    shadowed["vueShadowSources"] = serde_json::json!(["p { padding: 20px; }"]);
+    shadowed["stylesheets"][0]["vueShadowCss"] = serde_json::json!([0]);
     let response = plan_batch(shadowed);
     assert_eq!(response["convertedRules"], 0);
     assert_eq!(response["warnings"][0]["code"], "shadowed-scoped-rule");
 
     // An unparseable piece is unverifiable and retains everything.
     let mut opaque = vue_batch_request(source, true, None);
-    opaque["stylesheets"][0]["vueShadowCss"] = serde_json::json!(["$name: card;"]);
+    opaque["vueShadowSources"] = serde_json::json!(["$name: card;"]);
+    opaque["stylesheets"][0]["vueShadowCss"] = serde_json::json!([0]);
     let response = plan_batch(opaque);
     assert_eq!(response["convertedRules"], 0);
 }

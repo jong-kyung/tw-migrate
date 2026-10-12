@@ -124,6 +124,7 @@ pub(super) fn batch_stylesheet_request<'a>(
         sheet: stylesheet.clone(),
         tailwind_source: batch.tailwind_source.clone(),
         files,
+        vue_shadow_overlay: &[],
     }
 }
 
@@ -230,8 +231,17 @@ fn parse_request_rules(
     // template site the package's non-scoped corpus can also target.
     if vue_masked.is_some() && is_module {
         let shadow = shadow_cache.index(
-            &request.sheet.vue_shadow_css,
-            &request.sheet.vue_shadow_module_css,
+            request
+                .sheet
+                .vue_shadow_css
+                .iter()
+                .map(|&id| &request.batch.vue_shadow_sources[id])
+                .chain(request.vue_shadow_overlay),
+            request
+                .sheet
+                .vue_shadow_module_css
+                .iter()
+                .map(|&id| &request.batch.vue_shadow_sources[id]),
         );
         let unverifiable = request.sheet.vue_shadow_unverifiable || shadow.unverifiable;
         let vue_files = request
