@@ -55,6 +55,49 @@ fn batch_preserves_prepass_error_priority() {
 }
 
 #[test]
+fn batch_skips_only_unchanged_module_non_consumers() {
+    use crate::consumer::CONSUMER_VISITS;
+
+    let request = serde_json::json!({
+        "stylesheets": [
+            { "cssPath": "/project/A.module.css", "cssSource": ".a { padding: 13px; }" },
+            { "cssPath": "/project/B.module.css", "cssSource": ".b { margin: 7px; }" },
+        ],
+        "files": [
+            { "path": "/project/A.tsx", "source": "import a from './A.module.css';\nexport const A = () => <div className={a.a} />;" },
+            { "path": "/project/B.tsx", "source": "import b from './B.module.css';\nexport const B = () => <div className={b.b} />;" },
+            { "path": "/project/Other.tsx", "source": "export const Other = () => <div className=\"other\" />;" },
+            { "path": "/project/Dynamic.tsx", "source": "export const Dynamic = ({ value }) => <div className={value} />;" },
+        ],
+    });
+    let before = CONSUMER_VISITS.get();
+    let response = plan_batch(request);
+    assert_eq!(response["convertedRules"], 2);
+    assert_eq!(
+        response["deletedFiles"],
+        serde_json::json!(["/project/A.module.css", "/project/B.module.css"])
+    );
+    assert_eq!(
+        response["files"],
+        serde_json::json!([
+            { "path": "/project/A.tsx", "source": "export const A = () => <div className=\"p-[13px]\" />;" },
+            { "path": "/project/B.tsx", "source": "export const B = () => <div className=\"m-[7px]\" />;" },
+        ])
+    );
+    assert!(
+        response["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning["code"] == "dynamic-class-name"
+                && warning["file"] == "/project/Dynamic.tsx")
+    );
+    // Eight snapshot visits, then two for A and three for B: changed A and
+    // the diagnostic-bearing file must still be analyzed for B.
+    assert_eq!(CONSUMER_VISITS.get() - before, 13);
+}
+
+#[test]
 fn batch_ignores_an_unparseable_unwritable_file_without_a_reference() {
     let request = serde_json::json!({
         "stylesheets": [{

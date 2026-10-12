@@ -556,6 +556,7 @@ pub(super) fn plan_request(
     blocked_rules: &RuleConflicts,
     externally_blocked: &HashSet<RuleId>,
     unproven_rules: &HashMap<RuleId, String>,
+    unreferenced_files: &[bool],
     shadow_cache: &mut ShadowSelectorCache,
 ) -> MigrationResult<PlanResponse> {
     let (
@@ -695,19 +696,25 @@ pub(super) fn plan_request(
     });
     let request_properties =
         candidate_property_union(rules.iter().flat_map(|rule| rule.candidate_properties.iter()));
-    for file in &request.files {
-        let mut result = plan_consumer_file(
-            file,
-            &request.sheet.css_path,
-            is_module,
-            &candidate_map,
-            &request_properties,
-            &preserved_module_classes,
-            module_rule_classes.as_ref(),
-            request.batch.utility_prefix.as_deref(),
-            request.sheet.vue_unscoped,
-            request.sheet.vue_module,
-        )?;
+    for (file_index, file) in request.files.iter().enumerate() {
+        let mut result = if unreferenced_files[file_index]
+            && file.source == request.batch.files[file_index].source
+        {
+            SourcePlan::default()
+        } else {
+            plan_consumer_file(
+                file,
+                &request.sheet.css_path,
+                is_module,
+                &candidate_map,
+                &request_properties,
+                &preserved_module_classes,
+                module_rule_classes.as_ref(),
+                request.batch.utility_prefix.as_deref(),
+                request.sheet.vue_unscoped,
+                request.sheet.vue_module,
+            )?
+        };
 
         module_references_safe &= result.module_references_safe;
         let direct_html_link = file

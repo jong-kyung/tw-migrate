@@ -37,6 +37,8 @@ pub struct SourcePlan {
     pub module_refs: HashMap<String, usize>,
     pub matched_module_refs: HashMap<String, usize>,
     pub module_references_safe: bool,
+    /// The file has no module reference or diagnostic. Reuse requires unchanged source.
+    pub unreferenced_module: bool,
     pub warnings: Vec<Warning>,
 }
 
@@ -52,6 +54,7 @@ impl Default for SourcePlan {
             module_refs: HashMap::new(),
             matched_module_refs: HashMap::new(),
             module_references_safe: true,
+            unreferenced_module: false,
             warnings: Vec::new(),
         }
     }
@@ -327,6 +330,9 @@ fn plan_parsed_source_file(
         module_refs: collector.module_refs,
         matched_module_refs: collector.matched_module_refs,
         module_references_safe,
+        unreferenced_module: is_module
+            && imports.warning_span.is_none()
+            && collector.warnings.is_empty(),
         warnings: collector.warnings,
     }
 }

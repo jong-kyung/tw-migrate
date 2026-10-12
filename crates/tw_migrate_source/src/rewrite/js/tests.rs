@@ -18,8 +18,53 @@ fn plan_value(plan: SourcePlan) -> serde_json::Value {
         "moduleRefs": plan.module_refs,
         "matchedModuleRefs": plan.matched_module_refs,
         "moduleReferencesSafe": plan.module_references_safe,
+        "unreferencedModule": plan.unreferenced_module,
         "warnings": plan.warnings,
     })
+}
+
+#[test]
+fn module_non_consumer_proof_preserves_references_and_diagnostics() {
+    for (source, unreferenced) in [
+        ("export const App = () => <div className=\"a\" />;", true),
+        (
+            "import other from './Other.module.css'; export const App = () => <div className={other.a} />;",
+            true,
+        ),
+        ("import a from './A.module.css';", false),
+        ("import './A.module.css';", false),
+        ("export { default } from './A.module.css';", false),
+        ("export * from './A.module.css';", false),
+        ("const a = require('./A.module.css');", false),
+        ("const a = import('./A.module.css');", false),
+        (
+            "export const App = ({ value }) => <div className={value} />;",
+            false,
+        ),
+    ] {
+        let file = serde_json::from_value::<SourceFile>(serde_json::json!({
+            "path": "/project/App.tsx", "source": source,
+        }))
+        .unwrap();
+        with_source_file(&file, |planner| {
+            for is_module in [true, false] {
+                let plan = planner
+                    .plan(
+                        "/project/A.module.css",
+                        is_module,
+                        &HashMap::from([(SelectorKey::Class("a".into()), vec!["p-[13px]".into()])]),
+                        &HashMap::new(),
+                        &BTreeSet::new(),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    plan.unreferenced_module,
+                    is_module && unreferenced,
+                    "{source}"
+                );
+            }
+        });
+    }
 }
 
 #[test]
