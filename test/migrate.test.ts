@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
-  lstat,
   mkdtemp,
   mkdir,
   readFile,
@@ -2304,22 +2303,6 @@ test("foreign workspace Vue sources keep caller fallthrough open", async () => {
         rule.status === "retained",
     ),
   );
-});
-
-test("does not rewrite symlinked Vue files reached by component proof", async (context) => {
-  if (process.platform === "win32") context.skip("symlink creation requires elevated privileges");
-  const cwd = await fixture();
-  await writeFile(
-    join(cwd, "RealChild.vue"),
-    '<template>\n  <div class="leaf">Leaf</div>\n</template>\n',
-  );
-  await symlink("RealChild.vue", join(cwd, "Child.vue"));
-  await writeFile(
-    join(cwd, "Parent.vue"),
-    '<template>\n  <Child />\n  <main>Parent</main>\n</template>\n<script setup>\nimport Child from "./Child.vue";\n</script>\n<style scoped>\n.leaf { margin: 7px; }\n</style>\n',
-  );
-  await migrate({ cwd, styleFile: "Parent.vue", write: true });
-  assert.equal((await lstat(join(cwd, "Child.vue"))).isSymbolicLink(), true);
 });
 
 test("writes parent scoped utilities at the proven component call site", async () => {

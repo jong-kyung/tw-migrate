@@ -12,7 +12,6 @@ import {
   isStylesheetModule,
   normalizedRelativePath,
   projectPackageSchema,
-  rejectSymlinkTarget,
   snapshotFile,
   snapshotLoadedSource,
   stylesheetReferenceTargets,
@@ -613,7 +612,6 @@ export async function preparePackageVue({
   }
 
   for (const file of selected) {
-    await rejectSymlinkTarget(file.path, packageRoot);
     const analysis = analysisOf(file.path);
     warnings.push(...analysis.warnings);
     if (analysis.retained) continue;
@@ -795,7 +793,6 @@ export async function preparePackageVue({
     if (analysis.retained) continue;
     const elements = elementsByFile.get(file.path) ?? [];
     const contextPaths = [...new Set(elements.flatMap((element) => element.cssPaths))];
-    if (contextPaths.length > 0) await rejectSymlinkTarget(file.path, packageRoot);
     files.set(file.path, {
       ...file,
       ...(contextPaths.length > 0

@@ -1,4 +1,4 @@
-import { lstat, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 
 import * as z from "zod/mini";
@@ -68,15 +68,6 @@ export function isProjectInput(workspaceRoot: string, path: string): boolean {
     isWithin(workspaceRoot, path) &&
     !relative(workspaceRoot, path).split(/[\\/]/).includes("node_modules")
   );
-}
-
-export async function rejectSymlinkTarget(path: string, root: string): Promise<void> {
-  for (let current = path; isWithin(root, current); current = dirname(current)) {
-    if ((await lstat(current)).isSymbolicLink()) {
-      throw new Error(`Refusing to migrate a symbolic-link target: ${path}`);
-    }
-    if (current === root) break;
-  }
 }
 
 // Settle the whole batch before yielding so an early exit leaves no reads running.
