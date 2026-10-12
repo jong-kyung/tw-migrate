@@ -9,7 +9,6 @@ import {
   errorCode,
   isStylesheetPath,
   isWithin,
-  rejectSymlinkTarget,
 } from "./util/shared.ts";
 import type { MigrateOptions, Scope } from "./types.ts";
 
@@ -46,9 +45,6 @@ export async function resolveScope(options: MigrateOptions): Promise<Scope> {
   }
   if (configuredEntry && !(await stat(configuredEntry)).isFile()) {
     throw new TypeError("The Tailwind CSS entry must be a file");
-  }
-  for (const path of [explicitStyle, configuredEntry]) {
-    if (path) await rejectSymlinkTarget(path, currentPackage);
   }
   if (explicitStyle && !isWithin(currentPackage, explicitStyle)) {
     throw new TypeError("The selected stylesheet must belong to the current package");

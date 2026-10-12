@@ -32,7 +32,7 @@ The TypeScript layer discovers projects, loads project-local compilers and Tailw
 
 - The CLI writes by default; the public API previews by default. Use `--dry-run` for local experiments. Dry runs must not modify files.
 - Treat source changes during planning/writing, plan collisions, and write failures as fatal. `--force` may skip recoverable package input failures only.
-- Reject symlink migration targets, preserve permissions, and keep writes transactional with rollback after partial failure.
+- Preserve permissions and keep writes transactional with rollback after partial failure.
 - Preserve byte offsets and untouched source bytes. Map compiled preprocessor spans back to authored files before editing.
 - Load Sass, Less, and Vue compilers from the target project. Do not fall back to repository dependencies.
 - Retain unsupported or ambiguous rules with warnings instead of guessing. Compile generated candidates against the project's Tailwind entry.

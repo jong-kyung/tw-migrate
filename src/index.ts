@@ -1,4 +1,3 @@
-import { lstat } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
 
 import * as z from "zod/mini";
@@ -28,7 +27,6 @@ import {
   projectPackageSchema,
   readInBatches,
   recordSnapshot,
-  rejectSymlinkTarget,
   snapshotFile,
   snapshotLoadedSource,
   stylesheetSyntax,
@@ -684,7 +682,6 @@ async function preparePackage(
     stylesheets = [];
     const compilerDependents = new Map<string, string[]>();
     for (const stylePath of provenTargets.sort()) {
-      await rejectSymlinkTarget(stylePath, packageRoot);
       const isPartial = isSassPath(stylePath) && basename(stylePath).startsWith("_");
       const stylesheet: StylesheetEntry = {
         cssPath: stylePath,
@@ -1166,7 +1163,7 @@ async function planPreparedGroup(
   if (active.length === 0) return results;
 
   // Entry safety gates every entry mutation, not only media extraction.
-  const groupWritable = !(await entryUnsafe(entry.path, workspaceRoot, targetable));
+  const groupWritable = targetable.has(entry.path) && isProjectInput(workspaceRoot, entry.path);
   const mediaWarnings: MigrationWarning[] = [];
   let extraction: MediaExtraction | undefined;
   // Malformed member inputs must stay attributable to their member even
@@ -1617,18 +1614,6 @@ function accumulateBlockedRules(blocked: BlockedRules, plan: Plan, failing: stri
     for (const candidate of failed) blockedRule.candidates.add(candidate);
   }
   return progressed;
-}
-
-/// True when the group must not edit the entry: a symbolic link or a path
-/// outside the writable project scope.
-async function entryUnsafe(
-  entryPath: string,
-  workspaceRoot: string,
-  targetable: Set<string>,
-): Promise<boolean> {
-  if (!targetable.has(entryPath) || !isProjectInput(workspaceRoot, entryPath)) return true;
-  const stats = await lstat(entryPath);
-  return stats.isSymbolicLink();
 }
 
 /// Registration identities of order-sensitive movable global at-rules in a

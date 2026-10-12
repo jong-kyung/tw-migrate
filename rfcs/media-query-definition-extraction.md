@@ -45,7 +45,7 @@ This RFC supersedes the unmatched `@media` behavior in the core RFC's **Breakpoi
 7. Extracting `@supports`, `@container`, `@starting-style`, or selector arbitrary variants.
 8. Expanding HTML `<link media>` support in the first implementation.
 9. Moving generated definitions into imported theme files or reorganizing existing `@theme` blocks.
-10. Editing dependency-owned or symlinked Tailwind entries.
+10. Editing dependency-owned Tailwind entries.
 11. Adding a user-configurable naming template in the first implementation.
 12. Inferring that a sibling package's Tailwind entry consumes another package.
 13. Reusing an ancestor Tailwind entry outside `--workspaces` mode.
@@ -340,7 +340,6 @@ After package planning composes permitted keyframes, global at-rules, and surviv
 
 The planner uses arbitrary variants when extraction is enabled but the resolved Tailwind entry is known before planning to be unsafe to edit, including when it is:
 
-- a symbolic link;
 - outside the writable project scope; or
 - shared with an unselected package in a way that prevents one complete transaction.
 
@@ -447,7 +446,7 @@ Phase 3 adds runtime confidence without changing the CLI contract introduced and
 - dry-run reports the entry diff without writing;
 - write mode changes the entry and consumers in one transaction;
 - source changes and write failures preserve current fatal behavior;
-- symlinked or out-of-scope entries use arbitrary variants, never receive an entry edit, and warn;
+- out-of-scope entries use arbitrary variants, never receive an entry edit, and warn;
 - unsafe entries retain rules that require movable keyframes or global at-rules;
 - generated definitions rejected by the target Tailwind version fall back independently;
 - a digest name owned with a different meaning sends its condition to the arbitrary variant, and identical-content definitions are adopted regardless of authorship;

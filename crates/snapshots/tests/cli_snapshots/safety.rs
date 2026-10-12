@@ -20,7 +20,6 @@ snapshot_cases! {
     safety_force_collision => git_init,
     safety_force_malformed => default_setup,
     safety_interrupted_leftovers => git_init,
-    safety_symlink_rejection => setup_symlinks,
     safety_planning_mutation => setup_planning_mutation,
     safety_reference_mutation => setup_reference_mutation,
     safety_missing_sass => setup_missing_sass,
@@ -203,37 +202,15 @@ fn setup_reference_mutation(context: &CaseContext<'_>) -> Result<(), String> {
     )
 }
 
-fn setup_symlinks(context: &CaseContext<'_>) -> Result<(), String> {
-    create_file_symlink(
-        Path::new("real.module.css"),
-        &context.workspace.join("linked.module.css"),
-    )?;
-    create_directory_symlink(
-        Path::new("real-directory"),
-        &context.workspace.join("linked-directory"),
-    )
-}
-
-// Unix has one symlink kind; only Windows distinguishes file and directory
-// links.
 #[cfg(unix)]
 fn create_file_symlink(target: &Path, link: &Path) -> Result<(), String> {
     std::os::unix::fs::symlink(target, link)
         .map_err(|error| format!("create symlink {}: {error}", link.display()))
 }
 
-#[cfg(unix)]
-use create_file_symlink as create_directory_symlink;
-
 #[cfg(windows)]
 fn create_file_symlink(target: &Path, link: &Path) -> Result<(), String> {
     std::os::windows::fs::symlink_file(target, link)
-        .map_err(|error| format!("create symlink {}: {error}", link.display()))
-}
-
-#[cfg(windows)]
-fn create_directory_symlink(target: &Path, link: &Path) -> Result<(), String> {
-    std::os::windows::fs::symlink_dir(target, link)
         .map_err(|error| format!("create symlink {}: {error}", link.display()))
 }
 

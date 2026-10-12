@@ -438,7 +438,6 @@ The restructure must preserve these contracts:
 - Source changes during planning and writing remain fatal integrity errors.
 - `--force` skips only recoverable package input failures.
 - Plan collisions, invalid edits, and write failures remain fatal.
-- Symlink migration targets remain rejected.
 - Source permissions and transactional rollback remain unchanged.
 - JS, JSX, TS, TSX, HTML, and Vue edits preserve untouched bytes.
 - Sass and Less continue loading from the target project.
