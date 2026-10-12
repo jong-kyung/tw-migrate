@@ -255,7 +255,11 @@ export function collectMemberMediaConditions(
   return JSON.parse(
     collectMediaConditions(
       JSON.stringify({
-        stylesheets,
+        // Shadow CSS is only needed by the planner, not media collection.
+        stylesheets: stylesheets.map(
+          ({ vueShadowCss: _shadowCss, vueShadowModuleCss: _shadowModuleCss, ...stylesheet }) =>
+            stylesheet,
+        ),
         themeTokens: tailwind.themeTokens,
         tailwindSources: tailwind.graphSources,
       }),
