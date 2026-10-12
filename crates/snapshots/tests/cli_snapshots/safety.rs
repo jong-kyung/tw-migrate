@@ -21,6 +21,7 @@ snapshot_cases! {
     safety_force_malformed => default_setup,
     safety_interrupted_leftovers => git_init,
     safety_planning_mutation => setup_planning_mutation,
+    safety_entry_deleted_by_plugin => default_setup,
     safety_reference_mutation => setup_reference_mutation,
     safety_missing_sass => setup_missing_sass,
     safety_missing_vue_sass => setup_missing_vue_sass,

@@ -1,0 +1,4 @@
+[[steps]]
+name = "entry deleted during preview with force"
+args = ["--dry-run", "--force"]
+status = 1
