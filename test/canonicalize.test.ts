@@ -1,4 +1,4 @@
-import { expect, test } from "vite-plus/test";
+import { expect, test, vi } from "vite-plus/test";
 
 import { __unstable__loadDesignSystem as loadDesignSystem } from "tailwindcss";
 
@@ -54,10 +54,41 @@ test("a missing canonicalization capability preserves the original candidate", a
   const loaded = await system();
   const limited: DesignSystem = {
     theme: loaded.theme,
-    candidatesToCss: (candidates) => loaded.candidatesToCss(candidates),
+    candidatesToCss: vi.fn((candidates) => loaded.candidatesToCss(candidates)),
   };
   expect(canonicalCandidate(limited, "mr-[auto]")).toBe(null);
+  expect(
+    acceptedCandidateAliases(limited, ["mr-[auto]"], spellingReservations(new Map(), [])),
+  ).toEqual({});
+  expect(limited.candidatesToCss).not.toHaveBeenCalled();
 });
+
+test.each(["", "tw:"])(
+  "skips canonicalization for variable-backed probes with prefix %s",
+  async (prefix) => {
+    const loaded = await system(`
+      ${prefix ? "@theme prefix(tw) { --spacing: 0.25rem; }" : ""}
+      @utility indirect { padding: var(--space); }
+      @custom-variant print (@media print);
+      @tailwind utilities;
+    `);
+    const canonicalize = vi.spyOn(loaded, "canonicalizeCandidates");
+    const probes = [
+      "p-[var(--space)]",
+      "p-[calc(var(--space)_+_1px)]",
+      "print:p-[var(--space)]!",
+      "indirect",
+      "mr-[auto]",
+      "mr-[auto]",
+    ].map((candidate) => prefix + candidate);
+
+    expect(acceptedCandidateAliases(loaded, probes, spellingReservations(new Map(), []))).toEqual({
+      [`${prefix}mr-[auto]`]: `${prefix}mr-auto`,
+    });
+    expect(canonicalize).toHaveBeenCalledTimes(1);
+    expect(canonicalize).toHaveBeenCalledWith([`${prefix}mr-[auto]`]);
+  },
+);
 
 test("stylesheet references calibrate reservation boundedness", () => {
   // Platform-native absolute paths, because reference resolution runs
