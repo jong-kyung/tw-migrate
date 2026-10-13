@@ -239,6 +239,7 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
     vueStyleRanges,
     entryCatalog: tailwindEntryCatalog(styleSources, scope.pathOwners),
     loadedTailwind: new Map(),
+    stylesheetReservationCache: new Map(),
     // Discovery keeps Git-ignored consumers for deletion safety, but the
     // Tailwind scanner skips them in every mode, so ignore detection must
     // not depend on --workspaces.
@@ -794,6 +795,7 @@ async function planPreparedGroup(
         .map((graphSource) => graphSource.path)
         .filter((path) => path.includes("\0")),
     ),
+    context.stylesheetReservationCache,
   );
   const groupFiles = new Map(
     active.flatMap((member) => member.files.map((file) => [file.path, file] as const)),

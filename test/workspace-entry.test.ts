@@ -4,6 +4,7 @@ import { expect, onTestFinished, test, vi } from "vite-plus/test";
 
 import { migrate } from "../src/index.ts";
 import * as tailwind from "../src/tailwind.ts";
+import * as canonicalize from "../src/plan/canonicalize.ts";
 
 const mediaCss =
   ".button { padding: 13px; }\n@media screen and (max-width: 700px) { .button { margin: 7px; } }\n";
@@ -29,6 +30,42 @@ function app(name: string, css: string = mediaCss): Record<string, string> {
     [`packages/${name}/Button.module.css`]: css,
   };
 }
+
+test("shares stylesheet reservations across entries only within one migration", async () => {
+  const scan = vi.spyOn(canonicalize, "spellingReservations");
+  onTestFinished(() => scan.mockRestore());
+  const files: Record<string, string> = { "package.json": '{"private":true}' };
+  for (const name of ["a", "b"]) {
+    Object.assign(files, app(name, ".button { padding: var(--space); }\n"), {
+      [`packages/${name}/globals.css`]: '@import "tailwindcss";\n',
+      [`packages/${name}/main.tsx`]:
+        'import "./globals.css"; import { Button } from "./Button.tsx"; export const render = Button;\n',
+    });
+  }
+  const cwd = await workspace(files);
+  const preview = await migrate({ cwd, workspaces: true });
+  expect(preview.convertedRules).toBe(2);
+  expect(preview.failures).toEqual([]);
+  expect(scan).toHaveBeenCalledTimes(2);
+  const firstCache = scan.mock.calls[0][3];
+  expect(firstCache).toBeDefined();
+  expect(scan.mock.calls[1][3]).toBe(firstCache);
+  expect(firstCache?.size).toBe(1);
+
+  await writeFile(join(cwd, "packages/a/unused.module.css"), ".late { --late: 1; }\n");
+  const next = await migrate({ cwd, workspaces: true, force: true });
+  expect(next.failures).toEqual([]);
+  const nextCache = scan.mock.calls[2][3];
+  expect(nextCache).toBeDefined();
+  expect(nextCache).not.toBe(firstCache);
+  expect(scan.mock.calls[3][3]).toBe(nextCache);
+  expect([...nextCache!.values()][0].properties.has("--late")).toBe(true);
+  expect([...firstCache!.values()][0].properties.has("--late")).toBe(false);
+  expect(await readFile(join(cwd, "packages/a/Button.module.css"), "utf8")).toBe(
+    files["packages/a/Button.module.css"],
+  );
+  expect(await migrate({ cwd, workspaces: true, force: true, write: true })).toEqual(next);
+});
 
 test("rejects malformed shared-entry metadata without guessing package privacy", async () => {
   const css = ".button { padding: 13px; }\n";

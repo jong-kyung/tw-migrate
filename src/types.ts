@@ -1,6 +1,7 @@
 import type { HtmlElementAttributes } from "./parser/html.ts";
 import type { SourceImportRecord } from "./native.ts";
 import type { SourceMapping } from "./parser/style-compiler.ts";
+import type { SpellingReservations } from "./plan/canonicalize.ts";
 import type { VueCompiler, VueStyleBlock, VueStyleRange, VueTemplateSite } from "./parser/vue.ts";
 
 export interface MigrateOptions {
@@ -221,6 +222,8 @@ export interface MigrationContext extends Scope {
   entryCatalog: Map<string, string[]>;
   /** Successful loads for this run, keyed by entry owner and path. */
   loadedTailwind: Map<string, LoadedTailwind>;
+  /** Snapshot reservations keyed by importer-specific resolved-import sets. */
+  stylesheetReservationCache: Map<string, SpellingReservations>;
   /** Scanned paths the utility scanner's ignore rules exclude. */
   ignoredPaths: Set<string>;
   /** Run-wide font token allocations (name to stack), because emitted
