@@ -238,6 +238,7 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrationRe
     styleDependents: indexStylesheetDependents(styleSources),
     vueStyleRanges,
     entryCatalog: tailwindEntryCatalog(styleSources, scope.pathOwners),
+    loadedTailwind: new Map(),
     // Discovery keeps Git-ignored consumers for deletion safety, but the
     // Tailwind scanner skips them in every mode, so ignore detection must
     // not depend on --workspaces.
@@ -661,7 +662,14 @@ async function preparePackage(
     // The entry owner supplies the project root for Tailwind, its imports,
     // plugins, and theme; the migrated package keeps supplying its own
     // stylesheets, consumers, and preprocessors.
-    tailwind = await loadTailwind(entryOwner, tailwindPath, snapshots, workspaceRoot);
+    const key = `${entryOwner}\0${tailwindPath}`;
+    tailwind = context.loadedTailwind.get(key);
+    if (tailwind === undefined) {
+      tailwind = await loadTailwind(entryOwner, tailwindPath, snapshots, workspaceRoot);
+      context.loadedTailwind.set(key, tailwind);
+    } else {
+      for (const path of tailwind.inputPaths) await snapshotFile(snapshots, path);
+    }
   } catch (error) {
     return recover(error, isIntegrityError(error));
   }

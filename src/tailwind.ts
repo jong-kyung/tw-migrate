@@ -73,12 +73,17 @@ export async function loadTailwind(
   const { __unstable__loadDesignSystem: loadDesignSystem } = await loadProjectModule<{
     __unstable__loadDesignSystem: (css: string, options: unknown) => Promise<DesignSystem>;
   }>(packageRoot, "tailwindcss", "Tailwind v4 must be installed in the target project.");
-  const css = await snapshotFile(snapshots, tailwindCss);
+  const inputPaths = new Set<string>();
+  const readInput = (path: string): Promise<string> => {
+    inputPaths.add(path);
+    return snapshotFile(snapshots, path);
+  };
+  const css = await readInput(tailwindCss);
   const base = dirname(tailwindCss);
   const tailwindRoot = dirname(packagePath);
   const loadModule = async (id: string, moduleBase: string) => {
     const path = createRequire(join(moduleBase, "package.json")).resolve(id);
-    if (isProjectInput(workspaceRoot, path)) await snapshotFile(snapshots, path);
+    if (isProjectInput(workspaceRoot, path)) await readInput(path);
     const imported = await import(pathToFileURL(path).href);
     return { path, base: dirname(path), module: imported.default ?? imported };
   };
@@ -92,7 +97,7 @@ export async function loadTailwind(
     } else if (id.startsWith(".") || isAbsolute(id)) path = resolve(sheetBase, id);
     else path = projectRequire.resolve(id);
     const content = isProjectInput(workspaceRoot, path)
-      ? await snapshotFile(snapshots, path)
+      ? await readInput(path)
       : await readFile(path, "utf8");
     return { content, base: dirname(path) };
   };
@@ -121,6 +126,7 @@ export async function loadTailwind(
     themeTokens,
     referenceTokens,
     graphSources,
+    inputPaths,
     loadWith,
   };
 }
