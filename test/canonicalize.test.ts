@@ -10,6 +10,7 @@ import {
   acceptedCandidateAliases,
   canonicalCandidate,
   spellingReservations,
+  type SpellingReservations,
 } from "../src/plan/canonicalize.ts";
 import { loadTailwind } from "../src/tailwind.ts";
 import type { DesignSystem } from "../src/types.ts";
@@ -157,6 +158,45 @@ test("stylesheet references calibrate reservation boundedness", () => {
       resolved,
     ).unbounded,
   ).toBe(true);
+});
+
+test("reuses snapshot reservations without sharing group mutations or import exemptions", () => {
+  const app = resolve("/app");
+  const sources = new Map([
+    [join(app, "main.css"), '@import "kit/theme.css"; .card { --font-other: serif; }'],
+    [join(app, "nested", "main.css"), '@import "kit/theme.css";'],
+  ]);
+  const scans = vi.spyOn(sources, Symbol.iterator);
+  const cache = new Map<string, SpellingReservations>();
+  const imports = [`${app}\0kit/theme.css`, `${join(app, "nested")}\0kit/theme.css`];
+  const first = spellingReservations(
+    sources,
+    [[join(app, "first.graph.css"), ".first { --first: 1; }"]],
+    new Set(imports),
+    cache,
+  );
+  expect(first.unbounded).toBe(false);
+  first.names.add("group-only");
+  first.prefixes.add("group-");
+  first.properties.add("--group-only");
+  first.unbounded = true;
+  first.propertiesUnbounded = true;
+
+  const second = spellingReservations(sources, [], new Set([...imports].reverse()), cache);
+  expect(scans).toHaveBeenCalledTimes(1);
+  expect(second).toEqual({
+    names: new Set(["card"]),
+    prefixes: new Set(),
+    properties: new Set(["--font-other"]),
+    unbounded: false,
+    propertiesUnbounded: false,
+  });
+  // Resolving the same specifier from one directory does not exempt the other.
+  expect(spellingReservations(sources, [], new Set([imports[0]]), cache).unbounded).toBe(true);
+  expect(scans).toHaveBeenCalledTimes(2);
+  expect(spellingReservations(sources, [], new Set(imports), cache)).toEqual(second);
+  expect(scans).toHaveBeenCalledTimes(2);
+  scans.mockRestore();
 });
 
 test("entry-graph sheets reserve their ordinary property overrides", () => {

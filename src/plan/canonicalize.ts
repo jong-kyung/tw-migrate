@@ -80,17 +80,31 @@ export function spellingReservations(
   /// not read as opaque. Keys carry the importer because the same
   /// specifier text can resolve differently from another location.
   resolvedImports: Set<string> = new Set(),
+  /// Shared only within one migration, after preparation fixes the stylesheet snapshot.
+  cache?: Map<string, SpellingReservations>,
 ): SpellingReservations {
-  const reservations: SpellingReservations = {
-    names: new Set(),
-    prefixes: new Set(),
-    unbounded: false,
-    properties: new Set(),
-    propertiesUnbounded: false,
-  };
-  for (const [path, source] of styleSources) {
-    scanStylesheetReservations(path, source, styleSources, reservations, resolvedImports);
+  const key = JSON.stringify([...resolvedImports].sort());
+  let base = cache?.get(key);
+  if (base === undefined) {
+    base = {
+      names: new Set(),
+      prefixes: new Set(),
+      unbounded: false,
+      properties: new Set(),
+      propertiesUnbounded: false,
+    };
+    for (const [path, source] of styleSources) {
+      scanStylesheetReservations(path, source, styleSources, base, resolvedImports);
+    }
+    cache?.set(key, base);
   }
+  // Entry extras and source reservations mutate only this group's copy.
+  const reservations = {
+    ...base,
+    names: new Set(base.names),
+    prefixes: new Set(base.prefixes),
+    properties: new Set(base.properties),
+  };
   for (const [path, source] of resolvedExtras) {
     try {
       const analysis = stylesheetAnalysis(path, source);
