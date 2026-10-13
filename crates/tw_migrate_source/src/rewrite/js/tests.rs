@@ -68,6 +68,45 @@ fn module_non_consumer_proof_preserves_references_and_diagnostics() {
 }
 
 #[test]
+fn import_inventory_keeps_normalized_targets_and_reference_kinds_separate() {
+    let file: SourceFile = serde_json::from_value(serde_json::json!({
+        "path": "/project/App.tsx",
+        "source": "import a from './nested/../A.module.css';\nimport again from './A.module.css';\nimport './Side.module.css';\nexport { default } from './Export.module.css';\nexport * from './Star.module.css';\nfunction load() { require('./Required.module.css'); return import('./Dynamic.module.css'); }\nexport const App = () => <div className={`${a.a} ${again.a}`} />;",
+    }))
+    .unwrap();
+    let candidates = HashMap::from([(SelectorKey::Class("a".into()), vec!["p-[8px]".into()])]);
+    with_source_file(&file, |planner| {
+        for name in [
+            "A", "Side", "Export", "Star", "Required", "Dynamic", "Missing", "A",
+        ] {
+            let plan = planner
+                .plan(
+                    &format!("/project/{name}.module.css"),
+                    true,
+                    &candidates,
+                    &HashMap::new(),
+                    &BTreeSet::new(),
+                )
+                .unwrap();
+            assert_eq!(
+                plan.module_references_safe,
+                matches!(name, "A" | "Missing"),
+                "{name}"
+            );
+            assert_eq!(plan.unreferenced_module, name == "Missing", "{name}");
+            if name == "A" {
+                assert_eq!(plan.module_refs.get("a"), Some(&2));
+                assert_eq!(plan.removable_import_edits.len(), 2);
+                assert!(plan.warnings.is_empty());
+            } else if name != "Missing" {
+                assert_eq!(plan.warnings.len(), 1, "{name}");
+                assert_eq!(plan.warnings[0].code, "unsupported-css-module-reference");
+            }
+        }
+    });
+}
+
+#[test]
 fn file_scope_is_lazy_and_keeps_cached_errors_stylesheet_specific() {
     let candidates = HashMap::new();
     let properties = HashMap::new();
@@ -148,6 +187,7 @@ fn file_scope_reuses_parse_and_semantic_without_changing_stylesheet_plans() {
     let properties = HashMap::new();
     let preserved = BTreeSet::new();
     let before = SOURCE_BUILDS.get();
+    let imports_before = IMPORT_BUILDS.get();
     let expected = files
         .iter()
         .map(|file| {
@@ -170,12 +210,14 @@ fn file_scope_reuses_parse_and_semantic_without_changing_stylesheet_plans() {
         })
         .collect::<Vec<_>>();
     assert_eq!(SOURCE_BUILDS.get(), (before.0 + 6, before.1 + 6));
+    assert_eq!(IMPORT_BUILDS.get(), imports_before + 4);
     assert!(!expected[0][0]["warnings"].as_array().unwrap().is_empty());
     assert!(!expected[0][0]["matches"].as_array().unwrap().is_empty());
 
     // A new scope must analyze again even for the same path and source.
     for _ in 0..2 {
         let before = SOURCE_BUILDS.get();
+        let imports_before = IMPORT_BUILDS.get();
         for (file, expected) in files.iter().zip(&expected) {
             with_source_file(file, |source| {
                 for ((path, module, candidates), expected) in sheets.iter().zip(expected) {
@@ -187,5 +229,6 @@ fn file_scope_reuses_parse_and_semantic_without_changing_stylesheet_plans() {
             });
         }
         assert_eq!(SOURCE_BUILDS.get(), (before.0 + 2, before.1 + 2));
+        assert_eq!(IMPORT_BUILDS.get(), imports_before + 2);
     }
 }
