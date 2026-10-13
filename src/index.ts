@@ -667,6 +667,8 @@ async function preparePackage(
     if (tailwind === undefined) {
       tailwind = await loadTailwind(entryOwner, tailwindPath, snapshots, workspaceRoot);
       context.loadedTailwind.set(key, tailwind);
+    } else {
+      for (const path of tailwind.inputPaths) await snapshotFile(snapshots, path);
     }
   } catch (error) {
     return recover(error, isIntegrityError(error));

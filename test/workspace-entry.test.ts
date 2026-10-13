@@ -92,6 +92,42 @@ test("an entry group shares one allocation and one composed entry edit", async (
   expect(again.changedFiles).toEqual([]);
 });
 
+test.each(
+  ["globals.css", "theme.css", "mutate.cjs"].flatMap((input) =>
+    [false, true].flatMap((write) => [false, true].map((force) => ({ input, write, force }))),
+  ),
+)(
+  "rejects changed shared Tailwind input $input before reuse with write=$write and force=$force",
+  async ({ input, write, force }) => {
+    const load = vi.spyOn(tailwind, "loadTailwind");
+    onTestFinished(() => load.mockRestore());
+    const files = {
+      "package.json": '{"private":true}',
+      "globals.css": '@import "tailwindcss";\n@import "./theme.css";\n@plugin "./mutate.cjs";\n',
+      "theme.css": "@theme { --color-brand: red; }\n",
+      "mutate.cjs": `module.exports = () => {
+        require("node:fs").appendFileSync(
+          require("node:path").join(__dirname, ${JSON.stringify(input)}),
+          "\\n/* changed during planning */\\n",
+        );
+      };\n`,
+      ...app("app", ".button { padding: 13px; }\n"),
+      ...app("lib", ".button { padding: 13px; }\n"),
+    };
+    const cwd = await workspace(files);
+
+    await expect(migrate({ cwd, workspaces: true, write, force })).rejects.toThrow(
+      `Source changed during planning: ${join(cwd, input)}`,
+    );
+    expect(load).toHaveBeenCalledTimes(1);
+    for (const [path, source] of Object.entries(files)) {
+      expect(await readFile(join(cwd, path), "utf8")).toBe(
+        path === input ? `${source}\n/* changed during planning */\n` : source,
+      );
+    }
+  },
+);
+
 test("loads separate Tailwind entries from their own packages", async () => {
   const load = vi.spyOn(tailwind, "loadTailwind");
   onTestFinished(() => load.mockRestore());
