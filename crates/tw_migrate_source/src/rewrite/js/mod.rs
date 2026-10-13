@@ -104,6 +104,7 @@ pub fn opaque_reference_plan(file: &SourceFile, css_path: &str, is_module: bool)
 #[cfg(test)]
 thread_local! {
     static SOURCE_BUILDS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    static IMPORT_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Lazily analyzed, immutable source shared only within one file's planning scope.
@@ -112,6 +113,7 @@ pub struct SourceFilePlanner<'a> {
     file: &'a SourceFile,
     allocator: &'a Allocator,
     parsed: OnceCell<MigrationResult<(Program<'a>, Scoping)>>,
+    imports: OnceCell<HashMap<PathBuf, ModuleImports>>,
 }
 
 /// Drop the arena, AST, and scoping before proceeding to the next file.
@@ -121,6 +123,7 @@ pub fn with_source_file<T>(file: &SourceFile, plan: impl FnOnce(&SourceFilePlann
         file,
         allocator: &allocator,
         parsed: OnceCell::new(),
+        imports: OnceCell::new(),
     })
 }
 
@@ -176,11 +179,29 @@ impl<'a> SourceFilePlanner<'a> {
             }
             Err(error) => return Err(error.clone()),
         };
+        let empty_imports = ModuleImports::default();
+        let imports = if is_module {
+            self.imports
+                .get_or_init(|| {
+                    #[cfg(test)]
+                    IMPORT_BUILDS.set(IMPORT_BUILDS.get() + 1);
+                    let mut collector = ImportCollector {
+                        file_path: &self.file.path,
+                        imports: HashMap::new(),
+                    };
+                    collector.visit_program(program);
+                    collector.imports
+                })
+                .get(&normalize_path(Path::new(css_path)))
+                .unwrap_or(&empty_imports)
+        } else {
+            &empty_imports
+        };
         Ok(plan_parsed_source_file(
             self.file,
             program,
             scoping,
-            css_path,
+            imports,
             is_module,
             candidates,
             candidate_properties,
@@ -212,22 +233,12 @@ fn plan_parsed_source_file(
     file: &SourceFile,
     program: &Program<'_>,
     scoping: &Scoping,
-    css_path: &str,
+    imports: &ModuleImports,
     is_module: bool,
     candidates: &HashMap<SelectorKey, Vec<String>>,
     candidate_properties: &HashMap<String, BTreeSet<String>>,
     preserved_module_classes: &BTreeSet<String>,
 ) -> SourcePlan {
-    let mut imports = ImportCollector {
-        file_path: &file.path,
-        css_target: normalize_path(Path::new(css_path)),
-        bindings: Vec::new(),
-        unsupported_shape: false,
-        warning_span: None,
-    };
-    if is_module {
-        imports.visit_program(program);
-    }
     // On the global path, members of CSS Module imports can never match a
     // global class: they are module references handled by the module's own
     // plan, not dynamic class names.
@@ -342,56 +353,59 @@ struct ImportBinding {
     span: Span,
 }
 
-struct ImportCollector<'s> {
-    file_path: &'s str,
-    css_target: PathBuf,
+#[derive(Default)]
+struct ModuleImports {
     bindings: Vec<ImportBinding>,
     unsupported_shape: bool,
     warning_span: Option<Span>,
 }
 
+struct ImportCollector<'s> {
+    file_path: &'s str,
+    imports: HashMap<PathBuf, ModuleImports>,
+}
+
 impl<'a> Visit<'a> for ImportCollector<'_> {
     fn visit_import_declaration(&mut self, declaration: &ImportDeclaration<'a>) {
-        let resolved = resolve_import(self.file_path, declaration.source.value.as_str());
-        if resolved == self.css_target {
-            self.warning_span.get_or_insert(declaration.span);
-            let Some(specifiers) = &declaration.specifiers else {
-                self.unsupported_shape = true;
-                walk::walk_import_declaration(self, declaration);
-                return;
-            };
-            if specifiers.len() != 1 {
-                self.unsupported_shape = true;
-            }
-            for specifier in specifiers {
-                if let ImportDeclarationSpecifier::ImportDefaultSpecifier(specifier) = specifier
-                    && let Some(symbol) = specifier.local.symbol_id.get()
-                {
-                    self.bindings.push(ImportBinding {
-                        symbol,
-                        span: declaration.span,
-                    });
-                } else {
-                    self.unsupported_shape = true;
-                }
+        let target = resolve_import(self.file_path, declaration.source.value.as_str());
+        let imports = self.imports.entry(target).or_default();
+        imports.warning_span.get_or_insert(declaration.span);
+        let Some(specifiers) = &declaration.specifiers else {
+            imports.unsupported_shape = true;
+            walk::walk_import_declaration(self, declaration);
+            return;
+        };
+        if specifiers.len() != 1 {
+            imports.unsupported_shape = true;
+        }
+        for specifier in specifiers {
+            if let ImportDeclarationSpecifier::ImportDefaultSpecifier(specifier) = specifier
+                && let Some(symbol) = specifier.local.symbol_id.get()
+            {
+                imports.bindings.push(ImportBinding {
+                    symbol,
+                    span: declaration.span,
+                });
+            } else {
+                imports.unsupported_shape = true;
             }
         }
         walk::walk_import_declaration(self, declaration);
     }
 
     fn visit_export_from_declaration(&mut self, declaration: &ExportFromDeclaration<'a>) {
-        if resolve_import(self.file_path, declaration.source.value.as_str()) == self.css_target {
-            self.unsupported_shape = true;
-            self.warning_span.get_or_insert(declaration.span);
-        }
+        let target = resolve_import(self.file_path, declaration.source.value.as_str());
+        let imports = self.imports.entry(target).or_default();
+        imports.unsupported_shape = true;
+        imports.warning_span.get_or_insert(declaration.span);
         walk::walk_export_from_declaration(self, declaration);
     }
 
     fn visit_export_all_declaration(&mut self, declaration: &ExportAllDeclaration<'a>) {
-        if resolve_import(self.file_path, declaration.source.value.as_str()) == self.css_target {
-            self.unsupported_shape = true;
-            self.warning_span.get_or_insert(declaration.span);
-        }
+        let target = resolve_import(self.file_path, declaration.source.value.as_str());
+        let imports = self.imports.entry(target).or_default();
+        imports.unsupported_shape = true;
+        imports.warning_span.get_or_insert(declaration.span);
         walk::walk_export_all_declaration(self, declaration);
     }
 
@@ -399,20 +413,21 @@ impl<'a> Visit<'a> for ImportCollector<'_> {
         if let Expression::Identifier(callee) = &call.callee
             && callee.name == "require"
             && let Some(Argument::StringLiteral(source)) = call.arguments.first()
-            && resolve_import(self.file_path, source.value.as_str()) == self.css_target
         {
-            self.unsupported_shape = true;
-            self.warning_span.get_or_insert(call.span);
+            let target = resolve_import(self.file_path, source.value.as_str());
+            let imports = self.imports.entry(target).or_default();
+            imports.unsupported_shape = true;
+            imports.warning_span.get_or_insert(call.span);
         }
         walk::walk_call_expression(self, call);
     }
 
     fn visit_import_expression(&mut self, import: &ImportExpression<'a>) {
-        if let Expression::StringLiteral(source) = &import.source
-            && resolve_import(self.file_path, source.value.as_str()) == self.css_target
-        {
-            self.unsupported_shape = true;
-            self.warning_span.get_or_insert(import.span);
+        if let Expression::StringLiteral(source) = &import.source {
+            let target = resolve_import(self.file_path, source.value.as_str());
+            let imports = self.imports.entry(target).or_default();
+            imports.unsupported_shape = true;
+            imports.warning_span.get_or_insert(import.span);
         }
         walk::walk_import_expression(self, import);
     }
