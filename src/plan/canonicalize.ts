@@ -257,9 +257,19 @@ export function acceptedCandidateAliases(
   reservations: SpellingReservations,
 ): Record<string, string> {
   const aliases: Record<string, string> = {};
-  if (reservations.unbounded) return aliases;
+  if (reservations.unbounded || typeof system.canonicalizeCandidates !== "function") return aliases;
   const prefix = system.theme.prefix;
   for (const probe of new Set(probes)) {
+    const compiledProbe = system.candidatesToCss([probe])[0];
+    if (compiledProbe == null) continue;
+    let probeShape;
+    try {
+      probeShape = compiledShape(compiledProbe);
+    } catch {
+      continue;
+    }
+    // Variable-backed probes cannot pass the literal-only alias proof.
+    if (probeShape.referencedProperties.length > 0) continue;
     const canonical = canonicalCandidate(system, probe);
     if (canonical === null) continue;
     // An entry `@utility` owns its root across every variant chain and
@@ -286,19 +296,16 @@ export function acceptedCandidateAliases(
     ) {
       continue;
     }
-    const [compiledProbe, compiledCanonical] = system.candidatesToCss([probe, canonical]);
-    if (compiledProbe == null || compiledCanonical == null) continue;
-    let probeShape;
+    const compiledCanonical = system.candidatesToCss([canonical])[0];
+    if (compiledCanonical == null) continue;
     let canonicalShape;
     try {
-      probeShape = compiledShape(compiledProbe);
       canonicalShape = compiledShape(compiledCanonical);
     } catch {
       continue;
     }
     if (
       canonicalShape.referencedProperties.length > 0 ||
-      probeShape.referencedProperties.length > 0 ||
       !sameShape(probeShape.declarations, canonicalShape.declarations)
     ) {
       continue;
