@@ -1,8 +1,9 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { expect, onTestFinished, test } from "vite-plus/test";
+import { expect, onTestFinished, test, vi } from "vite-plus/test";
 
 import { migrate } from "../src/index.ts";
+import * as tailwind from "../src/tailwind.ts";
 
 const mediaCss =
   ".button { padding: 13px; }\n@media screen and (max-width: 700px) { .button { margin: 7px; } }\n";
@@ -42,13 +43,32 @@ test("rejects malformed shared-entry metadata without guessing package privacy",
 });
 
 test("an entry group shares one allocation and one composed entry edit", async () => {
+  const originalLoad = tailwind.loadTailwind;
+  const reload = vi.fn();
+  const load = vi.spyOn(tailwind, "loadTailwind").mockImplementation(async (...args) => {
+    const entry = await originalLoad(...args);
+    return {
+      ...entry,
+      loadWith: async (css) => {
+        reload(css);
+        return entry.loadWith(css);
+      },
+    };
+  });
+  onTestFinished(() => load.mockRestore());
   const cwd = await workspace({
     "package.json": '{"private":true}',
     "globals.css": '@import "tailwindcss";\n',
     ...app("app"),
     ...app("lib"),
   });
+  const preview = await migrate({ cwd, workspaces: true });
+  expect(load).toHaveBeenCalledTimes(1);
+  expect(load.mock.calls[0].slice(0, 2)).toEqual([cwd, join(cwd, "globals.css")]);
+  expect(reload).toHaveBeenCalledWith(expect.stringContaining("@custom-variant width-lte-700px"));
   const report = await migrate({ cwd, workspaces: true, extractMediaQueries: true, write: true });
+  expect(load).toHaveBeenCalledTimes(2);
+  expect(report).toEqual(preview);
 
   expect(report.changedFiles).toEqual([
     "globals.css",
@@ -70,6 +90,44 @@ test("an entry group shares one allocation and one composed entry edit", async (
 
   const again = await migrate({ cwd, workspaces: true, extractMediaQueries: true, write: true });
   expect(again.changedFiles).toEqual([]);
+});
+
+test("loads separate Tailwind entries from their own packages", async () => {
+  const load = vi.spyOn(tailwind, "loadTailwind");
+  onTestFinished(() => load.mockRestore());
+  const cwd = await workspace({
+    "package.json": '{"private":true}',
+    "globals.css": '@import "tailwindcss";\n',
+    ...app("app", ".button { padding: 13px; }\n"),
+    ...app("other", ".button { padding: 13px; }\n"),
+    "packages/other/globals.css": '@import "tailwindcss";\n',
+    "packages/other/main.tsx":
+      "import './globals.css';\nimport { Button } from './Button.tsx';\nexport const render = Button;\n",
+  });
+  const report = await migrate({ cwd, workspaces: true });
+  expect(report.convertedRules).toBe(2);
+  expect(report.failures).toEqual([]);
+  expect(load.mock.calls.map((args) => args.slice(0, 2))).toEqual([
+    [cwd, join(cwd, "globals.css")],
+    [join(cwd, "packages/other"), join(cwd, "packages/other/globals.css")],
+  ]);
+});
+
+test("does not reuse a failed shared Tailwind load under force", async () => {
+  const load = vi
+    .spyOn(tailwind, "loadTailwind")
+    .mockRejectedValueOnce(new Error("Tailwind load failed"));
+  onTestFinished(() => load.mockRestore());
+  const cwd = await workspace({
+    "package.json": '{"private":true}',
+    "globals.css": '@import "tailwindcss";\n',
+    ...app("app", ".button { padding: 13px; }\n"),
+    ...app("lib", ".button { padding: 13px; }\n"),
+  });
+  const report = await migrate({ cwd, workspaces: true, force: true });
+  expect(load).toHaveBeenCalledTimes(2);
+  expect(report.convertedRules).toBe(1);
+  expect(report.failures).toEqual([{ package: "packages/app", message: "Tailwind load failed" }]);
 });
 
 test.each([

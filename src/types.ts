@@ -219,6 +219,8 @@ export interface MigrationContext extends Scope {
   vueStyleRanges: Map<string, VueStyleRange[]>;
   /** Tailwind entries per owning package, for ancestor-shared resolution. */
   entryCatalog: Map<string, string[]>;
+  /** Successful loads for this run, keyed by entry owner and path. */
+  loadedTailwind: Map<string, LoadedTailwind>;
   /** Scanned paths the utility scanner's ignore rules exclude. */
   ignoredPaths: Set<string>;
   /** Run-wide font token allocations (name to stack), because emitted
