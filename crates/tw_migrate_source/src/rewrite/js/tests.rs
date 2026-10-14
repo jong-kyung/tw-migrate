@@ -77,7 +77,7 @@ fn import_inventory_keeps_normalized_targets_and_reference_kinds_separate() {
     let candidates = HashMap::from([(SelectorKey::Class("a".into()), vec!["p-[8px]".into()])]);
     with_source_file(&file, |planner| {
         for name in [
-            "A", "Side", "Export", "Star", "Required", "Dynamic", "Missing", "A",
+            "Missing", "A", "Side", "Export", "Star", "Required", "Dynamic", "Missing", "A",
         ] {
             let plan = planner
                 .plan(
@@ -104,6 +104,79 @@ fn import_inventory_keeps_normalized_targets_and_reference_kinds_separate() {
             }
         }
     });
+}
+
+#[test]
+fn non_consumer_proof_reuses_only_warning_free_unreferenced_module_plans() {
+    let sheets = [
+        ("Missing.module.css", true, false),
+        ("A.module.css", true, false),
+        ("Other.module.css", true, true),
+        ("global.css", false, false),
+        ("A.module.css", true, true),
+        ("Side.module.css", true, false),
+        ("Missing.module.css", true, false),
+    ];
+    let mut file: SourceFile = serde_json::from_value(serde_json::json!({
+        "path": "/project/App.tsx",
+        "source": "// 가\r\nimport a from './A.module.css';\r\nimport './Side.module.css';\r\nexport const App = ({ flag }) => <div className={flag ? a.a : 'global'} />;\r\n",
+    }))
+    .unwrap();
+    for dynamic in [false, true] {
+        if dynamic {
+            file.source
+                .push_str("export const Other = ({ value }) => <div className={value} />;");
+        }
+        let plan = |source: &SourceFilePlanner<'_>, index: usize| {
+            let (name, module, preserve) = sheets[index];
+            let (utility, property) = if preserve {
+                ("m-[7px]", "margin")
+            } else {
+                ("p-[13px]", "padding")
+            };
+            let candidates = HashMap::from([
+                (SelectorKey::Class("a".into()), vec![utility.into()]),
+                (
+                    SelectorKey::Class("global".into()),
+                    vec!["text-[red]".into()],
+                ),
+            ]);
+            let properties = HashMap::from([(utility.into(), BTreeSet::from([property.into()]))]);
+            let mut preserved = BTreeSet::new();
+            if preserve {
+                preserved.insert("a".into());
+            }
+            plan_value(
+                source
+                    .plan(
+                        &format!("/project/{name}"),
+                        module,
+                        &candidates,
+                        &properties,
+                        &preserved,
+                    )
+                    .unwrap(),
+            )
+        };
+        let before = USAGE_VISITS.get();
+        let expected = (0..sheets.len())
+            .map(|index| with_source_file(&file, |source| plan(source, index)))
+            .collect::<Vec<_>>();
+        assert_eq!(USAGE_VISITS.get() - before, 7);
+        assert_eq!(expected[0]["unreferencedModule"], !dynamic);
+        assert_eq!(expected[1]["moduleRefs"]["a"], 1);
+        assert!(!expected[5]["moduleReferencesSafe"].as_bool().unwrap());
+
+        for _ in 0..2 {
+            let before = USAGE_VISITS.get();
+            with_source_file(&file, |source| {
+                for (index, expected) in expected.iter().enumerate() {
+                    assert_eq!(plan(source, index), *expected);
+                }
+            });
+            assert_eq!(USAGE_VISITS.get() - before, if dynamic { 7 } else { 5 });
+        }
+    }
 }
 
 #[test]

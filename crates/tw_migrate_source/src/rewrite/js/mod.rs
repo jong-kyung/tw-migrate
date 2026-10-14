@@ -1,7 +1,7 @@
 //! JS/JSX-side rewriting: locate CSS Module references and plan span edits.
 
 use std::{
-    cell::OnceCell,
+    cell::{Cell, OnceCell},
     collections::{BTreeSet, HashMap},
     path::{Component, Path, PathBuf},
 };
@@ -105,6 +105,7 @@ pub fn opaque_reference_plan(file: &SourceFile, css_path: &str, is_module: bool)
 thread_local! {
     static SOURCE_BUILDS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
     static IMPORT_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static USAGE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Lazily analyzed, immutable source shared only within one file's planning scope.
@@ -114,6 +115,7 @@ pub struct SourceFilePlanner<'a> {
     allocator: &'a Allocator,
     parsed: OnceCell<MigrationResult<(Program<'a>, Scoping)>>,
     imports: OnceCell<HashMap<PathBuf, ModuleImports>>,
+    module_non_consumer_proven: Cell<bool>,
 }
 
 /// Drop the arena, AST, and scoping before proceeding to the next file.
@@ -124,6 +126,7 @@ pub fn with_source_file<T>(file: &SourceFile, plan: impl FnOnce(&SourceFilePlann
         allocator: &allocator,
         parsed: OnceCell::new(),
         imports: OnceCell::new(),
+        module_non_consumer_proven: Cell::new(false),
     })
 }
 
@@ -197,7 +200,14 @@ impl<'a> SourceFilePlanner<'a> {
         } else {
             &empty_imports
         };
-        Ok(plan_parsed_source_file(
+        // Without a target import, module diagnostics do not depend on its candidates.
+        if is_module && imports.warning_span.is_none() && self.module_non_consumer_proven.get() {
+            return Ok(SourcePlan {
+                unreferenced_module: true,
+                ..SourcePlan::default()
+            });
+        }
+        let plan = plan_parsed_source_file(
             self.file,
             program,
             scoping,
@@ -206,7 +216,11 @@ impl<'a> SourceFilePlanner<'a> {
             candidates,
             candidate_properties,
             preserved_module_classes,
-        ))
+        );
+        if plan.unreferenced_module {
+            self.module_non_consumer_proven.set(true);
+        }
+        Ok(plan)
     }
 }
 
@@ -287,6 +301,8 @@ fn plan_parsed_source_file(
         unsafe_reference: false,
         warnings: Vec::new(),
     };
+    #[cfg(test)]
+    USAGE_VISITS.set(USAGE_VISITS.get() + 1);
     collector.visit_program(program);
 
     let classified_import_refs =
