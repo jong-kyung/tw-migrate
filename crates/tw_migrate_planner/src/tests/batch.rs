@@ -197,6 +197,46 @@ fn batch_updates_distinct_module_references_without_losing_edits() {
 }
 
 #[test]
+fn batch_reuses_html_metadata_across_sequential_edits() {
+    let source = "<!-- 한글 -->\r\n<div class=\"a b c\"></div>\r\n";
+    let start = source.find("a b c").unwrap();
+    let file = serde_json::json!({
+        "path": "/project/index.html",
+        "source": source,
+        "htmlElements": [{
+            "classAttribute": {"value": "a b c", "start": start, "end": start + 5}
+        }],
+        "htmlStylesheets": [
+            {"cssPath": "/project/A.css", "variants": []},
+            {"cssPath": "/project/B.css", "variants": []},
+            {"cssPath": "/project/C.css", "variants": []}
+        ]
+    });
+    let mut readonly = file.clone();
+    readonly["path"] = serde_json::json!("/project/readonly.html");
+    readonly["writable"] = serde_json::json!(false);
+    let response = plan_batch(serde_json::json!({
+        "stylesheets": [
+            {"cssPath": "/project/C.css", "cssSource": ".c { color: red; }"},
+            {"cssPath": "/project/A.css", "cssSource": ".a { padding: 13px; }"},
+            {"cssPath": "/project/B.css", "cssSource": ".b { margin: 7px; }"}
+        ],
+        "files": [file, readonly]
+    }));
+
+    assert_eq!(
+        response["files"],
+        serde_json::json!([{
+            "path": "/project/index.html",
+            "source": "<!-- 한글 -->\r\n<div class=\"a b c p-[13px] m-[7px] text-[red]\"></div>\r\n"
+        }])
+    );
+    assert_eq!(response["convertedRules"], 0);
+    assert_eq!(response["retainedRules"], 3);
+    assert_eq!(response["deletedFiles"], serde_json::json!([]));
+}
+
+#[test]
 fn batch_migrates_members_from_multiple_modules_in_one_template() {
     let request = serde_json::json!({
         "stylesheets": [

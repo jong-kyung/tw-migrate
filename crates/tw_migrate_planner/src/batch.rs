@@ -537,16 +537,15 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
             .cmp(&request.stylesheets[*right].css_path)
     });
 
+    // Reuse the prepass snapshots; only source text and edit history evolve.
     for index in order {
         let stylesheet = &request.stylesheets[index];
-        let mut files = request.files.clone();
-        for file in &mut files {
-            if let Some(source) = current.get(&file.path) {
-                file.source.clone_from(source);
-            }
+        for (file, original) in snapshot_files.iter_mut().zip(&request.files) {
+            file.source
+                .clone_from(current.get(&file.path).unwrap_or(&original.source));
             file.prior_edits = applied_edits.get(&file.path).cloned().unwrap_or_default();
         }
-        let mut stylesheet_request = batch_stylesheet_request(&request, stylesheet, files);
+        let mut stylesheet_request = batch_stylesheet_request(&request, stylesheet, snapshot_files);
         if stylesheet.vue_module
             && let Some(css) = co_located_retained_css.get(&stylesheet.css_path)
         {
@@ -570,13 +569,14 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
             .as_ref()
             .and_then(|path| current.get(path).cloned());
         let response = plan_request(
-            stylesheet_request,
+            &stylesheet_request,
             &blocked_rules[index],
             &externally_blocked[index],
             &candidate_maps[index].unproven,
             &unreferenced_files[index],
             &mut shadow_cache,
         )?;
+        snapshot_files = stylesheet_request.files;
 
         for (path, batches) in response.applied_edits {
             applied_edits.entry(path).or_default().extend(batches);
