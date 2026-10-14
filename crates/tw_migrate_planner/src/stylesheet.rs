@@ -552,7 +552,7 @@ fn is_batch_retained(warning: Option<&str>) -> bool {
 }
 
 pub(super) fn plan_request(
-    request: PlanRequest,
+    request: &PlanRequest,
     blocked_rules: &RuleConflicts,
     externally_blocked: &HashSet<RuleId>,
     unproven_rules: &HashMap<RuleId, String>,
@@ -567,7 +567,7 @@ pub(super) fn plan_request(
             global_at_rules,
         },
         vue_masked,
-    ) = parse_request_rules(&request, shadow_cache)?;
+    ) = parse_request_rules(request, shadow_cache)?;
     let vue_mode = vue_masked.is_some();
     let vue_retention = request
         .sheet
@@ -997,7 +997,7 @@ pub(super) fn plan_request(
     let mut applied_edits = HashMap::new();
     if stylesheet_changed {
         if let Some(masked) = vue_masked.as_deref() {
-            let (source, edit_batches) = finish_vue_stylesheet(&request, masked, css_edits)?;
+            let (source, edit_batches) = finish_vue_stylesheet(request, masked, css_edits)?;
             applied_edits.insert(request.sheet.css_path.clone(), edit_batches);
             planned_files.push(PlannedFile {
                 path: request.sheet.css_path.clone(),
@@ -1066,7 +1066,7 @@ pub(super) fn plan_request(
         files: planned_files,
         deleted_files,
         unlinked_files: if module_import_is_unused {
-            vec![request.sheet.css_path]
+            vec![request.sheet.css_path.clone()]
         } else {
             Vec::new()
         },
