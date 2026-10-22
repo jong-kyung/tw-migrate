@@ -472,7 +472,8 @@ fn static_ident_text(value: &InterpolableIdent<'_>) -> Option<String> {
                 oxc_css_parser::ast::SassInterpolatedIdentElement::Static(part) => {
                     Some(part.value.to_string())
                 }
-                oxc_css_parser::ast::SassInterpolatedIdentElement::Expression(_) => None,
+                oxc_css_parser::ast::SassInterpolatedIdentElement::Expression(_)
+                | oxc_css_parser::ast::SassInterpolatedIdentElement::Placeholder(_) => None,
             })
             .collect::<Option<Vec<_>>>()
             .map(|parts| parts.join("")),
@@ -1367,6 +1368,36 @@ mod tests {
             serde_json::json!(["legacy", "mr-auto", "p-4", "stack"])
         );
         assert_eq!(parsed["classReservationsUnbounded"], false);
+    }
+
+    #[test]
+    fn rejects_template_placeholders_in_static_ident_text() {
+        use oxc_css_parser::{
+            Allocator, ParserBuilder, ParserOptions, Syntax, TemplatePlaceholder,
+        };
+
+        let allocator = Allocator::default();
+        let mut parser = ParserBuilder::new(&allocator, "prefix-`PLACEHOLDER-0`-suffix")
+            .syntax(Syntax::Scss)
+            .options(ParserOptions {
+                template_placeholder: Some(TemplatePlaceholder {
+                    prefix: "PLACEHOLDER-",
+                }),
+                ..Default::default()
+            })
+            .build();
+        let ident = parser
+            .parse::<oxc_css_parser::ast::InterpolableIdent>()
+            .unwrap();
+        assert!(matches!(
+            &ident,
+            oxc_css_parser::ast::InterpolableIdent::SassInterpolated(value)
+                if value.elements.iter().any(|element| matches!(
+                    element,
+                    oxc_css_parser::ast::SassInterpolatedIdentElement::Placeholder(_)
+                ))
+        ));
+        assert_eq!(super::static_ident_text(&ident), None);
     }
 
     #[test]
