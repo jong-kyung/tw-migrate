@@ -7,8 +7,8 @@ settings:
 catalogs:
   default:
     '@napi-rs/cli':
-      specifier: 3.10.8
-      version: 3.10.8
+      specifier: 3.10.9
+      version: 3.10.9
     '@types/node':
       specifier: 24.13.6
       version: 24.13.6
@@ -63,7 +63,7 @@ importers:
     devDependencies:
       '@napi-rs/cli':
         specifier: 'catalog:'
-        version: 3.10.8(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)(@types/node@24.13.6)
+        version: 3.10.9(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)(@types/node@24.13.6)
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.6
@@ -322,8 +322,8 @@ packages:
   '@keyv/serialize@1.1.1':
     resolution: {integrity: sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA==}
 
-  '@napi-rs/cli@3.10.8':
-    resolution: {integrity: sha512-hg7m8VwECTIIHxNzajDG8QgtTOEVAKiIVLCLCW90Th6Z5R/ijWjh16iaQrRvXj4ve/S2fcXYo5cctCWJ8aVxIg==}
+  '@napi-rs/cli@3.10.9':
+    resolution: {integrity: sha512-RpzJrTDlSxUi2Deo+dh4bmDTKklAVe295aSQjZspwbZyUBG7twbXbiKskL2w/bL4kNg3DdkrwbI/iQwI9kgQaQ==}
     engines: {node: ^20.17.0 || ^22.13.0 || >= 23.5.0}
     hasBin: true
     peerDependencies:
@@ -3736,7 +3736,7 @@ snapshots:
 
   '@keyv/serialize@1.1.1': {}
 
-  '@napi-rs/cli@3.10.8(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)(@types/node@24.13.6)':
+  '@napi-rs/cli@3.10.9(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)(@types/node@24.13.6)':
     dependencies:
       '@inquirer/prompts': 8.5.2(@types/node@24.13.6)
       '@napi-rs/cross-toolchain': 1.0.3
