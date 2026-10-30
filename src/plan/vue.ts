@@ -1,5 +1,7 @@
 import { dirname, extname, join, resolve } from "node:path";
 
+import * as v from "valibot";
+
 import { sourceAnalysis, stylesheetAnalysis, validateCss } from "../native.ts";
 import { parseHtmlSource } from "../parser/html.ts";
 import { compileStyleEntry } from "../parser/style-compiler.ts";
@@ -466,7 +468,8 @@ export async function preparePackageVue({
   }
 
   const packageIsPrivate =
-    projectPackageSchema.parse(
+    v.parse(
+      projectPackageSchema,
       JSON.parse(await snapshotFile(snapshots, join(packageRoot, "package.json"))),
     ).private === true;
   const files = new Map<string, PreparedSourceFile>();

@@ -1,4 +1,5 @@
 import { expect, test } from "vite-plus/test";
+import * as v from "valibot";
 
 import { join, resolve, sep } from "node:path";
 
@@ -31,8 +32,8 @@ test("validates consumed package metadata without narrowing export patterns", ()
     scripts: { build: "some-tool" },
     customTool: { arbitrary: true },
   };
-  expect(projectPackageSchema.parse(metadata)).toEqual(metadata);
-  expect(projectPackageSchema.parse({})).toEqual({});
+  expect(v.parse(projectPackageSchema, metadata)).toEqual(metadata);
+  expect(v.parse(projectPackageSchema, {})).toEqual({});
   for (const value of [
     null,
     [],
@@ -43,7 +44,7 @@ test("validates consumed package metadata without narrowing export patterns", ()
     { name: false },
     { name: null },
   ]) {
-    expect(projectPackageSchema.safeParse(value).success).toBe(false);
+    expect(v.safeParse(projectPackageSchema, value).success).toBe(false);
   }
 });
 

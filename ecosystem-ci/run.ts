@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, posix, resolve, win32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import * as z from "zod/mini";
+import * as v from "valibot";
 
 import { prepareCaseUpload } from "./lifecycle.ts";
 import { packageUploadRoot, stagePackages } from "./packages.ts";
@@ -19,74 +19,78 @@ import {
 import type { ControlledProject, Manifest, ProbedProject, Project } from "./types.ts";
 
 const usage = "Usage: node ecosystem-ci/run.ts (--case <id> | --all)";
-const nonemptyString = z.string().check(z.minLength(1));
-// Zod records skip __proto__ before validating values. Reject it on the raw
-// input so unknown project keys or authored probes cannot silently disappear.
-const recordInput = z
-  .unknown()
-  .check(
-    z.refine(
-      (value) => value === null || typeof value !== "object" || !Object.hasOwn(value, "__proto__"),
-      "Object keys must not include __proto__",
-    ),
-  );
+const nonemptyString = v.pipe(v.string(), v.minLength(1));
+// Keep raw keys until strict project validation so unknown keys cannot disappear.
+const recordInput = v.pipe(
+  v.custom<Record<string, unknown>>(
+    (value) => value !== null && typeof value === "object" && !Array.isArray(value),
+    "Expected an object",
+  ),
+  v.check((value) => !Object.hasOwn(value, "__proto__"), "Object keys must not include __proto__"),
+);
 // Preserve the existing integer contract without imposing a new safe-integer ceiling.
-const positiveInteger = z
-  .number()
-  .check(z.refine(Number.isInteger, "must be an integer"), z.minimum(1));
-const relativePath = nonemptyString.check(
-  z.refine(
+const positiveInteger = v.pipe(
+  v.number(),
+  v.check((value) => Number.isInteger(value), "must be an integer"),
+  v.minValue(1),
+);
+const relativePath = v.pipe(
+  nonemptyString,
+  v.check(
     (path) =>
       !posix.isAbsolute(path) && !win32.isAbsolute(path) && !path.split(/[\\/]/).includes(".."),
     "must be a relative path without traversal",
   ),
 );
-const selectorSchema = z
-  .strictObject({
-    type: z.enum(knownSelectorTypes),
+const selectorSchema = v.pipe(
+  v.strictObject({
+    type: v.picklist(knownSelectorTypes),
     value: nonemptyString,
-    name: z.optional(nonemptyString),
-  })
-  .check(
-    z.refine(
-      (selector) => selector.type !== "tag" || /^[a-z][a-z0-9-]*$/.test(selector.value),
-      "tag selector must be one lowercase HTML tag",
-    ),
-    z.refine(
-      (selector) => selector.type !== "css" || !/[.#]/.test(selector.value),
-      "CSS selector must not contain class or id selectors",
-    ),
-    z.refine(
-      (selector) => selector.name === undefined || selector.type === "role",
-      "name is only valid for role selectors",
-    ),
-  );
-const actionSchema = z.discriminatedUnion("type", [
-  z.strictObject({ type: z.literal("press"), key: nonemptyString }),
-  z.strictObject({ type: z.enum(["hover", "focus"]), selector: selectorSchema }),
+    name: v.optional(nonemptyString),
+  }),
+  v.check(
+    (selector) => selector.type !== "tag" || /^[a-z][a-z0-9-]*$/.test(selector.value),
+    "tag selector must be one lowercase HTML tag",
+  ),
+  v.check(
+    (selector) => selector.type !== "css" || !/[.#]/.test(selector.value),
+    "CSS selector must not contain class or id selectors",
+  ),
+  v.check(
+    (selector) => selector.name === undefined || selector.type === "role",
+    "name is only valid for role selectors",
+  ),
+);
+const actionSchema = v.variant("type", [
+  v.strictObject({ type: v.literal("press"), key: nonemptyString }),
+  v.strictObject({ type: v.picklist(["hover", "focus"]), selector: selectorSchema }),
 ]);
-const probeSchema = z
-  .strictObject({
+const probeSchema = v.pipe(
+  v.strictObject({
     route: nonemptyString,
-    viewport: z.strictObject({ width: positiveInteger, height: positiveInteger }),
-    readiness: z.strictObject({ selector: selectorSchema, cardinality: positiveInteger }),
+    viewport: v.strictObject({ width: positiveInteger, height: positiveInteger }),
+    readiness: v.strictObject({ selector: selectorSchema, cardinality: positiveInteger }),
     selector: selectorSchema,
     cardinality: positiveInteger,
-    identity: z.array(nonemptyString),
-    action: z.optional(actionSchema),
-    witness: z.optional(z.literal(false)),
-  })
-  .check(
-    z.refine(
-      (probe) => probe.identity.length === probe.cardinality,
-      "identity must contain one stable identity per target",
-    ),
-  );
-const probesSchema = z
-  .pipe(recordInput, z.record(z.string(), probeSchema))
-  .check(z.refine((probes) => Object.keys(probes).length > 0, "must contain at least one probe"));
-const controlledProbesSchema = z
-  .strictObject({
+    identity: v.array(nonemptyString),
+    action: v.optional(actionSchema),
+    witness: v.optional(v.literal(false)),
+  }),
+  v.check(
+    (probe) => probe.identity.length === probe.cardinality,
+    "identity must contain one stable identity per target",
+  ),
+);
+const probesSchema = v.pipe(
+  recordInput,
+  // Validate entries without dropping probe names such as constructor or prototype.
+  v.transform((value) => Object.entries(value)),
+  v.array(v.tuple([v.string(), probeSchema])),
+  v.minLength(1),
+  v.transform((entries) => Object.fromEntries(entries)),
+);
+const controlledProbesSchema = v.pipe(
+  v.strictObject({
     base: probeSchema,
     hover: probeSchema,
     focus: probeSchema,
@@ -94,62 +98,66 @@ const controlledProbesSchema = z
     "responsive-below": probeSchema,
     "responsive-above": probeSchema,
     // Only fixtures exercising <style module> need this additional observation.
-    "module-panel": z.optional(probeSchema),
-  })
-  .check(
-    z.refine((probes) => probes.hover.action?.type === "hover", "hover.action.type must be hover"),
-    z.refine((probes) => probes.focus.action?.type === "focus", "focus.action.type must be focus"),
-    z.refine(
-      (probes) =>
-        probes["focus-visible"].action?.type === "press" &&
-        probes["focus-visible"].action.key === "Tab",
-      "focus-visible.action must press Tab",
-    ),
-    z.refine(
-      (probes) =>
-        probes["responsive-below"].viewport.width < probes["responsive-above"].viewport.width,
-      "responsive-below viewport must be narrower than responsive-above",
-    ),
-  );
-const sourceSchema = z.strictObject({
+    "module-panel": v.optional(probeSchema),
+  }),
+  v.check((probes) => probes.hover.action?.type === "hover", "hover.action.type must be hover"),
+  v.check((probes) => probes.focus.action?.type === "focus", "focus.action.type must be focus"),
+  v.check(
+    (probes) =>
+      probes["focus-visible"].action?.type === "press" &&
+      probes["focus-visible"].action.key === "Tab",
+    "focus-visible.action must press Tab",
+  ),
+  v.check(
+    (probes) =>
+      probes["responsive-below"].viewport.width < probes["responsive-above"].viewport.width,
+    "responsive-below viewport must be narrower than responsive-above",
+  ),
+);
+const sourceSchema = v.strictObject({
   path: relativePath,
   before: nonemptyString,
   after: nonemptyString,
 });
-const commandSchema = z.array(nonemptyString).check(z.minLength(1));
-const repositoryUrl = z.url({ protocol: /^https$/ }).check(
-  z.refine((value) => {
-    const url = URL.parse(value);
-    return url !== null && !url.username && !url.password && !url.search && !url.hash;
+const commandSchema = v.pipe(v.array(nonemptyString), v.minLength(1));
+const repositoryUrl = v.pipe(
+  v.string(),
+  v.check((value) => {
+    const url = URL.parse(value.trim());
+    return url?.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash;
   }, "repository must be an HTTPS URL without credentials, query, or fragment"),
+  v.transform((value) => value.trim().replace(/[\t\n\r]/g, "")),
 );
-const projectSchema = z.discriminatedUnion("kind", [
-  z.strictObject({
+const projectSchema = v.variant("kind", [
+  v.strictObject({
     id: nonemptyString,
-    kind: z.literal("controlled"),
-    runtime: z.enum(controlledRuntimes),
-    style: z.enum(controlledStyles),
-    fixture: z.optional(relativePath),
-    scope: z.optional(z.enum(["package", "workspaces"])),
-    idempotency: z.optional(z.literal(true)),
+    kind: v.literal("controlled"),
+    runtime: v.picklist(controlledRuntimes),
+    style: v.picklist(controlledStyles),
+    fixture: v.optional(relativePath),
+    scope: v.optional(v.picklist(["package", "workspaces"])),
+    idempotency: v.optional(v.literal(true)),
     source: sourceSchema,
     probes: probesSchema,
   }),
-  z.strictObject({ id: nonemptyString, kind: z.literal("smoke"), fixture: nonemptyString }),
-  z.strictObject({
+  v.strictObject({ id: nonemptyString, kind: v.literal("smoke"), fixture: nonemptyString }),
+  v.strictObject({
     id: nonemptyString,
-    kind: z.literal("external"),
+    kind: v.literal("external"),
     repository: repositoryUrl,
-    revision: z.string().check(z.regex(/^[0-9a-f]{40}$/)),
-    packageManager: z.string().check(z.regex(/^(npm|pnpm)@\d+\.\d+\.\d+$/)),
+    revision: v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/)),
+    packageManager: v.pipe(v.string(), v.regex(/^(npm|pnpm)@\d+\.\d+\.\d+$/)),
     lockfile: relativePath,
     packageRoot: relativePath,
-    installs: z
-      .array(z.strictObject({ cwd: relativePath, args: commandSchema }))
-      .check(z.minLength(1), z.maxLength(4)),
-    runtimeWrites: z.array(relativePath).check(z.maxLength(3)),
-    start: commandSchema.check(
-      z.refine(
+    installs: v.pipe(
+      v.array(v.strictObject({ cwd: relativePath, args: commandSchema })),
+      v.minLength(1),
+      v.maxLength(4),
+    ),
+    runtimeWrites: v.pipe(v.array(relativePath), v.maxLength(3)),
+    start: v.pipe(
+      commandSchema,
+      v.check(
         (args) => args.length === 2 && args[0] === "run" && /^[a-z0-9:_-]+$/.test(args[1]),
         "start must name one reviewed package script",
       ),
@@ -161,9 +169,9 @@ const projectSchema = z.discriminatedUnion("kind", [
 ]);
 // Parse the envelope first so matrix cells can inherit probes before the
 // complete project schema requires them. Scenario fixtures never inherit.
-const manifestSchema = z.strictObject({
-  matrixProbes: z.optional(controlledProbesSchema),
-  projects: z.array(z.pipe(recordInput, z.record(z.string(), z.unknown()))).check(z.minLength(1)),
+const manifestSchema = v.strictObject({
+  matrixProbes: v.optional(controlledProbesSchema),
+  projects: v.pipe(v.array(recordInput), v.minLength(1)),
 });
 
 function validateProject(project: Project, index: number): void {
@@ -171,7 +179,7 @@ function validateProject(project: Project, index: number): void {
   if (project.kind === "smoke") return;
   const probes = Object.entries(project.probes);
   if (project.kind === "controlled") {
-    if (project.fixture === undefined) controlledProbesSchema.parse(project.probes);
+    if (project.fixture === undefined) v.parse(controlledProbesSchema, project.probes);
     if (probes.every(([, probe]) => probe.witness === false)) {
       throw new Error(`${label}.probes must keep at least one causal-witness probe`);
     }
@@ -216,9 +224,10 @@ function validateProject(project: Project, index: number): void {
 }
 
 function validateManifest(value: unknown): Manifest {
-  const manifest = manifestSchema.parse(value);
+  const manifest = v.parse(manifestSchema, value);
   const projects = manifest.projects.map((record) =>
-    projectSchema.parse(
+    v.parse(
+      projectSchema,
       manifest.matrixProbes !== undefined &&
         record.kind === "controlled" &&
         !("fixture" in record) &&
