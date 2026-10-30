@@ -44,7 +44,18 @@ async function fixture({ css = initialCss, tsx = initialTsx } = {}) {
 }
 
 test("rejects invalid public options before filesystem discovery", async () => {
-  const invalid: unknown[] = [null, false, 1, "", [], { typo: true }, { write: "false" }];
+  const invalid: unknown[] = [
+    null,
+    false,
+    1,
+    "",
+    [],
+    { typo: true },
+    { write: "false" },
+    JSON.parse('{"__proto__":{}}'),
+    { constructor: "unknown" },
+    { prototype: "unknown" },
+  ];
   for (const key of ["write", "workspaces", "force", "extractMediaQueries"]) {
     for (const value of [null, 0, "true", {}, []]) invalid.push({ [key]: value });
   }
@@ -89,6 +100,7 @@ test("keeps undefined public options and preview defaults", async () => {
 test("classifies only authored external CSS URL schemes", () => {
   for (const value of [
     "HTTPS://example.invalid/a.css",
+    "https://example.invalid\u00a0",
     "hTtP://example.invalid/a.css",
     "DATA:text/css,.a%7B%7D",
     "//example.invalid/a.css",

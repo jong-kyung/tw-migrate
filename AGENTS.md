@@ -38,7 +38,7 @@ The TypeScript layer discovers projects, loads project-local compilers and Tailw
 - Retain unsupported or ambiguous rules with warnings instead of guessing. Compile generated candidates against the project's Tailwind entry.
 - Support Tailwind v4 import-based entries. Direct `@tailwind` directives are outside the supported scope.
 - Preserve external stylesheet imports without fetching them. Missing local imports must still fail.
-- Use `zod/mini` at external-input boundaries without coercion. Reject unknown public API option keys, preserve authored strings and defaults, and keep public types independent of schema implementation details.
+- Use `valibot` at external-input boundaries without coercion. Reject unknown public API option keys, preserve authored strings and defaults, and keep public types independent of schema implementation details.
 
 ## Working on changes
 

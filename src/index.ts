@@ -1,6 +1,6 @@
 import { basename, dirname, extname, join, resolve } from "node:path";
 
-import * as z from "zod/mini";
+import * as v from "valibot";
 
 import { unifiedDiff } from "./util/diff.ts";
 import { collectFiles, resolveScope, scannerIgnoredPaths } from "./discovery.ts";
@@ -137,26 +137,35 @@ function indexWarningPositions(
 
 // Keep the public interface (and its JSDoc) independent of schema internals.
 // Paths are checked, not normalized: authored whitespace is meaningful.
-const optionPath = z.string().check(
-  z.minLength(1),
-  z.refine((path) => !path.includes("\0")),
+const optionPath = v.pipe(
+  v.string(),
+  v.minLength(1),
+  v.check((path) => !path.includes("\0")),
 );
-const migrateOptionsSchema = z.strictObject({
-  styleFile: z.optional(optionPath),
-  cwd: z.optional(optionPath),
-  write: z.optional(z.boolean()),
-  tailwindCss: z.optional(optionPath),
-  workspaces: z.optional(z.boolean()),
-  force: z.optional(z.boolean()),
-  extractMediaQueries: z.optional(z.boolean()),
-} satisfies { [Key in keyof Required<MigrateOptions>]: z.ZodMiniType<MigrateOptions[Key]> });
+const migrateOptionsSchema = v.pipe(
+  v.unknown(),
+  v.check((input) => !Array.isArray(input), "Expected an object"),
+  v.strictObject({
+    styleFile: v.optional(optionPath),
+    cwd: v.optional(optionPath),
+    write: v.optional(v.boolean()),
+    tailwindCss: v.optional(optionPath),
+    workspaces: v.optional(v.boolean()),
+    force: v.optional(v.boolean()),
+    extractMediaQueries: v.optional(v.boolean()),
+  } satisfies {
+    [Key in keyof Required<MigrateOptions>]: v.GenericSchema<unknown, MigrateOptions[Key]>;
+  }),
+);
 
 export async function migrate(options: MigrateOptions = {}): Promise<MigrationReport> {
-  const parsedOptions = migrateOptionsSchema.safeParse(options);
+  const parsedOptions = v.safeParse(migrateOptionsSchema, options);
   if (!parsedOptions.success) {
-    throw new TypeError(`Invalid migrate options: ${parsedOptions.error.message}`);
+    throw new TypeError(
+      `Invalid migrate options: ${JSON.stringify(v.flatten(parsedOptions.issues))}`,
+    );
   }
-  options = parsedOptions.data;
+  options = parsedOptions.output;
   if (options.styleFile && options.workspaces) {
     throw new TypeError("styleFile cannot be combined with workspaces");
   }
@@ -544,7 +553,7 @@ async function preparePackage(
     try {
       const rawPackageJson = snapshots.get(join(packageRoot, "package.json"));
       if (rawPackageJson !== undefined) {
-        packageJson = projectPackageSchema.parse(JSON.parse(rawPackageJson));
+        packageJson = v.parse(projectPackageSchema, JSON.parse(rawPackageJson));
       }
     } catch (error) {
       return recover(error);
