@@ -69,6 +69,23 @@ fn does_not_duplicate_a_dynamic_global_class_name() {
 }
 
 #[test]
+fn warns_instead_of_rewriting_a_class_name_with_a_lone_surrogate() {
+    let request = serde_json::json!({
+        "cssPath": "/project/global.css",
+        "cssSource": ".card { padding: 13px; }\n",
+        "files": [{
+            "path": "/project/Card.tsx",
+            "source": "export const Card = () => <div className={'card \\uD800'} />;\n"
+        }]
+    });
+
+    let response = plan(request);
+
+    assert_eq!(response["files"], serde_json::json!([]));
+    assert_eq!(response["warnings"][0]["code"], "dynamic-class-name");
+}
+
+#[test]
 fn does_not_flag_module_members_as_dynamic_for_global_css() {
     let request = serde_json::json!({
         "cssPath": "/project/global.css",

@@ -134,7 +134,9 @@ pub(super) fn extract_file(path: &str, source: &str, css_path: &str) -> Option<F
     for stmt in &parsed.program.body {
         match stmt {
             Statement::ImportDeclaration(decl) => {
-                let is_css = resolve_import(path, decl.source.value.as_str()) == syms.css_target;
+                let is_css = decl.source.value.as_str().is_some_and(|specifier| {
+                    resolve_import(path, specifier) == syms.css_target
+                });
                 let Some(specifiers) = &decl.specifiers else {
                     continue;
                 };
@@ -147,7 +149,10 @@ pub(super) fn extract_file(path: &str, source: &str, css_path: &str) -> Option<F
                                 let local = spec.local.name.to_string();
                                 imports.insert(
                                     local.clone(),
-                                    (decl.source.value.to_string(), ImportedName::Default),
+                                    (
+                                        decl.source.value.display().to_string(),
+                                        ImportedName::Default,
+                                    ),
                                 );
                                 syms.import_symbols.insert(sym, local);
                             }
@@ -160,7 +165,7 @@ pub(super) fn extract_file(path: &str, source: &str, css_path: &str) -> Option<F
                                 imports.insert(
                                     local.clone(),
                                     (
-                                        decl.source.value.to_string(),
+                                        decl.source.value.display().to_string(),
                                         ImportedName::Named(spec.imported.name().to_string()),
                                     ),
                                 );
@@ -171,7 +176,8 @@ pub(super) fn extract_file(path: &str, source: &str, css_path: &str) -> Option<F
                             if is_css {
                                 out.unsound = true;
                             } else if let Some(sym) = spec.local.symbol_id.get() {
-                                syms.ns_symbols.insert(sym, decl.source.value.to_string());
+                                let specifier = decl.source.value.display().to_string();
+                                syms.ns_symbols.insert(sym, specifier);
                             }
                         }
                     }

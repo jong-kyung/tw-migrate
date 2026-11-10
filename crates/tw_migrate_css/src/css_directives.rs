@@ -96,7 +96,7 @@ fn import_directive(source_text: &str, at_rule: &oxc_css_parser::ast::AtRule<'_>
             );
         }
     }
-    let reference = source_text[at_rule.span.start..at_rule.span.end].contains("reference");
+    let reference = at_rule.span.slice(source_text).contains("reference");
     CssDirective::Import {
         specifier,
         tailwind,
@@ -144,7 +144,7 @@ fn read_source_tokens(
         .filter_map(|value| match value {
             ComponentValue::TokenWithSpan(with_span) => Some((
                 &with_span.token,
-                &source_text[with_span.span.start..with_span.span.end],
+                with_span.span.slice(source_text),
             )),
             _ => None,
         })
@@ -238,8 +238,8 @@ pub fn collect_css_directives_json(source: &str) -> MigrationResult<String> {
                 let prelude_end = at_rule
                     .block
                     .as_ref()
-                    .map_or(at_rule.span.end, |block| block.span.start);
-                let text = &source[at_rule.span.start..prelude_end];
+                    .map_or(at_rule.span.end as usize, |block| block.span.start as usize);
+                let text = &source[at_rule.span.start as usize..prelude_end];
                 let prelude = text.trim_start().trim_start_matches("@source");
                 directives.push(source_directive(prelude));
             }

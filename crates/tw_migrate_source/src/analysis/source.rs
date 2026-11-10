@@ -72,7 +72,7 @@ fn collect_template_prefixes(
         let Some(cooked) = quasi.value.cooked.as_ref() else {
             continue;
         };
-        record_trailing_prefix(cooked, prefixes);
+        record_trailing_prefix(&cooked.display().to_string(), prefixes);
     }
 }
 
@@ -103,12 +103,14 @@ fn collect_concat_prefixes(
     let Some(text) = trailing_static_string(&expression.left) else {
         return;
     };
-    record_trailing_prefix(text, prefixes);
+    record_trailing_prefix(&text, prefixes);
 }
 
-fn trailing_static_string<'e>(expression: &'e Expression<'_>) -> Option<&'e str> {
+/// Lone surrogates print as `\uXXXX`, which keeps whitespace-delimited
+/// tokens intact so prefix collection stays conservative.
+fn trailing_static_string(expression: &Expression<'_>) -> Option<String> {
     match expression {
-        Expression::StringLiteral(literal) => Some(literal.value.as_str()),
+        Expression::StringLiteral(literal) => Some(literal.value.display().to_string()),
         Expression::BinaryExpression(binary) if binary.operator == BinaryOperator::Addition => {
             trailing_static_string(&binary.right)
         }
@@ -173,7 +175,7 @@ impl<'a> Visit<'a> for ExpressionCollector {
         member: &oxc_ast::ast::ComputedMemberExpression<'a>,
     ) {
         if let Expression::StringLiteral(literal) = &member.expression {
-            self.record(&literal.value);
+            self.record(&literal.value.display().to_string());
         }
         walk::walk_computed_member_expression(self, member);
     }
@@ -189,12 +191,12 @@ pub fn expression_analysis_json(path: &str, source: &str) -> MigrationResult<Str
             message: format!("Failed to parse {path}: {diagnostics:?}"),
         })?;
     let static_string = match &expression {
-        Expression::StringLiteral(literal) => Some(literal.value.to_string()),
+        Expression::StringLiteral(literal) => literal.value.as_str().map(str::to_string),
         Expression::TemplateLiteral(template) if template.expressions.is_empty() => template
             .quasis
             .first()
-            .and_then(|quasi| quasi.value.cooked.as_ref())
-            .map(ToString::to_string),
+            .and_then(|quasi| quasi.value.cooked?.as_str())
+            .map(str::to_string),
         _ => None,
     };
     let vue_module_member = match &expression {
@@ -401,17 +403,15 @@ impl<'a> SourceCollector<'_, 'a> {
 
     fn collect_glob_argument(&mut self, argument: &Argument<'_>) -> bool {
         match argument {
-            Argument::StringLiteral(literal) => {
-                self.analysis
-                    .vue_glob_patterns
-                    .push(literal.value.to_string());
+            Argument::StringLiteral(literal) if let Some(value) = literal.value.as_str() => {
+                self.analysis.vue_glob_patterns.push(value.to_string());
                 true
             }
             Argument::TemplateLiteral(template) if template.expressions.is_empty() => {
                 if let Some(value) = template
                     .quasis
                     .first()
-                    .and_then(|quasi| quasi.value.cooked.as_ref())
+                    .and_then(|quasi| quasi.value.cooked?.as_str())
                 {
                     self.analysis.vue_glob_patterns.push(value.to_string());
                     true
@@ -423,17 +423,18 @@ impl<'a> SourceCollector<'_, 'a> {
                 let mut readable = true;
                 for element in &array.elements {
                     match element {
-                        ArrayExpressionElement::StringLiteral(literal) => self
-                            .analysis
-                            .vue_glob_patterns
-                            .push(literal.value.to_string()),
+                        ArrayExpressionElement::StringLiteral(literal)
+                            if let Some(value) = literal.value.as_str() =>
+                        {
+                            self.analysis.vue_glob_patterns.push(value.to_string());
+                        }
                         ArrayExpressionElement::TemplateLiteral(template)
                             if template.expressions.is_empty() =>
                         {
                             if let Some(value) = template
                                 .quasis
                                 .first()
-                                .and_then(|quasi| quasi.value.cooked.as_ref())
+                                .and_then(|quasi| quasi.value.cooked?.as_str())
                             {
                                 self.analysis.vue_glob_patterns.push(value.to_string());
                             } else {
@@ -523,7 +524,7 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
                         };
                         let value = match &attribute.value {
                             Some(oxc_ast::ast::JSXAttributeValue::StringLiteral(literal)) => {
-                                Some(literal.value.as_str())
+                                literal.value.as_str()
                             }
                             _ => None,
                         };
@@ -580,7 +581,7 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
                     })
             });
         self.analysis.imports.push(SourceImport {
-            specifier: decl.source.value.to_string(),
+            specifier: decl.source.value.display().to_string(),
             type_only,
             // An import attribute clause such as `with { type: 'css' }`
             // constructs a stylesheet object without applying it, so the
@@ -592,11 +593,11 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
         if !type_only && decl.phase.is_none() && decl.with_clause.is_none() {
             self.analysis
                 .static_imports
-                .push(decl.source.value.to_string());
+                .push(decl.source.value.display().to_string());
             for specifier in decl.specifiers.iter().flatten() {
                 if let ImportDeclarationSpecifier::ImportDefaultSpecifier(specifier) = specifier {
                     self.analysis.default_imports.push(DefaultImportBinding {
-                        source: decl.source.value.to_string(),
+                        source: decl.source.value.display().to_string(),
                         local: specifier.local.name.to_string(),
                     });
                 }
@@ -613,7 +614,7 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
                     .iter()
                     .all(|specifier| specifier.export_kind.is_type()));
         self.analysis.imports.push(SourceImport {
-            specifier: decl.source.value.to_string(),
+            specifier: decl.source.value.display().to_string(),
             type_only,
             dynamic: false,
         });
@@ -622,7 +623,7 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
 
     fn visit_export_all_declaration(&mut self, decl: &oxc_ast::ast::ExportAllDeclaration<'a>) {
         self.analysis.imports.push(SourceImport {
-            specifier: decl.source.value.to_string(),
+            specifier: decl.source.value.display().to_string(),
             type_only: decl.export_kind.is_type(),
             dynamic: false,
         });
@@ -633,7 +634,7 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
         self.analysis.has_dynamic_import = true;
         if let Expression::StringLiteral(literal) = &expression.source {
             self.analysis.imports.push(SourceImport {
-                specifier: literal.value.to_string(),
+                specifier: literal.value.display().to_string(),
                 type_only: false,
                 dynamic: true,
             });
@@ -649,7 +650,7 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
             &decl.module_reference
         {
             self.analysis.imports.push(SourceImport {
-                specifier: reference.expression.value.to_string(),
+                specifier: reference.expression.value.display().to_string(),
                 type_only: decl.import_kind.is_type(),
                 dynamic: false,
             });
@@ -741,7 +742,7 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
             if callee.name == "require" {
                 if let Some(Argument::StringLiteral(literal)) = call.arguments.first() {
                     self.analysis.imports.push(SourceImport {
-                        specifier: literal.value.to_string(),
+                        specifier: literal.value.display().to_string(),
                         type_only: false,
                         dynamic: true,
                     });
@@ -793,7 +794,7 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
         collect_template_prefixes(template, &mut self.analysis.template_prefixes);
         for quasi in &template.quasis {
             if let Some(cooked) = quasi.value.cooked.as_ref() {
-                tw_migrate_css::collect_custom_property_mentions(cooked, &mut self.analysis.custom_properties);
+                tw_migrate_css::collect_custom_property_mentions(&cooked.display().to_string(), &mut self.analysis.custom_properties);
             }
         }
         walk::walk_template_literal(self, template);
@@ -810,7 +811,7 @@ impl<'a> Visit<'a> for SourceCollector<'_, 'a> {
     /// embedded mention reserves; ownership precision is not worth
     /// chasing call shapes.
     fn visit_string_literal(&mut self, literal: &oxc_ast::ast::StringLiteral<'a>) {
-        tw_migrate_css::collect_custom_property_mentions(literal.value.as_str(), &mut self.analysis.custom_properties);
+        tw_migrate_css::collect_custom_property_mentions(&literal.value.display().to_string(), &mut self.analysis.custom_properties);
         walk::walk_string_literal(self, literal);
     }
 

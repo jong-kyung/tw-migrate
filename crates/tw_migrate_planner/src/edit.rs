@@ -55,8 +55,8 @@ pub(super) fn collect_empty_conditionals(statements: &[Statement<'_>], edits: &m
         };
         if is_conditional(at_rule.name.name) && block.statements.is_empty() {
             edits.push(Edit {
-                start: at_rule.span.start,
-                end: at_rule.span.end,
+                start: at_rule.span.start as usize,
+                end: at_rule.span.end as usize,
                 replacement: String::new(),
             });
         } else {

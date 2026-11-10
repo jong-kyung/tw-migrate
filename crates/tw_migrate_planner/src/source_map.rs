@@ -179,8 +179,9 @@ fn collect_qualified_rule_spans(
             Statement::QualifiedRule(rule) => {
                 let index = spans.len();
                 spans.push(AuthoredRuleSpan {
-                    span: rule.span.start..rule.span.end,
-                    selector_span: rule.selector.span.start..rule.selector.span.end,
+                    span: rule.span.start as usize..rule.span.end as usize,
+                    selector_span: rule.selector.span.start as usize
+                        ..rule.selector.span.end as usize,
                     parent,
                 });
                 collect_qualified_rule_spans(&rule.block.statements, spans, Some(index));

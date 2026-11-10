@@ -191,7 +191,7 @@ impl UsageCollector<'_> {
         let mut preserved_candidates = Vec::new();
         let mut partial = false;
         for (index, quasi) in template.quasis.iter().enumerate() {
-            let cooked = quasi.value.cooked.as_ref()?.as_str();
+            let cooked = quasi.value.cooked?.as_str()?;
             value.push_str(cooked);
             original.push_str(cooked);
             let Some(expression) = template.expressions.get(index) else {
@@ -233,8 +233,9 @@ impl UsageCollector<'_> {
                     }
                 }
                 Expression::StringLiteral(literal) => {
-                    value.push_str(literal.value.as_str());
-                    original.push_str(literal.value.as_str());
+                    let text = literal.value.as_str()?;
+                    value.push_str(text);
+                    original.push_str(text);
                 }
                 _ => return None,
             }
@@ -330,21 +331,33 @@ impl UsageCollector<'_> {
                 has_class_name = true;
                 match &attribute.value {
                     Some(JSXAttributeValue::StringLiteral(literal)) => {
-                        class_literal = Some((literal.span, literal.value.to_string()));
+                        // A decoded entity can produce a lone surrogate, which no class can match.
+                        if let Some(value) = literal.value.as_str() {
+                            class_literal = Some((literal.span, value.to_string()));
+                        } else {
+                            self.warn_dynamic_class_name(
+                                literal.span,
+                                "Only static className values are supported.",
+                            );
+                        }
                     }
                     Some(JSXAttributeValue::ExpressionContainer(container)) => {
                         match &container.expression {
-                            JSXExpression::StringLiteral(literal) => {
-                                class_literal = Some((container.span, literal.value.to_string()));
+                            JSXExpression::StringLiteral(literal)
+                                if let Some(value) = literal.value.as_str() =>
+                            {
+                                class_literal = Some((container.span, value.to_string()));
                             }
                             JSXExpression::TemplateLiteral(template)
                                 if template.expressions.is_empty()
                                     && template
                                         .quasis
                                         .first()
-                                        .is_some_and(|quasi| quasi.value.cooked.is_some()) =>
+                                        .and_then(|quasi| quasi.value.cooked?.as_str())
+                                        .is_some() =>
                             {
-                                let cooked = template.quasis[0].value.cooked.as_ref().unwrap();
+                                let cooked = template.quasis[0].value.cooked.unwrap();
+                                let cooked = cooked.as_str().unwrap();
                                 class_literal = Some((container.span, cooked.to_string()));
                             }
                             expression => {
@@ -365,8 +378,9 @@ impl UsageCollector<'_> {
                 }
             } else if name.name == "id"
                 && let Some(JSXAttributeValue::StringLiteral(literal)) = &attribute.value
+                && let Some(value) = literal.value.as_str()
             {
-                let key = SelectorKey::Id(literal.value.to_string());
+                let key = SelectorKey::Id(value.to_string());
                 if let Some(candidates) = self.candidates.get(&key) {
                     id_candidates.extend(
                         candidates
@@ -489,10 +503,10 @@ impl UsageCollector<'_> {
     /// Plan one supported result leaf of a global className expression.
     fn global_result_leaf(&mut self, leaf: &Expression<'_>) {
         match leaf {
-            Expression::StringLiteral(literal) => {
+            Expression::StringLiteral(literal) if let Some(value) = literal.value.as_str() => {
                 self.global_string_leaf(
                     literal.span,
-                    literal.value.as_str(),
+                    value,
                     self.source.as_bytes()[literal.span.start as usize],
                 );
             }
@@ -501,12 +515,13 @@ impl UsageCollector<'_> {
                     && template
                         .quasis
                         .first()
-                        .is_some_and(|quasi| quasi.value.cooked.is_some()) =>
+                        .and_then(|quasi| quasi.value.cooked?.as_str())
+                        .is_some() =>
             {
                 // A substitution-free template is a static value; like the
                 // whole-attribute template handling, the rewrite emits a
                 // plain string literal.
-                let cooked = template.quasis[0].value.cooked.as_ref().unwrap().as_str();
+                let cooked = template.quasis[0].value.cooked.unwrap().as_str().unwrap();
                 self.global_string_leaf(template.span, cooked, b'"');
             }
             Expression::StaticMemberExpression(member)

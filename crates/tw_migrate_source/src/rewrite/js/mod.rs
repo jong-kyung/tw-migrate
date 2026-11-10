@@ -383,7 +383,8 @@ struct ImportCollector<'s> {
 
 impl<'a> Visit<'a> for ImportCollector<'_> {
     fn visit_import_declaration(&mut self, declaration: &ImportDeclaration<'a>) {
-        let target = resolve_import(self.file_path, declaration.source.value.as_str());
+        let specifier = declaration.source.value.display().to_string();
+        let target = resolve_import(self.file_path, &specifier);
         let imports = self.imports.entry(target).or_default();
         imports.warning_span.get_or_insert(declaration.span);
         let Some(specifiers) = &declaration.specifiers else {
@@ -410,7 +411,8 @@ impl<'a> Visit<'a> for ImportCollector<'_> {
     }
 
     fn visit_export_from_declaration(&mut self, declaration: &ExportFromDeclaration<'a>) {
-        let target = resolve_import(self.file_path, declaration.source.value.as_str());
+        let specifier = declaration.source.value.display().to_string();
+        let target = resolve_import(self.file_path, &specifier);
         let imports = self.imports.entry(target).or_default();
         imports.unsupported_shape = true;
         imports.warning_span.get_or_insert(declaration.span);
@@ -418,7 +420,8 @@ impl<'a> Visit<'a> for ImportCollector<'_> {
     }
 
     fn visit_export_all_declaration(&mut self, declaration: &ExportAllDeclaration<'a>) {
-        let target = resolve_import(self.file_path, declaration.source.value.as_str());
+        let specifier = declaration.source.value.display().to_string();
+        let target = resolve_import(self.file_path, &specifier);
         let imports = self.imports.entry(target).or_default();
         imports.unsupported_shape = true;
         imports.warning_span.get_or_insert(declaration.span);
@@ -430,7 +433,7 @@ impl<'a> Visit<'a> for ImportCollector<'_> {
             && callee.name == "require"
             && let Some(Argument::StringLiteral(source)) = call.arguments.first()
         {
-            let target = resolve_import(self.file_path, source.value.as_str());
+            let target = resolve_import(self.file_path, &source.value.display().to_string());
             let imports = self.imports.entry(target).or_default();
             imports.unsupported_shape = true;
             imports.warning_span.get_or_insert(call.span);
@@ -440,7 +443,7 @@ impl<'a> Visit<'a> for ImportCollector<'_> {
 
     fn visit_import_expression(&mut self, import: &ImportExpression<'a>) {
         if let Expression::StringLiteral(source) = &import.source {
-            let target = resolve_import(self.file_path, source.value.as_str());
+            let target = resolve_import(self.file_path, &source.value.display().to_string());
             let imports = self.imports.entry(target).or_default();
             imports.unsupported_shape = true;
             imports.warning_span.get_or_insert(import.span);

@@ -700,7 +700,9 @@ impl<'a> Visit<'a> for Sweep<'_, '_> {
         if let Expression::Identifier(callee) = &call.callee
             && callee.name == "require"
             && let Some(Argument::StringLiteral(source)) = call.arguments.first()
-            && resolve_import(self.syms.file_path, source.value.as_str()) == self.syms.css_target
+            && source.value.as_str().is_some_and(|specifier| {
+                resolve_import(self.syms.file_path, specifier) == self.syms.css_target
+            })
         {
             self.out.unsound = true;
         }
@@ -709,7 +711,9 @@ impl<'a> Visit<'a> for Sweep<'_, '_> {
 
     fn visit_import_expression(&mut self, import: &ImportExpression<'a>) {
         if let Expression::StringLiteral(source) = &import.source
-            && resolve_import(self.syms.file_path, source.value.as_str()) == self.syms.css_target
+            && source.value.as_str().is_some_and(|specifier| {
+                resolve_import(self.syms.file_path, specifier) == self.syms.css_target
+            })
         {
             self.out.unsound = true;
         }

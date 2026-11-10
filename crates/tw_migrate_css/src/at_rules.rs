@@ -38,12 +38,12 @@ pub fn global_at_rule_plan(
     ) {
         return None;
     }
-    let raw = &source[at_rule.span.start..at_rule.span.end];
+    let raw = at_rule.span.slice(source);
     if !relative_urls_stable && has_relative_url(raw) {
         return None;
     }
     Some(GlobalAtRulePlan {
-        span: at_rule.span.start..at_rule.span.end,
+        span: at_rule.span.start as usize..at_rule.span.end as usize,
         source: raw.to_string(),
     })
 }
@@ -57,7 +57,7 @@ pub fn append_global_at_rules(
         .map_err(|message| MigrationError::AuthoredStylesheetParse { message })?;
     let mut existing = HashSet::new();
     walk_at_rules(&stylesheet.statements, &mut |at_rule| {
-        existing.insert(source[at_rule.span.start..at_rule.span.end].trim());
+        existing.insert(at_rule.span.slice(source).trim());
     });
 
     let mut output = source.to_string();
@@ -256,7 +256,7 @@ pub fn media_breakpoint_variant(
     source: &str,
     theme_tokens: &HashMap<String, String>,
 ) -> Option<String> {
-    let query = &source[at_rule.span.start..at_rule.block.as_ref()?.span.start];
+    let query = &source[at_rule.span.start as usize..at_rule.block.as_ref()?.span.start as usize];
     let (min_width, max_width) = width_media_query(query)?;
     let min_variant = exact_theme_token("breakpoint", min_width, theme_tokens)?;
     let Some(max_width) = max_width else {
@@ -306,7 +306,8 @@ fn supports_variant(at_rule: &AtRule<'_>, source: &str) -> Option<String> {
 }
 
 fn arbitrary_at_rule_variant(at_rule: &AtRule<'_>, source: &str) -> Option<String> {
-    let header = source[at_rule.span.start..at_rule.block.as_ref()?.span.start].trim();
+    let header =
+        source[at_rule.span.start as usize..at_rule.block.as_ref()?.span.start as usize].trim();
     let header = normalize_query(header)?.replace(", ", ",");
     Some(format!("[{}]", encode_arbitrary(&header)))
 }
@@ -339,7 +340,7 @@ pub fn at_rule_query<'a>(at_rule: &AtRule<'_>, source: &'a str, name: &str) -> O
     fn trim_css(text: &str) -> &str {
         text.trim_matches(|character: char| character.is_ascii_whitespace())
     }
-    trim_css(&source[at_rule.span.start..at_rule.block.as_ref()?.span.start])
+    trim_css(&source[at_rule.span.start as usize..at_rule.block.as_ref()?.span.start as usize])
         .strip_prefix('@')?
         .strip_prefix(name)
         .map(trim_css)
