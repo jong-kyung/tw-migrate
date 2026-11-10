@@ -91,30 +91,30 @@ pub(crate) fn import_href(href: &ImportPreludeHref<'_>) -> Option<String> {
 
 fn interpolable_str_end(value: &InterpolableStr<'_>) -> usize {
     match value {
-        InterpolableStr::Literal(value) => value.span.end,
-        InterpolableStr::SassInterpolated(value) => value.span.end,
-        InterpolableStr::LessInterpolated(value) => value.span.end,
+        InterpolableStr::Literal(value) => value.span.end as usize,
+        InterpolableStr::SassInterpolated(value) => value.span.end as usize,
+        InterpolableStr::LessInterpolated(value) => value.span.end as usize,
     }
 }
 
 fn import_href_end(href: &ImportPreludeHref<'_>) -> usize {
     match href {
         ImportPreludeHref::Str(value) => interpolable_str_end(value),
-        ImportPreludeHref::Url(value) => value.span.end,
-        ImportPreludeHref::Function(value) => value.span.end,
+        ImportPreludeHref::Url(value) => value.span.end as usize,
+        ImportPreludeHref::Function(value) => value.span.end as usize,
     }
 }
 
 fn import_media(source: &str, prelude: &ImportPrelude<'_>) -> String {
     if prelude.layer.is_some() || prelude.supports.is_some() || prelude.modifiers.is_some() {
-        return source[import_href_end(&prelude.href)..prelude.span.end]
+        return source[import_href_end(&prelude.href)..prelude.span.end as usize]
             .trim()
             .to_string();
     }
     prelude
         .media
         .as_ref()
-        .map(|media| source[media.span.start..media.span.end].trim().to_string())
+        .map(|media| media.span.slice(source).trim().to_string())
         .unwrap_or_default()
 }
 
@@ -155,13 +155,13 @@ fn collect_compound_scope_escapes(
                 pseudo
                     .arg
                     .as_ref()
-                    .map(|arg| (arg.l_paren.end, arg.r_paren.start)),
+                    .map(|arg| (arg.l_paren.end as usize, arg.r_paren.start as usize)),
             ),
             SimpleSelector::PseudoElement(pseudo) if scope_escape_name(&pseudo.name) => Some(
                 pseudo
                     .arg
                     .as_ref()
-                    .map(|arg| (arg.l_paren.end, arg.r_paren.start)),
+                    .map(|arg| (arg.l_paren.end as usize, arg.r_paren.start as usize)),
             ),
             _ => None,
         };
@@ -454,7 +454,7 @@ fn declaration_value(source: &str, declaration: &oxc_css_parser::ast::Declaratio
         return String::new();
     };
     let last = declaration.value.last().expect("checked");
-    source[first.span().start..last.span().end]
+    source[first.span().start as usize..last.span().end as usize]
         .trim()
         .to_string()
 }
@@ -582,7 +582,8 @@ fn collect_at_rule_metadata(
                         .global_at_rule_identities
                         .push(format!("{name} {prelude}"));
                 } else if syntax == Syntax::Css {
-                    let prelude = source[at_rule.name.span.end..block.span.start].trim();
+                    let prelude =
+                        source[at_rule.name.span.end as usize..block.span.start as usize].trim();
                     analysis
                         .global_at_rule_identities
                         .push(format!("{name} {prelude}"));
@@ -695,9 +696,9 @@ fn collect_stylesheet_statements(
                     let end = at_rule
                         .block
                         .as_ref()
-                        .map_or(at_rule.span.end, |block| block.span.start);
+                        .map_or(at_rule.span.end as usize, |block| block.span.start as usize);
                     collect_custom_property_mentions(
-                        &source[at_rule.span.start..end],
+                        &source[at_rule.span.start as usize..end],
                         &mut analysis.custom_properties,
                     );
                 }
@@ -707,7 +708,7 @@ fn collect_stylesheet_statements(
                     // under any namespace alias, so the sheet's
                     // dependencies become unknowable.
                     Some(AtRulePrelude::SassInclude(include)) => {
-                        let text = &source[include.span.start..include.span.end];
+                        let text = include.span.slice(source);
                         let name = text.split(['(', ' ']).next().unwrap_or("").trim();
                         if name == "load-css" || name.ends_with(".load-css") {
                             analysis.unverifiable = true;
@@ -724,7 +725,7 @@ fn collect_stylesheet_statements(
                     // selector walk; the block form's inner rules are
                     // collected by the generic recursion below.
                     _ if at_rule.name.name == "custom-variant" && at_rule.block.is_none() => {
-                        let text = &source[at_rule.span.start..at_rule.span.end];
+                        let text = at_rule.span.slice(source);
                         // A class-attribute selector matches class tokens
                         // this dot-token scan cannot enumerate.
                         if text.contains("[class") {
@@ -740,7 +741,10 @@ fn collect_stylesheet_statements(
                         let prelude = at_rule
                             .block
                             .as_ref()
-                            .map(|block| source[at_rule.span.start..block.span.start].trim())
+                            .map(|block| {
+                                let end = block.span.start as usize;
+                                source[at_rule.span.start as usize..end].trim()
+                            })
                             .and_then(|text| text.strip_prefix("@utility"))
                             .map(str::trim)
                             .unwrap_or("");
@@ -847,7 +851,7 @@ fn collect_stylesheet_statements(
                                 continue;
                             }
                             let reference = pseudo.arg.as_ref().and_then(|arg| {
-                                let text = source[arg.span.start..arg.span.end]
+                                let text = arg.span.slice(source)
                                     .trim()
                                     .trim_start_matches('(')
                                     .trim_end_matches(')')
@@ -927,7 +931,7 @@ fn collect_stylesheet_statements(
                 if !direct && !nested {
                     analysis.scope_shadow_css.push(format!(
                         "{} {{}}",
-                        &source[rule.selector.span.start..rule.selector.span.end]
+                        rule.selector.span.slice(source)
                     ));
                 }
                 has_scope_escape |= direct || nested;
@@ -1031,12 +1035,14 @@ fn collect_loading_imports(
         if let Some(AtRulePrelude::Import(prelude)) = &at_rule.prelude {
             if imports_allowed {
                 if let Some(href) = import_href(&prelude.href) {
-                    let end = at_rule.span.end
-                        + usize::from(source.as_bytes().get(at_rule.span.end) == Some(&b';'));
+                    let end = at_rule.span.end as usize
+                        + usize::from(
+                            source.as_bytes().get(at_rule.span.end as usize) == Some(&b';'),
+                        );
                     analysis.imports.push(StylesheetImport {
                         href,
                         media: import_media(source, prelude),
-                        start: at_rule.span.start,
+                        start: at_rule.span.start as usize,
                         end,
                     });
                 } else {
@@ -1155,7 +1161,7 @@ fn collect_shape_statements(
                 let InterpolableIdent::Literal(name) = &declaration.name else {
                     return Err("Nonliteral compiled property".to_string());
                 };
-                let value = source[declaration.span.start..declaration.span.end]
+                let value = declaration.span.slice(source)
                     .split_once(':')
                     .map(|(_, value)| value)
                     .unwrap_or("")

@@ -196,7 +196,7 @@ pub(super) fn declaration_value<'a>(
     source: &'a str,
     declaration: &oxc_css_parser::ast::Declaration<'_>,
 ) -> &'a str {
-    source[declaration.colon_span.end..declaration.span.end]
+    source[declaration.colon_span.end as usize..declaration.span.end as usize]
         .trim()
         .trim_end_matches(';')
         .trim()
@@ -357,9 +357,10 @@ fn arbitrary_selector_variant(
         _ => return None,
     };
     let selector_span = rule.selector.span;
-    let mut condition = source[selector_span.start..selector_span.end].to_string();
+    let mut condition = selector_span.slice(source).to_string();
     condition.replace_range(
-        target_span.start - selector_span.start..target_span.end - selector_span.start,
+        (target_span.start - selector_span.start) as usize
+            ..(target_span.end - selector_span.start) as usize,
         "&",
     );
     Some(format!("[{}]", encode_arbitrary(&condition)))

@@ -24,7 +24,7 @@ pub fn keyframe_plan(at_rule: &AtRule<'_>, path: &str, source: &str) -> Option<K
     else {
         return None;
     };
-    let raw = &source[at_rule.span.start..at_rule.span.end];
+    let raw = at_rule.span.slice(source);
     if raw.to_ascii_lowercase().contains("url(") {
         return None;
     }
@@ -32,11 +32,12 @@ pub fn keyframe_plan(at_rule: &AtRule<'_>, path: &str, source: &str) -> Option<K
     let migrated_name = format!("tw-migrate-{:x}-{}", stable_hash(path), name.name);
     let mut migrated_source = raw.to_string();
     migrated_source.replace_range(
-        name.span.start - at_rule.span.start..name.span.end - at_rule.span.start,
+        (name.span.start - at_rule.span.start) as usize
+            ..(name.span.end - at_rule.span.start) as usize,
         &migrated_name,
     );
     Some(KeyframePlan {
-        span: at_rule.span.start..at_rule.span.end,
+        span: at_rule.span.start as usize..at_rule.span.end as usize,
         name: name.name.to_string(),
         migrated_name,
         source: migrated_source,
@@ -87,7 +88,7 @@ pub fn append_keyframes(source: &str, keyframes: &[&KeyframePlan]) -> MigrationR
         {
             existing.insert(
                 name.name.to_string(),
-                source[at_rule.span.start..at_rule.span.end].to_string(),
+                at_rule.span.slice(source).to_string(),
             );
         }
     });

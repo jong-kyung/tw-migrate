@@ -309,8 +309,8 @@ fn collect_authored_variants(
         let prelude_end = at_rule
             .block
             .as_ref()
-            .map_or(at_rule.span.end, |block| block.span.start);
-        let prelude = source[at_rule.span.start..prelude_end]
+            .map_or(at_rule.span.end as usize, |block| block.span.start as usize);
+        let prelude = source[at_rule.span.start as usize..prelude_end]
             .trim()
             .trim_start_matches('@')
             .trim_start_matches("custom-variant")
@@ -320,7 +320,7 @@ fn collect_authored_variants(
         };
         variants.push(AuthoredVariant {
             name: name.trim_end_matches(';').to_string(),
-            definition: collapse_whitespace(&source[at_rule.span.start..at_rule.span.end]),
+            definition: collapse_whitespace(at_rule.span.slice(source)),
             media_query_key: authored_media_wrapper_key(at_rule, source),
             path: path.to_string(),
         });

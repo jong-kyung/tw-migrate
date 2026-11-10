@@ -171,7 +171,7 @@ pub fn parse_css_rules(
     );
 
     for (rule, outer_variants) in qualified_rules {
-        let selector = source[rule.selector.span.start..rule.selector.span.end].to_string();
+        let selector = rule.selector.span.slice(source).to_string();
         let mut relationship = None;
         let selector_match = selector_match(rule, source, is_module).or_else(|| {
             if !is_module {
@@ -207,10 +207,10 @@ pub fn parse_css_rules(
         }
         candidates.sort();
         candidates.dedup();
-        let mut provenance_offsets = vec![rule.selector.span.start];
+        let mut provenance_offsets = vec![rule.selector.span.start as usize];
         collect_declaration_offsets(&rule.block.statements, &mut provenance_offsets);
         rules.push(RulePlan {
-            span: rule.span.start..rule.span.end,
+            span: rule.span.start as usize..rule.span.end as usize,
             authored_span: None,
             provenance_offsets,
             selector,
@@ -241,7 +241,7 @@ pub fn parse_css_rules(
 fn collect_declaration_offsets(statements: &[Statement<'_>], offsets: &mut Vec<usize>) {
     for statement in statements {
         match statement {
-            Statement::Declaration(declaration) => offsets.push(declaration.span.start),
+            Statement::Declaration(declaration) => offsets.push(declaration.span.start as usize),
             Statement::AtRule(at_rule) => {
                 if let Some(block) = &at_rule.block {
                     collect_declaration_offsets(&block.statements, offsets);
@@ -256,7 +256,7 @@ fn declaration_is_plain_css(
     declaration: &oxc_css_parser::ast::Declaration<'_>,
     source: &str,
 ) -> bool {
-    let raw = &source[declaration.span.start..declaration.span.end];
+    let raw = declaration.span.slice(source);
     if raw.contains(['$', '@', '`', '(']) || raw.contains("#{") {
         return false;
     }
@@ -404,7 +404,7 @@ fn collect_declaration_candidates(
             .iter()
             .map(|component| {
                 let span = component.span();
-                source[span.start..span.end].trim()
+                span.slice(source).trim()
             })
             .collect::<Vec<_>>();
         let mut family_result = Ok(false);
@@ -586,7 +586,8 @@ fn collect_conditional_rules<'a, 's>(
                 qualified_rules.push((rule, variants.to_vec()));
             }
             Statement::AtRule(at_rule)
-                if variants.is_empty() && movable_at_rule_starts.contains(&at_rule.span.start) => {}
+                if variants.is_empty()
+                    && movable_at_rule_starts.contains(&(at_rule.span.start as usize)) => {}
             Statement::AtRule(at_rule) if is_conditional(at_rule.name.name) => {
                 let Some((variant, block)) =
                     conditional_variant(at_rule, source, theme_tokens, media_names)
@@ -643,17 +644,17 @@ fn retained_at_rule(
     let end = at_rule
         .block
         .as_ref()
-        .map_or(at_rule.span.end, |block| block.span.start);
+        .map_or(at_rule.span.end as usize, |block| block.span.start as usize);
     let mut related_classes = BTreeSet::new();
     let contains_selectors = at_rule.block.as_ref().is_some_and(|block| {
         collect_statement_classes(&block.statements, &mut related_classes);
         statements_contain_selectors(&block.statements)
     });
     RulePlan {
-        span: at_rule.span.start..at_rule.span.end,
+        span: at_rule.span.start as usize..at_rule.span.end as usize,
         authored_span: None,
         provenance_offsets: Vec::new(),
-        selector: source[at_rule.span.start..end].trim().to_string(),
+        selector: source[at_rule.span.start as usize..end].trim().to_string(),
         related_classes: related_classes.into_iter().collect(),
         contains_selectors,
         key: None,
