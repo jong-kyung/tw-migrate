@@ -27,6 +27,15 @@
   },
   "packageRules": [
     {
+      "description": "npm 12 refuses registry tarballs of packages with bundleDependencies during --package-lock-only, which breaks lockfile updates for Tailwind fixtures. Remove this constraint after https://github.com/npm/cli/issues/9800 is fixed.",
+      "matchManagers": [
+        "npm"
+      ],
+      "constraints": {
+        "npm": "<12"
+      }
+    },
+    {
       "matchDepNames": [
         "node"
       ],
