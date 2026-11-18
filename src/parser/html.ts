@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { parse, type Token } from "parse5";
 
 export const TEMPLATE_MARKERS = /\{\{|\}\}|\$\{|<%|%>|<#|#>|\[%|%\]/;
@@ -71,7 +73,33 @@ interface ParsedHtml {
   hasStyle: boolean;
 }
 
+// Planning re-reads each page once per package and per proof, so one run
+// shares results by path and exact source. Callers treat results as read-only.
+const parseCache = new AsyncLocalStorage<Map<string, Map<string, ParsedHtml | Error>>>();
+
+export function withHtmlParseCache<T>(run: () => T): T {
+  return parseCache.run(new Map(), run);
+}
+
 export function parseHtmlSource(path: string, source: string): ParsedHtml {
+  const cache = parseCache.getStore();
+  if (!cache) return parseUncached(path, source);
+  let bySource = cache.get(path);
+  if (!bySource) cache.set(path, (bySource = new Map()));
+  let result = bySource.get(source);
+  if (!result) {
+    try {
+      result = parseUncached(path, source);
+    } catch (error) {
+      result = error instanceof Error ? error : new Error(String(error));
+    }
+    bySource.set(source, result);
+  }
+  if (result instanceof Error) throw result;
+  return result;
+}
+
+function parseUncached(path: string, source: string): ParsedHtml {
   const errors: { code: string }[] = [];
   const document = parse(source, {
     sourceCodeLocationInfo: true,

@@ -4,7 +4,12 @@ import * as v from "valibot";
 
 import { unifiedDiff } from "./util/diff.ts";
 import { collectFiles, resolveScope, scannerIgnoredPaths } from "./discovery.ts";
-import { parseHtmlSource, TEMPLATE_EXPRESSIONS, TEMPLATE_MARKERS } from "./parser/html.ts";
+import {
+  parseHtmlSource,
+  TEMPLATE_EXPRESSIONS,
+  TEMPLATE_MARKERS,
+  withHtmlParseCache,
+} from "./parser/html.ts";
 import { localHtmlReference, preparePackageHtml } from "./plan/html.ts";
 import {
   fontFamilyStack,
@@ -158,7 +163,11 @@ const migrateOptionsSchema = v.pipe(
   }),
 );
 
-export async function migrate(options: MigrateOptions = {}): Promise<MigrationReport> {
+export function migrate(options: MigrateOptions = {}): Promise<MigrationReport> {
+  return withHtmlParseCache(() => migrateWithCache(options));
+}
+
+async function migrateWithCache(options: MigrateOptions): Promise<MigrationReport> {
   const parsedOptions = v.safeParse(migrateOptionsSchema, options);
   if (!parsedOptions.success) {
     throw new TypeError(
