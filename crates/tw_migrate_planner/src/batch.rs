@@ -537,14 +537,34 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
             .cmp(&request.stylesheets[*right].css_path)
     });
 
-    // Reuse the prepass snapshots; only source text and edit history evolve.
+    // Reuse the prepass snapshots; only source text and edit history evolve,
+    // so after the first pass only files the previous response touched resync.
+    let mut touched: Option<HashSet<String>> = None;
+    let mut unchanged = vec![true; request.files.len()];
     for index in order {
         let stylesheet = &request.stylesheets[index];
-        for (file, original) in snapshot_files.iter_mut().zip(&request.files) {
+        for ((file, original), unchanged) in snapshot_files
+            .iter_mut()
+            .zip(&request.files)
+            .zip(&mut unchanged)
+        {
+            if touched
+                .as_ref()
+                .is_some_and(|paths| !paths.contains(&file.path))
+            {
+                continue;
+            }
             file.source
                 .clone_from(current.get(&file.path).unwrap_or(&original.source));
             file.prior_edits = applied_edits.get(&file.path).cloned().unwrap_or_default();
+            *unchanged = file.source == original.source;
         }
+        // A changed file can gain a reference, so only unchanged proofs skip.
+        let skipped_files = unreferenced_files[index]
+            .iter()
+            .zip(&unchanged)
+            .map(|(unreferenced, unchanged)| *unreferenced && *unchanged)
+            .collect::<Vec<_>>();
         let mut stylesheet_request = batch_stylesheet_request(&request, stylesheet, snapshot_files);
         if stylesheet.vue_module
             && let Some(css) = co_located_retained_css.get(&stylesheet.css_path)
@@ -573,11 +593,16 @@ pub fn plan_batch_json(request: &str) -> MigrationResult<String> {
             &blocked_rules[index],
             &externally_blocked[index],
             &candidate_maps[index].unproven,
-            &unreferenced_files[index],
+            &skipped_files,
             &mut shadow_cache,
         )?;
         snapshot_files = stylesheet_request.files;
 
+        let next = touched.get_or_insert_with(HashSet::new);
+        next.clear();
+        next.extend(response.applied_edits.keys().cloned());
+        next.extend(response.files.iter().map(|file| file.path.clone()));
+        next.extend(response.deleted_files.iter().cloned());
         for (path, batches) in response.applied_edits {
             applied_edits.entry(path).or_default().extend(batches);
         }

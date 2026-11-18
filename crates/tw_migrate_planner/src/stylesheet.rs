@@ -556,7 +556,8 @@ pub(super) fn plan_request(
     blocked_rules: &RuleConflicts,
     externally_blocked: &HashSet<RuleId>,
     unproven_rules: &HashMap<RuleId, String>,
-    unreferenced_files: &[bool],
+    // Files the prepass proved unreferenced and no earlier stylesheet changed.
+    skipped_files: &[bool],
     shadow_cache: &mut ShadowSelectorCache,
 ) -> MigrationResult<PlanResponse> {
     let (
@@ -697,9 +698,7 @@ pub(super) fn plan_request(
     let request_properties =
         candidate_property_union(rules.iter().flat_map(|rule| rule.candidate_properties.iter()));
     for (file_index, file) in request.files.iter().enumerate() {
-        let mut result = if unreferenced_files[file_index]
-            && file.source == request.batch.files[file_index].source
-        {
+        let mut result = if skipped_files[file_index] {
             SourcePlan::default()
         } else {
             plan_consumer_file(
