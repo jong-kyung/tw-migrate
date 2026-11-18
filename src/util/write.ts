@@ -35,7 +35,6 @@ export async function writeChanges(
     change.path,
   ]);
   const backedUp: [string, string][] = [];
-  let succeeded = false;
   try {
     const stagingResults = await Promise.allSettled(
       staged.map(async ([temporaryPath, change]) => {
@@ -52,17 +51,24 @@ export async function writeChanges(
       backedUp.push([backupPath, originalPath]);
     }
     for (const [temporaryPath, change] of staged) await rename(temporaryPath, change.path);
-    succeeded = true;
-  } finally {
-    if (succeeded) {
-      await Promise.all(backups.map(([backupPath]) => rm(backupPath, { force: true })));
-    } else {
-      for (const [backupPath, originalPath] of backedUp.reverse()) {
-        try {
-          await rename(backupPath, originalPath);
-        } catch {}
+  } catch (writeError) {
+    const failures: string[] = [];
+    for (const [backupPath, originalPath] of backedUp.reverse()) {
+      try {
+        await rename(backupPath, originalPath);
+      } catch (error) {
+        failures.push(
+          `Could not restore ${originalPath} from backup ${backupPath}: ${errorMessage(error)}`,
+        );
       }
     }
-    await Promise.all(staged.map(([temporaryPath]) => rm(temporaryPath, { force: true })));
+    const cleanup = await Promise.allSettled(staged.map(([path]) => rm(path, { force: true })));
+    for (const [index, result] of cleanup.entries()) {
+      if (result.status === "rejected")
+        failures.push(`Could not remove ${staged[index][0]}: ${errorMessage(result.reason)}`);
+    }
+    if (failures.length === 0) throw writeError;
+    throw new Error([errorMessage(writeError), ...failures].join("\n"), { cause: writeError });
   }
+  await Promise.all(backups.map(([backupPath]) => rm(backupPath, { force: true })));
 }
